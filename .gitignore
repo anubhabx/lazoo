@@ -1,0 +1,30 @@
+# Rust and Tauri build output
+target/
+dist/
+
+# JavaScript dependencies and build caches
+node_modules/
+.turbo/
+.vite/
+
+# Local configuration and secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# Lazoo runtime data
+.lazoo/
+*.db
+*.db-shm
+*.db-wal
+*.log
+
+# Editor and operating-system files
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+Desktop.ini
+
