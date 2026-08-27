@@ -1,3 +1,5 @@
+use std::path::PathBuf;
+
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use uuid::Uuid;
@@ -37,4 +39,54 @@ pub struct EventSummary {
 pub struct RegisterProjectResult {
     pub project: ProjectRecord,
     pub event_sequence: u64,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct RegisterProjectParams {
+    pub path: PathBuf,
+    pub display_name: Option<String>,
+    #[serde(default)]
+    pub checkout_mode: CheckoutMode,
+    pub idempotency_key: String,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct EventsListParams {
+    #[serde(default)]
+    pub after: u64,
+    #[serde(default = "default_event_limit")]
+    pub limit: u32,
+}
+
+impl Default for EventsListParams {
+    fn default() -> Self {
+        Self {
+            after: 0,
+            limit: default_event_limit(),
+        }
+    }
+}
+
+const fn default_event_limit() -> u32 {
+    100
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct SystemStatus {
+    pub daemon_version: String,
+    pub boot_id: Uuid,
+    pub uptime_millis: u64,
+    pub protocol_version: u32,
+    pub data_root: PathBuf,
+    pub schema_version: u32,
+    pub journal_mode: String,
+    pub project_count: u64,
+    pub event_high_water: u64,
+    pub pending_outbox: u64,
+    pub emergency_incident_count: u64,
+    pub keeper: Option<Value>,
+    pub degraded: Vec<String>,
 }

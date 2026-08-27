@@ -1,0 +1,27 @@
+[package]
+name = "lazood"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+chrono.workspace = true
+lazoo-domain = { path = "../../crates/lazoo-domain" }
+lazoo-ipc = { path = "../../crates/lazoo-ipc" }
+lazoo-protocol = { path = "../../crates/lazoo-protocol" }
+lazoo-runtime = { path = "../../crates/lazoo-runtime" }
+lazoo-store = { path = "../../crates/lazoo-store" }
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[lints]
+workspace = true
