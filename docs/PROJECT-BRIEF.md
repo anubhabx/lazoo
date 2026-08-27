@@ -123,7 +123,7 @@ The following is a local inventory combined with current official interface rese
 | Claude Code | Native executable 2.1.241 detected; local settings detected | Native Claude Code sessions and documented cross-session messaging; agent teams offer independent sessions and shared coordination | Yes, through documented cross-session messaging and experimental agent teams on supported versions | Preserve Claude-native messaging where useful, mirror every envelope into Lazoo's bus, and fall back to the canonical bus | Installation inspected only; live acceptance blocked by expired subscription |
 | OpenCode | Version 1.18.23 and configuration detected | Local server and SDK, Server-Sent Events, sessions, asynchronous prompts, abort/status APIs, and ACP | No stable provider-neutral peer bus is documented in the researched server/SDK contract | Run a controlled native server/session boundary per employee configuration; consume SSE; use Lazoo tools for peer messaging | Locally inspected and command help verified |
 | Grok Build CLI | Version 1.0.5 detected with local config | ACP-compatible agent stdio, headless and server modes, streaming JSON, resumable sessions | No durable cross-provider peer bus in ACP | Prefer ACP stdio for lifecycle, prompts, streaming, permission requests, and terminal updates; retain provider-native memory as an optional employee capability | Locally inspected and command help verified |
-| Antigravity / agy | Antigravity desktop and IDE detected; agy CLI not found on PATH | Official agy headless mode supports streaming JSON, long-lived input streams, conversation continuation, model/effort/permission/sandbox controls, MCP, and plugins | No provider-neutral durable peer bus is documented | Install and validate the supported agy CLI, then use long-lived stream-JSON mode; desktop/IDE presence alone is not adapter readiness | Documentation researched; CLI installation is a prerequisite |
+| Antigravity / agy | Antigravity desktop and IDE detected; agy CLI 1.1.22 installed under the user's local application data | Local help verifies streaming JSON, long-lived stream-JSON input, conversation continuation, model/effort/agent/mode/permission/sandbox controls, MCP, and plugins | No provider-neutral durable peer bus is documented | Use a long-lived stream-JSON process, persist conversation IDs, and probe the installed CLI rather than relying only on the parent process's PATH snapshot | Version and command surface locally verified; model-backed session not exercised |
 
 ### 6.1 Central finding: Lazoo must own collaboration
 
@@ -167,7 +167,7 @@ Unknown or unsupported capabilities remain false. Adapters must not infer suppor
 
 **Grok Build.** ACP stdio is the cleanest contract for session creation, prompt streaming, tool updates, permission requests, terminal events, and cancellation. Grok's native memory can remain enabled as an employee-specific feature, but it is separate from shared Lazoo project memory.
 
-**Antigravity.** The supported agy CLI is required. Lazoo must not automate the desktop GUI as its normal adapter. A long-lived stream-JSON process is the intended native interface after installation, with conversation identifiers persisted for resume.
+**Antigravity.** agy 1.1.22 is installed and its local command surface confirms the documented long-lived stream-JSON interface. Lazoo must not automate the desktop GUI as its normal adapter. Conversation identifiers should be persisted for resume. The installer added agy's directory to the persisted user PATH, but the already-running Codex desktop process retained its older environment; adapter discovery must inspect persisted Windows environment data and known installation locations rather than trusting its inherited PATH alone.
 
 ## 7. Existing landscape and greenfield rationale
 
@@ -901,7 +901,7 @@ These three are first because their local installations are currently usable and
 
 ### Stage 4: remaining provider adapters
 
-- install and validate agy, then build the Antigravity adapter;
+- validate agy authentication and a model-backed stream, then build the Antigravity adapter against the installed CLI;
 - implement the Claude Code adapter against recorded/documented fixtures;
 - complete Claude live acceptance only after the subscription is restored;
 - validate optional native-message acceleration without weakening the Lazoo bus.
@@ -956,7 +956,7 @@ Each stage requires a separate implementation plan and acceptance evidence. Late
 | Too many provider-specific abstractions create a lowest common denominator | Loss of native value | Capability-aware adapter contract and provider-native extensions |
 | Close competitors make greenfield wasteful | Time spent rebuilding existing work | Reassess Relaydeck/Muster at each stage boundary against Lazoo's differentiators |
 | Low disk space accumulates worktrees/transcripts | Build failures or system pressure | Attribution, quotas, warnings, compressed archives, recoverable cleanup, no silent deletion |
-| Claude and Antigravity cannot be tested now | False completion | Keep explicit prerequisites and unverified states; do not claim live support |
+| Claude cannot be live-tested now, and agy's model-backed path has not yet been exercised | False completion | Keep explicit verification states; test agy during adapter work and do not claim Claude live support until the subscription returns |
 
 ## 24. Definition of core v1
 
@@ -972,7 +972,7 @@ Core v1 is complete when:
 - live roster changes prevent offline dispatch;
 - clean incidents, thresholds, bounded lead remediation, emergency reporting, and user notifications work;
 - Codex, OpenCode, and Grok Build pass live adapter gates;
-- Antigravity passes after agy installation;
+- Antigravity passes its adapter gates against the installed agy CLI;
 - Claude Code passes after subscription restoration, or is clearly shipped as unverified rather than falsely supported;
 - local transcript archive and summarized typed-memory modes work with bounded context injection;
 - MCP/plugin/skill federation can import, preview, apply, and roll back at least the verified supported configurations;
@@ -1043,6 +1043,6 @@ This brief is the proposed product and engineering contract. The next step is ow
 - authority-mode semantics;
 - worktree and integration policy;
 - transcript retention default;
-- what must count as core v1 when Claude and agy are not currently live-testable.
+- what must count as core v1 while Claude remains blocked from live testing.
 
 Implementation planning begins only after this brief is accepted or revised.
