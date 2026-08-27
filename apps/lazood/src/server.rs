@@ -3,6 +3,10 @@ use lazoo_protocol::{EventsListParams, JsonRpcRequest, JsonRpcResponse, RpcError
 use lazoo_runtime::{DataRoot, Installation, OwnerSecurity, SingleInstance};
 use lazoo_store::Store;
 use serde_json::json;
+use tokio::{
+    task::JoinSet,
+    time::{Duration, timeout},
+};
 
 use crate::{App, DaemonError};
 
@@ -17,18 +21,24 @@ pub async fn run() -> Result<(), DaemonError> {
     let owner = OwnerSecurity::current()?;
     let mut server = PipeServer::bind(&installation, &owner)?;
     let mut shutdown = app.shutdown_receiver();
+    let mut clients = JoinSet::new();
     loop {
         tokio::select! {
             accepted = server.accept() => {
                 let connection = accepted?;
                 let client_app = app.clone();
-                tokio::spawn(async move { let _ = serve_connection(client_app, connection).await; });
+                clients.spawn(async move { let _ = serve_connection(client_app, connection).await; });
             }
             changed = shutdown.changed() => {
                 if changed.is_err() || *shutdown.borrow() { break; }
             }
         }
     }
+    let _ = timeout(Duration::from_secs(2), async {
+        while clients.join_next().await.is_some() {}
+    })
+    .await;
+    clients.abort_all();
     Ok(())
 }
 

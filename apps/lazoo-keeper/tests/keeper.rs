@@ -50,6 +50,7 @@ fn keeper_state_replaces_atomically_and_round_trips() {
         consecutive_failures: 2,
         last_exit_code: Some(9),
         last_incident_id: None,
+        ..KeeperState::default()
     };
     state.save(&root).unwrap();
     assert_eq!(KeeperState::load(&root).unwrap(), state);
@@ -107,6 +108,8 @@ fn notifier_failure_cannot_undo_durable_incident() {
     let result = record_unavailable(&root, &notifier, &mut state, 12);
     assert!(result.is_ok());
     assert_eq!(*notifier.calls.lock().unwrap(), 1);
+    assert!(state.notification_attempted);
+    assert_eq!(state.notification_error.as_deref(), Some("blocked"));
     let segment = fs::read_dir(root.spool_pending())
         .unwrap()
         .next()

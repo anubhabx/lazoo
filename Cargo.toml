@@ -9,6 +9,7 @@ members = [
   "apps/lazood",
   "apps/lazooctl",
   "apps/lazoo-keeper",
+  "tests/fixtures/crashing-daemon",
 ]
 
 [workspace.package]

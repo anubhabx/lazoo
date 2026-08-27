@@ -103,7 +103,12 @@ pub fn record_unavailable(
     EmergencySpool::new(root.clone()).append_and_seal(&incident)?;
     state.last_incident_id = Some(incident_id);
     state.save(root)?;
-    if let Err(error) = notifier.notify("Lazoo daemon unavailable", &incident.message) {
+    state.notification_attempted = true;
+    state.notification_error = notifier
+        .notify("Lazoo daemon unavailable", &incident.message)
+        .err();
+    state.save(root)?;
+    if let Some(error) = &state.notification_error {
         eprintln!("native notification failed after durable spool: {error}");
     }
     Ok(())

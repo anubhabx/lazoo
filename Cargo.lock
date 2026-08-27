@@ -416,6 +416,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "lazoo-crashing-daemon"
+version = "0.1.0"
+
+[[package]]
 name = "lazoo-domain"
 version = "0.1.0"
 dependencies = [

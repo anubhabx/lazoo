@@ -4,12 +4,14 @@ use lazoo_runtime::{DataRoot, RuntimeError, atomic_write};
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(deny_unknown_fields, rename_all = "camelCase")]
+#[serde(default, deny_unknown_fields, rename_all = "camelCase")]
 pub struct KeeperState {
     pub exit_times_millis: Vec<u64>,
     pub consecutive_failures: u32,
     pub last_exit_code: Option<i32>,
     pub last_incident_id: Option<String>,
+    pub notification_attempted: bool,
+    pub notification_error: Option<String>,
 }
 
 impl KeeperState {
