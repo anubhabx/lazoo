@@ -19,7 +19,7 @@ Provider adapters, employee execution, the desktop shell, managed memory, and wo
 Use the pinned Rust toolchain on Windows:
 
 ```powershell
-& "$env:USERPROFILE\.cargo\bin\cargo.exe" build --workspace --release
+cargo build --workspace --release
 & .\target\release\lazoo-keeper.exe
 ```
 
@@ -38,10 +38,11 @@ Add `--json` for a stable machine-readable result. Mutable state defaults to `%L
 ## Verification
 
 ```powershell
-& "$env:USERPROFILE\.cargo\bin\cargo.exe" test --workspace
-& "$env:USERPROFILE\.cargo\bin\cargo.exe" check --workspace --all-targets
-& "$env:USERPROFILE\.cargo\bin\cargo.exe" clippy --workspace --all-targets -- -D warnings
-& "$env:USERPROFILE\.cargo\bin\cargo.exe" fmt --all -- --check
+& .\scripts\verify-rust-toolchain.ps1
+cargo test --workspace
+cargo check --workspace --all-targets
+cargo clippy --workspace --all-targets -- -D warnings
+cargo fmt --all -- --check
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\acceptance\first-slice.ps1
 ```
 

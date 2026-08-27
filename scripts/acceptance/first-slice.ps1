@@ -88,7 +88,7 @@ function Find-DaemonProcess([int]$ExcludePid = 0) {
 }
 
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
-$cargoExe = Join-Path $env:USERPROFILE '.cargo\bin\cargo.exe'
+$cargoExe = (Get-Command cargo -CommandType Application -ErrorAction Stop).Source
 $releaseDir = Join-Path $repoRoot 'target\release'
 $script:keeperExe = Join-Path $releaseDir 'lazoo-keeper.exe'
 $script:daemonExe = Join-Path $releaseDir 'lazood.exe'

@@ -87,9 +87,7 @@ impl EmergencySpool {
         }
         self.ensure_capacity()?;
         let active = self.root.spool_active();
-        let active_len = fs::metadata(&active)
-            .map(|metadata| metadata.len())
-            .unwrap_or(0);
+        let active_len = fs::metadata(&active).map_or(0, |metadata| metadata.len());
         if active_len + u64::try_from(record.len()).unwrap_or(u64::MAX) > MAX_SEGMENT_BYTES {
             self.recover_stale()?;
             self.ensure_capacity()?;

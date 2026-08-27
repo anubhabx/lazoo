@@ -42,7 +42,8 @@ impl App {
         }
     }
 
-    #[allow(clippy::unused_async)]
+    // Keep the request boundary async so transports can await it without an API change.
+    #[allow(clippy::unused_async, clippy::unused_async_trait_impl)]
     pub async fn handle(&self, request: JsonRpcRequest) -> JsonRpcResponse {
         if request.jsonrpc != "2.0" {
             return failure(

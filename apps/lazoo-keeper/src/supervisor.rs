@@ -64,7 +64,7 @@ async fn supervise(root: &DataRoot, notifier: &impl NotificationPort) -> Result<
         }
         let runtime = started.elapsed().unwrap_or(Duration::ZERO);
         let now = unix_millis()?;
-        if runtime >= Duration::from_secs(10 * 60) {
+        if runtime >= Duration::from_mins(10) {
             budget = RestartBudget::default();
         }
         state.last_exit_code = status.code();

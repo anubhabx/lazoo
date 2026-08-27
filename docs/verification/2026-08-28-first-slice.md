@@ -4,7 +4,7 @@
 - **Result:** PASS
 - **Branch:** `feature/first-control-plane-slice`
 - **Acceptance manifest:** `artifacts/acceptance/first-slice-manifest.json`
-- **Baseline:** Windows 11, Rust 1.92.0 MSVC
+- **Baseline:** Windows 11, Rust 1.98.0 MSVC
 
 ## Delivered boundary
 
@@ -16,6 +16,7 @@ Provider adapters, employee execution, worktree creation, managed memory, policy
 
 | Gate | Result | Evidence |
 |---|---|---|
+| Toolchain | PASS | Plain `cargo` and `rustc` resolve to Rust 1.98.0 with the `x86_64-pc-windows-msvc` host |
 | Formatting | PASS | `cargo fmt --all -- --check` exited 0 |
 | Lint | PASS | `cargo clippy --workspace --all-targets -- -D warnings` exited 0 |
 | Tests | PASS | `cargo test --workspace` ran 48 tests; 48 passed, 0 failed |
@@ -24,7 +25,7 @@ Provider adapters, employee execution, worktree creation, managed memory, policy
 | Windows acceptance | PASS | `powershell -NoProfile -ExecutionPolicy Bypass -File scripts/acceptance/first-slice.ps1` exited 0 |
 | Whitespace | PASS | `git diff --check` exited 0 |
 
-The final acceptance run completed in 10.418 seconds and recorded 15 release/CLI commands. It verified release binary presence, protocol and schema version 1, WAL mode, default isolated registration, duplicate-idempotency collapse to one project and event, forced daemon restart with a new boot ID and PID, durable project/event/outbox state, crash-loop exhaustion, keeper exit code 20, a sealed `LZ-DAEMON-UNAVAILABLE` incident, Windows notification API acceptance, reconciliation, and exactly-once incident import across a second recovery restart.
+The final acceptance run completed in 10.885 seconds and recorded 15 release/CLI commands. It verified release binary presence, protocol and schema version 1, WAL mode, default isolated registration, duplicate-idempotency collapse to one project and event, forced daemon restart with a new boot ID and PID, durable project/event/outbox state, crash-loop exhaustion, keeper exit code 20, a sealed `LZ-DAEMON-UNAVAILABLE` incident, Windows notification API acceptance, reconciliation, and exactly-once incident import across a second recovery restart.
 
 ## Acceptance-criterion audit
 

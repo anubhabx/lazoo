@@ -8,13 +8,13 @@
 
 **Architecture:** A Rust workspace separates protocol/domain logic, Windows runtime facilities, SQLite persistence, and named-pipe transport. Three thin binaries compose those libraries. The first domain mutation is idempotent project registration, producing immutable audit and outbox records that survive daemon restart.
 
-**Tech Stack:** Rust 1.92.0; Tokio 1.53.1; rusqlite 0.40.2 with bundled SQLite; windows-rs 0.62.2; Clap 4.6.6; Serde 1.0.229; serde_json 1.0.151; UUID 1.26.0; thiserror 2.0.20; tracing 0.1.44; HMAC 0.13.0 and SHA-2 0.11.0.
+**Tech Stack:** Rust 1.98.0; Tokio 1.53.1; rusqlite 0.40.2 with bundled SQLite; windows-rs 0.62.2; Clap 4.6.6; Serde 1.0.229; serde_json 1.0.151; UUID 1.26.0; thiserror 2.0.20; tracing 0.1.44; HMAC 0.13.0 and SHA-2 0.11.0.
 
 **Spec:** docs/superpowers/specs/2026-08-28-control-plane-vertical-slice-design.md
 
 ## Global Constraints
 
-- Windows 11 and the current user's x86_64-pc-windows-gnu Rust 1.92.0 toolchain are the execution baseline.
+- Windows 11 and the rustup-managed `x86_64-pc-windows-msvc` Rust 1.98.0 toolchain are the execution baseline.
 - No network listener, provider adapter, Tauri code, ConPTY, worktree creation, employee/task model, policy engine, or managed-memory processing.
 - Mutable state defaults to %LOCALAPPDATA%\Lazoo and tests use LAZOO_DATA_ROOT with a temporary directory.
 - The control pipe uses JSON-RPC 2.0 UTF-8 frames with a four-byte little-endian length and a 1 MiB limit.
@@ -23,7 +23,7 @@
 - The shipped checkout-mode default is isolated; lead-main is stored only as an explicit project setting.
 - Keeper production thresholds remain three unexpected exits in five minutes with 1, 2, and 5 second backoff.
 - Tests precede implementation behavior. Never report an unrun gate as passed.
-- rustfmt and clippy are currently unavailable on this host; keep those as explicit blocked gates unless the toolchain is repaired without changing system state.
+- rustfmt and Clippy are required components of the pinned toolchain and must pass before closeout.
 
 ---
 
