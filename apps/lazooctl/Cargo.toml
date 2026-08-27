@@ -1,0 +1,20 @@
+[package]
+name = "lazooctl"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+clap.workspace = true
+lazoo-ipc = { path = "../../crates/lazoo-ipc" }
+lazoo-protocol = { path = "../../crates/lazoo-protocol" }
+lazoo-runtime = { path = "../../crates/lazoo-runtime" }
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+uuid.workspace = true
+
+[lints]
+workspace = true
