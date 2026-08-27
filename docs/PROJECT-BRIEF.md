@@ -4,7 +4,7 @@
 - **Research snapshot:** 2026-08-28
 - **Owner review:** 2026-08-28
 - **Product boundary:** Windows-first, single-user, local desktop software
-- **Repository stage:** First control-plane slice approved for detailed planning; no implementation exists
+- **Repository stage:** First control-plane slice implemented and verified; later product slices remain unimplemented
 
 ## 1. Executive summary
 

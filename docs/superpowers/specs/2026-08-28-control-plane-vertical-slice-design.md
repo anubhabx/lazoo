@@ -1,6 +1,6 @@
 # Lazoo Control-Plane Vertical Slice Design
 
-- **Status:** Draft for owner review
+- **Status:** Implemented and verified
 - **Date:** 2026-08-28
 - **Scope:** First runnable Windows control-plane milestone
 - **Parent contract:** docs/PROJECT-BRIEF.md

@@ -4,6 +4,8 @@
 
 **Goal:** Build and verify the first runnable Windows control-plane slice: lazoo-keeper supervises lazood, lazooctl communicates over a secured named pipe, project registration persists transactionally in SQLite, and restart exhaustion uses an emergency spool.
 
+**Execution status:** Complete on 2026-08-28. All nine tasks were executed with inline TDD; exact evidence is recorded in `docs/verification/2026-08-28-first-slice.md`.
+
 **Architecture:** A Rust workspace separates protocol/domain logic, Windows runtime facilities, SQLite persistence, and named-pipe transport. Three thin binaries compose those libraries. The first domain mutation is idempotent project registration, producing immutable audit and outbox records that survive daemon restart.
 
 **Tech Stack:** Rust 1.92.0; Tokio 1.53.1; rusqlite 0.40.2 with bundled SQLite; windows-rs 0.62.2; Clap 4.6.6; Serde 1.0.229; serde_json 1.0.151; UUID 1.26.0; thiserror 2.0.20; tracing 0.1.44; HMAC 0.13.0 and SHA-2 0.11.0.
