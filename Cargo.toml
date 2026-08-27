@@ -3,6 +3,7 @@ resolver = "2"
 members = [
   "crates/lazoo-protocol",
   "crates/lazoo-domain",
+  "crates/lazoo-runtime",
 ]
 
 [workspace.package]
@@ -35,6 +36,7 @@ windows = { version = "0.62.2", features = [
   "Win32_Foundation",
   "Win32_Security",
   "Win32_Security_Authorization",
+  "Win32_Security_Cryptography",
   "Win32_Storage_FileSystem",
   "Win32_System_Memory",
   "Win32_System_Pipes",
@@ -45,5 +47,8 @@ windows = { version = "0.62.2", features = [
 unsafe_op_in_unsafe_fn = "deny"
 
 [workspace.lints.clippy]
-all = "warn"
-pedantic = "warn"
+all = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+missing_errors_doc = "allow"
+missing_panics_doc = "allow"
+module_name_repetitions = "allow"
