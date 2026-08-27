@@ -5,6 +5,7 @@ members = [
   "crates/lazoo-domain",
   "crates/lazoo-runtime",
   "crates/lazoo-store",
+  "crates/lazoo-ipc",
 ]
 
 [workspace.package]
