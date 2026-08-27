@@ -16,6 +16,7 @@ node_modules/
 
 # Lazoo runtime data
 .lazoo/
+.worktrees/
 *.db
 *.db-shm
 *.db-wal
@@ -27,4 +28,3 @@ node_modules/
 .DS_Store
 Thumbs.db
 Desktop.ini
-
