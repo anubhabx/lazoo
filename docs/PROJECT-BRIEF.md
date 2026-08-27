@@ -1,9 +1,10 @@
 # Lazoo Project Brief
 
-- **Status:** Research-backed design candidate, awaiting owner review
+- **Status:** Owner-reviewed product and engineering contract
 - **Research snapshot:** 2026-08-28
+- **Owner review:** 2026-08-28
 - **Product boundary:** Windows-first, single-user, local desktop software
-- **Repository stage:** Architecture only; no implementation exists
+- **Repository stage:** First control-plane slice approved for detailed planning; no implementation exists
 
 ## 1. Executive summary
 
@@ -27,6 +28,7 @@ The product is intentionally personal. It does not need multi-user tenancy, clou
 
 The recommended design is:
 
+- A **greenfield Lazoo implementation**. Relaydeck remains the closest benchmark and must be reassessed at stage boundaries, but Lazoo is not implemented as a Relaydeck extension.
 - **Rust** for the daemon, process supervision, Windows integration, provider adapters, storage, and CLI.
 - **Tauri 2** for the desktop shell, backed by the system WebView2 runtime.
 - **SQLite in WAL mode** for durable local state, with an append-only audit/event model and transactional outbox.
@@ -490,9 +492,19 @@ Every assignment that may edit files receives a worktree by default:
 
 The exact root is configurable, but Lazoo validates that it is on a suitable volume and not recursively inside another worktree. Branch and path components are sanitized and collision-checked.
 
+Projects have two checkout modes:
+
+| Mode | Behavior |
+|---|---|
+| All editors isolated | Default. The lead and every delegated employee that may edit files receive separate worktrees. Read-only employees may use an enforced read-only project view. |
+| Lead edits main | The lead alone may edit the registered main checkout. Every delegated employee that may edit files still receives a separate worktree. |
+
+The mode is configurable per project. A global preference may choose the initial value for newly registered projects, but the shipped default is **All editors isolated**. Changing modes never relocates or deletes active dirty work; it takes effect only after Lazoo verifies that existing editing leases are compatible.
+
 Rules:
 
 - the main checkout is never concurrently writable by multiple employees;
+- in **Lead edits main** mode, the lead holds the only possible Lazoo editing lease for the main checkout;
 - one worktree has one active editing owner;
 - read-only employees may share an enforced read-only project view;
 - a task records its starting commit and all resulting commits;
@@ -580,6 +592,10 @@ On daemon restart, Lazoo:
 ## 15. Shared project memory
 
 Memory modes are composable. A project can use one, several, or none.
+
+The default active memory experience is the managed, indexed typed ledger in Mode B. Its indexing and summarization work may run through a dedicated employee worker or an explicitly configured external API. Raw transcript injection is never the default.
+
+Compressed source-transcript retention is enabled by default so indexed memories can be audited and corrected. It is bounded by visible retention and disk quotas and can be disabled globally or per project. Disabling source retention does not silently delete existing archives; Lazoo previews the effect and requires an explicit cleanup action.
 
 ### 15.1 Mode A: local transcript archive
 
@@ -856,7 +872,7 @@ Measure aggregate Lazoo CPU, memory, handles, threads, database latency, termina
 | Provider | Gate before claiming support |
 |---|---|
 | Codex | App Server contract and fallback tested against supported installed versions |
-| Claude Code | Subscription restored; live Windows session, messaging, permissions, cancellation, resume/recovery tested |
+| Claude Code | Live Windows session, messaging, permissions, cancellation, and resume/recovery tested through a configured external endpoint/model; the native Anthropic subscription path is verified and reported separately when available |
 | OpenCode | Server/SSE or ACP lifecycle tested, including accepted-but-stalled fault handling |
 | Grok Build | ACP stdio lifecycle, permissions, terminal events, cancel, and resume tested |
 | Antigravity | Supported agy CLI installed; long-lived stream-JSON lifecycle and resume tested |
@@ -875,6 +891,8 @@ Until those gates pass, the UI must say **Detected**, **Configured**, **Degraded
 - incident taxonomy;
 - benchmark harness and baseline capture;
 - threat model and data-retention contract.
+
+The first implementation milestone is a narrow Stage 1/Stage 2 bridge: a runnable control-plane vertical slice. It includes the Rust workspace, daemon, CLI, keeper, versioned control IPC, SQLite event/outbox persistence, current-user pipe security, one durable project-registration flow, restart recovery, and the emergency incident spool. It excludes provider adapters, ConPTY, worktree creation, approvals, the task/message bus, memory processing, and the Tauri desktop shell.
 
 ### Stage 2: Windows control-plane kernel
 
@@ -903,7 +921,8 @@ These three are first because their local installations are currently usable and
 
 - validate agy authentication and a model-backed stream, then build the Antigravity adapter against the installed CLI;
 - implement the Claude Code adapter against recorded/documented fixtures;
-- complete Claude live acceptance only after the subscription is restored;
+- complete Claude live harness acceptance through a configured external endpoint/model;
+- verify and report the native Anthropic subscription path separately when a subscription is available;
 - validate optional native-message acceleration without weakening the Lazoo bus.
 
 ### Stage 5: memory and integration federation
@@ -973,7 +992,7 @@ Core v1 is complete when:
 - clean incidents, thresholds, bounded lead remediation, emergency reporting, and user notifications work;
 - Codex, OpenCode, and Grok Build pass live adapter gates;
 - Antigravity passes its adapter gates against the installed agy CLI;
-- Claude Code passes after subscription restoration, or is clearly shipped as unverified rather than falsely supported;
+- Claude Code passes its live harness gate through a configured external endpoint/model; the native Anthropic subscription path has its own verification state and does not independently block core v1;
 - local transcript archive and summarized typed-memory modes work with bounded context injection;
 - MCP/plugin/skill federation can import, preview, apply, and roll back at least the verified supported configurations;
 - the end-to-end acceptance scenario passes;
@@ -990,7 +1009,6 @@ These choices belong in implementation plans or benchmarks and do not block the 
 - final JSON-RPC method names and schema serialization library;
 - default idle timeout and per-provider concurrency;
 - which free summarization model/provider is selected first;
-- whether transcript retention defaults to bounded local archives or metadata-only during onboarding;
 - the local embedding model, if any;
 - STT and TTS providers;
 - visual design language and final tray behavior;
@@ -1034,15 +1052,16 @@ The constraints in this brief remain binding whichever implementation choices wi
 - [Muster mission control](https://musterai.org/)
 - [Orrery source repository](https://github.com/DivyamTalwar/ORRERY)
 
-## 27. Review gate
+## 27. Owner-reviewed decisions and next gate
 
-This brief is the proposed product and engineering contract. The next step is owner review, especially of:
+The owner accepted this product and engineering contract on 2026-08-28 with the following clarifications:
 
-- the greenfield rationale versus Relaydeck;
-- the keeper and dual-path failsafe;
-- authority-mode semantics;
-- worktree and integration policy;
-- transcript retention default;
-- what must count as core v1 while Claude remains blocked from live testing.
+- Lazoo remains greenfield, with Relaydeck used as a benchmark rather than an implementation base.
+- The keeper and dual-path emergency incident spool are required in the first runnable control-plane milestone.
+- Ask, self-decision, and full-autonomy semantics remain as documented, with **Ask** as the default.
+- Worktree isolation is configurable between **All editors isolated** and **Lead edits main**; new projects default to full isolation.
+- Managed indexed typed memory is the default active mode. A dedicated worker or approved external API may produce it.
+- Compressed source transcripts are retained by default within visible limits, with global and per-project opt-out.
+- Claude Code live harness verification may use a configured external endpoint/model; native Anthropic subscription verification is tracked separately.
 
-Implementation planning begins only after this brief is accepted or revised.
+The selected first milestone is the runnable control-plane vertical slice described in Stage 1. Its detailed design must be reviewed before the implementation plan is written. Each later stage still requires its own design, plan, and acceptance evidence.
