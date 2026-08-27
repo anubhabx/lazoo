@@ -8,6 +8,7 @@ members = [
   "crates/lazoo-ipc",
   "apps/lazood",
   "apps/lazooctl",
+  "apps/lazoo-keeper",
 ]
 
 [workspace.package]

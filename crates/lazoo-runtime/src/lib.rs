@@ -1,12 +1,14 @@
 mod atomic_file;
 mod data_root;
 mod installation;
+mod notification;
 mod security;
 mod single_instance;
 
 pub use atomic_file::atomic_write;
 pub use data_root::DataRoot;
 pub use installation::Installation;
+pub use notification::NativeNotifier;
 pub use security::OwnerSecurity;
 pub use single_instance::SingleInstance;
 

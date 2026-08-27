@@ -445,6 +445,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "lazoo-keeper"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "lazoo-runtime",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror",
+ "tokio",
+ "uuid",
+]
+
+[[package]]
 name = "lazoo-protocol"
 version = "0.1.0"
 dependencies = [
