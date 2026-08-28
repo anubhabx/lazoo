@@ -122,19 +122,19 @@ apps/lazoo-desktop/ui/
 - Modify: `apps/lazoo-desktop/ui/src/App.tsx`
 - Modify: `apps/lazoo-desktop/ui/src/app.test.tsx`
 
-- [ ] Write a CSS contract test first that rejects literal hex/rgb/hsl/oklch product colors, `transition: all`, remote URLs, mixed emoji icons, and pointer cursors on buttons or selectable rows in `src`.
-- [ ] Run the contract test and confirm RED because `app.css` and the token import contract are absent.
-- [ ] Write component tests first for the 40px titlebar landmarks, accessible window-control names, 208px navigation labels, selected navigation state, 28px status bar, loading layout, and minimum-shell structure.
-- [ ] Run the focused component tests and confirm RED because the shell components do not exist.
-- [ ] Implement reusable React Aria Button and Tooltip primitives with visible `:focus-visible`, disabled, pressed, hover, and loading states.
-- [ ] Implement the custom draggable titlebar, brand mark, current view label, command trigger, compact connection state, and Windows minimize/maximize/close controls. Prevent drag initiation from controls.
-- [ ] Implement Control room, Projects, Activity, and System navigation as read-only client views; use one Lucide outline family and label future functionality nowhere as available.
-- [ ] Implement the status bar with daemon truth, refresh age, project/event counts, and local-pipe wording.
-- [ ] Style the shell from canonical semantic tokens: graphite surface hierarchy, ember current-location/focus accent, 1px borders, Zed spacing/type dimensions, restrained hover, and no grounded-panel shadows.
-- [ ] Collapse the navigation to labeled tooltips at the minimum-width breakpoint; retain accessible names and keyboard reachability.
-- [ ] Run the contract and component tests and confirm GREEN.
-- [ ] Run `npm --prefix apps/lazoo-desktop/ui run build`, inspect `dist/index.html`, and confirm all runtime resources are local.
-- [ ] Commit: `feat: build Lazoo dark desktop shell`
+- [x] Write a CSS contract test first that rejects literal hex/rgb/hsl/oklch product colors, `transition: all`, remote URLs, mixed emoji icons, and pointer cursors on buttons or selectable rows in `src`.
+- [x] Run the contract test and confirm RED because `app.css` and the token import contract are absent.
+- [x] Write component tests first for the 40px titlebar landmarks, accessible window-control names, 208px navigation labels, selected navigation state, 28px status bar, loading layout, and minimum-shell structure.
+- [x] Run the focused component tests and confirm RED because the shell components do not exist.
+- [x] Implement reusable React Aria Button and Tooltip primitives with visible `:focus-visible`, disabled, pressed, hover, and loading states.
+- [x] Implement the custom draggable titlebar, brand mark, current view label, command trigger, compact connection state, and Windows minimize/maximize/close controls. Prevent drag initiation from controls.
+- [x] Implement Control room, Projects, Activity, and System navigation as read-only client views; use one Lucide outline family and label future functionality nowhere as available.
+- [x] Implement the status bar with daemon truth, refresh age, project/event counts, and local-pipe wording.
+- [x] Style the shell from canonical semantic tokens: graphite surface hierarchy, ember current-location/focus accent, 1px borders, Zed spacing/type dimensions, restrained hover, and no grounded-panel shadows.
+- [x] Collapse the navigation to labeled tooltips at the minimum-width breakpoint; retain accessible names and keyboard reachability.
+- [x] Run the contract and component tests and confirm GREEN.
+- [x] Run `npm --prefix apps/lazoo-desktop/ui run build`, inspect `dist/index.html`, and confirm all runtime resources are local.
+- [x] Commit: `feat: build Lazoo dark desktop shell`
 
 ### Task 4: Implement operational views, states, and inspector
 
