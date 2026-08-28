@@ -20,6 +20,8 @@ fn main() {
 
 fn lazoo_icon() -> Vec<u8> {
     const SIDE: u32 = 32;
+    const SIDE_U8: u8 = 32;
+    const SIDE_I32: i32 = 32;
     const PIXEL_BYTES: u32 = SIDE * SIDE * 4;
     const MASK_BYTES: u32 = SIDE * 4;
     const IMAGE_BYTES: u32 = 40 + PIXEL_BYTES + MASK_BYTES;
@@ -28,15 +30,15 @@ fn lazoo_icon() -> Vec<u8> {
     icon.extend_from_slice(&0_u16.to_le_bytes());
     icon.extend_from_slice(&1_u16.to_le_bytes());
     icon.extend_from_slice(&1_u16.to_le_bytes());
-    icon.extend_from_slice(&[SIDE as u8, SIDE as u8, 0, 0]);
+    icon.extend_from_slice(&[SIDE_U8, SIDE_U8, 0, 0]);
     icon.extend_from_slice(&1_u16.to_le_bytes());
     icon.extend_from_slice(&32_u16.to_le_bytes());
     icon.extend_from_slice(&IMAGE_BYTES.to_le_bytes());
     icon.extend_from_slice(&22_u32.to_le_bytes());
 
     icon.extend_from_slice(&40_u32.to_le_bytes());
-    icon.extend_from_slice(&(SIDE as i32).to_le_bytes());
-    icon.extend_from_slice(&((SIDE * 2) as i32).to_le_bytes());
+    icon.extend_from_slice(&SIDE_I32.to_le_bytes());
+    icon.extend_from_slice(&(SIDE_I32 * 2).to_le_bytes());
     icon.extend_from_slice(&1_u16.to_le_bytes());
     icon.extend_from_slice(&32_u16.to_le_bytes());
     icon.extend_from_slice(&0_u32.to_le_bytes());

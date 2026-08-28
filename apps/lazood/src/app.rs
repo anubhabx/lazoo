@@ -63,7 +63,7 @@ impl App {
                 .map(to_value)
                 .map_err(store_error),
             "events.list" => self.list_events(request.params),
-            "desktop.snapshot" => self.desktop_snapshot(request.params),
+            "desktop.snapshot" => self.desktop_snapshot(&request.params),
             "system.shutdown" => {
                 let _ = self.shutdown.send(true);
                 Ok(json!({"planned": true}))
@@ -171,8 +171,8 @@ impl App {
             .map_err(store_error)
     }
 
-    fn desktop_snapshot(&self, params: Value) -> Result<Value, RpcError> {
-        require_empty_params(&params)?;
+    fn desktop_snapshot(&self, params: &Value) -> Result<Value, RpcError> {
+        require_empty_params(params)?;
         let store_status = self.store.status().map_err(store_error)?;
         let recent_after = store_status.event_high_water.saturating_sub(100);
         let projects = self.store.list_projects().map_err(store_error)?;
