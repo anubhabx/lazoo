@@ -4,7 +4,7 @@
 - **Research snapshot:** 2026-08-28
 - **Owner review:** 2026-08-28
 - **Product boundary:** Windows-first, single-user, local desktop software
-- **Repository stage:** First control-plane slice implemented and verified; later product slices remain unimplemented
+- **Repository stage:** Control-plane foundation and read-only Tauri desktop shell implemented and verified; provider, employee, and collaboration slices remain unimplemented
 
 ## 1. Executive summary
 
@@ -892,7 +892,7 @@ Until those gates pass, the UI must say **Detected**, **Configured**, **Degraded
 - benchmark harness and baseline capture;
 - threat model and data-retention contract.
 
-The first implementation milestone is a narrow Stage 1/Stage 2 bridge: a runnable control-plane vertical slice. It includes the Rust workspace, daemon, CLI, keeper, versioned control IPC, SQLite event/outbox persistence, current-user pipe security, one durable project-registration flow, restart recovery, and the emergency incident spool. It excludes provider adapters, ConPTY, worktree creation, approvals, the task/message bus, memory processing, and the Tauri desktop shell.
+The first implementation milestone was a narrow Stage 1/Stage 2 bridge: a runnable control-plane vertical slice. It includes the Rust workspace, daemon, CLI, keeper, versioned control IPC, SQLite event/outbox persistence, current-user pipe security, one durable project-registration flow, restart recovery, and the emergency incident spool. That milestone excluded provider adapters, ConPTY, worktree creation, approvals, the task/message bus, memory processing, and the Tauri desktop shell.
 
 ### Stage 2: Windows control-plane kernel
 
@@ -906,6 +906,8 @@ The first implementation milestone is a narrow Stage 1/Stage 2 bridge: a runnabl
 - approvals;
 - incidents, watchdog, emergency spool;
 - live roster and resource governor.
+
+Current Stage 2 status: daemon, keeper, CLI, SQLite event/outbox storage, named-pipe IPC, watchdog/emergency spool, and a minimal read-only Tauri shell are implemented and verified. The shell exposes one explicit `desktop.snapshot` command and shows daemon health, registered projects, recent events, and recovered-incident count. Employee lifecycle, ConPTY/Job Objects, the worktree manager, task/message bus, approvals, and the live roster/resource governor remain unimplemented.
 
 ### Stage 3: first live provider adapters
 
@@ -1064,4 +1066,4 @@ The owner accepted this product and engineering contract on 2026-08-28 with the 
 - Compressed source transcripts are retained by default within visible limits, with global and per-project opt-out.
 - Claude Code live harness verification may use a configured external endpoint/model; native Anthropic subscription verification is tracked separately.
 
-The selected first milestone is the runnable control-plane vertical slice described in Stage 1. Its detailed design must be reviewed before the implementation plan is written. Each later stage still requires its own design, plan, and acceptance evidence.
+The runnable control-plane milestone and the following read-only Tauri desktop-shell slice are implemented with separate design, plan, and acceptance evidence. The next recommended slice is provider truth and the revisioned live employee roster; provider execution must not be claimed until its own live conformance gates pass. Each later slice still requires its own design, plan, and acceptance evidence.

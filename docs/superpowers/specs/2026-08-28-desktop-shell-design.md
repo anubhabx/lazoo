@@ -1,6 +1,6 @@
 # Lazoo Desktop Shell Design
 
-- **Status:** Approved for implementation by the owner's 2026-08-28 “Go ahead with the desktop shell” direction
+- **Status:** Implemented and verified on 2026-08-28
 - **Slice:** Minimal Stage 2 Tauri shell
 - **Platform:** Windows 11, current local user, Tauri 2, WebView2
 

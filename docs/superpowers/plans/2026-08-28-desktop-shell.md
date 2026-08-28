@@ -8,6 +8,8 @@
 
 **Tech Stack:** Rust 1.98, Tokio, existing Lazoo JSON-RPC/named-pipe crates, Tauri 2.11, WebView2, static HTML/CSS/JavaScript, Node 24 built-in test runner, PowerShell acceptance.
 
+**Execution status:** Complete on 2026-08-28. All five tasks were executed with inline red-green-refactor cycles; exact gate evidence is recorded in `docs/verification/2026-08-28-desktop-shell.md`.
+
 ---
 
 ## File map
@@ -36,7 +38,7 @@
 - Modify: `apps/lazood/src/app.rs`
 - Modify: `apps/lazood/tests/daemon.rs`
 
-- [ ] **Step 1: Write the failing protocol serialization test**
+- [x] **Step 1: Write the failing protocol serialization test**
 
 Add a test that constructs a `DesktopSnapshot`, serializes it, asserts `capturedAt`, `status`, `projects`, and `events`, and verifies an unknown field is rejected during deserialization.
 
@@ -57,13 +59,13 @@ fn desktop_snapshot_uses_strict_camel_case_contract() {
 }
 ```
 
-- [ ] **Step 2: Run the test and verify RED**
+- [x] **Step 2: Run the test and verify RED**
 
 Run: `cargo test -p lazoo-protocol --test contracts desktop_snapshot_uses_strict_camel_case_contract`
 
 Expected: compilation fails because `DesktopSnapshot` does not exist.
 
-- [ ] **Step 3: Add the minimal shared DTO**
+- [x] **Step 3: Add the minimal shared DTO**
 
 ```rust
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
@@ -78,17 +80,17 @@ pub struct DesktopSnapshot {
 
 Re-export it from `lazoo-protocol` and rerun the focused test to verify GREEN.
 
-- [ ] **Step 4: Write failing daemon snapshot tests**
+- [x] **Step 4: Write failing daemon snapshot tests**
 
 Add one test that registers a real temporary Git repository, calls `desktop.snapshot`, decodes `DesktopSnapshot`, and asserts the project and event are present. Add another request with a nonempty params object and assert `LZ-INVALID-PARAMS`.
 
-- [ ] **Step 5: Run the daemon tests and verify RED**
+- [x] **Step 5: Run the daemon tests and verify RED**
 
 Run: `cargo test -p lazood --test daemon desktop_snapshot`
 
 Expected: `desktop.snapshot` returns `LZ-METHOD-NOT-FOUND`.
 
-- [ ] **Step 6: Implement snapshot assembly**
+- [x] **Step 6: Implement snapshot assembly**
 
 Add a strict empty-params decoder and a method that reads store status once, uses `event_high_water.saturating_sub(100)` as the recent cursor, and returns:
 
@@ -103,7 +105,7 @@ DesktopSnapshot {
 
 Keep `system.status` behavior unchanged by sharing only the internal status assembly.
 
-- [ ] **Step 7: Verify GREEN and commit**
+- [x] **Step 7: Verify GREEN and commit**
 
 Run: `cargo test -p lazoo-protocol -p lazood`
 
@@ -124,7 +126,7 @@ Commit: `feat: add desktop snapshot RPC`
 - Create: `apps/lazoo-desktop/tests/config.rs`
 - Modify: `Cargo.toml`
 
-- [ ] **Step 1: Add only the crate test surface and failing client tests**
+- [x] **Step 1: Add only the crate test surface and failing client tests**
 
 Create the crate with `serde`, `serde_json`, `thiserror`, `tokio`, `uuid`, `lazoo-ipc`, `lazoo-protocol`, `lazoo-runtime`, `tauri = "2.11.5"`, and `tauri-build = "2.6.3"`. Register it in the workspace. In `client.rs`, write tests for the wished-for API:
 
@@ -158,13 +160,13 @@ fn invalid_response_is_redacted() {
 }
 ```
 
-- [ ] **Step 2: Run the focused tests and verify RED**
+- [x] **Step 2: Run the focused tests and verify RED**
 
 Run: `cargo test -p lazoo-desktop --lib client::tests`
 
 Expected: compilation fails because the client functions and types are absent.
 
-- [ ] **Step 3: Implement the minimal typed bridge**
+- [x] **Step 3: Implement the minimal typed bridge**
 
 Implement `snapshot_request`, `parse_snapshot_response`, public failure mapping, and:
 
@@ -194,13 +196,13 @@ pub async fn fetch_snapshot() -> Result<DesktopSnapshot, DesktopFailure> {
 
 Ensure all internal errors become `DesktopFailure { code, message }` without debug formatting or secret-bearing data.
 
-- [ ] **Step 4: Verify bridge GREEN**
+- [x] **Step 4: Verify bridge GREEN**
 
 Run: `cargo test -p lazoo-desktop --lib client::tests`
 
 Expected: all client tests pass.
 
-- [ ] **Step 5: Write failing Tauri configuration tests**
+- [x] **Step 5: Write failing Tauri configuration tests**
 
 The tests must parse `tauri.conf.json` and assert:
 
@@ -212,13 +214,13 @@ The tests must parse `tauri.conf.json` and assert:
 - bundle creation is disabled for this slice;
 - the capability contains only `core:default` and generated `allow-load-desktop-snapshot` permissions.
 
-- [ ] **Step 6: Run configuration tests and verify RED**
+- [x] **Step 6: Run configuration tests and verify RED**
 
 Run: `cargo test -p lazoo-desktop --test config`
 
 Expected: configuration files are missing.
 
-- [ ] **Step 7: Add the Tauri builder and restricted configuration**
+- [x] **Step 7: Add the Tauri builder and restricted configuration**
 
 Register only:
 
@@ -231,7 +233,7 @@ async fn load_desktop_snapshot() -> Result<DesktopSnapshot, DesktopFailure> {
 
 Use `tauri::generate_handler![load_desktop_snapshot]`. Configure one decorated, resizable main window, static `ui` frontend, `withGlobalTauri`, local-only CSP, and `bundle.active: false`. Use the documented Tauri build manifest to declare only `load_desktop_snapshot`.
 
-- [ ] **Step 8: Verify configuration and native compilation, then commit**
+- [x] **Step 8: Verify configuration and native compilation, then commit**
 
 Run: `cargo test -p lazoo-desktop`
 
@@ -247,7 +249,7 @@ Commit: `feat: add secure Lazoo Tauri bridge`
 - Create: `apps/lazoo-desktop/ui/view-model.js`
 - Create: `apps/lazoo-desktop/ui/view-model.test.mjs`
 
-- [ ] **Step 1: Write failing Node tests**
+- [x] **Step 1: Write failing Node tests**
 
 Cover exact behavior:
 
@@ -273,17 +275,17 @@ test('summarizes project registration without rendering raw JSON', () => {
 
 Also cover healthy state, recovered incidents, checkout labels, invalid timestamps, unknown event types, and long payload truncation.
 
-- [ ] **Step 2: Run Node tests and verify RED**
+- [x] **Step 2: Run Node tests and verify RED**
 
 Run: `node --test apps/lazoo-desktop/ui/view-model.test.mjs`
 
 Expected: module-not-found or missing-export failure.
 
-- [ ] **Step 3: Implement pure formatting functions**
+- [x] **Step 3: Implement pure formatting functions**
 
 Export `formatUptime`, `formatTimestamp`, `formatRelativeTime`, `formatCheckoutMode`, `humanizeEventType`, `summarizeEvent`, and `buildViewModel`. Do not access `window` or `document` in this module.
 
-- [ ] **Step 4: Verify GREEN and commit**
+- [x] **Step 4: Verify GREEN and commit**
 
 Run: `node --test apps/lazoo-desktop/ui/view-model.test.mjs`
 
@@ -298,11 +300,11 @@ Commit: `feat: add desktop presentation model`
 - Create: `apps/lazoo-desktop/ui/styles.css`
 - Create: `apps/lazoo-desktop/ui/app.js`
 
-- [ ] **Step 1: Build the semantic static document**
+- [x] **Step 1: Build the semantic static document**
 
 Use a real `header`, `main`, `section`, `ol`, `dl`, and `button`. Include one polite live region for connection state. Load `styles.css` and `app.js` as local files; include no inline style, inline script, remote resource, or form.
 
-- [ ] **Step 2: Implement serialized refresh and safe rendering**
+- [x] **Step 2: Implement serialized refresh and safe rendering**
 
 `app.js` must:
 
@@ -314,11 +316,11 @@ Use a real `header`, `main`, `section`, `ol`, `dl`, and `button`. Include one po
 - expose connected, degraded, disconnected, loading, project-empty, and activity-empty states;
 - make the manual refresh button keyboard accessible and reflect busy state.
 
-- [ ] **Step 3: Apply the responsive visual system**
+- [x] **Step 3: Apply the responsive visual system**
 
 Use the spec's paper/ink/orange/green palette, Bahnschrift/Segoe typography, asymmetric primary/diagnostic grid, thin rules, visible focus, reduced-motion handling, and a single-column narrow layout. Avoid external assets, gradients, glow, glass, nested cards, and decorative charts.
 
-- [ ] **Step 4: Run static safety checks and the frontend tests**
+- [x] **Step 4: Run static safety checks and the frontend tests**
 
 Run: `rg -n "innerHTML|outerHTML|insertAdjacentHTML|https?://|<script[^>]*>[^<]" apps/lazoo-desktop/ui`
 
@@ -328,7 +330,7 @@ Run: `node --test apps/lazoo-desktop/ui/view-model.test.mjs`
 
 Expected: all tests pass.
 
-- [ ] **Step 5: Compile the embedded frontend and commit**
+- [x] **Step 5: Compile the embedded frontend and commit**
 
 Run: `cargo build -p lazoo-desktop`
 
@@ -347,9 +349,9 @@ Commit: `feat: build Lazoo desktop control room`
 - Modify: `docs/superpowers/plans/2026-08-28-desktop-shell.md`
 - Modify: `docs/superpowers/specs/2026-08-28-desktop-shell-design.md`
 
-- [ ] **Step 1: Write the acceptance script assertions before relying on the new app**
+- [x] **Step 1: Write the acceptance script assertions before relying on the new app**
 
-The script must use a unique temporary `LAZOO_DATA_ROOT`, build locked release binaries, initialize a temporary Git repository, start `lazoo-keeper.exe`, register the project, launch `lazoo-desktop.exe`, wait for a nonzero `MainWindowHandle` and exact title, capture default and narrow temporary screenshots, stop only the exact desktop/keeper processes it started, remove its temporary directory, and write a JSON manifest.
+The script must use a unique temporary `LAZOO_DATA_ROOT`, build locked release binaries, initialize a temporary Git repository, start `lazoo-keeper.exe`, register the project, launch `lazoo-desktop.exe`, wait for a nonzero `MainWindowHandle` and exact title, capture default and narrow temporary screenshots, stop only the exact desktop/keeper processes it started, retain the isolated run directory for visual evidence, and write a JSON manifest.
 
 Required manifest gates:
 
@@ -365,7 +367,7 @@ Required manifest gates:
 }
 ```
 
-- [ ] **Step 2: Run acceptance and inspect screenshots**
+- [x] **Step 2: Run acceptance and inspect screenshots**
 
 Run: `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\acceptance\desktop-shell.ps1`
 
@@ -373,11 +375,11 @@ Expected: `DESKTOP SHELL ACCEPTANCE: PASS` and manifest status `PASS`.
 
 Inspect both screenshots for clipping, hierarchy, focus visibility, narrow-layout reflow, correct project content, and a readable system pulse. Record exact observations in the verification file. Delete only the temporary screenshots after inspection.
 
-- [ ] **Step 3: Synchronize product documentation**
+- [x] **Step 3: Synchronize product documentation**
 
 Update `README.md` to list four executables and exact desktop run/acceptance commands. Update the project brief's repository stage, first-slice exclusions, Stage 2 status, and next gate without implying employee/provider support. Mark the design Implemented only after all required gates pass.
 
-- [ ] **Step 4: Run the full fresh gate sequence**
+- [x] **Step 4: Run the full fresh gate sequence**
 
 Run in order:
 
@@ -396,7 +398,7 @@ git diff --check
 
 Record exact test counts, exit results, acceptance manifest gates, manual evidence, and any blocker in `docs/verification/2026-08-28-desktop-shell.md`.
 
-- [ ] **Step 5: Final contract review and commit**
+- [x] **Step 5: Final contract review and commit**
 
 Compare the implementation line by line against `docs/superpowers/specs/2026-08-28-desktop-shell-design.md`. Confirm every exclusion remains excluded and no gate is claimed without output.
 
