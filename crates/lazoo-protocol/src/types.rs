@@ -90,3 +90,12 @@ pub struct SystemStatus {
     pub keeper: Option<Value>,
     pub degraded: Vec<String>,
 }
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct DesktopSnapshot {
+    pub captured_at: String,
+    pub status: SystemStatus,
+    pub projects: Vec<ProjectRecord>,
+    pub events: Vec<EventSummary>,
+}

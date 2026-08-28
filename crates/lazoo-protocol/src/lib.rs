@@ -3,8 +3,8 @@ mod types;
 
 pub use rpc::{JsonRpcRequest, JsonRpcResponse, RpcError};
 pub use types::{
-    CheckoutMode, EventSummary, EventsListParams, ProjectRecord, RegisterProjectParams,
-    RegisterProjectResult, SystemStatus,
+    CheckoutMode, DesktopSnapshot, EventSummary, EventsListParams, ProjectRecord,
+    RegisterProjectParams, RegisterProjectResult, SystemStatus,
 };
 
 pub const PROTOCOL_V1: u32 = 1;

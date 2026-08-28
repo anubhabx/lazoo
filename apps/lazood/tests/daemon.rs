@@ -1,6 +1,6 @@
 use std::{path::Path, process::Command, time::Duration};
 
-use lazoo_protocol::{CheckoutMode, JsonRpcRequest};
+use lazoo_protocol::{CheckoutMode, DesktopSnapshot, JsonRpcRequest};
 use lazoo_runtime::DataRoot;
 use lazoo_store::Store;
 use lazood::App;
@@ -179,4 +179,53 @@ async fn shutdown_request_sets_the_planned_stop_signal() {
         .unwrap()
         .unwrap();
     assert!(*shutdown.borrow());
+}
+
+#[tokio::test]
+async fn desktop_snapshot_returns_status_projects_and_recent_events() {
+    let (temporary, app) = test_app();
+    let repository = temporary.path().join("desktop-project");
+    std::fs::create_dir_all(&repository).unwrap();
+    git_init(&repository);
+    app.handle(request(
+        "register-desktop",
+        "project.register",
+        json!({
+            "path": repository,
+            "displayName": "Desktop project",
+            "idempotencyKey": "desktop-project"
+        }),
+    ))
+    .await;
+
+    let response = app
+        .handle(request("desktop-1", "desktop.snapshot", json!({})))
+        .await;
+    let snapshot: DesktopSnapshot =
+        serde_json::from_value(response.result.expect("snapshot result")).unwrap();
+
+    assert_eq!(snapshot.status.project_count, 1);
+    assert_eq!(snapshot.status.event_high_water, 1);
+    assert_eq!(snapshot.projects.len(), 1);
+    assert_eq!(snapshot.projects[0].display_name, "Desktop project");
+    assert_eq!(snapshot.events.len(), 1);
+    assert_eq!(snapshot.events[0].sequence, 1);
+    assert_eq!(snapshot.events[0].event_type, "project.registered");
+    assert!(snapshot.captured_at.ends_with('Z'));
+}
+
+#[tokio::test]
+async fn desktop_snapshot_rejects_nonempty_parameters() {
+    let (_temporary, app) = test_app();
+
+    let response = app
+        .handle(request(
+            "desktop-invalid",
+            "desktop.snapshot",
+            json!({"method": "system.shutdown"}),
+        ))
+        .await;
+
+    let error = response.error.expect("nonempty params must fail");
+    assert_eq!(error.code, "LZ-INVALID-PARAMS");
 }

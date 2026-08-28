@@ -1,12 +1,13 @@
 use std::{fs, time::Instant};
 
+use chrono::{SecondsFormat, Utc};
 use lazoo_domain::inspect_git_repository;
 use lazoo_protocol::{
-    EventSummary, EventsListParams, JsonRpcRequest, JsonRpcResponse, PROTOCOL_V1,
+    DesktopSnapshot, EventSummary, EventsListParams, JsonRpcRequest, JsonRpcResponse, PROTOCOL_V1,
     RegisterProjectParams, RpcError, SystemStatus,
 };
 use lazoo_runtime::DataRoot;
-use lazoo_store::{RegisterProjectInput, Store};
+use lazoo_store::{RegisterProjectInput, Store, StoreStatus};
 use serde::Serialize;
 use serde_json::{Value, json};
 use tokio::sync::{broadcast, watch};
@@ -62,6 +63,7 @@ impl App {
                 .map(to_value)
                 .map_err(store_error),
             "events.list" => self.list_events(request.params),
+            "desktop.snapshot" => self.desktop_snapshot(request.params),
             "system.shutdown" => {
                 let _ = self.shutdown.send(true);
                 Ok(json!({"planned": true}))
@@ -100,9 +102,13 @@ impl App {
 
     fn status(&self) -> Result<Value, RpcError> {
         let status = self.store.status().map_err(store_error)?;
+        Ok(to_value(self.system_status(status)))
+    }
+
+    fn system_status(&self, status: StoreStatus) -> SystemStatus {
         let uptime_millis = u64::try_from(self.started.elapsed().as_millis()).unwrap_or(u64::MAX);
         let keeper = read_optional_json(self.root.keeper_state_file());
-        Ok(to_value(SystemStatus {
+        SystemStatus {
             daemon_version: env!("CARGO_PKG_VERSION").to_owned(),
             boot_id: self.boot_id,
             uptime_millis,
@@ -116,7 +122,7 @@ impl App {
             emergency_incident_count: status.emergency_incident_count,
             keeper,
             degraded: Vec::new(),
-        }))
+        }
     }
 
     fn register(&self, request: &JsonRpcRequest) -> Result<Value, RpcError> {
@@ -163,6 +169,33 @@ impl App {
             .list_events(params.after, params.limit)
             .map(to_value)
             .map_err(store_error)
+    }
+
+    fn desktop_snapshot(&self, params: Value) -> Result<Value, RpcError> {
+        require_empty_params(&params)?;
+        let store_status = self.store.status().map_err(store_error)?;
+        let recent_after = store_status.event_high_water.saturating_sub(100);
+        let projects = self.store.list_projects().map_err(store_error)?;
+        let events = self
+            .store
+            .list_events(recent_after, 100)
+            .map_err(store_error)?;
+        Ok(to_value(DesktopSnapshot {
+            captured_at: Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true),
+            status: self.system_status(store_status),
+            projects,
+            events,
+        }))
+    }
+}
+
+fn require_empty_params(params: &Value) -> Result<(), RpcError> {
+    if params.as_object().is_some_and(serde_json::Map::is_empty) {
+        Ok(())
+    } else {
+        Err(invalid_params(
+            "desktop.snapshot accepts only an empty object",
+        ))
     }
 }
 
