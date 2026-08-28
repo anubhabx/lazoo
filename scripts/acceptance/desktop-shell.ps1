@@ -48,9 +48,15 @@ function Wait-Status([int]$TimeoutSeconds = 20) {
     throw "daemon did not become ready: $lastError"
 }
 
-function Start-HiddenProcess([string]$Executable, [string]$DataRoot, [bool]$RedirectOutput) {
+function Start-HiddenProcess(
+    [string]$Executable,
+    [string]$DataRoot,
+    [bool]$RedirectOutput,
+    [string]$Arguments = ''
+) {
     $startInfo = [Diagnostics.ProcessStartInfo]::new()
     $startInfo.FileName = $Executable
+    $startInfo.Arguments = $Arguments
     $startInfo.UseShellExecute = $false
     $startInfo.CreateNoWindow = $RedirectOutput
     $startInfo.RedirectStandardOutput = $RedirectOutput
@@ -101,7 +107,8 @@ function Wait-DescendantProcess(
 
 function Stop-OwnedProcessTree(
     [int]$RootProcessId,
-    [int]$PreStopProbeDelayMilliseconds = 0
+    [int]$PreStopProbeDelayMilliseconds = 0,
+    [int]$RootStopProbeDelayMilliseconds = 0
 ) {
     $observedDescendants = [Collections.Generic.HashSet[int]]::new()
     foreach ($candidateId in @(Get-DescendantProcessIds $RootProcessId)) {
@@ -117,7 +124,10 @@ function Stop-OwnedProcessTree(
 
     $rootProcess = Get-Process -Id $RootProcessId -ErrorAction SilentlyContinue
     if ($null -ne $rootProcess) {
-        Stop-Process -Id $RootProcessId -Force
+        if ($RootStopProbeDelayMilliseconds -gt 0) {
+            Start-Sleep -Milliseconds $RootStopProbeDelayMilliseconds
+        }
+        Stop-Process -Id $RootProcessId -Force -ErrorAction SilentlyContinue
         Assert-True $rootProcess.WaitForExit(5000) "process-tree root $RootProcessId stopped"
     }
 
@@ -301,6 +311,7 @@ $keeper = $null
 $desktop = $null
 $cleanupProbeKeeper = $null
 $cleanupProbeOther = $null
+$cleanupExitProbe = $null
 $manifestStatus = 'FAIL'
 $keeperStdout = ''
 $keeperStderr = ''
@@ -330,6 +341,13 @@ try {
         Assert-True (Test-Path -LiteralPath $binary) "binary exists: $binary"
     }
     $gates.releaseBuild = 'PASS'
+
+    $hostExecutable = (Get-Process -Id $PID).Path
+    $cleanupExitProbe = Start-HiddenProcess $hostExecutable $cleanupOwnedRoot $true '-NoProfile -Command "Start-Sleep -Milliseconds 250"'
+    $null = @(Stop-OwnedProcessTree $cleanupExitProbe.Id 0 500)
+    Assert-True $cleanupExitProbe.WaitForExit(5000) 'self-exiting cleanup-probe root stopped'
+    Assert-Equal $cleanupExitProbe.ExitCode 0 'cleanup tolerates root exiting before stop request'
+    $cleanupExitProbe = $null
 
     $cleanupProbeKeeper = Start-HiddenProcess $script:keeperExe $cleanupOwnedRoot $true
     $ownedProbeDaemon = Wait-DescendantProcess $cleanupProbeKeeper.Id 'lazood.exe'
@@ -419,6 +437,9 @@ try {
     }
     if ($null -ne $cleanupProbeOther -and -not $cleanupProbeOther.HasExited) {
         Stop-Process -Id $cleanupProbeOther.Id -Force
+    }
+    if ($null -ne $cleanupExitProbe -and -not $cleanupExitProbe.HasExited) {
+        Stop-Process -Id $cleanupExitProbe.Id -Force
     }
     if ($null -ne $cleanupProbeKeeper -and -not $cleanupProbeKeeper.HasExited) {
         Stop-OwnedProcessTree $cleanupProbeKeeper.Id

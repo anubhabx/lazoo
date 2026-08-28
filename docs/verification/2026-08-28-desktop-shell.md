@@ -38,7 +38,7 @@ The Rust count increased from 48 to 61: one protocol contract test, two daemon s
 - Desktop-client tests first failed on missing request/parser/error types, then passed after the one-shot typed bridge was implemented.
 - Review regression tests first failed because the bridge had no overall deadline and accepted mismatched JSON-RPC metadata. They pass after a five-second request deadline and strict version/request-ID correlation were added.
 - Tauri configuration tests first failed because the configuration, capability, and build manifest files were absent, then passed after the restricted scaffold was added.
-- The failed-run cleanup regression first proved the harness selected daemons by shared executable path. A second review exposed a restart race in a one-time descendant snapshot. Cleanup now stops and confirms the keeper first, then repeatedly rescans and drains only its descendants; the live probe forces a child restart during cleanup while a same-binary unrelated daemon remains running until explicitly stopped.
+- The failed-run cleanup regression first proved the harness selected daemons by shared executable path. Later review passes exposed a restart race in a one-time descendant snapshot and a root-exit race that could interrupt `finally`. Cleanup now idempotently stops and confirms the keeper, then repeatedly rescans and drains only its descendants; live probes cover a concurrent natural root exit and force a child restart during cleanup while a same-binary unrelated daemon remains running until explicitly stopped.
 - The Node suite first failed because `view-model.js` was absent. Its first implementation exposed an acronym-humanization failure; the focused fix produced 7/7 passing tests.
 
 ## Windows acceptance evidence
@@ -48,7 +48,7 @@ The final desktop manifest records:
 | Gate | Evidence |
 |---|---|
 | `releaseBuild` | Release binaries existed from the immediately preceding locked workspace build |
-| `cleanupIsolation` | The harness forced a probe daemon restart during cleanup, drained the restarted keeper descendant, and preserved an unrelated `lazood.exe` launched from the same release binary with a separate data root |
+| `cleanupIsolation` | The harness tolerated a probe root exiting concurrently, forced a daemon restart during keeper cleanup, drained the restarted descendant, and preserved an unrelated `lazood.exe` launched from the same release binary with a separate data root |
 | `daemonReady` | Isolated keeper/daemon reported protocol 1 and SQLite WAL |
 | `desktopWindow` | `lazoo-desktop.exe` exposed a nonzero Windows main-window handle with the exact title `Lazoo — Local control room` |
 | `snapshotRpc` | Windows UI Automation observed `Control plane steady`, `Desktop acceptance`, and `Project registered` from the real WebView2 surface |
@@ -56,7 +56,7 @@ The final desktop manifest records:
 | `narrowScreenshot` | The same real window resized to 860×620 and retained `System pulse` and project content in the accessibility tree |
 | `processIsolation` | Closing the desktop left the keeper running; planned daemon shutdown then ended the keeper with exit code 0 |
 
-The acceptance harness initially used `CopyFromScreen`; visual inspection caught that an occluding Chrome window could produce a false screenshot pass. The harness was corrected to use Windows `PrintWindow` for the application surface, with screen copy only as a fallback. Review then caught that failed-run cleanup selected every daemon sharing the release executable path and later found a child-restart race in the first fix. Cleanup now confirms the keeper has stopped, repeatedly drains its descendant tree, and verifies forced-restart plus same-binary isolation at runtime. The final manifest was regenerated after these corrections.
+The acceptance harness initially used `CopyFromScreen`; visual inspection caught that an occluding Chrome window could produce a false screenshot pass. The harness was corrected to use Windows `PrintWindow` for the application surface, with screen copy only as a fallback. Review then caught that failed-run cleanup selected every daemon sharing the release executable path and later found child-restart and concurrent-root-exit races in the fixes. Cleanup is now idempotent, confirms the keeper has stopped, repeatedly drains its descendant tree, and verifies root-exit, forced-restart, and same-binary isolation at runtime. The final manifest was regenerated after these corrections.
 
 ## Visual QA
 
