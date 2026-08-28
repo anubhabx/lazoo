@@ -76,19 +76,19 @@ apps/lazoo-desktop/ui/
 - Modify: `apps/lazoo-desktop/tests/config.rs`
 - Create: `apps/lazoo-desktop/ui/dist/`
 
-- [ ] Extend `apps/lazoo-desktop/tests/config.rs` first so it requires `frontendDist: ui/dist`, a local Vite hook, `decorations: false`, dark theme, the existing minimum size, `withGlobalTauri: false`, and exactly the snapshot plus approved core-window permissions.
-- [ ] Run `cargo test -p lazoo-desktop --test config tauri_configuration_is_static_local_and_single_windowed main_capability_allows_only_core_window_and_snapshot_commands` and confirm RED because the current config still points at `ui`, uses native decorations, exposes the global API, and lacks window permissions.
-- [ ] Add exact frontend dependencies and scripts. Use exact versions and commit the npm lockfile. Scripts must include `dev`, `build`, `typecheck`, `test`, `test:watch`, `format`, `format:check`, and `check`.
-- [ ] Configure Vite with `base: './'`, `build.outDir: 'dist'`, source maps disabled, a fixed localhost development port, `server.strictPort: true`, and a workspace allow-list that permits importing `design-system/tokens.css` without exposing paths above the repository root.
-- [ ] Configure Vitest for `jsdom`, the shared setup file, restored mocks, and CSS enabled. Add missing DOM shims only when a failing test demonstrates the need.
-- [ ] Replace `index.html` with a minimal dark boot document containing `#root`, a strict module entry, dark color scheme metadata, and no inline style/script or remote resource.
-- [ ] Add the smallest React boot surface, import local font packages and canonical `design-system/tokens.css`, and build `ui/dist`.
-- [ ] Update Tauri to package `ui/dist`, use Vite hooks for `tauri dev/build`, disable decorations, set dark theme, and disable `withGlobalTauri`.
-- [ ] Grant only `core:window:default`, close, minimize, toggle-maximize, start-dragging, is-maximized, and the generated snapshot command.
-- [ ] Run the focused Rust configuration tests and confirm GREEN.
-- [ ] Run `npm --prefix apps/lazoo-desktop/ui run check` and confirm typecheck, Vitest, formatting, and production build pass.
-- [ ] Run `cargo build -p lazoo-desktop` and confirm `target/debug/lazoo-desktop.exe` is emitted from the checked-in `dist` payload.
-- [ ] Commit: `build: add React desktop frontend pipeline`
+- [x] Extend `apps/lazoo-desktop/tests/config.rs` first so it requires `frontendDist: ui/dist`, a local Vite hook, `decorations: false`, dark theme, the existing minimum size, `withGlobalTauri: false`, and exactly the snapshot plus approved core-window permissions.
+- [x] Run `cargo test -p lazoo-desktop --test config tauri_configuration_is_static_local_and_single_windowed main_capability_allows_only_core_window_and_snapshot_commands` and confirm RED because the current config still points at `ui`, uses native decorations, exposes the global API, and lacks window permissions.
+- [x] Add exact frontend dependencies and scripts. Use exact versions and commit the npm lockfile. Scripts must include `dev`, `build`, `typecheck`, `test`, `test:watch`, `format`, `format:check`, and `check`.
+- [x] Configure Vite with `base: './'`, `build.outDir: 'dist'`, source maps disabled, a fixed localhost development port, `server.strictPort: true`, and a workspace allow-list that permits importing `design-system/tokens.css` without exposing paths above the repository root.
+- [x] Configure Vitest for `jsdom`, the shared setup file, restored mocks, and CSS enabled. Add missing DOM shims only when a failing test demonstrates the need.
+- [x] Replace `index.html` with a minimal dark boot document containing `#root`, a strict module entry, dark color scheme metadata, and no inline style/script or remote resource.
+- [x] Add the smallest React boot surface, import local font packages and canonical `design-system/tokens.css`, and build `ui/dist`.
+- [x] Update Tauri to package `ui/dist`, use Vite hooks for `tauri dev/build`, disable decorations, set dark theme, and disable `withGlobalTauri`.
+- [x] Grant only `core:window:default`, close, minimize, toggle-maximize, start-dragging, is-maximized, and the generated snapshot command.
+- [x] Run the focused Rust configuration tests and confirm GREEN.
+- [x] Run `npm --prefix apps/lazoo-desktop/ui run check` and confirm typecheck, Vitest, formatting, and production build pass.
+- [x] Run `cargo build -p lazoo-desktop` and confirm `target/debug/lazoo-desktop.exe` is emitted from the checked-in `dist` payload.
+- [x] Commit: `build: add React desktop frontend pipeline`
 
 ### Task 2: Port and strengthen the presentation model
 

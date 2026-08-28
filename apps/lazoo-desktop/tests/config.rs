@@ -23,14 +23,25 @@ fn tauri_configuration_is_static_local_and_single_windowed() {
 
     assert_eq!(config["productName"], "Lazoo");
     assert_eq!(config["identifier"], "com.anubhab.lazoo");
-    assert_eq!(config["build"]["frontendDist"], "ui");
-    assert_eq!(config["app"]["withGlobalTauri"], true);
+    assert_eq!(config["build"]["frontendDist"], "ui/dist");
+    assert_eq!(
+        config["build"]["beforeDevCommand"],
+        "npm --prefix ui run dev"
+    );
+    assert_eq!(
+        config["build"]["beforeBuildCommand"],
+        "npm --prefix ui run build"
+    );
+    assert_eq!(config["build"]["devUrl"], "http://127.0.0.1:1420");
+    assert_eq!(config["app"]["withGlobalTauri"], false);
     assert_eq!(windows.len(), 1);
     assert_eq!(windows[0]["label"], "main");
     assert_eq!(windows[0]["title"], "Lazoo — Local control room");
     assert_eq!(windows[0]["minWidth"], 860);
     assert_eq!(windows[0]["minHeight"], 620);
     assert_eq!(windows[0]["resizable"], true);
+    assert_eq!(windows[0]["decorations"], false);
+    assert_eq!(windows[0]["theme"], "Dark");
     assert_eq!(config["bundle"]["active"], false);
     assert!(csp.contains("default-src 'self'"));
     assert!(
@@ -41,13 +52,22 @@ fn tauri_configuration_is_static_local_and_single_windowed() {
 }
 
 #[test]
-fn main_capability_allows_only_core_and_snapshot_command() {
+fn main_capability_allows_only_core_window_and_snapshot_commands() {
     let capability = read_json("capabilities/main.json");
 
     assert_eq!(capability["windows"], serde_json::json!(["main"]));
     assert_eq!(
         capability["permissions"],
-        serde_json::json!(["core:default", "allow-load-desktop-snapshot"])
+        serde_json::json!([
+            "core:default",
+            "core:window:default",
+            "core:window:allow-close",
+            "core:window:allow-minimize",
+            "core:window:allow-toggle-maximize",
+            "core:window:allow-start-dragging",
+            "core:window:allow-is-maximized",
+            "allow-load-desktop-snapshot"
+        ])
     );
 }
 

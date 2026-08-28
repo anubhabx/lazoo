@@ -1,11 +1,14 @@
 # Rust and Tauri build output
 target/
 dist/
+!apps/lazoo-desktop/ui/dist/
+!apps/lazoo-desktop/ui/dist/**
 
 # JavaScript dependencies and build caches
 node_modules/
 .turbo/
 .vite/
+*.tsbuildinfo
 
 # Local configuration and secrets
 .env

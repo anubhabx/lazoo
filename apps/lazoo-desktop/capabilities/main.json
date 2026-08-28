@@ -1,7 +1,16 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "main",
-  "description": "Read-only access to the Lazoo desktop snapshot",
+  "description": "Read-only snapshot access and native main-window controls",
   "windows": ["main"],
-  "permissions": ["core:default", "allow-load-desktop-snapshot"]
+  "permissions": [
+    "core:default",
+    "core:window:default",
+    "core:window:allow-close",
+    "core:window:allow-minimize",
+    "core:window:allow-toggle-maximize",
+    "core:window:allow-start-dragging",
+    "core:window:allow-is-maximized",
+    "allow-load-desktop-snapshot"
+  ]
 }
