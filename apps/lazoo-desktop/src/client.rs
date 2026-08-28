@@ -1,3 +1,5 @@
+use std::{future::Future, time::Duration};
+
 use lazoo_ipc::{IpcError, PipeClient};
 use lazoo_protocol::{DesktopSnapshot, JsonRpcRequest, JsonRpcResponse};
 use lazoo_runtime::{DataRoot, Installation, RuntimeError};
@@ -15,6 +17,8 @@ pub struct DesktopFailure {
 
 #[derive(Debug, Error)]
 enum DesktopClientError {
+    #[error("desktop IPC request timed out")]
+    Timeout,
     #[error("desktop IPC failed")]
     Ipc(#[from] IpcError),
     #[error("desktop runtime failed")]
@@ -30,6 +34,11 @@ enum DesktopClientError {
 impl From<&DesktopClientError> for DesktopFailure {
     fn from(error: &DesktopClientError) -> Self {
         match error {
+            DesktopClientError::Timeout | DesktopClientError::Ipc(IpcError::Io(_)) => Self {
+                code: "LZ-DESKTOP-DAEMON-OFFLINE".to_owned(),
+                message: "Lazoo cannot reach the local daemon. Start lazoo-keeper and retry."
+                    .to_owned(),
+            },
             DesktopClientError::Ipc(IpcError::Authentication) => Self {
                 code: "LZ-IPC-AUTH".to_owned(),
                 message: "The desktop could not authenticate with the local daemon.".to_owned(),
@@ -37,11 +46,6 @@ impl From<&DesktopClientError> for DesktopFailure {
             DesktopClientError::Ipc(IpcError::ProtocolIncompatible) => Self {
                 code: "LZ-PROTOCOL-INCOMPATIBLE".to_owned(),
                 message: "The desktop and daemon use incompatible protocol versions.".to_owned(),
-            },
-            DesktopClientError::Ipc(IpcError::Io(_)) => Self {
-                code: "LZ-DESKTOP-DAEMON-OFFLINE".to_owned(),
-                message: "Lazoo cannot reach the local daemon. Start lazoo-keeper and retry."
-                    .to_owned(),
             },
             DesktopClientError::Ipc(_) => Self {
                 code: "LZ-DESKTOP-IPC".to_owned(),
@@ -75,7 +79,11 @@ fn snapshot_request(id: impl Into<String>) -> JsonRpcRequest {
 
 fn parse_snapshot_response(
     response: JsonRpcResponse,
+    expected_id: &str,
 ) -> Result<DesktopSnapshot, DesktopClientError> {
+    if response.jsonrpc != "2.0" || response.id != expected_id {
+        return Err(DesktopClientError::InvalidResponse);
+    }
     match (response.result, response.error) {
         (Some(result), None) => Ok(serde_json::from_value(result)?),
         (None, Some(error)) => Err(DesktopClientError::Rpc {
@@ -86,15 +94,28 @@ fn parse_snapshot_response(
     }
 }
 
+async fn with_deadline<T, F>(duration: Duration, operation: F) -> Result<T, DesktopClientError>
+where
+    F: Future<Output = Result<T, DesktopClientError>>,
+{
+    tokio::time::timeout(duration, operation)
+        .await
+        .map_err(|_| DesktopClientError::Timeout)?
+}
+
 async fn fetch_snapshot_inner() -> Result<DesktopSnapshot, DesktopClientError> {
-    let root = DataRoot::resolve()?;
-    let installation = Installation::load_or_create(&root)?;
-    let mut connection =
-        PipeClient::connect(&installation, "lazoo-desktop", env!("CARGO_PKG_VERSION")).await?;
-    let request = snapshot_request(Uuid::new_v4().to_string());
-    connection.send_json(&request).await?;
-    let response = connection.receive_json().await?;
-    parse_snapshot_response(response)
+    with_deadline(Duration::from_secs(5), async {
+        let root = DataRoot::resolve()?;
+        let installation = Installation::load_or_create(&root)?;
+        let mut connection =
+            PipeClient::connect(&installation, "lazoo-desktop", env!("CARGO_PKG_VERSION")).await?;
+        let request_id = Uuid::new_v4().to_string();
+        let request = snapshot_request(request_id.clone());
+        connection.send_json(&request).await?;
+        let response = connection.receive_json().await?;
+        parse_snapshot_response(response, &request_id)
+    })
+    .await
 }
 
 pub async fn fetch_snapshot() -> Result<DesktopSnapshot, DesktopFailure> {
@@ -105,13 +126,16 @@ pub async fn fetch_snapshot() -> Result<DesktopSnapshot, DesktopFailure> {
 
 #[cfg(test)]
 mod tests {
-    use std::path::PathBuf;
+    use std::{future::pending, path::PathBuf, time::Duration};
 
     use lazoo_protocol::{DesktopSnapshot, JsonRpcResponse, PROTOCOL_V1, RpcError, SystemStatus};
     use serde_json::json;
     use uuid::Uuid;
 
-    use super::{DesktopFailure, parse_snapshot_response, snapshot_request};
+    use super::{
+        DesktopClientError, DesktopFailure, parse_snapshot_response, snapshot_request,
+        with_deadline,
+    };
 
     fn snapshot() -> DesktopSnapshot {
         DesktopSnapshot {
@@ -154,21 +178,24 @@ mod tests {
         );
 
         assert_eq!(
-            parse_snapshot_response(response).expect("snapshot response"),
+            parse_snapshot_response(response, "desktop-test").expect("snapshot response"),
             expected
         );
     }
 
     #[test]
     fn rpc_failure_preserves_public_code_and_message() {
-        let error = parse_snapshot_response(JsonRpcResponse::failure(
+        let error = parse_snapshot_response(
+            JsonRpcResponse::failure(
+                "desktop-test",
+                RpcError {
+                    code: "LZ-STORE".to_owned(),
+                    message: "store unavailable".to_owned(),
+                    data: None,
+                },
+            ),
             "desktop-test",
-            RpcError {
-                code: "LZ-STORE".to_owned(),
-                message: "store unavailable".to_owned(),
-                data: None,
-            },
-        ))
+        )
         .expect_err("RPC error must fail");
 
         let public = DesktopFailure::from(&error);
@@ -178,16 +205,55 @@ mod tests {
 
     #[test]
     fn invalid_response_is_redacted() {
-        let error = parse_snapshot_response(JsonRpcResponse {
-            jsonrpc: "2.0".to_owned(),
-            id: "desktop-test".to_owned(),
-            result: None,
-            error: None,
-        })
+        let error = parse_snapshot_response(
+            JsonRpcResponse {
+                jsonrpc: "2.0".to_owned(),
+                id: "desktop-test".to_owned(),
+                result: None,
+                error: None,
+            },
+            "desktop-test",
+        )
         .expect_err("invalid shape must fail");
 
         let public = DesktopFailure::from(&error);
         assert_eq!(public.code, "LZ-DESKTOP-INVALID-RESPONSE");
         assert!(!public.message.contains("nonce"));
+    }
+
+    #[test]
+    fn response_id_and_json_rpc_version_must_match_the_request() {
+        let wrong_id = JsonRpcResponse::success(
+            "another-request",
+            serde_json::to_value(snapshot()).expect("snapshot serializes"),
+        );
+        let wrong_version = JsonRpcResponse {
+            jsonrpc: "1.0".to_owned(),
+            id: "desktop-test".to_owned(),
+            result: Some(serde_json::to_value(snapshot()).expect("snapshot serializes")),
+            error: None,
+        };
+
+        for response in [wrong_id, wrong_version] {
+            let error = parse_snapshot_response(response, "desktop-test")
+                .expect_err("mismatched response metadata must fail");
+            assert_eq!(
+                DesktopFailure::from(&error).code,
+                "LZ-DESKTOP-INVALID-RESPONSE"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn stalled_exchange_times_out_as_daemon_offline() {
+        let stalled = pending::<Result<DesktopSnapshot, DesktopClientError>>();
+
+        let error = with_deadline(Duration::from_millis(10), stalled)
+            .await
+            .expect_err("stalled exchange must time out");
+        let public = DesktopFailure::from(&error);
+
+        assert_eq!(public.code, "LZ-DESKTOP-DAEMON-OFFLINE");
+        assert!(public.message.contains("retry"));
     }
 }

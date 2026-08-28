@@ -358,6 +358,7 @@ Required manifest gates:
 ```json
 {
   "releaseBuild": "PASS",
+  "cleanupIsolation": "PASS",
   "daemonReady": "PASS",
   "snapshotRpc": "PASS",
   "desktopWindow": "PASS",

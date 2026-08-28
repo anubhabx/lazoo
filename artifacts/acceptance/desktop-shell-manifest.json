@@ -1,54 +1,55 @@
-﻿{
-    "schemaVersion":  1,
-    "status":  "PASS",
-    "startedAt":  "2026-08-28T15:54:44.5471896Z",
-    "completedAt":  "2026-08-28T15:54:48.0540598Z",
-    "durationMs":  3503,
-    "platform":  "Microsoft Windows NT 10.0.26200.0",
-    "rustcVersion":  "rustc 1.98.0 (88d9e12ae 2026-08-18)",
-    "cargoVersion":  "cargo 1.98.0 (797e8a9bc 2026-08-05)",
-    "repositoryRoot":  "C:\\workspace\\Orchestrator\\.worktrees\\desktop-shell",
-    "isolatedDataRoot":  "C:\\Users\\anubhab\\AppData\\Local\\Temp\\lazoo-desktop-acceptance-45e5a0ce59414713aac18cbd68bf40b4\\data",
-    "temporaryProject":  "C:\\Users\\anubhab\\AppData\\Local\\Temp\\lazoo-desktop-acceptance-45e5a0ce59414713aac18cbd68bf40b4\\repository",
-    "artifacts":  {
-                      "manifest":  "C:\\workspace\\Orchestrator\\.worktrees\\desktop-shell\\artifacts\\acceptance\\desktop-shell-manifest.json",
-                      "runRoot":  "C:\\Users\\anubhab\\AppData\\Local\\Temp\\lazoo-desktop-acceptance-45e5a0ce59414713aac18cbd68bf40b4",
-                      "defaultScreenshot":  "C:\\Users\\anubhab\\AppData\\Local\\Temp\\lazoo-desktop-acceptance-45e5a0ce59414713aac18cbd68bf40b4\\desktop-default.png",
-                      "narrowScreenshot":  "C:\\Users\\anubhab\\AppData\\Local\\Temp\\lazoo-desktop-acceptance-45e5a0ce59414713aac18cbd68bf40b4\\desktop-narrow.png"
-                  },
-    "keeper":  {
-                   "stdout":  "",
-                   "stderr":  ""
-               },
-    "commands":  [
-                     {
-                         "command":  "git init --quiet \u003ctemporary-project\u003e",
-                         "exitCode":  0,
-                         "durationMs":  null
-                     },
-                     {
-                         "command":  "lazooctl --json status",
-                         "exitCode":  0,
-                         "durationMs":  79
-                     },
-                     {
-                         "command":  "lazooctl --json project register C:\\Users\\anubhab\\AppData\\Local\\Temp\\lazoo-desktop-acceptance-45e5a0ce59414713aac18cbd68bf40b4\\repository --name Desktop acceptance --idempotency-key desktop-45e5a0ce59414713aac18cbd68bf40b4",
-                         "exitCode":  0,
-                         "durationMs":  81
-                     },
-                     {
-                         "command":  "lazooctl --json system shutdown",
-                         "exitCode":  0,
-                         "durationMs":  18
-                     }
-                 ],
-    "gates":  {
-                  "releaseBuild":  "PASS",
-                  "daemonReady":  "PASS",
-                  "desktopWindow":  "PASS",
-                  "snapshotRpc":  "PASS",
-                  "defaultScreenshot":  "PASS",
-                  "narrowScreenshot":  "PASS",
-                  "processIsolation":  "PASS"
-              }
+{
+  "schemaVersion": 1,
+  "status": "PASS",
+  "startedAt": "2026-08-28T16:42:53.5731768Z",
+  "completedAt": "2026-08-28T16:42:57.9272026Z",
+  "durationMs": 4351,
+  "platform": "Microsoft Windows NT 10.0.26200.0",
+  "rustcVersion": "rustc 1.98.0 (88d9e12ae 2026-08-18)",
+  "cargoVersion": "cargo 1.98.0 (797e8a9bc 2026-08-05)",
+  "repositoryRoot": "C:\\workspace\\Orchestrator\\.worktrees\\desktop-shell",
+  "isolatedDataRoot": "C:\\Users\\anubhab\\AppData\\Local\\Temp\\lazoo-desktop-acceptance-57ebab2cd30147fc8db498e26660a595\\data",
+  "temporaryProject": "C:\\Users\\anubhab\\AppData\\Local\\Temp\\lazoo-desktop-acceptance-57ebab2cd30147fc8db498e26660a595\\repository",
+  "artifacts": {
+    "manifest": "C:\\workspace\\Orchestrator\\.worktrees\\desktop-shell\\artifacts\\acceptance\\desktop-shell-manifest.json",
+    "runRoot": "C:\\Users\\anubhab\\AppData\\Local\\Temp\\lazoo-desktop-acceptance-57ebab2cd30147fc8db498e26660a595",
+    "defaultScreenshot": "C:\\Users\\anubhab\\AppData\\Local\\Temp\\lazoo-desktop-acceptance-57ebab2cd30147fc8db498e26660a595\\desktop-default.png",
+    "narrowScreenshot": "C:\\Users\\anubhab\\AppData\\Local\\Temp\\lazoo-desktop-acceptance-57ebab2cd30147fc8db498e26660a595\\desktop-narrow.png"
+  },
+  "keeper": {
+    "stdout": "",
+    "stderr": ""
+  },
+  "commands": [
+    {
+      "command": "git init --quiet <temporary-project>",
+      "exitCode": 0,
+      "durationMs": null
+    },
+    {
+      "command": "lazooctl --json status",
+      "exitCode": 0,
+      "durationMs": 84
+    },
+    {
+      "command": "lazooctl --json project register C:\\Users\\anubhab\\AppData\\Local\\Temp\\lazoo-desktop-acceptance-57ebab2cd30147fc8db498e26660a595\\repository --name Desktop acceptance --idempotency-key desktop-57ebab2cd30147fc8db498e26660a595",
+      "exitCode": 0,
+      "durationMs": 78
+    },
+    {
+      "command": "lazooctl --json system shutdown",
+      "exitCode": 0,
+      "durationMs": 19
+    }
+  ],
+  "gates": {
+    "releaseBuild": "PASS",
+    "cleanupIsolation": "PASS",
+    "daemonReady": "PASS",
+    "desktopWindow": "PASS",
+    "snapshotRpc": "PASS",
+    "defaultScreenshot": "PASS",
+    "narrowScreenshot": "PASS",
+    "processIsolation": "PASS"
+  }
 }

@@ -59,6 +59,56 @@ function Start-HiddenProcess([string]$Executable, [string]$DataRoot, [bool]$Redi
     return [Diagnostics.Process]::Start($startInfo)
 }
 
+function Get-DescendantProcessIds([int]$RootProcessId) {
+    $processes = @(Get-CimInstance Win32_Process | Select-Object ProcessId, ParentProcessId)
+    $pending = [Collections.Generic.Queue[int]]::new()
+    $seen = [Collections.Generic.HashSet[int]]::new()
+    $descendants = [Collections.Generic.List[int]]::new()
+    $pending.Enqueue($RootProcessId)
+    $seen.Add($RootProcessId) | Out-Null
+
+    while ($pending.Count -gt 0) {
+        $parentId = $pending.Dequeue()
+        foreach ($candidate in @($processes | Where-Object { $_.ParentProcessId -eq $parentId })) {
+            $candidateId = [int]$candidate.ProcessId
+            if ($seen.Add($candidateId)) {
+                $descendants.Add($candidateId)
+                $pending.Enqueue($candidateId)
+            }
+        }
+    }
+
+    return @($descendants)
+}
+
+function Wait-DescendantProcess(
+    [int]$RootProcessId,
+    [string]$ProcessName,
+    [int]$TimeoutSeconds = 10
+) {
+    $deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSeconds)
+    while ([DateTime]::UtcNow -lt $deadline) {
+        foreach ($candidateId in @(Get-DescendantProcessIds $RootProcessId)) {
+            $candidate = Get-Process -Id $candidateId -ErrorAction SilentlyContinue
+            if ($null -ne $candidate -and "$($candidate.ProcessName).exe" -eq $ProcessName) {
+                return $candidate
+            }
+        }
+        Start-Sleep -Milliseconds 100
+    }
+    throw "process $RootProcessId did not start a descendant named $ProcessName"
+}
+
+function Stop-OwnedProcessTree([int]$RootProcessId) {
+    $descendantIds = @(Get-DescendantProcessIds $RootProcessId)
+
+    Stop-Process -Id $RootProcessId -Force -ErrorAction SilentlyContinue
+    [array]::Reverse($descendantIds)
+    foreach ($candidateId in $descendantIds) {
+        Stop-Process -Id $candidateId -Force -ErrorAction SilentlyContinue
+    }
+}
+
 function Wait-Window([Diagnostics.Process]$Process, [int]$TimeoutSeconds = 20) {
     $deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSeconds)
     while ([DateTime]::UtcNow -lt $deadline) {
@@ -211,6 +261,8 @@ $runId = [Guid]::NewGuid().ToString('N')
 $runRoot = Join-Path ([IO.Path]::GetTempPath()) "lazoo-desktop-acceptance-$runId"
 $script:dataRoot = Join-Path $runRoot 'data'
 $projectRoot = Join-Path $runRoot 'repository'
+$cleanupOwnedRoot = Join-Path $runRoot 'cleanup-owned'
+$cleanupUnrelatedRoot = Join-Path $runRoot 'cleanup-unrelated'
 $defaultScreenshot = Join-Path $runRoot 'desktop-default.png'
 $narrowScreenshot = Join-Path $runRoot 'desktop-narrow.png'
 $startedAt = [DateTime]::UtcNow
@@ -219,11 +271,19 @@ $script:commands = [Collections.Generic.List[object]]::new()
 $gates = [ordered]@{}
 $keeper = $null
 $desktop = $null
+$cleanupProbeKeeper = $null
+$cleanupProbeOther = $null
 $manifestStatus = 'FAIL'
 $keeperStdout = ''
 $keeperStderr = ''
 
-New-Item -ItemType Directory -Force -Path $artifactDir, $script:dataRoot, $projectRoot | Out-Null
+New-Item -ItemType Directory -Force -Path @(
+    $artifactDir,
+    $script:dataRoot,
+    $projectRoot,
+    $cleanupOwnedRoot,
+    $cleanupUnrelatedRoot
+) | Out-Null
 
 try {
     if (-not $SkipBuild) {
@@ -242,6 +302,24 @@ try {
         Assert-True (Test-Path -LiteralPath $binary) "binary exists: $binary"
     }
     $gates.releaseBuild = 'PASS'
+
+    $cleanupProbeKeeper = Start-HiddenProcess $script:keeperExe $cleanupOwnedRoot $true
+    $ownedProbeDaemon = Wait-DescendantProcess $cleanupProbeKeeper.Id 'lazood.exe'
+    $cleanupProbeOther = Start-HiddenProcess $script:daemonExe $cleanupUnrelatedRoot $true
+    Start-Sleep -Milliseconds 500
+    Assert-True (-not $cleanupProbeOther.HasExited) 'unrelated cleanup-probe daemon started'
+
+    Stop-OwnedProcessTree $cleanupProbeKeeper.Id
+    Assert-True $cleanupProbeKeeper.WaitForExit(5000) 'cleanup-probe keeper stopped'
+    Assert-True (
+        $null -eq (Get-Process -Id $ownedProbeDaemon.Id -ErrorAction SilentlyContinue)
+    ) 'cleanup-probe owned daemon stopped'
+    Assert-True (-not $cleanupProbeOther.HasExited) 'cleanup preserves unrelated daemon from same binary'
+    $cleanupProbeKeeper = $null
+    Stop-Process -Id $cleanupProbeOther.Id -Force
+    Assert-True $cleanupProbeOther.WaitForExit(5000) 'unrelated cleanup-probe daemon stopped explicitly'
+    $cleanupProbeOther = $null
+    $gates.cleanupIsolation = 'PASS'
 
     & git init --quiet $projectRoot
     Assert-Equal $LASTEXITCODE 0 'temporary Git repository initialization'
@@ -308,11 +386,14 @@ try {
     if ($null -ne $desktop -and -not $desktop.HasExited) {
         Stop-Process -Id $desktop.Id -Force
     }
+    if ($null -ne $cleanupProbeOther -and -not $cleanupProbeOther.HasExited) {
+        Stop-Process -Id $cleanupProbeOther.Id -Force
+    }
+    if ($null -ne $cleanupProbeKeeper -and -not $cleanupProbeKeeper.HasExited) {
+        Stop-OwnedProcessTree $cleanupProbeKeeper.Id
+    }
     if ($null -ne $keeper -and -not $keeper.HasExited) {
-        $ownedDaemon = Get-CimInstance Win32_Process -Filter "Name = 'lazood.exe'" |
-            Where-Object { $_.ExecutablePath -eq $script:daemonExe }
-        foreach ($process in $ownedDaemon) { Stop-Process -Id $process.ProcessId -Force }
-        Stop-Process -Id $keeper.Id -Force
+        Stop-OwnedProcessTree $keeper.Id
     }
     $manifest = [ordered]@{
         schemaVersion = 1

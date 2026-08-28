@@ -19,24 +19,26 @@ The webview can invoke only the generated `allow-load-desktop-snapshot` command 
 |---|---|---|
 | Toolchain | PASS | `scripts\verify-rust-toolchain.ps1` resolved plain Cargo to `C:\Users\anubhab\.cargo\bin\cargo.exe`, Rust 1.98.0 MSVC |
 | JavaScript presentation tests | PASS | `node --test apps\lazoo-desktop\ui\view-model.test.mjs`: 7 passed, 0 failed |
-| Rust workspace tests | PASS | `cargo test --workspace`: 58 passed, 0 failed, plus all doc tests passed |
+| Rust workspace tests | PASS | `cargo test --workspace`: 61 passed, 0 failed, plus all doc tests passed |
 | Formatting | PASS | `cargo fmt --all -- --check` exited 0 |
 | Lint | PASS | `cargo clippy --workspace --all-targets -- -D warnings` exited 0 |
 | All-target compilation | PASS | `cargo check --workspace --all-targets` exited 0 |
 | Locked release build | PASS | `cargo build --workspace --release --locked` exited 0 and produced all four release executables |
 | Foundation Windows acceptance | PASS | `scripts\acceptance\first-slice.ps1` exited 0; all eight retained gates report PASS |
-| Desktop Windows acceptance | PASS | `scripts\acceptance\desktop-shell.ps1 -SkipBuild` exited 0 after the separate locked release build; all seven desktop gates report PASS |
+| Desktop Windows acceptance | PASS | `scripts\acceptance\desktop-shell.ps1 -SkipBuild` exited 0 after the separate locked release build; all eight desktop gates report PASS |
 | Static webview safety scan | PASS | No `innerHTML`, `outerHTML`, `insertAdjacentHTML`, remote HTTP resource, or inline-script-content match under `apps/lazoo-desktop/ui` |
 | Whitespace | PASS | `git diff --check` exited 0 |
 
-The Rust count increased from 48 to 58: one protocol contract test, two daemon snapshot tests, four desktop-client tests, and three Tauri configuration/security tests were added. Seven Node tests cover uptime and timestamp formatting, checkout/event labels, bounded event summaries, healthy state, degraded state, and recovered-incident state.
+The Rust count increased from 48 to 61: one protocol contract test, two daemon snapshot tests, six desktop-client tests, and four Tauri configuration/security and acceptance-scope tests were added. Seven Node tests cover uptime and timestamp formatting, checkout/event labels, bounded event summaries, healthy state, degraded state, and recovered-incident state.
 
 ## TDD evidence
 
 - The protocol test first failed because `DesktopSnapshot` did not exist, then passed after the strict camel-case DTO was added.
 - Both daemon tests first returned `LZ-METHOD-NOT-FOUND`, then passed after `desktop.snapshot` was implemented with empty-parameter enforcement.
 - Desktop-client tests first failed on missing request/parser/error types, then passed after the one-shot typed bridge was implemented.
+- Review regression tests first failed because the bridge had no overall deadline and accepted mismatched JSON-RPC metadata. They pass after a five-second request deadline and strict version/request-ID correlation were added.
 - Tauri configuration tests first failed because the configuration, capability, and build manifest files were absent, then passed after the restricted scaffold was added.
+- The failed-run cleanup regression first proved the harness selected daemons by shared executable path. Cleanup now walks only the keeper's process descendants, and a live same-binary unrelated-daemon probe remains running until explicitly stopped.
 - The Node suite first failed because `view-model.js` was absent. Its first implementation exposed an acronym-humanization failure; the focused fix produced 7/7 passing tests.
 
 ## Windows acceptance evidence
@@ -46,6 +48,7 @@ The final desktop manifest records:
 | Gate | Evidence |
 |---|---|
 | `releaseBuild` | Release binaries existed from the immediately preceding locked workspace build |
+| `cleanupIsolation` | The harness stopped a probe keeper and its child daemon while preserving an unrelated `lazood.exe` launched from the same release binary with a separate data root |
 | `daemonReady` | Isolated keeper/daemon reported protocol 1 and SQLite WAL |
 | `desktopWindow` | `lazoo-desktop.exe` exposed a nonzero Windows main-window handle with the exact title `Lazoo — Local control room` |
 | `snapshotRpc` | Windows UI Automation observed `Control plane steady`, `Desktop acceptance`, and `Project registered` from the real WebView2 surface |
@@ -53,7 +56,7 @@ The final desktop manifest records:
 | `narrowScreenshot` | The same real window resized to 860×620 and retained `System pulse` and project content in the accessibility tree |
 | `processIsolation` | Closing the desktop left the keeper running; planned daemon shutdown then ended the keeper with exit code 0 |
 
-The acceptance harness initially used `CopyFromScreen`; visual inspection caught that an occluding Chrome window could produce a false screenshot pass. The harness was corrected to use Windows `PrintWindow` for the application surface, with screen copy only as a fallback. The final manifest was regenerated after that correction.
+The acceptance harness initially used `CopyFromScreen`; visual inspection caught that an occluding Chrome window could produce a false screenshot pass. The harness was corrected to use Windows `PrintWindow` for the application surface, with screen copy only as a fallback. Review then caught that failed-run cleanup selected every daemon sharing the release executable path; it now targets only the keeper's descendant tree and verifies same-binary isolation at runtime. The final manifest was regenerated after both corrections.
 
 ## Visual QA
 
@@ -71,4 +74,4 @@ The earlier foundation slice still has two explicitly manual/environment-bound c
 
 ## Contract audit
 
-The implementation was compared with `docs/superpowers/specs/2026-08-28-desktop-shell-design.md` and the delivery exclusions above. Every named automated gate ran. The desktop exposes no mutation command, does not start or stop the keeper, uses no JavaScript framework or remote asset, and does not claim provider or employee support.
+The implementation was compared with `docs/superpowers/specs/2026-08-28-desktop-shell-design.md` and the delivery exclusions above. Every named automated gate ran. The desktop exposes no mutation command, does not start or stop the keeper, uses no JavaScript framework or remote asset, rejects mismatched JSON-RPC responses, bounds stalled daemon exchanges, and does not claim provider or employee support.

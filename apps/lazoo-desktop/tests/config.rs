@@ -59,3 +59,13 @@ fn build_manifest_declares_only_snapshot_command() {
     assert!(!build_script.contains("system.shutdown"));
     assert!(!build_script.contains("project.register"));
 }
+
+#[test]
+fn failed_acceptance_cleanup_is_scoped_to_the_keeper_process_tree() {
+    let script = fs::read_to_string(manifest_path("../../scripts/acceptance/desktop-shell.ps1"))
+        .expect("desktop acceptance script");
+
+    assert!(script.contains("function Stop-OwnedProcessTree"));
+    assert!(script.contains("ParentProcessId"));
+    assert!(!script.contains("ExecutablePath -eq $script:daemonExe"));
+}

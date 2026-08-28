@@ -69,7 +69,7 @@ Pure formatting and view-model functions live in an ES module and are tested wit
 
 ## Error and lifecycle behavior
 
-- A missing or busy pipe becomes `LZ-DESKTOP-DAEMON-OFFLINE` with a short actionable message.
+- A missing, busy, or non-responsive pipe becomes `LZ-DESKTOP-DAEMON-OFFLINE` with a short actionable message. The complete connect/handshake/request/response exchange has a bounded deadline so refresh can never remain in flight indefinitely.
 - Authentication, protocol, runtime, daemon RPC, and malformed-response errors keep their stable Lazoo code where available and expose no nonce or secret value.
 - Refresh requests are serialized. A second refresh request while one is active is ignored.
 - The previous successful snapshot remains visible under a disconnected banner after a later refresh fails.
@@ -89,6 +89,7 @@ Automated gates must prove:
 - Tauri configuration uses the static frontend, one main window, a CSP, and global Tauri API;
 - `lazoo-desktop.exe` builds on the pinned Windows toolchain;
 - a real desktop process opens a nonzero Windows main-window handle against an isolated running keeper/daemon;
+- failure cleanup stops only the keeper process tree created by the harness, proven while an unrelated daemon from the same release binary remains alive;
 - the existing first-slice test and acceptance gates remain green.
 
 Visual QA uses a temporary screenshot of the real Tauri window at its default size and one narrow resize. The screenshot is inspected for clipping, contrast, hierarchy, empty states, and disconnected-state clarity; it is not committed as a product asset.
