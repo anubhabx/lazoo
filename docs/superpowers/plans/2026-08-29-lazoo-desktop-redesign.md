@@ -99,16 +99,16 @@ apps/lazoo-desktop/ui/
 - Create: `apps/lazoo-desktop/ui/src/bridge.ts`
 - Create: `apps/lazoo-desktop/ui/src/bridge.test.ts`
 
-- [ ] Write model tests first for the existing healthy, degraded, recovered-incident, empty, malformed-time, checkout-label, event-label, bounded-summary, and newest-event-first behavior.
-- [ ] Add new tests for explicit connection states (`loading`, `connected`, `degraded`, `offline`), last-good-snapshot retention, command filtering/grouping, selection descriptors, and path middle-truncation data.
-- [ ] Run `npm --prefix apps/lazoo-desktop/ui test -- src/model.test.ts` and confirm RED because the TypeScript model does not exist.
-- [ ] Implement strict TypeScript DTOs and pure transformations. Keep unknown provider/employee concepts out of the model because the backend does not return them.
-- [ ] Run the focused model suite and confirm GREEN.
-- [ ] Write bridge tests first for invoking only `load_desktop_snapshot`, rejecting a missing Tauri runtime with `LZ-DESKTOP-BRIDGE-MISSING`, and forwarding close/minimize/toggle-maximize/start-dragging/is-maximized through an injected window adapter.
-- [ ] Run `npm --prefix apps/lazoo-desktop/ui test -- src/bridge.test.ts` and confirm RED because the bridge adapter does not exist.
-- [ ] Implement the narrow bridge using `@tauri-apps/api/core` and `@tauri-apps/api/window`; export dependency-injection seams rather than test-only production methods.
-- [ ] Run both focused suites and confirm GREEN.
-- [ ] Commit: `feat: add typed desktop presentation model`
+- [x] Write model tests first for the existing healthy, degraded, recovered-incident, empty, malformed-time, checkout-label, event-label, bounded-summary, and newest-event-first behavior.
+- [x] Add new tests for explicit connection states (`loading`, `connected`, `degraded`, `offline`), last-good-snapshot retention, command filtering/grouping, selection descriptors, and path middle-truncation data.
+- [x] Run `npm --prefix apps/lazoo-desktop/ui test -- src/model.test.ts` and confirm RED because the TypeScript model does not exist.
+- [x] Implement strict TypeScript DTOs and pure transformations. Keep unknown provider/employee concepts out of the model because the backend does not return them.
+- [x] Run the focused model suite and confirm GREEN.
+- [x] Write bridge tests first for invoking only `load_desktop_snapshot`, rejecting a missing Tauri runtime with `LZ-DESKTOP-BRIDGE-MISSING`, and forwarding close/minimize/toggle-maximize/start-dragging/is-maximized through an injected window adapter.
+- [x] Run `npm --prefix apps/lazoo-desktop/ui test -- src/bridge.test.ts` and confirm RED because the bridge adapter does not exist.
+- [x] Implement the narrow bridge using `@tauri-apps/api/core` and `@tauri-apps/api/window`; export dependency-injection seams rather than test-only production methods.
+- [x] Run both focused suites and confirm GREEN.
+- [x] Commit: `feat: add typed desktop presentation model`
 
 ### Task 3: Build the token-driven shell and native window chrome
 
