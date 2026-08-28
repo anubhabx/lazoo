@@ -59,7 +59,7 @@ This additive method remains protocol version 1. It introduces no mutation and n
 5. rejects malformed result/error combinations; and
 6. returns a typed `DesktopSnapshot` or a redacted `DesktopFailure` DTO.
 
-The Tauri command `load_desktop_snapshot` is the only webview command registered by the application manifest. The webview receives no filesystem, process, HTTP, clipboard, or shell plugin permissions. It cannot supply a daemon method name or arbitrary parameters.
+The Tauri command `load_desktop_snapshot` is the only webview command registered by the application manifest. The main-window capability contains `core:default` plus the generated `allow-load-desktop-snapshot` permission and no filesystem, process, HTTP, clipboard, or shell plugin permission. The webview cannot supply a daemon method name or arbitrary parameters.
 
 ### Static frontend
 
