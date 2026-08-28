@@ -66,10 +66,13 @@ fn failed_acceptance_cleanup_is_scoped_to_the_keeper_process_tree() {
         .expect("desktop acceptance script");
 
     assert!(script.contains("function Stop-OwnedProcessTree"));
+    assert!(script.contains("function Stop-OwnedProcess"));
     assert!(script.contains("ParentProcessId"));
-    assert!(
-        script.contains("Stop-Process -Id $RootProcessId -Force -ErrorAction SilentlyContinue")
-    );
+    assert!(script.contains("Stop-Process -Id $Process.Id -Force -ErrorAction SilentlyContinue"));
     assert!(script.contains("cleanup tolerates root exiting before stop request"));
+    assert!(script.contains("Stop-OwnedProcess $desktop"));
+    assert!(!script.contains("Stop-Process -Id $desktop.Id -Force"));
+    assert!(!script.contains("Stop-Process -Id $cleanupProbeOther.Id -Force"));
+    assert!(!script.contains("Stop-Process -Id $cleanupExitProbe.Id -Force"));
     assert!(!script.contains("ExecutablePath -eq $script:daemonExe"));
 }

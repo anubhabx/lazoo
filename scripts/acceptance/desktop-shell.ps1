@@ -87,6 +87,23 @@ function Get-DescendantProcessIds([int]$RootProcessId) {
     return @($descendants)
 }
 
+function Stop-OwnedProcess(
+    [Diagnostics.Process]$Process,
+    [int]$TimeoutMilliseconds = 5000,
+    [int]$ProbeDelayMilliseconds = 0
+) {
+    if ($null -eq $Process) { return $true }
+    try {
+        if ($ProbeDelayMilliseconds -gt 0) {
+            Start-Sleep -Milliseconds $ProbeDelayMilliseconds
+        }
+        Stop-Process -Id $Process.Id -Force -ErrorAction SilentlyContinue
+        return $Process.WaitForExit($TimeoutMilliseconds)
+    } catch {
+        try { return $Process.HasExited } catch { return $false }
+    }
+}
+
 function Wait-DescendantProcess(
     [int]$RootProcessId,
     [string]$ProcessName,
@@ -124,11 +141,9 @@ function Stop-OwnedProcessTree(
 
     $rootProcess = Get-Process -Id $RootProcessId -ErrorAction SilentlyContinue
     if ($null -ne $rootProcess) {
-        if ($RootStopProbeDelayMilliseconds -gt 0) {
-            Start-Sleep -Milliseconds $RootStopProbeDelayMilliseconds
-        }
-        Stop-Process -Id $RootProcessId -Force -ErrorAction SilentlyContinue
-        Assert-True $rootProcess.WaitForExit(5000) "process-tree root $RootProcessId stopped"
+        Assert-True (
+            Stop-OwnedProcess $rootProcess 5000 $RootStopProbeDelayMilliseconds
+        ) "process-tree root $RootProcessId stopped"
     }
 
     $deadline = [DateTime]::UtcNow.AddSeconds(5)
@@ -315,6 +330,7 @@ $cleanupExitProbe = $null
 $manifestStatus = 'FAIL'
 $keeperStdout = ''
 $keeperStderr = ''
+$cleanupErrors = [Collections.Generic.List[string]]::new()
 
 New-Item -ItemType Directory -Force -Path @(
     $artifactDir,
@@ -355,8 +371,7 @@ try {
     Start-Sleep -Milliseconds 500
     Assert-True (-not $cleanupProbeOther.HasExited) 'unrelated cleanup-probe daemon started'
 
-    Stop-Process -Id $ownedProbeDaemon.Id -Force
-    Assert-True $ownedProbeDaemon.WaitForExit(5000) 'cleanup-probe daemon stopped to force restart'
+    Assert-True (Stop-OwnedProcess $ownedProbeDaemon) 'cleanup-probe daemon stopped to force restart'
     $observedDuringCleanup = @(Stop-OwnedProcessTree $cleanupProbeKeeper.Id 1500)
     Assert-True $cleanupProbeKeeper.WaitForExit(5000) 'cleanup-probe keeper stopped'
     Assert-True (
@@ -365,8 +380,7 @@ try {
     Assert-Equal @(Get-DescendantProcessIds $cleanupProbeKeeper.Id).Count 0 'cleanup drained restarted descendants'
     Assert-True (-not $cleanupProbeOther.HasExited) 'cleanup preserves unrelated daemon from same binary'
     $cleanupProbeKeeper = $null
-    Stop-Process -Id $cleanupProbeOther.Id -Force
-    Assert-True $cleanupProbeOther.WaitForExit(5000) 'unrelated cleanup-probe daemon stopped explicitly'
+    Assert-True (Stop-OwnedProcess $cleanupProbeOther) 'unrelated cleanup-probe daemon stopped explicitly'
     $cleanupProbeOther = $null
     $gates.cleanupIsolation = 'PASS'
 
@@ -415,7 +429,9 @@ try {
     $gates.narrowScreenshot = 'PASS'
 
     Assert-True $desktop.CloseMainWindow() 'desktop accepted close request'
-    if (-not $desktop.WaitForExit(5000)) { Stop-Process -Id $desktop.Id -Force }
+    if (-not $desktop.WaitForExit(5000)) {
+        Assert-True (Stop-OwnedProcess $desktop) 'desktop force-close completed'
+    }
     $desktop = $null
     Assert-True (-not $keeper.HasExited) 'closing desktop leaves keeper running'
     $gates.processIsolation = 'PASS'
@@ -432,20 +448,28 @@ try {
     throw
 } finally {
     $stopwatch.Stop()
-    if ($null -ne $desktop -and -not $desktop.HasExited) {
-        Stop-Process -Id $desktop.Id -Force
+    if ($null -ne $desktop -and -not (Stop-OwnedProcess $desktop)) {
+        $cleanupErrors.Add("desktop process $($desktop.Id) did not stop")
     }
-    if ($null -ne $cleanupProbeOther -and -not $cleanupProbeOther.HasExited) {
-        Stop-Process -Id $cleanupProbeOther.Id -Force
+    if ($null -ne $cleanupProbeOther -and -not (Stop-OwnedProcess $cleanupProbeOther)) {
+        $cleanupErrors.Add("unrelated probe process $($cleanupProbeOther.Id) did not stop")
     }
-    if ($null -ne $cleanupExitProbe -and -not $cleanupExitProbe.HasExited) {
-        Stop-Process -Id $cleanupExitProbe.Id -Force
+    if ($null -ne $cleanupExitProbe -and -not (Stop-OwnedProcess $cleanupExitProbe)) {
+        $cleanupErrors.Add("self-exiting probe process $($cleanupExitProbe.Id) did not stop")
     }
-    if ($null -ne $cleanupProbeKeeper -and -not $cleanupProbeKeeper.HasExited) {
-        Stop-OwnedProcessTree $cleanupProbeKeeper.Id
+    if ($null -ne $cleanupProbeKeeper) {
+        try { $null = Stop-OwnedProcessTree $cleanupProbeKeeper.Id } catch {
+            $cleanupErrors.Add("cleanup-probe keeper tree: $($_.Exception.Message)")
+        }
     }
-    if ($null -ne $keeper -and -not $keeper.HasExited) {
-        Stop-OwnedProcessTree $keeper.Id
+    if ($null -ne $keeper) {
+        try { $null = Stop-OwnedProcessTree $keeper.Id } catch {
+            $cleanupErrors.Add("main keeper tree: $($_.Exception.Message)")
+        }
+    }
+    if ($cleanupErrors.Count -gt 0) {
+        $gates.cleanup = "FAIL: $($cleanupErrors -join '; ')"
+        $manifestStatus = 'FAIL'
     }
     $manifest = [ordered]@{
         schemaVersion = 1
@@ -475,6 +499,9 @@ try {
     $manifest | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $manifestPath -Encoding UTF8
 }
 
+if ($manifestStatus -ne 'PASS') {
+    throw "desktop shell acceptance cleanup failed: $($cleanupErrors -join '; ')"
+}
 Write-Output "DESKTOP SHELL ACCEPTANCE: PASS"
 Write-Output "PASS manifest: $manifestPath"
 Write-Output "Visual QA screenshots: $defaultScreenshot and $narrowScreenshot"
