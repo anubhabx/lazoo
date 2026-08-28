@@ -6,7 +6,7 @@
 
 **Architecture:** Keep `load_desktop_snapshot` as the only product-data command and move the webview to a React 19 + TypeScript application compiled by Vite into a checked-in `ui/dist` runtime payload. React Aria Components owns focus, dialog, listbox, button, and tooltip behavior; local CSS consumes the canonical Lazoo semantic tokens; Tauri's core window API owns only minimize, maximize/restore, drag, and close. A small dependency-injected bridge isolates Tauri calls from presentation code and makes browser-level tests deterministic.
 
-**Tech Stack:** Tauri 2.11, React 19, TypeScript 6, Vite 8, React Aria Components 1.20, Lucide React, Vitest, Testing Library, axe-core, CSS custom properties, bundled Inter Variable and IBM Plex Mono fonts.
+**Tech Stack:** Tauri 2.11, React 19, TypeScript 7, Vite 8, React Aria Components 1.20, Lucide React, Vitest, Testing Library, axe-core, CSS custom properties, bundled Inter Variable and IBM Plex Mono fonts.
 
 ---
 
@@ -146,18 +146,18 @@ apps/lazoo-desktop/ui/
 - Modify: `apps/lazoo-desktop/ui/src/app.test.tsx`
 - Modify: `apps/lazoo-desktop/ui/src/styles/app.css`
 
-- [ ] Write integration tests first for the initial reserved loading rows, healthy snapshot, degraded snapshot, disconnected-without-data state, failure-after-success retention, manual refresh busy state, empty projects/events, view navigation, project selection, event selection, inspector dismissal, and focus return.
-- [ ] Run the focused app suite and confirm RED on the missing operational surfaces.
-- [ ] Implement a stable loading skeleton that reserves the final list geometry and never swaps the whole shell.
-- [ ] Implement the Control Room as a prioritized operational summary: health line, compact metric strip, registered-project rows, and recent-event rows. Keep `Control plane steady`, the project name, and event label accessible for retained Windows acceptance.
-- [ ] Implement dedicated Projects, Activity, and System views from the same snapshot model; no extra backend calls.
-- [ ] Implement 32px React Aria selectable rows with arrow-key navigation, neutral selection, explicit text/icon status, and tabular times/counts.
-- [ ] Implement the 320px inspector for selected projects/events/system facts. At narrow width it overlays the workspace without resizing navigation. Closing it restores focus to the originating row.
-- [ ] Implement offline/error banners with error code, affected surface, retained-data wording, and one retry action. Preserve the last successful snapshot after later failures.
-- [ ] Refresh on initial mount, every ten seconds only while visible, on visibility restoration, and on manual retry; prevent concurrent refreshes.
-- [ ] Run the app suite and confirm GREEN.
-- [ ] Run axe-core against loading, healthy, empty, degraded, and disconnected renders; assert zero critical or serious violations.
-- [ ] Commit: `feat: redesign desktop operational views`
+- [x] Write integration tests first for the initial reserved loading rows, healthy snapshot, degraded snapshot, disconnected-without-data state, failure-after-success retention, manual refresh busy state, empty projects/events, view navigation, project selection, event selection, inspector dismissal, and focus return.
+- [x] Run the focused app suite and confirm RED on the missing operational surfaces.
+- [x] Implement a stable loading skeleton that reserves the final list geometry and never swaps the whole shell.
+- [x] Implement the Control Room as a prioritized operational summary: health line, compact metric strip, registered-project rows, and recent-event rows. Keep `Control plane steady`, the project name, and event label accessible for retained Windows acceptance.
+- [x] Implement dedicated Projects, Activity, and System views from the same snapshot model; no extra backend calls.
+- [x] Implement 32px React Aria selectable rows with arrow-key navigation, neutral selection, explicit text/icon status, and tabular times/counts.
+- [x] Implement the 320px inspector for selected projects/events/system facts. At narrow width it overlays the workspace without resizing navigation. Closing it restores focus to the originating row.
+- [x] Implement offline/error banners with error code, affected surface, retained-data wording, and one retry action. Preserve the last successful snapshot after later failures.
+- [x] Refresh on initial mount, every ten seconds only while visible, on visibility restoration, and on manual retry; prevent concurrent refreshes.
+- [x] Run the app suite and confirm GREEN.
+- [x] Run axe-core against loading, healthy, empty, degraded, and disconnected renders; assert zero critical or serious violations.
+- [x] Commit: `feat: redesign desktop operational views`
 
 ### Task 5: Implement the Raycast-style command and action flow
 
