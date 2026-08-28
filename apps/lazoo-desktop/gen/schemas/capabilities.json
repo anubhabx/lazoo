@@ -1,1 +1,0 @@
-{"main":{"identifier":"main","description":"Read-only access to the Lazoo desktop snapshot","local":true,"windows":["main"],"permissions":["core:default","allow-load-desktop-snapshot"]}}
