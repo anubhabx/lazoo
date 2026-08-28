@@ -1,4 +1,5 @@
 import { Maximize2, Minus, Search, X } from "lucide-react";
+import type { RefObject } from "react";
 
 import type { DesktopBridge } from "../bridge";
 import type { ConnectionState, DesktopViewModel } from "../model";
@@ -16,6 +17,7 @@ interface TitlebarProps {
   connection: ConnectionState;
   currentView: string;
   onOpenCommand: () => void;
+  commandTriggerRef?: RefObject<HTMLButtonElement | null>;
 }
 
 export function Titlebar({
@@ -23,6 +25,7 @@ export function Titlebar({
   connection,
   currentView,
   onOpenCommand,
+  commandTriggerRef,
 }: TitlebarProps) {
   return (
     <header className="titlebar" aria-label="Application titlebar">
@@ -40,6 +43,7 @@ export function Titlebar({
       </div>
 
       <Button
+        ref={commandTriggerRef}
         className="command-trigger"
         aria-label="Open command palette"
         onPress={onOpenCommand}

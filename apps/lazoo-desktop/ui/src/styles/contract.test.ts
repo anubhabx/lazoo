@@ -39,6 +39,7 @@ describe("desktop visual contract", () => {
       join(sourceRoot, "components", "Navigation.tsx"),
       join(sourceRoot, "components", "OperationalRows.tsx"),
       join(sourceRoot, "components", "Inspector.tsx"),
+      join(sourceRoot, "components", "CommandPalette.tsx"),
     ];
     const source = sourceFiles
       .filter((file) => existsSync(file))

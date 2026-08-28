@@ -168,17 +168,17 @@ apps/lazoo-desktop/ui/
 - Modify: `apps/lazoo-desktop/ui/src/app.test.tsx`
 - Modify: `apps/lazoo-desktop/ui/src/styles/app.css`
 
-- [ ] Write interaction tests first for `Ctrl+K`, immediate search focus, context-ranked groups, query filtering, arrow selection, `Enter` primary action, `Ctrl+Enter` secondary inspect action where available, `Escape` dismissal, outside dismissal, and focus restoration to the titlebar trigger or originating row.
-- [ ] Write tests for the bottom contextual action bar changing with the active view/selection and collapsing when no secondary action exists.
-- [ ] Run the focused interaction tests and confirm RED because the command surface is missing.
-- [ ] Implement a controlled React Aria modal dialog with a 44px search field, 40px ListBox rows, 720px maximum width, 560px maximum height, intent groups, stable empty/loading results, and no clipped overflow.
-- [ ] Rank contextual inspect/refresh actions first when a row is selected while keeping global navigation searchable.
-- [ ] Implement only real actions: navigate, refresh, select/inspect, dismiss. Destructive or unavailable mutation actions must not appear.
-- [ ] Implement the 36px contextual action bar with location on the left and truthful primary/secondary shortcuts on the right.
-- [ ] Use opacity/transform transitions only: 150ms micro states, 220ms overlay, 8px maximum travel, no spring or overshoot.
-- [ ] Confirm reduced-motion tokens remove nonessential duration and translation.
-- [ ] Run the interaction suite and confirm GREEN.
-- [ ] Commit: `feat: add desktop command and action flow`
+- [x] Write interaction tests first for `Ctrl+K`, immediate search focus, context-ranked groups, query filtering, arrow selection, `Enter` primary action, `Ctrl+Enter` secondary inspect action where available, `Escape` dismissal, outside dismissal, and focus restoration to the titlebar trigger or originating row.
+- [x] Write tests for the bottom contextual action bar changing with the active view/selection and collapsing when no secondary action exists.
+- [x] Run the focused interaction tests and confirm RED because the command surface is missing.
+- [x] Implement a controlled React Aria modal dialog with a 44px search field, 40px ListBox rows, 720px maximum width, 560px maximum height, intent groups, stable empty/loading results, and no clipped overflow.
+- [x] Rank contextual inspect/refresh actions first when a row is selected while keeping global navigation searchable.
+- [x] Implement only real actions: navigate, refresh, select/inspect, dismiss. Destructive or unavailable mutation actions must not appear.
+- [x] Implement the 36px contextual action bar with location on the left and truthful primary/secondary shortcuts on the right.
+- [x] Use opacity/transform transitions only: 150ms micro states, 220ms overlay, 8px maximum travel, no spring or overshoot.
+- [x] Confirm reduced-motion tokens remove nonessential duration and translation.
+- [x] Run the interaction suite and confirm GREEN.
+- [x] Commit: `feat: add desktop command and action flow`
 
 ### Task 6: Strengthen real-window acceptance and responsive visual evidence
 

@@ -316,3 +316,156 @@ describe("operational snapshot", () => {
     Reflect.deleteProperty(document, "visibilityState");
   });
 });
+
+describe("command and action flow", () => {
+  test("opens with Ctrl+K, focuses search, and ranks active actions first", async () => {
+    const user = userEvent.setup();
+    render(<App bridge={bridgeWithSnapshot()} refreshIntervalMs={0} />);
+    await screen.findByText("Example");
+
+    await user.keyboard("{Control>}k{/Control}");
+
+    expect(
+      screen.getByRole("dialog", { name: "Command palette" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("searchbox", { name: "Search commands" }),
+    ).toHaveFocus();
+    expect(screen.getAllByRole("option")[0]).toHaveAccessibleName(
+      /^Refresh snapshot/u,
+    );
+    expect(screen.getByText("Act")).toBeInTheDocument();
+    expect(screen.getAllByText("Navigate")).toHaveLength(2);
+  });
+
+  test("filters commands and executes the highlighted result with Enter", async () => {
+    const user = userEvent.setup();
+    render(<App bridge={bridgeWithSnapshot()} refreshIntervalMs={0} />);
+    await screen.findByText("Example");
+    await user.keyboard("{Control>}k{/Control}");
+
+    const search = screen.getByRole("searchbox", { name: "Search commands" });
+    await user.type(search, "projects");
+    expect(screen.getAllByRole("option")).toHaveLength(1);
+    expect(screen.getByRole("option")).toHaveAccessibleName(/^Open projects/u);
+    await user.keyboard("{Enter}");
+
+    expect(
+      screen.queryByRole("dialog", { name: "Command palette" }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.getByRole("heading", { level: 1, name: "Projects" }),
+    ).toBeInTheDocument();
+  });
+
+  test("moves the highlighted command with arrows before execution", async () => {
+    const user = userEvent.setup();
+    render(<App bridge={bridgeWithSnapshot()} refreshIntervalMs={0} />);
+    await screen.findByText("Example");
+    await user.keyboard("{Control>}k{/Control}");
+
+    await user.keyboard("{ArrowDown}{ArrowDown}");
+    expect(
+      screen.getByRole("option", { name: /^Open projects/u }),
+    ).toHaveAttribute("aria-selected", "true");
+    await user.keyboard("{Enter}");
+
+    expect(
+      screen.getByRole("heading", { level: 1, name: "Projects" }),
+    ).toBeInTheDocument();
+  });
+
+  test("runs refresh from search and keeps an explicit empty result", async () => {
+    const user = userEvent.setup();
+    const bridge = bridgeWithSnapshot();
+    render(<App bridge={bridge} refreshIntervalMs={0} />);
+    await screen.findByText("Example");
+
+    await user.keyboard("{Control>}k{/Control}");
+    await user.type(
+      screen.getByRole("searchbox", { name: "Search commands" }),
+      "sync",
+    );
+    await user.keyboard("{Enter}");
+    await waitFor(() => expect(bridge.loadSnapshot).toHaveBeenCalledTimes(2));
+
+    await user.keyboard("{Control>}k{/Control}");
+    await user.type(
+      screen.getByRole("searchbox", { name: "Search commands" }),
+      "no-such-command",
+    );
+    expect(screen.getByRole("status")).toHaveTextContent(
+      "No matching commands",
+    );
+    expect(screen.queryAllByRole("option")).toHaveLength(0);
+  });
+
+  test("ranks a selected row's inspect action first and supports Ctrl+Enter", async () => {
+    const user = userEvent.setup();
+    render(<App bridge={bridgeWithSnapshot()} refreshIntervalMs={0} />);
+    const project = await screen.findByRole("option", { name: /^Example/u });
+    await user.click(project);
+    await user.keyboard("{Control>}k{/Control}");
+
+    expect(screen.getAllByRole("option")[0]).toHaveAccessibleName(
+      /^Inspect selected project/u,
+    );
+    expect(screen.getAllByText("Inspect")).toHaveLength(2);
+    await user.keyboard("{Control>}{Enter}{/Control}");
+
+    expect(
+      screen.queryByRole("dialog", { name: "Command palette" }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.getByRole("complementary", { name: "Inspector" }),
+    ).toBeInTheDocument();
+    expect(project).toHaveFocus();
+  });
+
+  test("dismisses with Escape and outside press, restoring trigger focus", async () => {
+    const user = userEvent.setup();
+    render(<App bridge={bridgeWithSnapshot()} refreshIntervalMs={0} />);
+    await screen.findByText("Example");
+    const trigger = screen.getByRole("button", {
+      name: "Open command palette",
+    });
+
+    await user.click(trigger);
+    await user.keyboard("{Control>}k{/Control}");
+    await user.keyboard("{Escape}");
+    expect(
+      screen.queryByRole("dialog", { name: "Command palette" }),
+    ).not.toBeInTheDocument();
+    expect(trigger).toHaveFocus();
+
+    await user.click(trigger);
+    const overlay = document.querySelector<HTMLElement>(".command-overlay");
+    expect(overlay).not.toBeNull();
+    if (overlay) await user.click(overlay);
+    expect(
+      screen.queryByRole("dialog", { name: "Command palette" }),
+    ).not.toBeInTheDocument();
+    expect(trigger).toHaveFocus();
+  });
+
+  test("shows an honest contextual action bar and expands it for selection", async () => {
+    const user = userEvent.setup();
+    render(<App bridge={bridgeWithSnapshot()} refreshIntervalMs={0} />);
+    const project = await screen.findByRole("option", { name: /^Example/u });
+    const actionBar = screen.getByRole("toolbar", {
+      name: "Contextual actions",
+    });
+
+    expect(actionBar).toHaveTextContent("Control room");
+    expect(
+      screen.queryByRole("button", { name: "Close inspector" }),
+    ).not.toBeInTheDocument();
+
+    await user.click(project);
+    expect(actionBar).toHaveTextContent("Project");
+    expect(actionBar).toHaveTextContent("Example");
+    expect(
+      screen.getByRole("button", { name: "Dismiss inspector" }),
+    ).toBeInTheDocument();
+  });
+});

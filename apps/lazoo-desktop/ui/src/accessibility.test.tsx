@@ -1,4 +1,5 @@
 import { render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import axe from "axe-core";
 import { describe, expect, test, vi } from "vitest";
 
@@ -102,5 +103,22 @@ describe("desktop accessibility states", () => {
 
     await screen.findByRole("heading", { name: "Control room disconnected" });
     await expectNoSeriousViolations(container);
+  });
+
+  test("command palette has no serious or critical violations", async () => {
+    const user = userEvent.setup();
+    const { container } = render(
+      <App
+        bridge={bridge(() => Promise.resolve(desktopSnapshot()))}
+        refreshIntervalMs={0}
+      />,
+    );
+    await screen.findByText("Control plane steady");
+
+    await user.keyboard("{Control>}k{/Control}");
+    const dialog = screen.getByRole("dialog", { name: "Command palette" });
+    await expectNoSeriousViolations(
+      dialog.closest<HTMLElement>(".command-overlay") ?? container,
+    );
   });
 });

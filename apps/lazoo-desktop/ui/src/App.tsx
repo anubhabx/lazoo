@@ -9,6 +9,7 @@ import {
 import { useCallback, useEffect, useReducer, useRef, useState } from "react";
 
 import { desktopBridge, type DesktopBridge } from "./bridge";
+import { ActionBar, CommandPalette } from "./components/CommandPalette";
 import { Inspector } from "./components/Inspector";
 import { Navigation, viewLabels } from "./components/Navigation";
 import { EventRows, ProjectRows } from "./components/OperationalRows";
@@ -16,8 +17,10 @@ import { Button } from "./components/primitives";
 import { StatusBar, Titlebar } from "./components/ShellChrome";
 import {
   createInitialDesktopState,
+  describeSelection,
   normalizeFailure,
   reduceDesktopState,
+  type CommandDefinition,
   type DesktopState,
   type DesktopViewModel,
   type Selection,
@@ -326,6 +329,7 @@ export function App({
 }: AppProps) {
   const [activeView, setActiveView] = useState<ViewId>("control");
   const [selection, setSelection] = useState<Selection | null>(null);
+  const [commandOpen, setCommandOpen] = useState(false);
   const [desktopState, dispatch] = useReducer(
     reduceDesktopState,
     undefined,
@@ -333,6 +337,8 @@ export function App({
   );
   const refreshInFlight = useRef(false);
   const selectionOrigin = useRef<HTMLElement | null>(null);
+  const commandOrigin = useRef<HTMLElement | null>(null);
+  const commandTriggerRef = useRef<HTMLButtonElement | null>(null);
 
   const refresh = useCallback(async () => {
     if (refreshInFlight.current) return;
@@ -372,8 +378,41 @@ export function App({
     queueMicrotask(() => origin?.focus());
   }, []);
 
+  const openCommand = useCallback(() => {
+    const activeElement = document.activeElement;
+    commandOrigin.current =
+      activeElement instanceof HTMLElement && activeElement !== document.body
+        ? activeElement
+        : commandTriggerRef.current;
+    setCommandOpen(true);
+  }, []);
+
+  const changeCommandOpen = useCallback(
+    (nextOpen: boolean) => {
+      if (nextOpen) {
+        openCommand();
+        return;
+      }
+      const origin = commandOrigin.current ?? commandTriggerRef.current;
+      setCommandOpen(false);
+      queueMicrotask(() => origin?.focus());
+    },
+    [openCommand],
+  );
+
   useEffect(() => {
-    if (!selection) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "k") {
+        event.preventDefault();
+        if (!commandOpen) openCommand();
+      }
+    };
+    window.addEventListener("keydown", onKeyDown, true);
+    return () => window.removeEventListener("keydown", onKeyDown, true);
+  }, [commandOpen, openCommand]);
+
+  useEffect(() => {
+    if (!selection || commandOpen) return;
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
         event.preventDefault();
@@ -382,7 +421,7 @@ export function App({
     };
     window.addEventListener("keydown", onKeyDown, true);
     return () => window.removeEventListener("keydown", onKeyDown, true);
-  }, [closeInspector, selection]);
+  }, [closeInspector, commandOpen, selection]);
 
   const navigate = (view: ViewId) => {
     setActiveView(view);
@@ -395,95 +434,125 @@ export function App({
     setSelection(nextSelection);
   };
 
+  const executeCommand = (command: CommandDefinition) => {
+    if (command.id === "refresh") {
+      void refresh();
+      return;
+    }
+    const destination = command.id.replace("navigate-", "") as ViewId;
+    if (command.id.startsWith("navigate-") && destination in viewLabels) {
+      navigate(destination);
+    }
+  };
+
   const model = desktopState.model;
+  const selectionDescription =
+    model && selection ? describeSelection(model, selection) : null;
   return (
-    <div className="app-shell" data-connection={desktopState.connection}>
-      <Titlebar
-        bridge={bridge}
-        connection={desktopState.connection}
-        currentView={viewLabels[activeView]}
-        onOpenCommand={() => undefined}
-      />
+    <>
+      <div className="app-shell" data-connection={desktopState.connection}>
+        <Titlebar
+          bridge={bridge}
+          connection={desktopState.connection}
+          currentView={viewLabels[activeView]}
+          onOpenCommand={openCommand}
+          commandTriggerRef={commandTriggerRef}
+        />
 
-      <div className="shell-body">
-        <Navigation activeView={activeView} onNavigate={navigate} />
-        <div
-          className="workspace-stage"
-          data-inspector-open={selection ? "true" : "false"}
-        >
-          <section
-            className="workspace-frame"
-            aria-label={`${viewLabels[activeView]} workspace`}
+        <div className="shell-body">
+          <Navigation activeView={activeView} onNavigate={navigate} />
+          <div
+            className="workspace-stage"
+            data-inspector-open={selection ? "true" : "false"}
           >
-            <header className="workspace-toolbar">
-              <div className="workspace-location">
-                <span>Lazoo</span>
-                <span aria-hidden>/</span>
-                <strong>{viewLabels[activeView]}</strong>
-              </div>
-              <Button
-                className="refresh-button"
-                aria-label="Refresh snapshot"
-                aria-busy={desktopState.isRefreshing}
-                isDisabled={desktopState.isRefreshing}
-                onPress={() => void refresh()}
-              >
-                <RefreshCw aria-hidden size={14} strokeWidth={1.8} />
-                <span>Refresh</span>
-              </Button>
-            </header>
-            <FailureBanner
-              state={desktopState}
-              onRetry={() => void refresh()}
-            />
-            <main className="workspace" aria-busy={desktopState.isRefreshing}>
-              <div className="workspace-heading">
-                <div>
-                  <span className="section-kicker">Local control plane</span>
-                  <h1>{viewLabels[activeView]}</h1>
+            <section
+              className="workspace-frame"
+              aria-label={`${viewLabels[activeView]} workspace`}
+            >
+              <header className="workspace-toolbar">
+                <div className="workspace-location">
+                  <span>Lazoo</span>
+                  <span aria-hidden>/</span>
+                  <strong>{viewLabels[activeView]}</strong>
                 </div>
-                <span className="workspace-context">Windows local</span>
-              </div>
-              {!model && desktopState.connection === "loading" ? (
-                <LoadingWorkspace view={activeView} />
-              ) : null}
-              {!model && desktopState.connection === "offline" ? (
-                <DisconnectedView
-                  state={desktopState}
-                  onRetry={() => void refresh()}
-                />
-              ) : null}
-              {model ? (
-                <WorkspaceView
-                  view={activeView}
-                  model={model}
-                  selection={selection}
-                  onSelect={select}
-                />
-              ) : null}
-            </main>
-          </section>
-          {model && selection ? (
-            <Inspector
-              model={model}
-              selection={selection}
-              onClose={closeInspector}
-            />
-          ) : null}
+                <Button
+                  className="refresh-button"
+                  aria-label="Refresh snapshot"
+                  aria-busy={desktopState.isRefreshing}
+                  isDisabled={desktopState.isRefreshing}
+                  onPress={() => void refresh()}
+                >
+                  <RefreshCw aria-hidden size={14} strokeWidth={1.8} />
+                  <span>Refresh</span>
+                </Button>
+              </header>
+              <FailureBanner
+                state={desktopState}
+                onRetry={() => void refresh()}
+              />
+              <main className="workspace" aria-busy={desktopState.isRefreshing}>
+                <div className="workspace-heading">
+                  <div>
+                    <span className="section-kicker">Local control plane</span>
+                    <h1>{viewLabels[activeView]}</h1>
+                  </div>
+                  <span className="workspace-context">Windows local</span>
+                </div>
+                {!model && desktopState.connection === "loading" ? (
+                  <LoadingWorkspace view={activeView} />
+                ) : null}
+                {!model && desktopState.connection === "offline" ? (
+                  <DisconnectedView
+                    state={desktopState}
+                    onRetry={() => void refresh()}
+                  />
+                ) : null}
+                {model ? (
+                  <WorkspaceView
+                    view={activeView}
+                    model={model}
+                    selection={selection}
+                    onSelect={select}
+                  />
+                ) : null}
+              </main>
+              <ActionBar
+                viewLabel={viewLabels[activeView]}
+                selectionLabel={selectionDescription?.label}
+                selectionKind={selectionDescription?.kindLabel}
+                onOpenCommand={openCommand}
+                onCloseInspector={closeInspector}
+              />
+            </section>
+            {model && selection ? (
+              <Inspector
+                model={model}
+                selection={selection}
+                onClose={closeInspector}
+              />
+            ) : null}
+          </div>
         </div>
-      </div>
 
-      <StatusBar
-        connection={desktopState.connection}
-        model={desktopState.model}
+        <StatusBar
+          connection={desktopState.connection}
+          model={desktopState.model}
+        />
+        <p className="sr-only" aria-live="polite">
+          {desktopState.connection === "loading"
+            ? "Loading control-plane snapshot"
+            : desktopState.connection === "offline"
+              ? `${desktopState.failure?.code}. ${desktopState.failure?.message}`
+              : `${desktopState.model?.health.label}. Snapshot updated.`}
+        </p>
+      </div>
+      <CommandPalette
+        isOpen={commandOpen}
+        context={{ view: activeView, selection }}
+        onOpenChange={changeCommandOpen}
+        onExecute={executeCommand}
+        onInspectSelection={() => undefined}
       />
-      <p className="sr-only" aria-live="polite">
-        {desktopState.connection === "loading"
-          ? "Loading control-plane snapshot"
-          : desktopState.connection === "offline"
-            ? `${desktopState.failure?.code}. ${desktopState.failure?.message}`
-            : `${desktopState.model?.health.label}. Snapshot updated.`}
-      </p>
-    </div>
+    </>
   );
 }
