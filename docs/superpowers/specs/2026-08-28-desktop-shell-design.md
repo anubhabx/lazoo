@@ -89,7 +89,7 @@ Automated gates must prove:
 - Tauri configuration uses the static frontend, one main window, a CSP, and global Tauri API;
 - `lazoo-desktop.exe` builds on the pinned Windows toolchain;
 - a real desktop process opens a nonzero Windows main-window handle against an isolated running keeper/daemon;
-- failure cleanup stops only the keeper process tree created by the harness, proven while an unrelated daemon from the same release binary remains alive;
+- failure cleanup stops and repeatedly drains only the keeper process tree created by the harness, proven across a forced daemon restart while an unrelated daemon from the same release binary remains alive;
 - the existing first-slice test and acceptance gates remain green.
 
 Visual QA uses a temporary screenshot of the real Tauri window at its default size and one narrow resize. The screenshot is inspected for clipping, contrast, hierarchy, empty states, and disconnected-state clarity; it is not committed as a product asset.

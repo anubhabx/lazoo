@@ -99,14 +99,42 @@ function Wait-DescendantProcess(
     throw "process $RootProcessId did not start a descendant named $ProcessName"
 }
 
-function Stop-OwnedProcessTree([int]$RootProcessId) {
-    $descendantIds = @(Get-DescendantProcessIds $RootProcessId)
-
-    Stop-Process -Id $RootProcessId -Force -ErrorAction SilentlyContinue
-    [array]::Reverse($descendantIds)
-    foreach ($candidateId in $descendantIds) {
-        Stop-Process -Id $candidateId -Force -ErrorAction SilentlyContinue
+function Stop-OwnedProcessTree(
+    [int]$RootProcessId,
+    [int]$PreStopProbeDelayMilliseconds = 0
+) {
+    $observedDescendants = [Collections.Generic.HashSet[int]]::new()
+    foreach ($candidateId in @(Get-DescendantProcessIds $RootProcessId)) {
+        $observedDescendants.Add($candidateId) | Out-Null
     }
+
+    if ($PreStopProbeDelayMilliseconds -gt 0) {
+        Start-Sleep -Milliseconds $PreStopProbeDelayMilliseconds
+    }
+    foreach ($candidateId in @(Get-DescendantProcessIds $RootProcessId)) {
+        $observedDescendants.Add($candidateId) | Out-Null
+    }
+
+    $rootProcess = Get-Process -Id $RootProcessId -ErrorAction SilentlyContinue
+    if ($null -ne $rootProcess) {
+        Stop-Process -Id $RootProcessId -Force
+        Assert-True $rootProcess.WaitForExit(5000) "process-tree root $RootProcessId stopped"
+    }
+
+    $deadline = [DateTime]::UtcNow.AddSeconds(5)
+    do {
+        $remainingIds = @(Get-DescendantProcessIds $RootProcessId)
+        foreach ($candidateId in $remainingIds) {
+            $observedDescendants.Add($candidateId) | Out-Null
+            Stop-Process -Id $candidateId -Force -ErrorAction SilentlyContinue
+        }
+        if ($remainingIds.Count -eq 0) { break }
+        Start-Sleep -Milliseconds 50
+    } while ([DateTime]::UtcNow -lt $deadline)
+
+    $remainingIds = @(Get-DescendantProcessIds $RootProcessId)
+    Assert-Equal $remainingIds.Count 0 "process-tree descendants for $RootProcessId"
+    return @($observedDescendants)
 }
 
 function Wait-Window([Diagnostics.Process]$Process, [int]$TimeoutSeconds = 20) {
@@ -309,11 +337,14 @@ try {
     Start-Sleep -Milliseconds 500
     Assert-True (-not $cleanupProbeOther.HasExited) 'unrelated cleanup-probe daemon started'
 
-    Stop-OwnedProcessTree $cleanupProbeKeeper.Id
+    Stop-Process -Id $ownedProbeDaemon.Id -Force
+    Assert-True $ownedProbeDaemon.WaitForExit(5000) 'cleanup-probe daemon stopped to force restart'
+    $observedDuringCleanup = @(Stop-OwnedProcessTree $cleanupProbeKeeper.Id 1500)
     Assert-True $cleanupProbeKeeper.WaitForExit(5000) 'cleanup-probe keeper stopped'
     Assert-True (
-        $null -eq (Get-Process -Id $ownedProbeDaemon.Id -ErrorAction SilentlyContinue)
-    ) 'cleanup-probe owned daemon stopped'
+        @($observedDuringCleanup | Where-Object { $_ -ne $ownedProbeDaemon.Id }).Count -gt 0
+    ) 'cleanup observed a restarted daemon before stopping the keeper'
+    Assert-Equal @(Get-DescendantProcessIds $cleanupProbeKeeper.Id).Count 0 'cleanup drained restarted descendants'
     Assert-True (-not $cleanupProbeOther.HasExited) 'cleanup preserves unrelated daemon from same binary'
     $cleanupProbeKeeper = $null
     Stop-Process -Id $cleanupProbeOther.Id -Force
