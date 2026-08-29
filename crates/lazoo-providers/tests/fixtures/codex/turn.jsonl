@@ -1,0 +1,6 @@
+{"jsonrpc":"2.0","method":"turn/started","params":{"threadId":"thread-1","turn":{"id":"turn-1","status":"inProgress","items":[]}}}
+{"jsonrpc":"2.0","method":"item/agentMessage/delta","params":{"threadId":"thread-1","turnId":"turn-1","itemId":"item-1","delta":"Hello "}}
+{"jsonrpc":"2.0","method":"item/agentMessage/delta","params":{"threadId":"thread-1","turnId":"turn-1","itemId":"item-1","delta":"world"}}
+{"jsonrpc":"2.0","method":"item/started","params":{"threadId":"thread-1","turnId":"turn-1","startedAtMs":1788040000000,"item":{"id":"tool-1","type":"commandExecution","command":"cargo test","cwd":"C:\\repo","status":"inProgress","commandActions":[]}}}
+{"jsonrpc":"2.0","method":"item/completed","params":{"threadId":"thread-1","turnId":"turn-1","completedAtMs":1788040001000,"item":{"id":"tool-1","type":"commandExecution","command":"cargo test","cwd":"C:\\repo","status":"completed","commandActions":[]}}}
+{"jsonrpc":"2.0","method":"turn/completed","params":{"threadId":"thread-1","turn":{"id":"turn-1","status":"completed","items":[]}}}

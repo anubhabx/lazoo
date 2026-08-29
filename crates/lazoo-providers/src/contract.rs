@@ -290,7 +290,11 @@ impl TurnRequest {
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
-#[serde(rename_all = "camelCase", tag = "type")]
+#[serde(
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase",
+    tag = "type"
+)]
 pub enum ProviderEvent {
     SessionStarted {
         provider: ProviderKind,
@@ -386,11 +390,11 @@ pub enum ProviderEvent {
 
 pub type AdapterFuture<'a, T> = Pin<Box<dyn Future<Output = Result<T, ProviderError>> + Send + 'a>>;
 
-pub trait ProviderSession: Send {
+pub trait ProviderSession: Send + Sync {
     fn id(&self) -> &str;
-    fn turn<'a>(&'a mut self, request: &'a TurnRequest) -> AdapterFuture<'a, Vec<ProviderEvent>>;
-    fn cancel(&mut self) -> AdapterFuture<'_, ()>;
-    fn stop(&mut self) -> AdapterFuture<'_, ()>;
+    fn turn<'a>(&'a self, request: &'a TurnRequest) -> AdapterFuture<'a, Vec<ProviderEvent>>;
+    fn cancel(&self) -> AdapterFuture<'_, ()>;
+    fn stop(&self) -> AdapterFuture<'_, ()>;
 }
 
 pub trait ProviderAdapter: Send + Sync {

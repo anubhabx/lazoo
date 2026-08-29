@@ -1,6 +1,6 @@
 use lazoo_providers::{
-    DiscoverySource, ExecutableCandidate, ProviderCapabilities, ProviderKind, ProviderVerification,
-    rank_candidates, redact_json,
+    DiscoverySource, ExecutableCandidate, ProviderCapabilities, ProviderEvent, ProviderKind,
+    ProviderVerification, rank_candidates, redact_json,
 };
 use serde_json::json;
 
@@ -85,4 +85,19 @@ fn redaction_removes_nested_secret_like_values() {
             "array": [{"password": "[REDACTED]"}]
         }),
     );
+}
+
+#[test]
+fn normalized_events_use_camel_case_fields() {
+    let event = ProviderEvent::SessionStarted {
+        provider: ProviderKind::Codex,
+        session_id: "thread-1".to_owned(),
+        resumed: false,
+        raw: None,
+    };
+
+    let value = serde_json::to_value(event).unwrap();
+    assert_eq!(value["type"], "sessionStarted");
+    assert_eq!(value["sessionId"], "thread-1");
+    assert!(value.get("session_id").is_none());
 }
