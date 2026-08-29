@@ -1,0 +1,8 @@
+# Prettier enforces LF for the desktop frontend. Pin these formats so a
+# Windows checkout with core.autocrlf=true behaves like the build worktree.
+apps/lazoo-desktop/ui/**/*.css text eol=lf
+apps/lazoo-desktop/ui/**/*.html text eol=lf
+apps/lazoo-desktop/ui/**/*.js text eol=lf
+apps/lazoo-desktop/ui/**/*.json text eol=lf
+apps/lazoo-desktop/ui/**/*.ts text eol=lf
+apps/lazoo-desktop/ui/**/*.tsx text eol=lf
