@@ -470,6 +470,18 @@ fn normalize_session_update(
             text: required_text(update, update_type)?,
             raw,
         },
+        "tool_call_update" if provider == ProviderKind::GrokBuild && is_terminal_update(update) => {
+            ProviderEvent::TerminalUpdate {
+                provider,
+                session_id,
+                terminal_id: update
+                    .get("toolCallId")
+                    .and_then(Value::as_str)
+                    .map(str::to_owned),
+                output: terminal_output(update),
+                raw,
+            }
+        }
         "tool_call" | "tool_call_update" => ProviderEvent::ToolUpdate {
             provider,
             session_id,
@@ -495,6 +507,21 @@ fn normalize_session_update(
             cost_usd: update.get("cost").and_then(Value::as_f64),
             raw,
         },
+        "turn_completed" => {
+            let usage = update.get("usage").unwrap_or(&Value::Null);
+            ProviderEvent::Usage {
+                provider,
+                session_id,
+                input_tokens: usage.get("inputTokens").and_then(Value::as_u64),
+                output_tokens: usage.get("outputTokens").and_then(Value::as_u64),
+                total_tokens: usage.get("totalTokens").and_then(Value::as_u64),
+                cost_usd: usage
+                    .get("costUsdTicks")
+                    .and_then(Value::as_u64)
+                    .and_then(usd_ticks),
+                raw,
+            }
+        }
         _ => ProviderEvent::Progress {
             provider,
             session_id,
@@ -503,6 +530,36 @@ fn normalize_session_update(
         },
     };
     Ok(Some(event))
+}
+
+fn usd_ticks(ticks: u64) -> Option<f64> {
+    let whole = u32::try_from(ticks / 1_000_000_000).ok()?;
+    let fractional = u32::try_from(ticks % 1_000_000_000).ok()?;
+    Some(f64::from(whole) + f64::from(fractional) / 1_000_000_000.0)
+}
+
+fn is_terminal_update(update: &Value) -> bool {
+    update.get("kind").and_then(Value::as_str) == Some("execute")
+        || update.pointer("/rawOutput/variant").and_then(Value::as_str) == Some("Bash")
+        || update
+            .pointer("/_meta/x.ai~1tool/kind")
+            .and_then(Value::as_str)
+            == Some("execute")
+}
+
+fn terminal_output(update: &Value) -> Option<String> {
+    update
+        .pointer("/rawOutput/output")
+        .and_then(Value::as_str)
+        .or_else(|| {
+            update
+                .get("content")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .find_map(|content| content.pointer("/content/text").and_then(Value::as_str))
+        })
+        .map(str::to_owned)
 }
 
 fn required_text(update: &Value, update_type: &str) -> Result<String, ProviderError> {

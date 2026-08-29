@@ -2,6 +2,7 @@ mod acp;
 mod codex;
 mod contract;
 mod discovery;
+mod grok;
 mod json_rpc;
 mod opencode;
 mod redaction;
@@ -15,5 +16,6 @@ pub use contract::{
     TurnRequest,
 };
 pub use discovery::{DiscoveryEnvironment, DiscoverySource, rank_candidates};
+pub use grok::{GrokAdapter, GrokSession};
 pub use opencode::{OpenCodeAdapter, OpenCodeSession};
 pub use redaction::redact_json;

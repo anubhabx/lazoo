@@ -229,7 +229,7 @@ git commit -m "feat: connect OpenCode over ACP"
 - Test: `crates/lazoo-providers/tests/grok.rs`
 - Create: `crates/lazoo-providers/tests/fixtures/grok/*.jsonl`
 
-- [ ] **Step 1: Write failing Grok tests**
+- [x] **Step 1: Write failing Grok tests**
 
 ```rust
 #[test]
@@ -241,7 +241,7 @@ fn grok_launch_preserves_model_reasoning_and_permission_options() {
     let command = GrokAdapter::command(Path::new(r"C:\Tools\grok.exe"), &request);
     assert_eq!(
         command.args,
-        ["agent", "stdio", "--model", "grok-code-fast", "--reasoning-effort", "high"],
+        ["--permission-mode", "dontAsk", "--model", "grok-code-fast", "--reasoning-effort", "high", "agent", "stdio"],
     );
     assert!(!command.args.iter().any(|arg| arg == "--always-approve"));
 }
@@ -264,17 +264,17 @@ fn grok_resume_uses_negotiated_session_capability() {
 }
 ```
 
-- [ ] **Step 2: Verify RED**
+- [x] **Step 2: Verify RED**
 
 Run: `cargo test -p lazoo-providers --test grok`
 
 Expected: FAIL because `GrokAdapter` is absent.
 
-- [ ] **Step 3: Implement Grok over the shared ACP client**
+- [x] **Step 3: Implement Grok over the shared ACP client**
 
-Launch `grok agent stdio`; negotiate v1; map provider-specific command options and ACP events; expose only negotiated terminal, permission, cancel, and resume capabilities.
+Launch Grok agent stdio with `--permission-mode dontAsk` by default; negotiate v1; map provider-specific command options and ACP events; expose only observed terminal, permission, cancel, and negotiated resume capabilities. Never inherit a configured always-approve mode silently.
 
-- [ ] **Step 4: Verify Grok tests and handshake**
+- [x] **Step 4: Verify Grok tests and handshake**
 
 Run: `cargo test -p lazoo-providers --test grok`
 
@@ -282,7 +282,7 @@ Run: `powershell -NoProfile -ExecutionPolicy Bypass -File scripts/acceptance/pro
 
 Expected: tests PASS and installed Grok ACP handshake is recorded.
 
-- [ ] **Step 5: Commit Grok**
+- [x] **Step 5: Commit Grok**
 
 ```powershell
 git add crates/lazoo-providers scripts/acceptance/provider-adapters.ps1

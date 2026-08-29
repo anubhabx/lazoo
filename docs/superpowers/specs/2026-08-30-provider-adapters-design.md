@@ -47,7 +47,7 @@ Launch `opencode acp` and negotiate ACP v1 over stdio. Map ACP session creation/
 
 ### Grok Build
 
-Launch `grok agent stdio` and negotiate ACP v1. Map the same ACP lifecycle but preserve Grok-specific model, reasoning, permission, terminal, and resume evidence. ACP capability negotiation decides support; the provider name does not.
+Launch Grok agent stdio with explicit process-level model/reasoning options and an explicit permission mode, then negotiate ACP v1. The adapter defaults to `dontAsk` so a native `always-approve` configuration is never inherited silently, never passes `--always-approve`, and cancels live ACP permission requests when no approval broker is attached. Map the shared ACP lifecycle while preserving Grok-specific terminal, usage/cost, and resume evidence. ACP capability negotiation decides support; the provider name alone does not.
 
 ### Antigravity
 
