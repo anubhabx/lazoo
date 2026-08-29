@@ -54,7 +54,9 @@ export function Inspector({ model, selection, onClose }: InspectorProps) {
         <div className="inspector-content">
           <div className="inspector-lead">
             <FolderGit2 aria-hidden size={18} strokeWidth={1.7} />
-            <p>{project.path}</p>
+            <p className="technical" title={project.path}>
+              {project.pathDisplay}
+            </p>
           </div>
           <dl className="inspector-facts">
             <Fact label="Checkout">{project.checkoutLabel}</Fact>

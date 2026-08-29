@@ -190,16 +190,16 @@ apps/lazoo-desktop/ui/
 - Modify: `apps/lazoo-desktop/ui/src/styles/app.css`
 - Regenerate: `artifacts/acceptance/desktop-shell-manifest.json`
 
-- [ ] Extend acceptance-contract tests first to require a frontend build gate, local-runtime-asset scan, custom-titlebar UI Automation names, command-palette keyboard exercise, inspector focus round-trip, default 1180×760 capture, minimum 860×620 capture, and a high-DPI capture at Windows 200% text scaling or an explicit environment-bound blocker.
-- [ ] Run the focused Rust acceptance-contract test and confirm RED because the script lacks the new gates.
-- [ ] Update the PowerShell harness without weakening its scoped process cleanup. Run `npm ci` and the frontend build before the locked Rust release build unless `-SkipBuild` is used.
-- [ ] Add keyboard input through Windows UI Automation for `Ctrl+K`, verify command text is exposed, dismiss with Escape, open a project inspector, close it, and verify focus returns.
-- [ ] Retain exact title, nonzero HWND, snapshot text, close isolation, and screenshot checks from the original harness.
-- [ ] Add static checks against remote runtime assets, inline code, and missing packaged files.
-- [ ] Run `cargo test -p lazoo-desktop --test config` and confirm GREEN.
-- [ ] Run the updated desktop acceptance once with a fresh locked build and retain its exact manifest and screenshot paths.
-- [ ] Inspect default, minimum, and high-DPI evidence at original resolution. Fix clipping, weak hierarchy, inconsistent spacing, overlay cutoff, focus visibility, and scroll failures through failing regression tests before CSS changes.
-- [ ] Commit: `test: verify redesigned desktop interactions`
+- [x] Extend acceptance-contract tests first to require a frontend build gate, local-runtime-asset scan, custom-titlebar UI Automation names, command-palette keyboard exercise, inspector focus round-trip, default 1180×760 capture, minimum 860×620 capture, and a high-DPI capture at Windows 200% text scaling or an explicit environment-bound blocker.
+- [x] Run the focused Rust acceptance-contract test and confirm RED because the script lacks the new gates.
+- [x] Update the PowerShell harness without weakening its scoped process cleanup. Run `npm ci` and the frontend build before the locked Rust release build unless `-SkipBuild` is used.
+- [x] Add keyboard input through Windows UI Automation for `Ctrl+K`, verify command text is exposed, dismiss with Escape, open a project inspector, close it, and verify focus returns.
+- [x] Retain exact title, nonzero HWND, snapshot text, close isolation, and screenshot checks from the original harness.
+- [x] Add static checks against remote runtime assets, inline code, and missing packaged files.
+- [x] Run `cargo test -p lazoo-desktop --test config` and confirm GREEN.
+- [x] Run the updated desktop acceptance once with a fresh locked build and retain its exact manifest and screenshot paths.
+- [x] Inspect default, minimum, and high-DPI evidence at original resolution. Fix clipping, weak hierarchy, inconsistent spacing, overlay cutoff, focus visibility, and scroll failures through failing regression tests before CSS changes. High-DPI evidence is explicitly environment-blocked at Windows text scaling 100%; default, minimum, command palette, and inspector captures passed visual review.
+- [x] Commit: `test: verify redesigned desktop interactions`
 
 ### Task 7: Full verification, documentation synchronization, and audit
 

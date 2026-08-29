@@ -1,55 +1,91 @@
-{
-  "schemaVersion": 1,
-  "status": "PASS",
-  "startedAt": "2026-08-28T16:57:30.5345892Z",
-  "completedAt": "2026-08-28T16:57:37.6079620Z",
-  "durationMs": 7072,
-  "platform": "Microsoft Windows NT 10.0.26200.0",
-  "rustcVersion": "rustc 1.98.0 (88d9e12ae 2026-08-18)",
-  "cargoVersion": "cargo 1.98.0 (797e8a9bc 2026-08-05)",
-  "repositoryRoot": "C:\\workspace\\Orchestrator\\.worktrees\\desktop-shell",
-  "isolatedDataRoot": "C:\\Users\\anubhab\\AppData\\Local\\Temp\\lazoo-desktop-acceptance-8bc357a101b74e608600a78ebd4e3c9c\\data",
-  "temporaryProject": "C:\\Users\\anubhab\\AppData\\Local\\Temp\\lazoo-desktop-acceptance-8bc357a101b74e608600a78ebd4e3c9c\\repository",
-  "artifacts": {
-    "manifest": "C:\\workspace\\Orchestrator\\.worktrees\\desktop-shell\\artifacts\\acceptance\\desktop-shell-manifest.json",
-    "runRoot": "C:\\Users\\anubhab\\AppData\\Local\\Temp\\lazoo-desktop-acceptance-8bc357a101b74e608600a78ebd4e3c9c",
-    "defaultScreenshot": "C:\\Users\\anubhab\\AppData\\Local\\Temp\\lazoo-desktop-acceptance-8bc357a101b74e608600a78ebd4e3c9c\\desktop-default.png",
-    "narrowScreenshot": "C:\\Users\\anubhab\\AppData\\Local\\Temp\\lazoo-desktop-acceptance-8bc357a101b74e608600a78ebd4e3c9c\\desktop-narrow.png"
-  },
-  "keeper": {
-    "stdout": "",
-    "stderr": ""
-  },
-  "commands": [
-    {
-      "command": "git init --quiet <temporary-project>",
-      "exitCode": 0,
-      "durationMs": null
-    },
-    {
-      "command": "lazooctl --json status",
-      "exitCode": 0,
-      "durationMs": 93
-    },
-    {
-      "command": "lazooctl --json project register C:\\Users\\anubhab\\AppData\\Local\\Temp\\lazoo-desktop-acceptance-8bc357a101b74e608600a78ebd4e3c9c\\repository --name Desktop acceptance --idempotency-key desktop-8bc357a101b74e608600a78ebd4e3c9c",
-      "exitCode": 0,
-      "durationMs": 81
-    },
-    {
-      "command": "lazooctl --json system shutdown",
-      "exitCode": 0,
-      "durationMs": 26
-    }
-  ],
-  "gates": {
-    "releaseBuild": "PASS",
-    "cleanupIsolation": "PASS",
-    "daemonReady": "PASS",
-    "desktopWindow": "PASS",
-    "snapshotRpc": "PASS",
-    "defaultScreenshot": "PASS",
-    "narrowScreenshot": "PASS",
-    "processIsolation": "PASS"
-  }
+﻿{
+    "schemaVersion":  1,
+    "status":  "PASS",
+    "startedAt":  "2026-08-29T15:40:11.1815658Z",
+    "completedAt":  "2026-08-29T15:41:48.4445970Z",
+    "durationMs":  97260,
+    "platform":  "Microsoft Windows NT 10.0.26200.0",
+    "rustcVersion":  "rustc 1.98.0 (88d9e12ae 2026-08-18)",
+    "cargoVersion":  "cargo 1.98.0 (797e8a9bc 2026-08-05)",
+    "repositoryRoot":  "C:\\workspace\\Orchestrator\\.worktrees\\desktop-shell",
+    "isolatedDataRoot":  "C:\\Users\\anubhab\\AppData\\Local\\Temp\\lazoo-desktop-acceptance-feadd8be2d43454b84ed7b12cca11ae0\\data",
+    "temporaryProject":  "C:\\Users\\anubhab\\AppData\\Local\\Temp\\lazoo-desktop-acceptance-feadd8be2d43454b84ed7b12cca11ae0\\repository",
+    "environment":  {
+                        "windowsTextScalePercent":  100
+                    },
+    "artifacts":  {
+                      "manifest":  "C:\\workspace\\Orchestrator\\.worktrees\\desktop-shell\\artifacts\\acceptance\\desktop-shell-manifest.json",
+                      "runRoot":  "C:\\Users\\anubhab\\AppData\\Local\\Temp\\lazoo-desktop-acceptance-feadd8be2d43454b84ed7b12cca11ae0",
+                      "defaultScreenshot":  "C:\\Users\\anubhab\\AppData\\Local\\Temp\\lazoo-desktop-acceptance-feadd8be2d43454b84ed7b12cca11ae0\\desktop-default.png",
+                      "narrowScreenshot":  "C:\\Users\\anubhab\\AppData\\Local\\Temp\\lazoo-desktop-acceptance-feadd8be2d43454b84ed7b12cca11ae0\\desktop-narrow.png",
+                      "commandPaletteScreenshot":  "C:\\Users\\anubhab\\AppData\\Local\\Temp\\lazoo-desktop-acceptance-feadd8be2d43454b84ed7b12cca11ae0\\desktop-command-palette.png",
+                      "inspectorScreenshot":  "C:\\Users\\anubhab\\AppData\\Local\\Temp\\lazoo-desktop-acceptance-feadd8be2d43454b84ed7b12cca11ae0\\desktop-inspector.png",
+                      "highDpiScreenshot":  null,
+                      "runtimeAssets":  [
+                                            "C:\\workspace\\Orchestrator\\.worktrees\\desktop-shell\\apps\\lazoo-desktop\\ui\\dist\\assets\\index-Dg_F_3dr.js",
+                                            "C:\\workspace\\Orchestrator\\.worktrees\\desktop-shell\\apps\\lazoo-desktop\\ui\\dist\\assets\\index-Bjt0GKvM.css",
+                                            "C:\\workspace\\Orchestrator\\.worktrees\\desktop-shell\\apps\\lazoo-desktop\\ui\\dist\\assets\\inter-latin-wght-normal-Dx4kXJAl.woff2",
+                                            "C:\\workspace\\Orchestrator\\.worktrees\\desktop-shell\\apps\\lazoo-desktop\\ui\\dist\\assets\\ibm-plex-mono-latin-400-normal-DMJ8VG8y.woff2",
+                                            "C:\\workspace\\Orchestrator\\.worktrees\\desktop-shell\\apps\\lazoo-desktop\\ui\\dist\\assets\\ibm-plex-mono-latin-500-normal-DSY6xOcd.woff2"
+                                        ]
+                  },
+    "keeper":  {
+                   "stdout":  "",
+                   "stderr":  ""
+               },
+    "commands":  [
+                     {
+                         "command":  "npm --prefix apps/lazoo-desktop/ui ci",
+                         "exitCode":  0,
+                         "durationMs":  31843
+                     },
+                     {
+                         "command":  "npm --prefix apps/lazoo-desktop/ui run build",
+                         "exitCode":  0,
+                         "durationMs":  7401
+                     },
+                     {
+                         "command":  "cargo build --workspace --release --locked",
+                         "exitCode":  0,
+                         "durationMs":  47684
+                     },
+                     {
+                         "command":  "git init --quiet \u003ctemporary-project\u003e",
+                         "exitCode":  0,
+                         "durationMs":  null
+                     },
+                     {
+                         "command":  "lazooctl --json status",
+                         "exitCode":  0,
+                         "durationMs":  91
+                     },
+                     {
+                         "command":  "lazooctl --json project register C:\\Users\\anubhab\\AppData\\Local\\Temp\\lazoo-desktop-acceptance-feadd8be2d43454b84ed7b12cca11ae0\\repository --name Desktop acceptance --idempotency-key desktop-feadd8be2d43454b84ed7b12cca11ae0",
+                         "exitCode":  0,
+                         "durationMs":  80
+                     },
+                     {
+                         "command":  "lazooctl --json system shutdown",
+                         "exitCode":  0,
+                         "durationMs":  32
+                     }
+                 ],
+    "gates":  {
+                  "frontendBuild":  "PASS",
+                  "runtimeAssets":  "PASS",
+                  "releaseBuild":  "PASS",
+                  "cleanupIsolation":  "PASS",
+                  "daemonReady":  "PASS",
+                  "desktopWindow":  "PASS",
+                  "snapshotRpc":  "PASS",
+                  "customTitlebar":  "PASS",
+                  "commandPaletteScreenshot":  "PASS",
+                  "commandPaletteKeyboard":  "PASS",
+                  "inspectorScreenshot":  "PASS",
+                  "inspectorFocusRoundTrip":  "PASS",
+                  "defaultScreenshot":  "PASS",
+                  "narrowScreenshot":  "PASS",
+                  "highDpiEvidence":  "BLOCKED: Windows text scaling is 100%; 200% is required for this capture",
+                  "processIsolation":  "PASS"
+              }
 }

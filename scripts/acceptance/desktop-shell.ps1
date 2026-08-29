@@ -203,6 +203,153 @@ function Wait-UiText([IntPtr]$WindowHandle, [string[]]$Expected, [int]$TimeoutSe
     throw "desktop UI did not expose expected text '$($Expected -join ', ')'; observed: $($lastNames -join ' | ')"
 }
 
+function Wait-UiTextAbsent([IntPtr]$WindowHandle, [string[]]$Unexpected, [int]$TimeoutSeconds = 10) {
+    $deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSeconds)
+    $lastNames = @()
+    while ([DateTime]::UtcNow -lt $deadline) {
+        try {
+            $lastNames = @(Get-AutomationNames $WindowHandle)
+            $present = @($Unexpected | Where-Object { $_ -in $lastNames })
+            if ($present.Count -eq 0) { return }
+        } catch { }
+        Start-Sleep -Milliseconds 100
+    }
+    throw "desktop UI still exposed unexpected text '$($Unexpected -join ', ')'; observed: $($lastNames -join ' | ')"
+}
+
+function Wait-AutomationElement(
+    [IntPtr]$WindowHandle,
+    [string]$Name,
+    [bool]$StartsWith = $false,
+    [int]$TimeoutSeconds = 20
+) {
+    $deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSeconds)
+    while ([DateTime]::UtcNow -lt $deadline) {
+        try {
+            $root = [System.Windows.Automation.AutomationElement]::FromHandle($WindowHandle)
+            $elements = $root.FindAll(
+                [System.Windows.Automation.TreeScope]::Descendants,
+                [System.Windows.Automation.Condition]::TrueCondition
+            )
+            foreach ($item in $elements) {
+                try {
+                    $candidateName = $item.Current.Name
+                    $matches = if ($StartsWith) {
+                        $candidateName.StartsWith($Name, [StringComparison]::Ordinal)
+                    } else {
+                        $candidateName -eq $Name
+                    }
+                    if ($matches) { return $item }
+                } catch { }
+            }
+        } catch { }
+        Start-Sleep -Milliseconds 100
+    }
+    throw "desktop UI did not expose automation element '$Name'"
+}
+
+function Send-WindowKeys(
+    [IntPtr]$WindowHandle,
+    [string]$Keys,
+    [System.Windows.Automation.AutomationElement]$FocusElement = $null
+) {
+    Assert-True ([WindowNative]::BringToFront($WindowHandle)) 'window activated for keyboard input'
+    Start-Sleep -Milliseconds 150
+    if ($null -ne $FocusElement) {
+        $FocusElement.SetFocus()
+        Start-Sleep -Milliseconds 100
+    }
+    [System.Windows.Forms.SendKeys]::SendWait($Keys)
+    Start-Sleep -Milliseconds 150
+}
+
+function Invoke-AutomationElement([System.Windows.Automation.AutomationElement]$Element) {
+    $pattern = $null
+    if (-not $Element.TryGetCurrentPattern(
+        [System.Windows.Automation.InvokePattern]::Pattern,
+        [ref]$pattern
+    )) {
+        throw "automation element '$($Element.Current.Name)' does not expose InvokePattern"
+    }
+    ([System.Windows.Automation.InvokePattern]$pattern).Invoke()
+}
+
+function Assert-FocusedAutomationName([string]$Prefix, [string]$Label) {
+    $deadline = [DateTime]::UtcNow.AddSeconds(5)
+    $lastName = ''
+    while ([DateTime]::UtcNow -lt $deadline) {
+        try {
+            $focused = [System.Windows.Automation.AutomationElement]::FocusedElement
+            $lastName = $focused.Current.Name
+            if ($lastName.StartsWith($Prefix, [StringComparison]::Ordinal)) { return }
+        } catch { }
+        Start-Sleep -Milliseconds 100
+    }
+    throw "$Label expected focused name starting '$Prefix' but found '$lastName'"
+}
+
+function Test-DesktopRuntimeAssets([string]$DistRoot) {
+    $indexPath = Join-Path $DistRoot 'index.html'
+    Assert-True (Test-Path -LiteralPath $indexPath) 'desktop dist index exists'
+    $index = Get-Content -LiteralPath $indexPath -Raw
+
+    $inlineScripts = [regex]::Matches(
+        $index,
+        '<script\b(?![^>]*\bsrc\s*=)[^>]*>[\s\S]*?</script>',
+        [Text.RegularExpressions.RegexOptions]::IgnoreCase
+    )
+    Assert-Equal $inlineScripts.Count 0 'inline script content'
+    Assert-True (-not [regex]::IsMatch(
+        $index,
+        '\son[a-z]+\s*=',
+        [Text.RegularExpressions.RegexOptions]::IgnoreCase
+    )) 'inline event handler content'
+
+    $references = [Collections.Generic.List[string]]::new()
+    $attributeMatches = [regex]::Matches(
+        $index,
+        '(?:src|href)\s*=\s*["''](?<path>[^"'']+)["'']',
+        [Text.RegularExpressions.RegexOptions]::IgnoreCase
+    )
+    foreach ($match in $attributeMatches) {
+        $reference = $match.Groups['path'].Value
+        Assert-True (-not ($reference -match '^(?:https?:|//|data:|javascript:)')) "remote runtime asset: $reference"
+        Assert-True $reference.StartsWith('./', [StringComparison]::Ordinal) "local runtime asset path: $reference"
+        $relativePath = $reference.Substring(2).Replace('/', [IO.Path]::DirectorySeparatorChar)
+        $assetPath = [IO.Path]::GetFullPath((Join-Path $DistRoot $relativePath))
+        Assert-True $assetPath.StartsWith(
+            ([IO.Path]::GetFullPath($DistRoot) + [IO.Path]::DirectorySeparatorChar),
+            [StringComparison]::OrdinalIgnoreCase
+        ) "packaged asset stays inside dist: $reference"
+        Assert-True (Test-Path -LiteralPath $assetPath) "packaged asset exists: $reference"
+        $references.Add($assetPath)
+    }
+
+    foreach ($cssPath in @($references | Where-Object { [IO.Path]::GetExtension($_) -eq '.css' })) {
+        $css = Get-Content -LiteralPath $cssPath -Raw
+        $urlMatches = [regex]::Matches(
+            $css,
+            'url\(["'']?(?<path>[^)"'']+)["'']?\)',
+            [Text.RegularExpressions.RegexOptions]::IgnoreCase
+        )
+        foreach ($match in $urlMatches) {
+            $reference = $match.Groups['path'].Value
+            if ($reference -match '^data:') { continue }
+            Assert-True (-not ($reference -match '^(?:https?:|//|javascript:)')) "remote runtime asset: $reference"
+            $assetPath = [IO.Path]::GetFullPath((Join-Path (Split-Path $cssPath) $reference))
+            Assert-True $assetPath.StartsWith(
+                ([IO.Path]::GetFullPath($DistRoot) + [IO.Path]::DirectorySeparatorChar),
+                [StringComparison]::OrdinalIgnoreCase
+            ) "CSS asset stays inside dist: $reference"
+            Assert-True (Test-Path -LiteralPath $assetPath) "packaged CSS asset exists: $reference"
+            $references.Add($assetPath)
+        }
+    }
+
+    Assert-True ($references.Count -ge 3) 'packaged desktop runtime asset count'
+    return @($references | Select-Object -Unique)
+}
+
 function Capture-Window([IntPtr]$WindowHandle, [string]$Path) {
     Assert-True ([WindowNative]::BringToFront($WindowHandle)) 'window brought to foreground'
     Start-Sleep -Milliseconds 350
@@ -231,6 +378,7 @@ function Capture-Window([IntPtr]$WindowHandle, [string]$Path) {
 
 Add-Type -AssemblyName System.Drawing
 Add-Type -AssemblyName UIAutomationClient
+Add-Type -AssemblyName System.Windows.Forms
 Add-Type -TypeDefinition @'
 using System;
 using System.Runtime.InteropServices;
@@ -303,11 +451,13 @@ public static class WindowNative {
 
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
 $cargoExe = (Get-Command cargo -CommandType Application -ErrorAction Stop).Source
+$npmExe = (Get-Command npm.cmd -CommandType Application -ErrorAction Stop).Source
 $releaseDir = Join-Path $repoRoot 'target\release'
 $script:keeperExe = Join-Path $releaseDir 'lazoo-keeper.exe'
 $script:daemonExe = Join-Path $releaseDir 'lazood.exe'
 $script:ctlExe = Join-Path $releaseDir 'lazooctl.exe'
 $desktopExe = Join-Path $releaseDir 'lazoo-desktop.exe'
+$desktopDist = Join-Path $repoRoot 'apps\lazoo-desktop\ui\dist'
 $artifactDir = Join-Path $repoRoot 'artifacts\acceptance'
 $manifestPath = Join-Path $artifactDir 'desktop-shell-manifest.json'
 $runId = [Guid]::NewGuid().ToString('N')
@@ -318,6 +468,14 @@ $cleanupOwnedRoot = Join-Path $runRoot 'cleanup-owned'
 $cleanupUnrelatedRoot = Join-Path $runRoot 'cleanup-unrelated'
 $defaultScreenshot = Join-Path $runRoot 'desktop-default.png'
 $narrowScreenshot = Join-Path $runRoot 'desktop-narrow.png'
+$commandPaletteScreenshot = Join-Path $runRoot 'desktop-command-palette.png'
+$inspectorScreenshot = Join-Path $runRoot 'desktop-inspector.png'
+$highDpiScreenshot = Join-Path $runRoot 'desktop-text-scale-200.png'
+$textScalePercent = 100
+$textScaleSettings = Get-ItemProperty -LiteralPath 'HKCU:\Software\Microsoft\Accessibility' -ErrorAction SilentlyContinue
+if ($null -ne $textScaleSettings -and $null -ne $textScaleSettings.TextScaleFactor) {
+    $textScalePercent = [int]$textScaleSettings.TextScaleFactor
+}
 $startedAt = [DateTime]::UtcNow
 $stopwatch = [Diagnostics.Stopwatch]::StartNew()
 $script:commands = [Collections.Generic.List[object]]::new()
@@ -331,6 +489,7 @@ $manifestStatus = 'FAIL'
 $keeperStdout = ''
 $keeperStderr = ''
 $cleanupErrors = [Collections.Generic.List[string]]::new()
+$runtimeAssets = @()
 
 New-Item -ItemType Directory -Force -Path @(
     $artifactDir,
@@ -342,6 +501,34 @@ New-Item -ItemType Directory -Force -Path @(
 
 try {
     if (-not $SkipBuild) {
+        Push-Location $repoRoot
+        try {
+            $timer = [Diagnostics.Stopwatch]::StartNew()
+            & $npmExe --prefix apps/lazoo-desktop/ui ci
+            $npmCiExit = $LASTEXITCODE
+            $timer.Stop()
+            $script:commands.Add([ordered]@{
+                command = 'npm --prefix apps/lazoo-desktop/ui ci'
+                exitCode = $npmCiExit
+                durationMs = $timer.ElapsedMilliseconds
+            })
+            Assert-Equal $npmCiExit 0 'frontend clean install'
+
+            $timer = [Diagnostics.Stopwatch]::StartNew()
+            & $npmExe --prefix apps/lazoo-desktop/ui run build
+            $frontendBuildExit = $LASTEXITCODE
+            $timer.Stop()
+            $script:commands.Add([ordered]@{
+                command = 'npm --prefix apps/lazoo-desktop/ui run build'
+                exitCode = $frontendBuildExit
+                durationMs = $timer.ElapsedMilliseconds
+            })
+            Assert-Equal $frontendBuildExit 0 'frontend production build'
+        } finally {
+            Pop-Location
+        }
+        $gates.frontendBuild = 'PASS'
+
         $timer = [Diagnostics.Stopwatch]::StartNew()
         & $cargoExe build --workspace --release --locked
         $buildExit = $LASTEXITCODE
@@ -352,7 +539,12 @@ try {
             durationMs = $timer.ElapsedMilliseconds
         })
         Assert-Equal $buildExit 0 'locked release build'
+    } else {
+        $gates.frontendBuild = 'SKIPPED: prebuilt frontend requested'
     }
+
+    $runtimeAssets = @(Test-DesktopRuntimeAssets $desktopDist)
+    $gates.runtimeAssets = 'PASS'
     foreach ($binary in @($script:keeperExe, $script:daemonExe, $script:ctlExe, $desktopExe)) {
         Assert-True (Test-Path -LiteralPath $binary) "binary exists: $binary"
     }
@@ -412,12 +604,50 @@ try {
     Assert-Equal $desktop.MainWindowTitle $expectedTitle 'desktop window title'
     $gates.desktopWindow = 'PASS'
 
-    $uiNames = Wait-UiText $windowHandle @('Control plane steady', 'Desktop acceptance')
-    Assert-True ('Project registered' -in $uiNames) 'desktop recent event label'
+    $uiNames = Wait-UiText $windowHandle @(
+        'Control plane steady',
+        'Open command palette',
+        'Minimize window',
+        'Maximize or restore window',
+        'Close window'
+    )
+    $projectElement = Wait-AutomationElement $windowHandle 'Desktop acceptance' $true
+    $eventElement = Wait-AutomationElement $windowHandle 'Project registered' $true
+    Assert-True $eventElement.Current.Name.StartsWith(
+        'Project registered',
+        [StringComparison]::Ordinal
+    ) 'desktop recent event label'
     $gates.snapshotRpc = 'PASS'
+    $gates.customTitlebar = 'PASS'
 
+    $commandTrigger = Wait-AutomationElement $windowHandle 'Open command palette'
+    Send-WindowKeys $windowHandle '^k' $commandTrigger
+    Wait-UiText $windowHandle @('Command palette', 'Search commands') | Out-Null
+    Wait-AutomationElement $windowHandle 'Refresh snapshot' $true | Out-Null
+    Wait-AutomationElement $windowHandle 'Open projects' $true | Out-Null
+    Capture-Window $windowHandle $commandPaletteScreenshot | Out-Null
+    $gates.commandPaletteScreenshot = 'PASS'
+    Send-WindowKeys $windowHandle '{ESC}'
+    Wait-UiTextAbsent $windowHandle @('Search commands')
+    $gates.commandPaletteKeyboard = 'PASS'
+
+    $projectElement = Wait-AutomationElement $windowHandle 'Desktop acceptance' $true
+    $projectElement.SetFocus()
+    Send-WindowKeys $windowHandle '{ENTER}'
+    Wait-UiText $windowHandle @('Inspector', 'Close inspector', 'Desktop acceptance') | Out-Null
+    Capture-Window $windowHandle $inspectorScreenshot | Out-Null
+    $gates.inspectorScreenshot = 'PASS'
+    $closeInspector = Wait-AutomationElement $windowHandle 'Close inspector'
+    Invoke-AutomationElement $closeInspector
+    Wait-UiTextAbsent $windowHandle @('Inspector', 'Close inspector')
+    Assert-FocusedAutomationName 'Desktop acceptance' 'focus returned to project row'
+    $gates.inspectorFocusRoundTrip = 'PASS'
+
+    Assert-True ([WindowNative]::MoveWindow($windowHandle, 40, 40, 1180, 760, $true)) 'default window resize'
+    Start-Sleep -Milliseconds 500
     $defaultBounds = Capture-Window $windowHandle $defaultScreenshot
-    Assert-True ($defaultBounds.Width -ge 1100 -and $defaultBounds.Height -ge 700) 'default window dimensions'
+    Assert-Equal $defaultBounds.Width 1180 'default window width'
+    Assert-Equal $defaultBounds.Height 760 'default window height'
     $gates.defaultScreenshot = 'PASS'
 
     Assert-True ([WindowNative]::MoveWindow($windowHandle, 80, 80, 860, 620, $true)) 'narrow window resize'
@@ -425,8 +655,21 @@ try {
     $narrowBounds = Capture-Window $windowHandle $narrowScreenshot
     Assert-Equal $narrowBounds.Width 860 'narrow window width'
     Assert-Equal $narrowBounds.Height 620 'narrow window height'
-    Wait-UiText $windowHandle @('System pulse', 'Desktop acceptance') | Out-Null
+    $systemNavigation = Wait-AutomationElement $windowHandle 'System'
+    Invoke-AutomationElement $systemNavigation
+    Wait-UiText $windowHandle @('System pulse') | Out-Null
     $gates.narrowScreenshot = 'PASS'
+
+    if ($textScalePercent -eq 200) {
+        Assert-True ([WindowNative]::MoveWindow($windowHandle, 40, 40, 1180, 760, $true)) 'high-DPI window resize'
+        Start-Sleep -Milliseconds 500
+        $highDpiBounds = Capture-Window $windowHandle $highDpiScreenshot
+        Assert-Equal $highDpiBounds.Width 1180 'high-DPI window width'
+        Assert-Equal $highDpiBounds.Height 760 'high-DPI window height'
+        $gates.highDpiEvidence = 'PASS'
+    } else {
+        $gates.highDpiEvidence = "BLOCKED: Windows text scaling is $textScalePercent%; 200% is required for this capture"
+    }
 
     Assert-True $desktop.CloseMainWindow() 'desktop accepted close request'
     if (-not $desktop.WaitForExit(5000)) {
@@ -483,11 +726,22 @@ try {
         repositoryRoot = $repoRoot
         isolatedDataRoot = $script:dataRoot
         temporaryProject = $projectRoot
+        environment = [ordered]@{
+            windowsTextScalePercent = $textScalePercent
+        }
         artifacts = [ordered]@{
             manifest = $manifestPath
             runRoot = $runRoot
             defaultScreenshot = $defaultScreenshot
             narrowScreenshot = $narrowScreenshot
+            commandPaletteScreenshot = $commandPaletteScreenshot
+            inspectorScreenshot = $inspectorScreenshot
+            highDpiScreenshot = if (Test-Path -LiteralPath $highDpiScreenshot) {
+                $highDpiScreenshot
+            } else {
+                $null
+            }
+            runtimeAssets = @($runtimeAssets)
         }
         keeper = [ordered]@{
             stdout = $keeperStdout
@@ -505,3 +759,9 @@ if ($manifestStatus -ne 'PASS') {
 Write-Output "DESKTOP SHELL ACCEPTANCE: PASS"
 Write-Output "PASS manifest: $manifestPath"
 Write-Output "Visual QA screenshots: $defaultScreenshot and $narrowScreenshot"
+Write-Output "Interaction screenshots: $commandPaletteScreenshot and $inspectorScreenshot"
+if (Test-Path -LiteralPath $highDpiScreenshot) {
+    Write-Output "High-DPI visual QA screenshot: $highDpiScreenshot"
+} else {
+    Write-Output $gates.highDpiEvidence
+}

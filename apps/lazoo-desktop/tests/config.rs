@@ -96,3 +96,42 @@ fn failed_acceptance_cleanup_is_scoped_to_the_keeper_process_tree() {
     assert!(!script.contains("Stop-Process -Id $cleanupExitProbe.Id -Force"));
     assert!(!script.contains("ExecutablePath -eq $script:daemonExe"));
 }
+
+#[test]
+fn production_binary_enables_tauri_custom_protocol_by_default() {
+    let cargo_manifest =
+        fs::read_to_string(manifest_path("Cargo.toml")).expect("desktop Cargo.toml");
+
+    assert!(cargo_manifest.contains("default = [\"custom-protocol\"]"));
+    assert!(cargo_manifest.contains("custom-protocol = [\"tauri/custom-protocol\"]"));
+}
+
+#[test]
+fn desktop_acceptance_covers_frontend_assets_and_native_interactions() {
+    let script = fs::read_to_string(manifest_path("../../scripts/acceptance/desktop-shell.ps1"))
+        .expect("desktop acceptance script");
+
+    assert!(script.contains("npm --prefix apps/lazoo-desktop/ui ci"));
+    assert!(script.contains("npm --prefix apps/lazoo-desktop/ui run build"));
+    assert!(script.contains("function Test-DesktopRuntimeAssets"));
+    assert!(script.contains("inline script content"));
+    assert!(script.contains("remote runtime asset"));
+    assert!(script.contains("Open command palette"));
+    assert!(script.contains("Minimize window"));
+    assert!(script.contains("Maximize or restore window"));
+    assert!(script.contains("Close window"));
+    assert!(script.contains("function Send-WindowKeys"));
+    assert!(script.contains("'^k'"));
+    assert!(script.contains("Search commands"));
+    assert!(script.contains("'{ESC}'"));
+    assert!(script.contains("function Invoke-AutomationElement"));
+    assert!(script.contains("Close inspector"));
+    assert!(script.contains("focus returned to project row"));
+    assert!(script.contains("1180, 760"));
+    assert!(script.contains("860, 620"));
+    assert!(script.contains("highDpiScreenshot"));
+    assert!(script.contains("commandPaletteScreenshot"));
+    assert!(script.contains("inspectorScreenshot"));
+    assert!(script.contains("TextScaleFactor"));
+    assert!(script.contains("BLOCKED: Windows text scaling"));
+}
