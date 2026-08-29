@@ -1,28 +1,28 @@
 ﻿{
     "schemaVersion":  1,
     "status":  "PASS",
-    "startedAt":  "2026-08-29T15:40:11.1815658Z",
-    "completedAt":  "2026-08-29T15:41:48.4445970Z",
-    "durationMs":  97260,
+    "startedAt":  "2026-08-29T16:02:31.0509945Z",
+    "completedAt":  "2026-08-29T16:02:44.3560280Z",
+    "durationMs":  13301,
     "platform":  "Microsoft Windows NT 10.0.26200.0",
     "rustcVersion":  "rustc 1.98.0 (88d9e12ae 2026-08-18)",
     "cargoVersion":  "cargo 1.98.0 (797e8a9bc 2026-08-05)",
     "repositoryRoot":  "C:\\workspace\\Orchestrator\\.worktrees\\desktop-shell",
-    "isolatedDataRoot":  "C:\\Users\\anubhab\\AppData\\Local\\Temp\\lazoo-desktop-acceptance-feadd8be2d43454b84ed7b12cca11ae0\\data",
-    "temporaryProject":  "C:\\Users\\anubhab\\AppData\\Local\\Temp\\lazoo-desktop-acceptance-feadd8be2d43454b84ed7b12cca11ae0\\repository",
+    "isolatedDataRoot":  "C:\\Users\\anubhab\\AppData\\Local\\Temp\\lazoo-desktop-acceptance-3a30c022ea7f43fcb8ea7f792fecc38c\\data",
+    "temporaryProject":  "C:\\Users\\anubhab\\AppData\\Local\\Temp\\lazoo-desktop-acceptance-3a30c022ea7f43fcb8ea7f792fecc38c\\repository",
     "environment":  {
                         "windowsTextScalePercent":  100
                     },
     "artifacts":  {
                       "manifest":  "C:\\workspace\\Orchestrator\\.worktrees\\desktop-shell\\artifacts\\acceptance\\desktop-shell-manifest.json",
-                      "runRoot":  "C:\\Users\\anubhab\\AppData\\Local\\Temp\\lazoo-desktop-acceptance-feadd8be2d43454b84ed7b12cca11ae0",
-                      "defaultScreenshot":  "C:\\Users\\anubhab\\AppData\\Local\\Temp\\lazoo-desktop-acceptance-feadd8be2d43454b84ed7b12cca11ae0\\desktop-default.png",
-                      "narrowScreenshot":  "C:\\Users\\anubhab\\AppData\\Local\\Temp\\lazoo-desktop-acceptance-feadd8be2d43454b84ed7b12cca11ae0\\desktop-narrow.png",
-                      "commandPaletteScreenshot":  "C:\\Users\\anubhab\\AppData\\Local\\Temp\\lazoo-desktop-acceptance-feadd8be2d43454b84ed7b12cca11ae0\\desktop-command-palette.png",
-                      "inspectorScreenshot":  "C:\\Users\\anubhab\\AppData\\Local\\Temp\\lazoo-desktop-acceptance-feadd8be2d43454b84ed7b12cca11ae0\\desktop-inspector.png",
+                      "runRoot":  "C:\\Users\\anubhab\\AppData\\Local\\Temp\\lazoo-desktop-acceptance-3a30c022ea7f43fcb8ea7f792fecc38c",
+                      "defaultScreenshot":  "C:\\Users\\anubhab\\AppData\\Local\\Temp\\lazoo-desktop-acceptance-3a30c022ea7f43fcb8ea7f792fecc38c\\desktop-default.png",
+                      "narrowScreenshot":  "C:\\Users\\anubhab\\AppData\\Local\\Temp\\lazoo-desktop-acceptance-3a30c022ea7f43fcb8ea7f792fecc38c\\desktop-narrow.png",
+                      "commandPaletteScreenshot":  "C:\\Users\\anubhab\\AppData\\Local\\Temp\\lazoo-desktop-acceptance-3a30c022ea7f43fcb8ea7f792fecc38c\\desktop-command-palette.png",
+                      "inspectorScreenshot":  "C:\\Users\\anubhab\\AppData\\Local\\Temp\\lazoo-desktop-acceptance-3a30c022ea7f43fcb8ea7f792fecc38c\\desktop-inspector.png",
                       "highDpiScreenshot":  null,
                       "runtimeAssets":  [
-                                            "C:\\workspace\\Orchestrator\\.worktrees\\desktop-shell\\apps\\lazoo-desktop\\ui\\dist\\assets\\index-Dg_F_3dr.js",
+                                            "C:\\workspace\\Orchestrator\\.worktrees\\desktop-shell\\apps\\lazoo-desktop\\ui\\dist\\assets\\index-BKzsj1Ba.js",
                                             "C:\\workspace\\Orchestrator\\.worktrees\\desktop-shell\\apps\\lazoo-desktop\\ui\\dist\\assets\\index-Bjt0GKvM.css",
                                             "C:\\workspace\\Orchestrator\\.worktrees\\desktop-shell\\apps\\lazoo-desktop\\ui\\dist\\assets\\inter-latin-wght-normal-Dx4kXJAl.woff2",
                                             "C:\\workspace\\Orchestrator\\.worktrees\\desktop-shell\\apps\\lazoo-desktop\\ui\\dist\\assets\\ibm-plex-mono-latin-400-normal-DMJ8VG8y.woff2",
@@ -35,21 +35,6 @@
                },
     "commands":  [
                      {
-                         "command":  "npm --prefix apps/lazoo-desktop/ui ci",
-                         "exitCode":  0,
-                         "durationMs":  31843
-                     },
-                     {
-                         "command":  "npm --prefix apps/lazoo-desktop/ui run build",
-                         "exitCode":  0,
-                         "durationMs":  7401
-                     },
-                     {
-                         "command":  "cargo build --workspace --release --locked",
-                         "exitCode":  0,
-                         "durationMs":  47684
-                     },
-                     {
                          "command":  "git init --quiet \u003ctemporary-project\u003e",
                          "exitCode":  0,
                          "durationMs":  null
@@ -57,21 +42,21 @@
                      {
                          "command":  "lazooctl --json status",
                          "exitCode":  0,
-                         "durationMs":  91
+                         "durationMs":  88
                      },
                      {
-                         "command":  "lazooctl --json project register C:\\Users\\anubhab\\AppData\\Local\\Temp\\lazoo-desktop-acceptance-feadd8be2d43454b84ed7b12cca11ae0\\repository --name Desktop acceptance --idempotency-key desktop-feadd8be2d43454b84ed7b12cca11ae0",
+                         "command":  "lazooctl --json project register C:\\Users\\anubhab\\AppData\\Local\\Temp\\lazoo-desktop-acceptance-3a30c022ea7f43fcb8ea7f792fecc38c\\repository --name Desktop acceptance --idempotency-key desktop-3a30c022ea7f43fcb8ea7f792fecc38c",
                          "exitCode":  0,
-                         "durationMs":  80
+                         "durationMs":  81
                      },
                      {
                          "command":  "lazooctl --json system shutdown",
                          "exitCode":  0,
-                         "durationMs":  32
+                         "durationMs":  23
                      }
                  ],
     "gates":  {
-                  "frontendBuild":  "PASS",
+                  "frontendBuild":  "SKIPPED: prebuilt frontend requested",
                   "runtimeAssets":  "PASS",
                   "releaseBuild":  "PASS",
                   "cleanupIsolation":  "PASS",

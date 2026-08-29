@@ -627,6 +627,22 @@ try {
     Wait-AutomationElement $windowHandle 'Open projects' $true | Out-Null
     Capture-Window $windowHandle $commandPaletteScreenshot | Out-Null
     $gates.commandPaletteScreenshot = 'PASS'
+
+    $searchBox = Wait-AutomationElement $windowHandle 'Search commands'
+    Send-WindowKeys $windowHandle 'open{DOWN}{ENTER}' $searchBox
+    Wait-UiTextAbsent $windowHandle @('Search commands')
+    Wait-UiText $windowHandle @('Projects') | Out-Null
+
+    $commandTrigger = Wait-AutomationElement $windowHandle 'Open command palette'
+    Invoke-AutomationElement $commandTrigger
+    $searchBox = Wait-AutomationElement $windowHandle 'Search commands'
+    Send-WindowKeys $windowHandle 'control{ENTER}' $searchBox
+    Wait-UiTextAbsent $windowHandle @('Search commands')
+    Wait-UiText $windowHandle @('Control room') | Out-Null
+
+    $commandTrigger = Wait-AutomationElement $windowHandle 'Open command palette'
+    Invoke-AutomationElement $commandTrigger
+    Wait-AutomationElement $windowHandle 'Search commands' | Out-Null
     Send-WindowKeys $windowHandle '{ESC}'
     Wait-UiTextAbsent $windowHandle @('Search commands')
     $gates.commandPaletteKeyboard = 'PASS'
@@ -637,6 +653,15 @@ try {
     Wait-UiText $windowHandle @('Inspector', 'Close inspector', 'Desktop acceptance') | Out-Null
     Capture-Window $windowHandle $inspectorScreenshot | Out-Null
     $gates.inspectorScreenshot = 'PASS'
+
+    $commandTrigger = Wait-AutomationElement $windowHandle 'Open command palette'
+    Invoke-AutomationElement $commandTrigger
+    Wait-AutomationElement $windowHandle 'Inspect selected project' $true | Out-Null
+    $searchBox = Wait-AutomationElement $windowHandle 'Search commands'
+    Send-WindowKeys $windowHandle '^~' $searchBox
+    Wait-UiTextAbsent $windowHandle @('Search commands')
+    Assert-FocusedAutomationName 'Close inspector' 'secondary inspect moved focus into inspector'
+
     $closeInspector = Wait-AutomationElement $windowHandle 'Close inspector'
     Invoke-AutomationElement $closeInspector
     Wait-UiTextAbsent $windowHandle @('Inspector', 'Close inspector')

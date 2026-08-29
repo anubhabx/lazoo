@@ -123,9 +123,13 @@ fn desktop_acceptance_covers_frontend_assets_and_native_interactions() {
     assert!(script.contains("function Send-WindowKeys"));
     assert!(script.contains("'^k'"));
     assert!(script.contains("Search commands"));
+    assert!(script.contains("'open{DOWN}{ENTER}'"));
+    assert!(script.contains("'control{ENTER}'"));
+    assert!(script.contains("'^~'"));
     assert!(script.contains("'{ESC}'"));
     assert!(script.contains("function Invoke-AutomationElement"));
     assert!(script.contains("Close inspector"));
+    assert!(script.contains("secondary inspect moved focus into inspector"));
     assert!(script.contains("focus returned to project row"));
     assert!(script.contains("1180, 760"));
     assert!(script.contains("860, 620"));

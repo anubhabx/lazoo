@@ -434,9 +434,20 @@ export function App({
     setSelection(nextSelection);
   };
 
+  const routeCommandFocusToInspector = () => {
+    const inspectorClose = document.querySelector<HTMLElement>(
+      'button[aria-label="Close inspector"]',
+    );
+    if (inspectorClose) commandOrigin.current = inspectorClose;
+  };
+
   const executeCommand = (command: CommandDefinition) => {
     if (command.id === "refresh") {
       void refresh();
+      return;
+    }
+    if (command.id.startsWith("inspect-")) {
+      routeCommandFocusToInspector();
       return;
     }
     const destination = command.id.replace("navigate-", "") as ViewId;
@@ -551,7 +562,7 @@ export function App({
         context={{ view: activeView, selection }}
         onOpenChange={changeCommandOpen}
         onExecute={executeCommand}
-        onInspectSelection={() => undefined}
+        onInspectSelection={routeCommandFocusToInspector}
       />
     </>
   );

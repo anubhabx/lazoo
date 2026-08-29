@@ -419,7 +419,9 @@ describe("command and action flow", () => {
     expect(
       screen.getByRole("complementary", { name: "Inspector" }),
     ).toBeInTheDocument();
-    expect(project).toHaveFocus();
+    expect(
+      screen.getByRole("button", { name: "Close inspector" }),
+    ).toHaveFocus();
   });
 
   test("dismisses with Escape and outside press, restoring trigger focus", async () => {

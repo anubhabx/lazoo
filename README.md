@@ -6,9 +6,9 @@ The name is a deliberately silly blend of **lazy** and **zoo**: wake the right e
 
 ## Status
 
-The first Windows control-plane slice and the read-only desktop-shell slice are implemented. Lazoo now provides four native executables:
+The first Windows control-plane slice and the polished read-only desktop-shell slice are implemented. Lazoo now provides four native executables:
 
-- `lazoo-desktop.exe` opens a Tauri 2 control room for daemon health, projects, recent events, and recovered-incident count.
+- `lazoo-desktop.exe` opens a dark, command-first Tauri 2 control room for daemon health, projects, recent events, and recovered-incident count.
 - `lazoo-keeper.exe` supervises the daemon with a bounded restart policy and emergency spool.
 - `lazood.exe` owns the SQLite WAL store and authenticated named-pipe API.
 - `lazooctl.exe` exposes status, project registration/listing, event listing/following, and planned shutdown.
@@ -17,9 +17,11 @@ The desktop is deliberately read-only in this slice. Provider adapters, employee
 
 ## Build and run
 
-Use the pinned Rust toolchain on Windows:
+Install and build the checked-in desktop frontend before the locked Rust release build:
 
 ```powershell
+npm --prefix apps\lazoo-desktop\ui ci
+npm --prefix apps\lazoo-desktop\ui run build
 cargo build --workspace --release --locked
 & .\target\release\lazoo-keeper.exe
 ```
@@ -42,22 +44,31 @@ The shell reconnects every ten seconds and keeps the last successful snapshot vi
 
 Add `--json` for a stable machine-readable result. Mutable state defaults to `%LOCALAPPDATA%\Lazoo`; set `LAZOO_DATA_ROOT` to isolate a test installation.
 
+For the frontend development loop, run the app from its Tauri directory with Tauri CLI 2 installed. The Tauri configuration starts Vite on `127.0.0.1:1420` automatically:
+
+```powershell
+Push-Location apps\lazoo-desktop
+cargo tauri dev
+Pop-Location
+```
+
 ## Verification
 
 ```powershell
 & .\scripts\verify-rust-toolchain.ps1
+npm --prefix apps\lazoo-desktop\ui ci
+npm --prefix apps\lazoo-desktop\ui run check
 cargo test --workspace
 cargo check --workspace --all-targets
 cargo clippy --workspace --all-targets -- -D warnings
 cargo fmt --all -- --check
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\acceptance\first-slice.ps1
-node --test apps\lazoo-desktop\ui\view-model.test.mjs
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\acceptance\desktop-shell.ps1
 ```
 
 The acceptance script uses a unique temporary data root, builds release binaries, forces a real daemon restart, exhausts the production keeper budget with a crashing fixture, and writes `artifacts\acceptance\first-slice-manifest.json`.
 
-The desktop-shell acceptance starts an isolated keeper and daemon, registers a disposable Git repository, opens the real WebView2 window, verifies connected content through Windows UI Automation, checks default and minimum-size captures, and writes `artifacts\acceptance\desktop-shell-manifest.json`.
+The desktop-shell acceptance starts an isolated keeper and daemon, registers a disposable Git repository, opens the real WebView2 window, exercises `Ctrl+K`, arrow/Enter navigation, `Ctrl+Enter` inspector focus, Escape dismissal, and inspector focus return through Windows UI Automation, checks default and minimum-size captures, and writes `artifacts\acceptance\desktop-shell-manifest.json`. A 200% text-scale capture runs only when Windows is configured at 200%; otherwise the manifest records an explicit environment blocker.
 
 ## Operating boundary
 

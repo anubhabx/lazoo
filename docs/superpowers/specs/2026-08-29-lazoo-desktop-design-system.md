@@ -1,7 +1,7 @@
 # Lazoo desktop design system: Zed structure × Raycast interaction
 
 - **Date:** 2026-08-29
-- **Status:** Proposed; research and starter tokens complete; not applied to the product
+- **Status:** Implemented for the current read-only desktop shell; all applicable gates pass, with 200% Windows text-scale evidence environment-blocked at the host's current 100% setting
 - **Scope:** Dark-first desktop design system for the Lazoo Tauri shell and future orchestration surfaces
 
 ## Decision
@@ -20,7 +20,7 @@ The generated starter files are:
 - `design-system/tokens.css`
 - `design-system/README.md`
 
-They are intentionally not imported by the current UI.
+The desktop frontend imports `tokens.css` once; `tokens.json` remains the tool-readable source and this specification remains the behavioral contract.
 
 ## Evidence and confidence
 
@@ -81,7 +81,7 @@ Lazoo keeps the sizes but uses a product-specific font stack:
 | Headline medium | 20 / 28            | 600     | workspace title                                   |
 | Headline large  | 23 / 32            | 600     | rare empty-state or first-run title               |
 
-The UI stack is `Inter Variable`, then Inter, Segoe UI Variable, and Segoe UI. Technical strings use IBM Plex Mono, then Cascadia Mono and Consolas. Font files are not bundled by this research slice; the fallbacks make the starter safe until the implementation plan includes an asset and license check.
+The UI stack is `Inter Variable`, then Inter, Segoe UI Variable, and Segoe UI. Technical strings use IBM Plex Mono, then Cascadia Mono and Consolas. The packaged shell bundles Inter Variable and IBM Plex Mono locally under the SIL Open Font License 1.1; no runtime font request leaves the application.
 
 ### Component dimensions
 
@@ -323,20 +323,18 @@ The following do not belong in the Lazoo system:
 
 ## Implementation boundary
 
-This design-system slice creates research, decisions, and starter tokens only. It does not:
+The implemented redesign applies this system to the existing read-only snapshot shell. It imports the canonical token CSS, uses React, React Aria Components, Lucide, and local font packages, and replaces the previous paper UI. It does not:
 
-- import the token CSS;
-- restyle or restructure the current shell;
-- add React, React Aria, Radix, Motion, or another frontend dependency;
-- expand Tauri capabilities;
-- alter the daemon/backend contract;
-- claim that later employee, provider, task, or approval workflows are implemented.
+- add a second product-data command beyond `load_desktop_snapshot`;
+- add filesystem, shell, process, HTTP, clipboard, registration, shutdown, or provider capabilities;
+- alter the daemon, IPC, protocol, or storage contract;
+- claim that later employee, provider, task, approval, terminal, memory, or mutation workflows are implemented.
 
-After owner approval, a separate implementation plan should migrate the shell to the selected frontend foundation, implement primitives and focus behavior, and redesign the Control Room against this specification. The first visual acceptance should compare the real Tauri window at default, minimum, and high-DPI sizes—not a browser-only mockup.
+Employee, task, and approval component contracts remain forward constraints only; the current backend does not return those objects, so the desktop does not fabricate their surfaces. The only added Tauri permissions are minimize, maximize/restore, drag, close, and maximized-state access for the custom titlebar.
 
 ## Verification required for implementation
 
-The eventual implementation is not complete until all of these are demonstrated:
+This implementation is not complete until all of these are demonstrated:
 
 1. Every component consumes semantic tokens rather than literal product colors.
 2. Default, hover, focus, active, selected, disabled, loading, empty, disconnected, and error states are visibly distinct.
@@ -346,6 +344,8 @@ The eventual implementation is not complete until all of these are demonstrated:
 6. No layout flashes, clipped overlays, missing focus rings, or remote runtime assets appear.
 7. The shell remains legible at the minimum supported window size and at 200% UI scaling.
 8. Provider and agent status wording remains truthful to the backend's verified state.
+
+The audit is recorded in `docs/verification/2026-08-29-lazoo-desktop-redesign.md`. Items 1–6 and 8 pass through source contracts, 47 frontend tests, 63 Rust tests, and real-window acceptance. Item 7 passes at the 860×620 minimum window; its 200% text-scale capture is explicitly blocked because this Windows host reports 100% text scaling. No environment-bound result is represented as a pass.
 
 ## Sources
 

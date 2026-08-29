@@ -1,8 +1,10 @@
 # Lazoo Desktop Redesign Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **Execution note:** Implemented task-by-task with the executing-plans workflow; checked boxes below record completed evidence.
 
 **Goal:** Replace the current paper-styled read-only Tauri shell with the approved dark Lazoo design system, a native-feeling custom window frame, accessible command-first interaction, and polished operational views while preserving the existing snapshot-only backend boundary.
+
+**Execution status:** Complete. All applicable implementation, frontend, Rust, locked-release, and real-window acceptance gates pass. Windows 200% text-scale evidence is explicitly environment-blocked because the verification host reports 100%.
 
 **Architecture:** Keep `load_desktop_snapshot` as the only product-data command and move the webview to a React 19 + TypeScript application compiled by Vite into a checked-in `ui/dist` runtime payload. React Aria Components owns focus, dialog, listbox, button, and tooltip behavior; local CSS consumes the canonical Lazoo semantic tokens; Tauri's core window API owns only minimize, maximize/restore, drag, and close. A small dependency-injected bridge isolates Tauri calls from presentation code and makes browser-level tests deterministic.
 
@@ -206,28 +208,29 @@ apps/lazoo-desktop/ui/
 **Files:**
 
 - Modify: `README.md`
+- Modify: `design-system/README.md`
 - Modify: `docs/PROJECT-BRIEF.md`
 - Modify: `docs/superpowers/specs/2026-08-29-lazoo-desktop-design-system.md`
 - Modify: `docs/superpowers/plans/2026-08-29-lazoo-desktop-redesign.md`
 - Create: `docs/verification/2026-08-29-lazoo-desktop-redesign.md`
 
-- [ ] Update user/developer commands for `npm ci`, frontend tests/build, `tauri dev`, Cargo, and desktop acceptance.
-- [ ] Mark the design spec Implemented only after every non-environment-bound gate passes. Keep the backend boundary and later-slice exclusions explicit.
-- [ ] Record exact dependency/license choices, test counts, command exit codes, acceptance manifest gates, screenshot sizes/paths, visual observations, and any genuine blocked high-DPI/manual gate.
-- [ ] Run `powershell -NoProfile -ExecutionPolicy Bypass -File scripts/verify-rust-toolchain.ps1`.
-- [ ] Run `npm --prefix apps/lazoo-desktop/ui ci` followed by `npm --prefix apps/lazoo-desktop/ui run check`.
-- [ ] Run `cargo test --workspace`.
-- [ ] Run `cargo fmt --all -- --check`.
-- [ ] Run `cargo clippy --workspace --all-targets -- -D warnings`.
-- [ ] Run `cargo check --workspace --all-targets`.
-- [ ] Run `cargo build --workspace --release --locked` after the fresh frontend build.
-- [ ] Run `powershell -NoProfile -ExecutionPolicy Bypass -File scripts/acceptance/first-slice.ps1 -SkipBuild`.
-- [ ] Run `powershell -NoProfile -ExecutionPolicy Bypass -File scripts/acceptance/desktop-shell.ps1 -SkipBuild`.
-- [ ] Run `git diff --check` and a source/runtime scan for inline scripts, remote assets, unsafe HTML injection, mixed icon systems, forbidden capability expansion, literal component colors, and `transition: all`.
-- [ ] Compare the implementation line by line with `docs/superpowers/specs/2026-08-29-lazoo-desktop-design-system.md`; confirm every required state and interaction has evidence and every exclusion remains excluded.
-- [ ] Scan the plan, implementation, and verification notes for unfinished markers and unqualified future claims.
-- [ ] Update every task checkbox and the execution status in this plan to match reality.
-- [ ] Commit: `docs: verify Lazoo desktop redesign`
+- [x] Update user/developer commands for `npm ci`, frontend tests/build, `tauri dev`, Cargo, and desktop acceptance.
+- [x] Mark the design spec Implemented only after every non-environment-bound gate passes. Keep the backend boundary and later-slice exclusions explicit.
+- [x] Record exact dependency/license choices, test counts, command exit codes, acceptance manifest gates, screenshot sizes/paths, visual observations, and any genuine blocked high-DPI/manual gate.
+- [x] Run `powershell -NoProfile -ExecutionPolicy Bypass -File scripts/verify-rust-toolchain.ps1`.
+- [x] Run `npm --prefix apps/lazoo-desktop/ui ci` followed by `npm --prefix apps/lazoo-desktop/ui run check`.
+- [x] Run `cargo test --workspace`.
+- [x] Run `cargo fmt --all -- --check`.
+- [x] Run `cargo clippy --workspace --all-targets -- -D warnings`.
+- [x] Run `cargo check --workspace --all-targets`.
+- [x] Run `cargo build --workspace --release --locked` after the fresh frontend build.
+- [x] Run `powershell -NoProfile -ExecutionPolicy Bypass -File scripts/acceptance/first-slice.ps1 -SkipBuild`.
+- [x] Run `powershell -NoProfile -ExecutionPolicy Bypass -File scripts/acceptance/desktop-shell.ps1 -SkipBuild`.
+- [x] Run `git diff --check` and a source/runtime scan for inline scripts, remote assets, unsafe HTML injection, mixed icon systems, forbidden capability expansion, literal component colors, and `transition: all`.
+- [x] Compare the implementation line by line with `docs/superpowers/specs/2026-08-29-lazoo-desktop-design-system.md`; confirm every required state and interaction has evidence and every exclusion remains excluded.
+- [x] Scan the plan, implementation, and verification notes for unfinished markers and unqualified future claims.
+- [x] Update every task checkbox and the execution status in this plan to match reality.
+- [x] Commit: `docs: verify Lazoo desktop redesign`
 
 ## Completion criteria
 

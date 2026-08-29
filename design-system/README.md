@@ -1,6 +1,6 @@
 # Lazoo desktop design-system starter
 
-Status: **Proposed — not imported by the application.**
+Status: **Implemented in the current read-only desktop shell.**
 
 This directory is the implementation-neutral starter for Lazoo's dark desktop interface. It combines:
 
@@ -11,10 +11,10 @@ This directory is the implementation-neutral starter for Lazoo's dark desktop in
 ## Files
 
 - `tokens.json` is the canonical, tool-readable source.
-- `tokens.css` is the generated-style CSS-variable starter for a future webview implementation.
+- `tokens.css` is the canonical CSS-variable source imported by the desktop frontend.
 - `../docs/superpowers/specs/2026-08-29-lazoo-desktop-design-system.md` contains the evidence, rationale, component contracts, and usage rules.
 
-Neither token file is currently imported by `apps/lazoo-desktop/ui/styles.css`. The existing desktop remains unchanged until the design-system specification is reviewed and approved.
+`apps/lazoo-desktop/ui/src/main.tsx` imports `tokens.css` once. The document root declares `data-theme="lazoo-dark"` and `data-density="default"`; component CSS consumes semantic variables from that contract.
 
 ## Usage rules
 
@@ -27,6 +27,6 @@ Neither token file is currently imported by `apps/lazoo-desktop/ui/styles.css`. 
 7. Motion uses opacity and 4–8px translation. Layout must remain understandable with motion disabled.
 8. Buttons and selectable rows keep the desktop arrow cursor. Pointer cursors are reserved for links.
 
-## Intended future import
+## Active import
 
-When the redesign is approved, the frontend entrypoint should import `tokens.css` once and place `data-theme="lazoo-dark"` and `data-density="default"` on the application root. This is guidance only; no import has been added yet.
+The frontend entrypoint imports `tokens.css` once, and `apps/lazoo-desktop/ui/index.html` places `data-theme="lazoo-dark"` and `data-density="default"` on the document root. Keep that single-import boundary when adding later desktop surfaces.

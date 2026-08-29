@@ -4,7 +4,7 @@
 - **Research snapshot:** 2026-08-28
 - **Owner review:** 2026-08-28
 - **Product boundary:** Windows-first, single-user, local desktop software
-- **Repository stage:** Control-plane foundation and read-only Tauri desktop shell implemented and verified; provider, employee, and collaboration slices remain unimplemented
+- **Repository stage:** Control-plane foundation and polished read-only Tauri desktop shell implemented and verified; provider, employee, and collaboration slices remain unimplemented
 
 ## 1. Executive summary
 
@@ -907,7 +907,7 @@ The first implementation milestone was a narrow Stage 1/Stage 2 bridge: a runnab
 - incidents, watchdog, emergency spool;
 - live roster and resource governor.
 
-Current Stage 2 status: daemon, keeper, CLI, SQLite event/outbox storage, named-pipe IPC, watchdog/emergency spool, and a minimal read-only Tauri shell are implemented and verified. The shell exposes one explicit `desktop.snapshot` command and shows daemon health, registered projects, recent events, and recovered-incident count. Employee lifecycle, ConPTY/Job Objects, the worktree manager, task/message bus, approvals, and the live roster/resource governor remain unimplemented.
+Current Stage 2 status: daemon, keeper, CLI, SQLite event/outbox storage, named-pipe IPC, watchdog/emergency spool, and a polished read-only Tauri shell are implemented and verified. The shell retains one explicit `desktop.snapshot` product-data command and presents daemon health, registered projects, recent events, and recovered-incident count through a dark command-first UI with truthful loading, degraded, offline, and last-good-snapshot states. Its only added capabilities are the narrow core-window permissions required by the custom titlebar. Employee lifecycle, ConPTY/Job Objects, the worktree manager, task/message bus, approvals, and the live roster/resource governor remain unimplemented.
 
 ### Stage 3: first live provider adapters
 
@@ -1066,4 +1066,4 @@ The owner accepted this product and engineering contract on 2026-08-28 with the 
 - Compressed source transcripts are retained by default within visible limits, with global and per-project opt-out.
 - Claude Code live harness verification may use a configured external endpoint/model; native Anthropic subscription verification is tracked separately.
 
-The runnable control-plane milestone and the following read-only Tauri desktop-shell slice are implemented with separate design, plan, and acceptance evidence. The next recommended slice is provider truth and the revisioned live employee roster; provider execution must not be claimed until its own live conformance gates pass. Each later slice still requires its own design, plan, and acceptance evidence.
+The runnable control-plane milestone and the polished read-only Tauri desktop-shell slice are implemented with separate design, plan, verification, and acceptance evidence. The next recommended slice is provider truth and the revisioned live employee roster; provider execution must not be claimed until its own live conformance gates pass. Each later slice still requires its own design, plan, and acceptance evidence.
