@@ -6,6 +6,7 @@ members = [
   "crates/lazoo-runtime",
   "crates/lazoo-store",
   "crates/lazoo-ipc",
+  "crates/lazoo-providers",
   "apps/lazood",
   "apps/lazooctl",
   "apps/lazoo-keeper",
@@ -36,6 +37,7 @@ tokio = { version = "1.53.1", features = ["io-util", "macros", "net", "process",
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter", "fmt", "json"] }
 uuid = { version = "1.26.0", features = ["serde", "v4"] }
+winreg = "0.55.0"
 windows = { version = "0.62.2", features = [
   "Data_Xml_Dom",
   "Foundation",
