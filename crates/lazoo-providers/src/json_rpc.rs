@@ -27,13 +27,19 @@ const MAX_STDERR_LINE_BYTES: usize = 4096;
 pub(crate) struct JsonRpcControl {
     stdin: Arc<Mutex<tokio::process::ChildStdin>>,
     next_id: Arc<AtomicU64>,
+    standard_envelope: bool,
 }
 
 impl JsonRpcControl {
-    async fn send_request(&self, method: &str, params: Value) -> Result<String, ProviderError> {
+    pub(crate) async fn send_request(
+        &self,
+        method: &str,
+        params: Value,
+    ) -> Result<String, ProviderError> {
         let id = self.next_id.fetch_add(1, Ordering::Relaxed).to_string();
-        self.write(&json!({"id": id, "method": method, "params": params}))
-            .await?;
+        let mut message = json!({"id": id, "method": method, "params": params});
+        self.add_standard_envelope(&mut message);
+        self.write(&message).await?;
         Ok(id)
     }
 
@@ -50,10 +56,11 @@ impl JsonRpcControl {
         method: &str,
         params: Option<Value>,
     ) -> Result<(), ProviderError> {
-        let message = params.map_or_else(
+        let mut message = params.map_or_else(
             || json!({"method": method}),
             |params| json!({"method": method, "params": params}),
         );
+        self.add_standard_envelope(&mut message);
         self.write(&message).await
     }
 
@@ -62,13 +69,23 @@ impl JsonRpcControl {
         id: Value,
         result: Result<Value, (i64, &'static str)>,
     ) -> Result<(), ProviderError> {
-        let message = match result {
+        let mut message = match result {
             Ok(result) => json!({"id": id, "result": result}),
             Err((code, message)) => {
                 json!({"id": id, "error": {"code": code, "message": message}})
             }
         };
+        self.add_standard_envelope(&mut message);
         self.write(&message).await
+    }
+
+    fn add_standard_envelope(&self, message: &mut Value) {
+        if self.standard_envelope {
+            message
+                .as_object_mut()
+                .expect("JSON-RPC messages are objects")
+                .insert("jsonrpc".to_owned(), Value::String("2.0".to_owned()));
+        }
     }
 
     async fn write(&self, message: &Value) -> Result<(), ProviderError> {
@@ -103,6 +120,17 @@ pub(crate) struct JsonRpcProcess {
 
 impl JsonRpcProcess {
     pub(crate) fn spawn(spec: &CommandSpec) -> Result<Self, ProviderError> {
+        Self::spawn_with_envelope(spec, false)
+    }
+
+    pub(crate) fn spawn_standard(spec: &CommandSpec) -> Result<Self, ProviderError> {
+        Self::spawn_with_envelope(spec, true)
+    }
+
+    fn spawn_with_envelope(
+        spec: &CommandSpec,
+        standard_envelope: bool,
+    ) -> Result<Self, ProviderError> {
         let mut command = Command::new(&spec.executable);
         command
             .args(&spec.args)
@@ -133,6 +161,7 @@ impl JsonRpcProcess {
             control: JsonRpcControl {
                 stdin: Arc::new(Mutex::new(stdin)),
                 next_id: Arc::new(AtomicU64::new(1)),
+                standard_envelope,
             },
             queued: VecDeque::new(),
             stderr_lines,
@@ -185,6 +214,12 @@ impl JsonRpcProcess {
         self.read_wire_message(wait, phase).await
     }
 
+    pub(crate) fn discard_queued(&mut self) -> usize {
+        let count = self.queued.len();
+        self.queued.clear();
+        count
+    }
+
     async fn read_wire_message(
         &mut self,
         wait: Duration,
@@ -225,7 +260,7 @@ impl JsonRpcProcess {
     }
 }
 
-fn response_id(message: &Value) -> Option<String> {
+pub(crate) fn response_id(message: &Value) -> Option<String> {
     message.get("id").and_then(|id| match id {
         Value::String(value) => Some(value.clone()),
         Value::Number(value) => Some(value.to_string()),

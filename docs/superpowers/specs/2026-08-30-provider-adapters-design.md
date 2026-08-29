@@ -17,7 +17,7 @@ Create a focused `lazoo-providers` crate. Public contract types describe provide
 Two reusable transports sit below provider modules:
 
 - A line-delimited bidirectional JSON-RPC transport for Codex App Server. It correlates responses by request ID while forwarding notifications and provider-initiated requests.
-- The official Agent Client Protocol Rust SDK for OpenCode and Grok Build. Provider wrappers select native launch commands and retain provider-specific capability evidence.
+- The official Agent Client Protocol Rust SDK schema types for OpenCode and Grok Build, carried over Lazoo's bounded JSON-RPC process transport. The SDK's process helper cannot set a child working directory, so the shared Lazoo transport retains structured cwd, Windows process ownership, timeout, and stderr guarantees while official types define the wire payloads. Provider wrappers select native launch commands and retain provider-specific capability evidence.
 
 Claude Code and agy use long-lived `stream-json` input/output processes. They share only safe NDJSON process plumbing; their schemas and event normalization remain separate because their wire contracts differ.
 
@@ -83,4 +83,3 @@ Each adapter follows red-green-refactor independently:
 4. Full workspace tests, check, Clippy, formatting, release build, first-slice acceptance, and provider-adapter acceptance run before completion.
 
 The acceptance manifest records executable path hash metadata (not secrets), version, handshake outcome, model-backed outcome, supported/unsupported capability evidence, blocker strings, and timestamps. A provider is never labeled verified when its live gate was skipped or blocked.
-

@@ -6,7 +6,7 @@
 
 **Architecture:** A new `lazoo-providers` crate owns the versioned adapter contract, truthful Windows discovery/probing, provider transports, event normalization, and a registry. The daemon and CLI expose bounded read-only provider truth plus an explicit single-turn smoke diagnostic; persistent employee ownership remains out of scope.
 
-**Tech Stack:** Rust 1.98, Tokio 1.53, Serde/serde_json, official Agent Client Protocol Rust SDK 2.0, Windows persisted environment APIs/registry reads, existing Lazoo JSON-RPC named-pipe control plane.
+**Tech Stack:** Rust 1.98, Tokio 1.53, Serde/serde_json, official Agent Client Protocol Rust SDK 2.0 schema types over Lazoo's bounded process transport, Windows persisted environment APIs/registry reads, existing Lazoo JSON-RPC named-pipe control plane.
 
 ---
 
@@ -167,7 +167,7 @@ git commit -m "feat: connect Codex App Server"
 - Test: `crates/lazoo-providers/tests/opencode.rs`
 - Create: `crates/lazoo-providers/tests/fixtures/opencode/*.jsonl`
 
-- [ ] **Step 1: Write failing OpenCode tests**
+- [x] **Step 1: Write failing OpenCode tests**
 
 ```rust
 #[test]
@@ -197,17 +197,17 @@ async fn opencode_acceptance_without_progress_becomes_stalled() {
 }
 ```
 
-- [ ] **Step 2: Verify RED**
+- [x] **Step 2: Verify RED**
 
 Run: `cargo test -p lazoo-providers --test opencode`
 
 Expected: FAIL because ACP/OpenCode modules are absent.
 
-- [ ] **Step 3: Implement OpenCode over the official ACP SDK**
+- [x] **Step 3: Implement OpenCode with official ACP schema types**
 
 Launch `opencode acp`; negotiate v1; map new/load/prompt/update/permission/cancel/close; require progress before the configured deadline; preserve unrecognized additive updates as redacted raw evidence.
 
-- [ ] **Step 4: Verify OpenCode tests and handshake**
+- [x] **Step 4: Verify OpenCode tests and handshake**
 
 Run: `cargo test -p lazoo-providers --test opencode`
 
@@ -215,7 +215,7 @@ Run: `powershell -NoProfile -ExecutionPolicy Bypass -File scripts/acceptance/pro
 
 Expected: tests PASS and installed OpenCode ACP handshake is recorded.
 
-- [ ] **Step 5: Commit OpenCode**
+- [x] **Step 5: Commit OpenCode**
 
 ```powershell
 git add Cargo.toml Cargo.lock crates/lazoo-providers scripts/acceptance/provider-adapters.ps1
