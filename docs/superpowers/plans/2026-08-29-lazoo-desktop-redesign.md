@@ -4,7 +4,7 @@
 
 **Goal:** Replace the current paper-styled read-only Tauri shell with the approved dark Lazoo design system, a native-feeling custom window frame, accessible command-first interaction, and polished operational views while preserving the existing snapshot-only backend boundary.
 
-**Execution status:** Complete. All applicable implementation, frontend, Rust, locked-release, and real-window acceptance gates pass. Windows 200% text-scale evidence is explicitly environment-blocked because the verification host reports 100%.
+**Execution status:** Technically complete. All applicable implementation, frontend, Rust, locked-release, and real-window acceptance gates pass. Windows 200% text-scale evidence is explicitly environment-blocked because the verification host reports 100%. Post-implementation owner review did not approve the information architecture; the next UI session must decide structure and sitemap before more implementation.
 
 **Architecture:** Keep `load_desktop_snapshot` as the only product-data command and move the webview to a React 19 + TypeScript application compiled by Vite into a checked-in `ui/dist` runtime payload. React Aria Components owns focus, dialog, listbox, button, and tooltip behavior; local CSS consumes the canonical Lazoo semantic tokens; Tauri's core window API owns only minimize, maximize/restore, drag, and close. A small dependency-injected bridge isolates Tauri calls from presentation code and makes browser-level tests deterministic.
 

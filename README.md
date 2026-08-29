@@ -15,6 +15,8 @@ The first Windows control-plane slice and the polished read-only desktop-shell s
 
 The desktop is deliberately read-only in this slice. Provider adapters, employee execution, task delegation, managed memory, and worktree automation remain later slices. The full product contract lives in [docs/PROJECT-BRIEF.md](docs/PROJECT-BRIEF.md).
 
+The visual system and interaction mechanics are technically verified, but the desktop information architecture is not owner-approved: the current UI is still not sufficiently understandable. Before any further UI implementation, use [docs/NEXT-SESSION.md](docs/NEXT-SESSION.md) to decide the screen structure, sitemap, navigation model, and core user flows.
+
 ## Build and run
 
 Install and build the checked-in desktop frontend before the locked Rust release build:

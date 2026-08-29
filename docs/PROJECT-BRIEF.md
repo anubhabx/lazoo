@@ -4,7 +4,7 @@
 - **Research snapshot:** 2026-08-28
 - **Owner review:** 2026-08-28
 - **Product boundary:** Windows-first, single-user, local desktop software
-- **Repository stage:** Control-plane foundation and polished read-only Tauri desktop shell implemented and verified; provider, employee, and collaboration slices remain unimplemented
+- **Repository stage:** Control-plane foundation and redesigned read-only Tauri desktop shell implemented and technically verified; desktop information architecture/sitemap awaits owner approval, and provider, employee, and collaboration slices remain unimplemented
 
 ## 1. Executive summary
 
@@ -907,7 +907,7 @@ The first implementation milestone was a narrow Stage 1/Stage 2 bridge: a runnab
 - incidents, watchdog, emergency spool;
 - live roster and resource governor.
 
-Current Stage 2 status: daemon, keeper, CLI, SQLite event/outbox storage, named-pipe IPC, watchdog/emergency spool, and a polished read-only Tauri shell are implemented and verified. The shell retains one explicit `desktop.snapshot` product-data command and presents daemon health, registered projects, recent events, and recovered-incident count through a dark command-first UI with truthful loading, degraded, offline, and last-good-snapshot states. Its only added capabilities are the narrow core-window permissions required by the custom titlebar. Employee lifecycle, ConPTY/Job Objects, the worktree manager, task/message bus, approvals, and the live roster/resource governor remain unimplemented.
+Current Stage 2 status: daemon, keeper, CLI, SQLite event/outbox storage, named-pipe IPC, watchdog/emergency spool, and a redesigned read-only Tauri shell are implemented and technically verified. The shell retains one explicit `desktop.snapshot` product-data command and presents daemon health, registered projects, recent events, and recovered-incident count through a dark command-first UI with truthful loading, degraded, offline, and last-good-snapshot states. Its only added capabilities are the narrow core-window permissions required by the custom titlebar. Post-implementation owner review found the current UI structure insufficiently understandable, so its information architecture and sitemap are not accepted and must be decided before further UI implementation. Employee lifecycle, ConPTY/Job Objects, the worktree manager, task/message bus, approvals, and the live roster/resource governor remain unimplemented.
 
 ### Stage 3: first live provider adapters
 

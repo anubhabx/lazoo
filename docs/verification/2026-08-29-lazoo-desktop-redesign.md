@@ -4,6 +4,7 @@
 - **Branch:** `codex/desktop-shell`
 - **Status:** PASS for every applicable gate
 - **Environment blocker:** Windows reports 100% text scaling, so the required 200% capture could not be produced. This is recorded as blocked, not passed.
+- **Owner UX verdict:** Technical verification is not design approval. The current UI structure is still not sufficiently understandable; information architecture and sitemap decisions are deferred to the next UI session before further implementation.
 
 ## Verified delivery boundary
 
