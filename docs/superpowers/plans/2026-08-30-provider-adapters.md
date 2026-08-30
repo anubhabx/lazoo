@@ -21,7 +21,7 @@
 - Test: `crates/lazoo-providers/tests/contract.rs`
 - Modify: `Cargo.toml`
 
-- [ ] **Step 1: Write failing contract tests**
+- [x] **Step 1: Write failing contract tests**
 
 ```rust
 #[test]
@@ -71,23 +71,23 @@ fn redaction_removes_nested_secret_like_values() {
 }
 ```
 
-- [ ] **Step 2: Run the focused tests and verify RED**
+- [x] **Step 2: Run the focused tests and verify RED**
 
 Run: `cargo test -p lazoo-providers --test contract`
 
 Expected: FAIL because the new crate/types/functions do not yet exist.
 
-- [ ] **Step 3: Implement the minimal versioned contract**
+- [x] **Step 3: Implement the minimal versioned contract**
 
 Define `ADAPTER_CONTRACT_V1`, `ProviderKind`, `ProviderCapabilities`, `ProviderVerification`, `AuthenticationState`, `ExecutableCandidate`, `ProviderProbe`, `SessionRequest`, `TurnRequest`, `ProviderEvent`, `ProviderError`, `ProviderAdapter`, and Windows discovery/redaction helpers. Keep capabilities opt-in and errors stable/redacted.
 
-- [ ] **Step 4: Run focused and workspace tests**
+- [x] **Step 4: Run focused and workspace tests**
 
 Run: `cargo test -p lazoo-providers --test contract && cargo test --workspace`
 
 Expected: PASS with zero failures.
 
-- [ ] **Step 5: Commit the contract slice**
+- [x] **Step 5: Commit the contract slice**
 
 ```powershell
 git add Cargo.toml Cargo.lock crates/lazoo-providers docs/superpowers/specs/2026-08-30-provider-adapters-design.md docs/superpowers/plans/2026-08-30-provider-adapters.md
@@ -102,7 +102,7 @@ git commit -m "feat: define native provider adapter contract"
 - Test: `crates/lazoo-providers/tests/codex.rs`
 - Create: `crates/lazoo-providers/tests/fixtures/codex/*.jsonl`
 
-- [ ] **Step 1: Write failing Codex fixture tests**
+- [x] **Step 1: Write failing Codex fixture tests**
 
 ```rust
 #[test]
@@ -134,17 +134,17 @@ fn codex_interrupt_correlates_the_active_turn() {
 }
 ```
 
-- [ ] **Step 2: Verify RED**
+- [x] **Step 2: Verify RED**
 
 Run: `cargo test -p lazoo-providers --test codex`
 
 Expected: FAIL because `CodexAdapter` and its JSON-RPC transport are absent.
 
-- [ ] **Step 3: Implement the Codex adapter**
+- [x] **Step 3: Implement the Codex adapter**
 
 Launch structured args `app-server --listen stdio://`; implement initialize/initialized, account probe, thread start/resume, turn start, notifications, interrupt, and bounded stop. Reject malformed response IDs and redact raw payloads.
 
-- [ ] **Step 4: Verify Codex tests and live handshake**
+- [x] **Step 4: Verify Codex tests and live handshake**
 
 Run: `cargo test -p lazoo-providers --test codex`
 
@@ -152,7 +152,7 @@ Run: `powershell -NoProfile -ExecutionPolicy Bypass -File scripts/acceptance/pro
 
 Expected: fixture tests PASS; installed Codex version and App Server handshake are recorded without a model call.
 
-- [ ] **Step 5: Commit Codex**
+- [x] **Step 5: Commit Codex**
 
 ```powershell
 git add crates/lazoo-providers scripts/acceptance/provider-adapters.ps1
@@ -492,7 +492,7 @@ Run: `cargo test -p lazoo-protocol -p lazood -p lazooctl`
 
 Expected: PASS with zero failures and unchanged desktop contract tests.
 
-- [ ] **Step 5: Commit backend integration**
+- [x] **Step 5: Commit backend integration**
 
 ```powershell
 git add crates/lazoo-protocol apps/lazood apps/lazooctl README.md Cargo.lock
@@ -506,7 +506,7 @@ git commit -m "feat: expose truthful provider diagnostics"
 - Create: `docs/verification/2026-08-30-provider-adapters.md`
 - Create/update generated manifest: `artifacts/acceptance/provider-adapters-manifest.json`
 
-- [ ] **Step 1: Run fixture and full repository gates**
+- [x] **Step 1: Run fixture and full repository gates**
 
 ```powershell
 & .\scripts\verify-rust-toolchain.ps1
@@ -520,7 +520,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\acceptance\first-sli
 
 Expected: every command exits 0; record exact test counts and blockers.
 
-- [ ] **Step 2: Run provider gates one at a time**
+- [x] **Step 2: Run provider gates one at a time**
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\acceptance\provider-adapters.ps1 -Provider codex
@@ -532,11 +532,11 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\acceptance\provider-
 
 Expected: each manifest entry independently reports pass, fail, blocked, or unverified. No blocked provider is called supported.
 
-- [ ] **Step 3: Write verification evidence and self-review requirement coverage**
+- [x] **Step 3: Write verification evidence and self-review requirement coverage**
 
 Record commands, exit codes, test counts, executable versions, handshake/model-backed status, blocker strings, known limitations, and the absence of UI changes in `docs/verification/2026-08-30-provider-adapters.md`.
 
-- [ ] **Step 4: Commit final evidence**
+- [x] **Step 4: Commit final evidence**
 
 ```powershell
 git add scripts/acceptance/provider-adapters.ps1 docs/verification/2026-08-30-provider-adapters.md artifacts/acceptance/provider-adapters-manifest.json

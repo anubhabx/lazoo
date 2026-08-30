@@ -1,0 +1,423 @@
+{
+  "schemaVersion": 1,
+  "status": "BLOCKED",
+  "generatedAt": "2026-08-30T10:05:14.4123928Z",
+  "platform": "Microsoft Windows NT 10.0.26200.0",
+  "rustcVersion": "rustc 1.98.0 (88d9e12ae 2026-08-18)",
+  "cargoVersion": "cargo 1.98.0 (797e8a9bc 2026-08-05)",
+  "providers": {
+    "codex": {
+      "provider": "codex",
+      "status": "PASS",
+      "startedAt": "2026-08-30T10:03:27.577635Z",
+      "completedAt": "2026-08-30T10:03:48.1428032Z",
+      "durationMs": 20565,
+      "executable": {
+        "detected": true,
+        "fileName": "codex.exe",
+        "pathSha256": "30edd846c0b6aeeb3998d2bed46b27e22b31e3a6c80b830ab042e3a4ea84cc8a",
+        "discoverySource": "inherited-path",
+        "version": "codex-cli 0.150.0-alpha.12.2"
+      },
+      "handshake": {
+        "status": "PASS",
+        "verification": "configured",
+        "protocol": "app-server/v2",
+        "blocker": null
+      },
+      "modelBacked": {
+        "status": "PASS",
+        "outputMatched": true,
+        "eventTypes": [
+          "sessionStarted",
+          "progress",
+          "turnStarted",
+          "textDelta",
+          "usage",
+          "turnCompleted"
+        ],
+        "usage": {
+          "inputTokens": 23584,
+          "outputTokens": 10,
+          "totalTokens": 23594,
+          "costUsd": null
+        },
+        "blocker": null
+      },
+      "authentication": {
+        "native": "ready",
+        "external": "unknown"
+      },
+      "capabilities": {
+        "session": true,
+        "stream": true,
+        "cancel": true,
+        "resume": true,
+        "terminal": true,
+        "permission": true,
+        "mcp": true,
+        "plugins": true,
+        "skills": true,
+        "connectors": true,
+        "nativeMessage": false,
+        "modelSelection": true
+      },
+      "commands": [
+        {
+          "command": "cargo build -p lazood -p lazooctl --release --locked",
+          "exitCode": 0,
+          "durationMs": 4477
+        },
+        {
+          "command": "lazooctl --json status",
+          "exitCode": 0,
+          "durationMs": 72
+        },
+        {
+          "command": "lazooctl --json provider list",
+          "exitCode": 0,
+          "durationMs": 32
+        },
+        {
+          "command": "lazooctl --json provider probe codex",
+          "exitCode": 0,
+          "durationMs": 2213
+        },
+        {
+          "command": "lazooctl --json provider smoke codex --prompt <conformance-prompt>",
+          "exitCode": 0,
+          "durationMs": 13536
+        }
+      ]
+    },
+    "opencode": {
+      "provider": "opencode",
+      "status": "PASS",
+      "startedAt": "2026-08-30T10:03:57.3030349Z",
+      "completedAt": "2026-08-30T10:04:10.2910418Z",
+      "durationMs": 12988,
+      "executable": {
+        "detected": true,
+        "fileName": "opencode.exe",
+        "pathSha256": "5c410d29c304c82df95f76f92e99cfb3c49e89d4008bab189cce0c42a73edc8d",
+        "discoverySource": "inherited-path",
+        "version": "1.18.23"
+      },
+      "handshake": {
+        "status": "PASS",
+        "verification": "unverified",
+        "protocol": "acp/v1",
+        "blocker": null
+      },
+      "modelBacked": {
+        "status": "PASS",
+        "outputMatched": true,
+        "eventTypes": [
+          "sessionStarted",
+          "turnStarted",
+          "progress",
+          "textDelta",
+          "usage",
+          "turnCompleted"
+        ],
+        "usage": {
+          "inputTokens": null,
+          "outputTokens": null,
+          "totalTokens": 25260,
+          "costUsd": null
+        },
+        "blocker": null
+      },
+      "authentication": {
+        "native": "unknown",
+        "external": "unknown"
+      },
+      "capabilities": {
+        "session": true,
+        "stream": true,
+        "cancel": true,
+        "resume": true,
+        "terminal": false,
+        "permission": true,
+        "mcp": false,
+        "plugins": false,
+        "skills": false,
+        "connectors": false,
+        "nativeMessage": false,
+        "modelSelection": false
+      },
+      "commands": [
+        {
+          "command": "cargo build -p lazood -p lazooctl --release --locked",
+          "exitCode": 0,
+          "durationMs": 407
+        },
+        {
+          "command": "lazooctl --json status",
+          "exitCode": 0,
+          "durationMs": 66
+        },
+        {
+          "command": "lazooctl --json provider list",
+          "exitCode": 0,
+          "durationMs": 31
+        },
+        {
+          "command": "lazooctl --json provider probe opencode",
+          "exitCode": 0,
+          "durationMs": 4056
+        },
+        {
+          "command": "lazooctl --json provider smoke opencode --prompt <conformance-prompt>",
+          "exitCode": 0,
+          "durationMs": 8298
+        }
+      ]
+    },
+    "grok-build": {
+      "provider": "grok-build",
+      "status": "PASS",
+      "startedAt": "2026-08-30T10:04:15.7809224Z",
+      "completedAt": "2026-08-30T10:04:28.7789901Z",
+      "durationMs": 12998,
+      "executable": {
+        "detected": true,
+        "fileName": "grok.exe",
+        "pathSha256": "a48c7ea20d1e007d92983e1d7f2f9de539cc62214c2dd623d0a59a9b66f7f8c8",
+        "discoverySource": "inherited-path",
+        "version": "grok 1.0.13 (5e9a58528b76)"
+      },
+      "handshake": {
+        "status": "PASS",
+        "verification": "unverified",
+        "protocol": "acp/v1",
+        "blocker": null
+      },
+      "modelBacked": {
+        "status": "PASS",
+        "outputMatched": true,
+        "eventTypes": [
+          "sessionStarted",
+          "turnStarted",
+          "progress",
+          "thoughtDelta",
+          "textDelta",
+          "turnCompleted"
+        ],
+        "usage": null,
+        "blocker": null
+      },
+      "authentication": {
+        "native": "unknown",
+        "external": "unknown"
+      },
+      "capabilities": {
+        "session": true,
+        "stream": true,
+        "cancel": true,
+        "resume": true,
+        "terminal": true,
+        "permission": true,
+        "mcp": false,
+        "plugins": false,
+        "skills": false,
+        "connectors": false,
+        "nativeMessage": false,
+        "modelSelection": true
+      },
+      "commands": [
+        {
+          "command": "cargo build -p lazood -p lazooctl --release --locked",
+          "exitCode": 0,
+          "durationMs": 390
+        },
+        {
+          "command": "lazooctl --json status",
+          "exitCode": 0,
+          "durationMs": 61
+        },
+        {
+          "command": "lazooctl --json provider list",
+          "exitCode": 0,
+          "durationMs": 31
+        },
+        {
+          "command": "lazooctl --json provider probe grok-build",
+          "exitCode": 0,
+          "durationMs": 2561
+        },
+        {
+          "command": "lazooctl --json provider smoke grok-build --prompt <conformance-prompt>",
+          "exitCode": 0,
+          "durationMs": 9841
+        }
+      ]
+    },
+    "antigravity": {
+      "provider": "antigravity",
+      "status": "PASS",
+      "startedAt": "2026-08-30T10:04:32.805927Z",
+      "completedAt": "2026-08-30T10:04:58.9565493Z",
+      "durationMs": 26150,
+      "executable": {
+        "detected": true,
+        "fileName": "agy.exe",
+        "pathSha256": "98e79b157fddf07fb1f032b78fedc5843e7c6134143a1231c1dbf2babba7c464",
+        "discoverySource": "inherited-path",
+        "version": "1.1.22"
+      },
+      "handshake": {
+        "status": "PASS",
+        "verification": "configured",
+        "protocol": "agy/stream-json-v1",
+        "blocker": null
+      },
+      "modelBacked": {
+        "status": "PASS",
+        "outputMatched": true,
+        "eventTypes": [
+          "sessionStarted",
+          "turnStarted",
+          "textDelta",
+          "usage",
+          "turnCompleted"
+        ],
+        "usage": {
+          "inputTokens": 15966,
+          "outputTokens": 126,
+          "totalTokens": 16092,
+          "costUsd": null
+        },
+        "blocker": null
+      },
+      "authentication": {
+        "native": "ready",
+        "external": "unknown"
+      },
+      "capabilities": {
+        "session": true,
+        "stream": true,
+        "cancel": true,
+        "resume": true,
+        "terminal": true,
+        "permission": false,
+        "mcp": false,
+        "plugins": false,
+        "skills": false,
+        "connectors": false,
+        "nativeMessage": true,
+        "modelSelection": true
+      },
+      "commands": [
+        {
+          "command": "cargo build -p lazood -p lazooctl --release --locked",
+          "exitCode": 0,
+          "durationMs": 389
+        },
+        {
+          "command": "lazooctl --json status",
+          "exitCode": 0,
+          "durationMs": 56
+        },
+        {
+          "command": "lazooctl --json provider list",
+          "exitCode": 0,
+          "durationMs": 31
+        },
+        {
+          "command": "lazooctl --json provider probe antigravity",
+          "exitCode": 0,
+          "durationMs": 11281
+        },
+        {
+          "command": "lazooctl --json provider smoke antigravity --prompt <conformance-prompt>",
+          "exitCode": 0,
+          "durationMs": 14259
+        }
+      ]
+    },
+    "claude-code": {
+      "provider": "claude-code",
+      "status": "BLOCKED",
+      "startedAt": "2026-08-30T10:05:03.0531732Z",
+      "completedAt": "2026-08-30T10:05:14.3466693Z",
+      "durationMs": 11293,
+      "executable": {
+        "detected": true,
+        "fileName": "claude.exe",
+        "pathSha256": "da0e189ed6baa5ea63927cf11f125865d3fa7f0e67d51f2fdfa073e89f442377",
+        "discoverySource": "inherited-path",
+        "version": "2.1.241 (Claude Code)"
+      },
+      "handshake": {
+        "status": "PASS",
+        "verification": "configured",
+        "protocol": "claude-code/stream-json-v1",
+        "blocker": null
+      },
+      "modelBacked": {
+        "status": "BLOCKED",
+        "outputMatched": false,
+        "eventTypes": [
+          "turnStarted",
+          "progress",
+          "sessionStarted",
+          "usage",
+          "error"
+        ],
+        "usage": {
+          "inputTokens": 0,
+          "outputTokens": 0,
+          "totalTokens": 0,
+          "costUsd": 0.0
+        },
+        "blocker": "Your organization has disabled Claude subscription access for Claude Code · Use an Anthropic API key instead, or ask your admin to enable access"
+      },
+      "authentication": {
+        "native": "ready",
+        "external": "unknown"
+      },
+      "capabilities": {
+        "session": true,
+        "stream": true,
+        "cancel": true,
+        "resume": true,
+        "terminal": true,
+        "permission": false,
+        "mcp": false,
+        "plugins": false,
+        "skills": false,
+        "connectors": false,
+        "nativeMessage": true,
+        "modelSelection": true
+      },
+      "commands": [
+        {
+          "command": "cargo build -p lazood -p lazooctl --release --locked",
+          "exitCode": 0,
+          "durationMs": 394
+        },
+        {
+          "command": "lazooctl --json status",
+          "exitCode": 0,
+          "durationMs": 85
+        },
+        {
+          "command": "lazooctl --json provider list",
+          "exitCode": 0,
+          "durationMs": 31
+        },
+        {
+          "command": "lazooctl --json provider probe claude-code",
+          "exitCode": 0,
+          "durationMs": 1440
+        },
+        {
+          "command": "lazooctl --json provider smoke claude-code --prompt <conformance-prompt>",
+          "exitCode": 0,
+          "durationMs": 9224
+        }
+      ]
+    }
+  }
+}
