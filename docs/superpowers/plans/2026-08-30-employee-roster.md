@@ -242,7 +242,7 @@ git commit -m "feat: derive live employee roster"
 - Modify: `apps/lazooctl/tests/cli.rs`
 - Modify: `README.md`
 
-- [ ] **Step 1: Write failing RPC and CLI tests**
+- [x] **Step 1: Write failing RPC and CLI tests**
 
 ```rust
 #[tokio::test]
@@ -266,23 +266,23 @@ fn employee_cli_maps_mutations_and_roster_refresh() {
 }
 ```
 
-- [ ] **Step 2: Run and verify RED**
+- [x] **Step 2: Run and verify RED**
 
 Run: `cargo test -p lazood -p lazooctl`
 
 Expected: FAIL because employee/roster methods and CLI commands are missing.
 
-- [ ] **Step 3: Implement daemon probe orchestration and CLI mapping**
+- [x] **Step 3: Implement daemon probe orchestration and CLI mapping**
 
 Inject a discovery environment seam into `App`; probe only during create, provider-changing update, and explicit refresh; deduplicate enabled providers on refresh; map store/domain errors to stable employee codes and CLI exit code 9.
 
-- [ ] **Step 4: Run focused tests and verify GREEN**
+- [x] **Step 4: Run focused tests and verify GREEN**
 
 Run: `cargo test -p lazood -p lazooctl`
 
 Expected: PASS with `desktop.snapshot` unchanged.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```powershell
 git add apps/lazood apps/lazooctl README.md

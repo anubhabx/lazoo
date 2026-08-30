@@ -2,7 +2,10 @@ use std::path::PathBuf;
 
 use clap::Parser;
 use lazoo_protocol::{CheckoutMode, RpcError};
-use lazooctl::{Cli, Command, ProjectCommand, command_request, exit_code_for_rpc, render_result};
+use lazooctl::{
+    Cli, Command, EmployeeCommand, ProjectCommand, RosterCommand, command_request,
+    exit_code_for_rpc, render_result,
+};
 use serde_json::json;
 
 #[test]
@@ -64,6 +67,8 @@ fn rpc_error_families_have_stable_exit_codes() {
         ("LZ-STORE", 7),
         ("LZ-PROVIDER-TIMEOUT", 8),
         ("LZ-PROVIDER-NOT-DETECTED", 8),
+        ("LZ-EMPLOYEE-STALE", 9),
+        ("LZ-EMPLOYEE-NOT-FOUND", 9),
         ("LZ-UNEXPECTED", 10),
     ];
     for (code, expected) in cases {
@@ -109,4 +114,63 @@ fn provider_cli_maps_list_probe_and_explicit_smoke_commands() {
             false
         )
     );
+}
+
+#[test]
+fn employee_cli_maps_mutations_and_roster_refresh() {
+    let create = Cli::try_parse_from([
+        "lazooctl",
+        "employee",
+        "create",
+        "Rhea",
+        "--provider",
+        "codex",
+    ])
+    .unwrap();
+    let Command::Employee(EmployeeCommand::Create {
+        authority_mode,
+        checkout_policy,
+        ..
+    }) = &create.command
+    else {
+        panic!("expected employee create");
+    };
+    assert_eq!(*authority_mode, lazoo_protocol::AuthorityMode::Ask);
+    assert_eq!(
+        *checkout_policy,
+        lazoo_protocol::EmployeeCheckoutPolicy::Isolated
+    );
+    assert_eq!(command_request(&create.command).0, "employee.create");
+
+    let employee_id = "00000000-0000-4000-8000-000000000001";
+    let update = Cli::try_parse_from([
+        "lazooctl",
+        "employee",
+        "update",
+        employee_id,
+        "--expected-revision",
+        "1",
+        "--role",
+        "Lead",
+    ])
+    .unwrap();
+    assert_eq!(command_request(&update.command).0, "employee.update");
+
+    let disable = Cli::try_parse_from([
+        "lazooctl",
+        "employee",
+        "disable",
+        employee_id,
+        "--expected-revision",
+        "2",
+    ])
+    .unwrap();
+    assert_eq!(command_request(&disable.command).0, "employee.disable");
+
+    let refresh = Cli::try_parse_from(["lazooctl", "roster", "refresh"]).unwrap();
+    assert!(matches!(
+        refresh.command,
+        Command::Roster(RosterCommand::Refresh { .. })
+    ));
+    assert_eq!(command_request(&refresh.command).0, "roster.refresh");
 }

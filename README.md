@@ -43,6 +43,10 @@ The shell reconnects every ten seconds and keeps the last successful snapshot vi
 & .\target\release\lazooctl.exe events list
 & .\target\release\lazooctl.exe provider list
 & .\target\release\lazooctl.exe provider probe codex
+& .\target\release\lazooctl.exe employee create Rhea --provider codex --role Lead
+& .\target\release\lazooctl.exe employee list
+& .\target\release\lazooctl.exe roster show
+& .\target\release\lazooctl.exe roster refresh
 & .\target\release\lazooctl.exe system shutdown
 ```
 
@@ -55,6 +59,8 @@ Add `--json` for a stable machine-readable result. Mutable state defaults to `%L
 ```
 
 Provider names are `codex`, `opencode`, `grok-build`, `antigravity`, and `claude-code`. Provider failures use the `LZ-PROVIDER-*` RPC family and CLI exit code 8. Provider diagnostics are intentionally absent from `desktop.snapshot`; no desktop UI was added for this slice.
+
+`employee create` performs one bounded non-model readiness probe, then stores the named employee and safe normalized provider evidence transactionally. `employee list`, `employee show`, and `roster show` are read-only and never launch a provider. `roster refresh` explicitly reruns one non-model probe per enabled provider; it never invokes a model smoke. Employee conflicts and stale revisions use the `LZ-EMPLOYEE-*` RPC family and CLI exit code 9. Employee and roster fields remain absent from `desktop.snapshot`.
 
 For the frontend development loop, run the app from its Tauri directory with Tauri CLI 2 installed. The Tauri configuration starts Vite on `127.0.0.1:1420` automatically:
 

@@ -2,7 +2,9 @@ use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
 use lazoo_ipc::{IpcError, PipeClient};
-use lazoo_protocol::{CheckoutMode, JsonRpcRequest, JsonRpcResponse, RpcError};
+use lazoo_protocol::{
+    AuthorityMode, CheckoutMode, EmployeeCheckoutPolicy, JsonRpcRequest, JsonRpcResponse, RpcError,
+};
 use lazoo_runtime::{DataRoot, Installation, RuntimeError};
 use serde_json::{Value, json};
 use thiserror::Error;
@@ -26,6 +28,10 @@ pub enum Command {
     Events(EventsCommand),
     #[command(subcommand)]
     Provider(ProviderCommand),
+    #[command(subcommand)]
+    Employee(EmployeeCommand),
+    #[command(subcommand)]
+    Roster(RosterCommand),
     #[command(subcommand)]
     System(SystemCommand),
 }
@@ -73,6 +79,80 @@ pub enum ProviderCommand {
         provider: String,
         #[arg(long)]
         prompt: String,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+pub enum EmployeeCommand {
+    Create {
+        name: String,
+        #[arg(long)]
+        provider: String,
+        #[arg(long, default_value = "")]
+        role: String,
+        #[arg(long, default_value = "")]
+        instructions: String,
+        #[arg(long)]
+        model: Option<String>,
+        #[arg(long)]
+        reasoning_effort: Option<String>,
+        #[arg(long, default_value = "{}")]
+        native_settings: Value,
+        #[arg(long, default_value = "ask", value_parser = parse_authority_mode)]
+        authority_mode: AuthorityMode,
+        #[arg(long, default_value = "isolated", value_parser = parse_employee_checkout_policy)]
+        checkout_policy: EmployeeCheckoutPolicy,
+        #[arg(long)]
+        disabled: bool,
+        #[arg(long)]
+        idempotency_key: Option<String>,
+    },
+    List,
+    Show {
+        id: Uuid,
+    },
+    Update {
+        id: Uuid,
+        #[arg(long)]
+        expected_revision: u64,
+        #[arg(long)]
+        name: Option<String>,
+        #[arg(long)]
+        provider: Option<String>,
+        #[arg(long)]
+        role: Option<String>,
+        #[arg(long)]
+        instructions: Option<String>,
+        #[arg(long)]
+        model: Option<String>,
+        #[arg(long)]
+        reasoning_effort: Option<String>,
+        #[arg(long)]
+        native_settings: Option<Value>,
+        #[arg(long, value_parser = parse_authority_mode)]
+        authority_mode: Option<AuthorityMode>,
+        #[arg(long, value_parser = parse_employee_checkout_policy)]
+        checkout_policy: Option<EmployeeCheckoutPolicy>,
+        #[arg(long, action = clap::ArgAction::Set)]
+        enabled: Option<bool>,
+        #[arg(long)]
+        idempotency_key: Option<String>,
+    },
+    Disable {
+        id: Uuid,
+        #[arg(long)]
+        expected_revision: u64,
+        #[arg(long)]
+        idempotency_key: Option<String>,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+pub enum RosterCommand {
+    Show,
+    Refresh {
+        #[arg(long)]
+        idempotency_key: Option<String>,
     },
 }
 
@@ -172,6 +252,93 @@ pub fn command_request(command: &Command) -> (&'static str, Value, bool) {
             json!({"provider": provider, "prompt": prompt}),
             false,
         ),
+        Command::Employee(EmployeeCommand::Create {
+            name,
+            provider,
+            role,
+            instructions,
+            model,
+            reasoning_effort,
+            native_settings,
+            authority_mode,
+            checkout_policy,
+            disabled,
+            idempotency_key,
+        }) => (
+            "employee.create",
+            json!({
+                "name": name,
+                "provider": provider,
+                "role": role,
+                "instructions": instructions,
+                "model": model,
+                "reasoningEffort": reasoning_effort,
+                "nativeSettings": native_settings,
+                "authorityMode": authority_mode,
+                "checkoutPolicy": checkout_policy,
+                "enabled": !disabled,
+                "idempotencyKey": idempotency_key.clone().unwrap_or_else(|| Uuid::new_v4().to_string()),
+            }),
+            false,
+        ),
+        Command::Employee(EmployeeCommand::List) => ("employee.list", json!({}), false),
+        Command::Employee(EmployeeCommand::Show { id }) => {
+            ("employee.show", json!({"id": id}), false)
+        }
+        Command::Employee(EmployeeCommand::Update {
+            id,
+            expected_revision,
+            name,
+            provider,
+            role,
+            instructions,
+            model,
+            reasoning_effort,
+            native_settings,
+            authority_mode,
+            checkout_policy,
+            enabled,
+            idempotency_key,
+        }) => (
+            "employee.update",
+            json!({
+                "id": id,
+                "expectedRevision": expected_revision,
+                "name": name,
+                "provider": provider,
+                "role": role,
+                "instructions": instructions,
+                "model": model,
+                "reasoningEffort": reasoning_effort,
+                "nativeSettings": native_settings,
+                "authorityMode": authority_mode,
+                "checkoutPolicy": checkout_policy,
+                "enabled": enabled,
+                "idempotencyKey": idempotency_key.clone().unwrap_or_else(|| Uuid::new_v4().to_string()),
+            }),
+            false,
+        ),
+        Command::Employee(EmployeeCommand::Disable {
+            id,
+            expected_revision,
+            idempotency_key,
+        }) => (
+            "employee.disable",
+            json!({
+                "id": id,
+                "expectedRevision": expected_revision,
+                "idempotencyKey": idempotency_key.clone().unwrap_or_else(|| Uuid::new_v4().to_string()),
+            }),
+            false,
+        ),
+        Command::Roster(RosterCommand::Show) => ("roster.get", json!({}), false),
+        Command::Roster(RosterCommand::Refresh { idempotency_key }) => (
+            "roster.refresh",
+            json!({
+                "idempotencyKey": idempotency_key.clone().unwrap_or_else(|| Uuid::new_v4().to_string()),
+            }),
+            false,
+        ),
         Command::System(SystemCommand::Shutdown) => ("system.shutdown", json!({}), false),
     }
 }
@@ -194,6 +361,7 @@ pub fn exit_code_for_rpc(error: &RpcError) -> i32 {
         "LZ-PROJECT-CONFLICT" => 6,
         "LZ-STORE" => 7,
         code if code.starts_with("LZ-PROVIDER-") || code == "LZ-PROVIDER" => 8,
+        code if code.starts_with("LZ-EMPLOYEE-") => 9,
         _ => 10,
     }
 }
@@ -215,5 +383,22 @@ fn parse_checkout_mode(value: &str) -> Result<CheckoutMode, String> {
         "isolated" => Ok(CheckoutMode::Isolated),
         "lead-main" => Ok(CheckoutMode::LeadMain),
         _ => Err("expected isolated or lead-main".to_owned()),
+    }
+}
+
+fn parse_authority_mode(value: &str) -> Result<AuthorityMode, String> {
+    match value {
+        "ask" => Ok(AuthorityMode::Ask),
+        "self-decision" => Ok(AuthorityMode::SelfDecision),
+        "full-autonomy" => Ok(AuthorityMode::FullAutonomy),
+        _ => Err("expected ask, self-decision, or full-autonomy".to_owned()),
+    }
+}
+
+fn parse_employee_checkout_policy(value: &str) -> Result<EmployeeCheckoutPolicy, String> {
+    match value {
+        "isolated" => Ok(EmployeeCheckoutPolicy::Isolated),
+        "read-only" => Ok(EmployeeCheckoutPolicy::ReadOnly),
+        _ => Err("expected isolated or read-only".to_owned()),
     }
 }

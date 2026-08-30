@@ -1,6 +1,7 @@
 use std::{path::Path, process::Command, time::Duration};
 
 use lazoo_protocol::{CheckoutMode, DesktopSnapshot, JsonRpcRequest};
+use lazoo_providers::DiscoveryEnvironment;
 use lazoo_runtime::DataRoot;
 use lazoo_store::Store;
 use lazood::App;
@@ -31,7 +32,10 @@ fn test_app() -> (tempfile::TempDir, App) {
     let root = DataRoot::from_path(temporary.path().join("data"));
     root.ensure().unwrap();
     let store = Store::open_path(root.state_db()).unwrap();
-    (temporary, App::new(store, root))
+    (
+        temporary,
+        App::new_with_provider_environment(store, root, DiscoveryEnvironment::empty()),
+    )
 }
 
 #[tokio::test]
@@ -44,7 +48,7 @@ async fn status_reports_protocol_store_and_boot_identity() {
     let result = response.result.unwrap();
 
     assert_eq!(result["protocolVersion"], 1);
-    assert_eq!(result["schemaVersion"], 1);
+    assert_eq!(result["schemaVersion"], 2);
     assert_eq!(result["journalMode"], "wal");
     assert!(
         result["bootId"]
@@ -266,4 +270,169 @@ async fn provider_methods_reject_unknown_names_with_a_stable_error() {
             .unwrap();
         assert_eq!(error.code, "LZ-PROVIDER-UNKNOWN");
     }
+}
+
+#[tokio::test]
+async fn employee_create_update_disable_and_roster_are_durable_and_ui_neutral() {
+    let (_temporary, app) = test_app();
+
+    let created = app
+        .handle(request(
+            "employee-create",
+            "employee.create",
+            json!({
+                "name": "Rhea",
+                "provider": "codex",
+                "role": "Lead",
+                "idempotencyKey": "create-rhea"
+            }),
+        ))
+        .await
+        .result
+        .unwrap();
+    let employee_id = created["employee"]["id"].as_str().unwrap();
+    assert_eq!(created["employee"]["name"], "Rhea");
+    assert_eq!(created["employee"]["authorityMode"], "ask");
+    assert_eq!(created["employee"]["checkoutPolicy"], "isolated");
+    assert_eq!(created["rosterRevision"], 1);
+
+    let employees = app
+        .handle(request("employee-list", "employee.list", json!({})))
+        .await
+        .result
+        .unwrap();
+    assert_eq!(employees.as_array().unwrap().len(), 1);
+    let shown = app
+        .handle(request(
+            "employee-show",
+            "employee.show",
+            json!({"id": employee_id}),
+        ))
+        .await
+        .result
+        .unwrap();
+    assert_eq!(shown["name"], "Rhea");
+
+    let roster = app
+        .handle(request("roster-get", "roster.get", json!({})))
+        .await
+        .result
+        .unwrap();
+    assert_eq!(roster["revision"], 1);
+    assert_eq!(roster["entries"][0]["availability"], "offline");
+    assert_eq!(
+        roster["entries"][0]["providerObservation"]["verification"],
+        "not-detected"
+    );
+
+    let updated = app
+        .handle(request(
+            "employee-update",
+            "employee.update",
+            json!({
+                "id": employee_id,
+                "expectedRevision": 1,
+                "role": "Principal lead",
+                "idempotencyKey": "update-rhea"
+            }),
+        ))
+        .await
+        .result
+        .unwrap();
+    assert_eq!(updated["employee"]["configurationRevision"], 2);
+    assert_eq!(updated["rosterRevision"], 2);
+
+    let stale = app
+        .handle(request(
+            "employee-stale",
+            "employee.update",
+            json!({
+                "id": employee_id,
+                "expectedRevision": 1,
+                "role": "Stale edit",
+                "idempotencyKey": "stale-rhea"
+            }),
+        ))
+        .await
+        .error
+        .unwrap();
+    assert_eq!(stale.code, "LZ-EMPLOYEE-STALE");
+    assert_eq!(stale.data.unwrap(), json!({"currentRevision": 2}));
+
+    let disabled = app
+        .handle(request(
+            "employee-disable",
+            "employee.disable",
+            json!({
+                "id": employee_id,
+                "expectedRevision": 2,
+                "idempotencyKey": "disable-rhea"
+            }),
+        ))
+        .await
+        .result
+        .unwrap();
+    assert_eq!(disabled["employee"]["enabled"], false);
+    assert_eq!(disabled["rosterRevision"], 3);
+
+    let desktop = app
+        .handle(request("desktop", "desktop.snapshot", json!({})))
+        .await
+        .result
+        .unwrap();
+    assert!(desktop.get("employees").is_none());
+    assert!(desktop.get("roster").is_none());
+    assert!(desktop.get("providers").is_none());
+}
+
+#[tokio::test]
+async fn employee_validation_rejects_credential_like_native_settings() {
+    let (_temporary, app) = test_app();
+
+    let error = app
+        .handle(request(
+            "employee-invalid",
+            "employee.create",
+            json!({
+                "name": "Rhea",
+                "provider": "codex",
+                "nativeSettings": {"api_key": "must-not-be-stored"},
+                "idempotencyKey": "invalid-rhea"
+            }),
+        ))
+        .await
+        .error
+        .unwrap();
+
+    assert_eq!(error.code, "LZ-EMPLOYEE-INVALID");
+    assert!(!error.message.contains("must-not-be-stored"));
+}
+
+#[tokio::test]
+async fn roster_refresh_is_non_model_and_does_not_advance_unchanged_state() {
+    let (_temporary, app) = test_app();
+    app.handle(request(
+        "employee-create",
+        "employee.create",
+        json!({
+            "name": "Rhea",
+            "provider": "codex",
+            "idempotencyKey": "create-rhea"
+        }),
+    ))
+    .await;
+
+    let refreshed = app
+        .handle(request(
+            "roster-refresh",
+            "roster.refresh",
+            json!({"idempotencyKey": "refresh-roster"}),
+        ))
+        .await
+        .result
+        .unwrap();
+
+    assert_eq!(refreshed["roster"]["revision"], 1);
+    assert!(refreshed["eventSequence"].is_null());
+    assert_eq!(refreshed["roster"]["entries"][0]["availability"], "offline");
 }

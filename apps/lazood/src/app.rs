@@ -1,18 +1,26 @@
-use std::{fs, str::FromStr, time::Instant};
+use std::{collections::BTreeSet, fs, str::FromStr, time::Instant};
 
 use chrono::{SecondsFormat, Utc};
-use lazoo_domain::inspect_git_repository;
+use lazoo_domain::{
+    inspect_git_repository, validate_employee_name, validate_employee_text_fields,
+    validate_native_settings,
+};
 use lazoo_protocol::{
-    DesktopSnapshot, EventSummary, EventsListParams, JsonRpcRequest, JsonRpcResponse, PROTOCOL_V1,
-    ProviderListEntry, ProviderProbeParams, ProviderSmokeParams, ProviderSmokeResult,
-    RegisterProjectParams, RpcError, SystemStatus,
+    CreateEmployeeParams, DesktopSnapshot, DisableEmployeeParams, EmployeeShowParams, EventSummary,
+    EventsListParams, JsonRpcRequest, JsonRpcResponse, PROTOCOL_V1, ProviderListEntry,
+    ProviderObservation, ProviderProbeParams, ProviderSmokeParams, ProviderSmokeResult,
+    RegisterProjectParams, RosterRefreshParams, RpcError, SystemStatus, UpdateEmployeeParams,
 };
 use lazoo_providers::{
-    DiscoveryEnvironment, DiscoverySource, ProviderError, ProviderKind, ProviderRegistry,
-    ProviderSession, SessionRequest, TurnRequest,
+    AuthenticationState, DiscoveryEnvironment, DiscoverySource, ProviderCapabilities,
+    ProviderError, ProviderKind, ProviderProbe, ProviderRegistry, ProviderSession,
+    ProviderVerification, SessionRequest, TurnRequest,
 };
 use lazoo_runtime::DataRoot;
-use lazoo_store::{RegisterProjectInput, Store, StoreStatus};
+use lazoo_store::{
+    CreateEmployeeInput, DisableEmployeeInput, RefreshProviderObservationsInput,
+    RegisterProjectInput, Store, StoreStatus, UpdateEmployeeInput,
+};
 use serde::Serialize;
 use serde_json::{Value, json};
 use tokio::sync::{broadcast, watch};
@@ -27,6 +35,7 @@ pub struct App {
     events: broadcast::Sender<EventSummary>,
     shutdown: watch::Sender<bool>,
     providers: ProviderRegistry,
+    provider_environment: DiscoveryEnvironment,
 }
 
 pub struct EventSubscription {
@@ -37,6 +46,16 @@ pub struct EventSubscription {
 impl App {
     #[must_use]
     pub fn new(store: Store, root: DataRoot) -> Self {
+        Self::new_with_provider_environment(store, root, DiscoveryEnvironment::current())
+    }
+
+    #[doc(hidden)]
+    #[must_use]
+    pub fn new_with_provider_environment(
+        store: Store,
+        root: DataRoot,
+        provider_environment: DiscoveryEnvironment,
+    ) -> Self {
         let (events, _) = broadcast::channel(1024);
         let (shutdown, _) = watch::channel(false);
         Self {
@@ -47,6 +66,7 @@ impl App {
             events,
             shutdown,
             providers: ProviderRegistry::default(),
+            provider_environment,
         }
     }
 
@@ -72,6 +92,13 @@ impl App {
             "provider.list" => self.provider_list(&request.params),
             "provider.probe" => self.provider_probe(request.params).await,
             "provider.smoke" => self.provider_smoke(request.params).await,
+            "employee.create" => self.create_employee(&request).await,
+            "employee.list" => self.employee_list(&request.params),
+            "employee.show" => self.employee_show(request.params),
+            "employee.update" => self.update_employee(&request).await,
+            "employee.disable" => self.disable_employee(&request),
+            "roster.get" => self.roster_get(&request.params),
+            "roster.refresh" => self.refresh_roster(&request).await,
             "system.shutdown" => {
                 let _ = self.shutdown.send(true);
                 Ok(json!({"planned": true}))
@@ -200,7 +227,7 @@ impl App {
         require_empty_params(params, "provider.list")?;
         let providers = self
             .providers
-            .discover(&DiscoveryEnvironment::current())
+            .discover(&self.provider_environment)
             .into_iter()
             .map(|discovery| ProviderListEntry {
                 provider: discovery.provider.to_string(),
@@ -222,7 +249,7 @@ impl App {
             serde_json::from_value(value).map_err(|error| invalid_params(error.to_string()))?;
         let provider = ProviderKind::from_str(&params.provider).map_err(provider_error)?;
         self.providers
-            .probe(provider, &DiscoveryEnvironment::current())
+            .probe(provider, &self.provider_environment)
             .await
             .map(to_value)
             .map_err(provider_error)
@@ -261,6 +288,213 @@ impl App {
             checked_at: Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true),
         }))
     }
+
+    async fn create_employee(&self, request: &JsonRpcRequest) -> Result<Value, RpcError> {
+        let params: CreateEmployeeParams = serde_json::from_value(request.params.clone())
+            .map_err(|error| invalid_params(error.to_string()))?;
+        require_idempotency_key(&params.idempotency_key)?;
+        let name = validate_employee_name(&params.name).map_err(employee_validation_error)?;
+        validate_employee_text_fields(
+            &params.role,
+            &params.instructions,
+            params.model.as_deref(),
+            params.reasoning_effort.as_deref(),
+        )
+        .map_err(employee_validation_error)?;
+        validate_native_settings(&params.native_settings).map_err(employee_validation_error)?;
+        let provider = employee_provider(&params.provider)?;
+        let observation = self.observe_provider(provider).await;
+        let result = self
+            .store
+            .create_employee(&CreateEmployeeInput {
+                request_id: request.id.clone(),
+                idempotency_key: params.idempotency_key,
+                name,
+                provider: provider.to_string(),
+                role: params.role.trim().to_owned(),
+                instructions: params.instructions,
+                model: normalized_optional(params.model),
+                reasoning_effort: normalized_optional(params.reasoning_effort),
+                native_settings: params.native_settings,
+                authority_mode: params.authority_mode,
+                checkout_policy: params.checkout_policy,
+                enabled: params.enabled,
+                provider_observation: Some(observation),
+            })
+            .map_err(store_error)?;
+        self.publish_events()?;
+        Ok(to_value(result))
+    }
+
+    fn employee_list(&self, params: &Value) -> Result<Value, RpcError> {
+        require_empty_params(params, "employee.list")?;
+        self.store
+            .list_employees()
+            .map(to_value)
+            .map_err(store_error)
+    }
+
+    fn employee_show(&self, value: Value) -> Result<Value, RpcError> {
+        let params: EmployeeShowParams =
+            serde_json::from_value(value).map_err(|error| invalid_params(error.to_string()))?;
+        self.store
+            .get_employee(params.id)
+            .map(to_value)
+            .map_err(store_error)
+    }
+
+    async fn update_employee(&self, request: &JsonRpcRequest) -> Result<Value, RpcError> {
+        let params: UpdateEmployeeParams = serde_json::from_value(request.params.clone())
+            .map_err(|error| invalid_params(error.to_string()))?;
+        require_idempotency_key(&params.idempotency_key)?;
+        if params.expected_revision == 0 {
+            return Err(employee_invalid(
+                "expectedRevision must be greater than zero",
+            ));
+        }
+        let current = self.store.get_employee(params.id).map_err(store_error)?;
+        let name = params
+            .name
+            .as_deref()
+            .map(validate_employee_name)
+            .transpose()
+            .map_err(employee_validation_error)?;
+        let provider = params
+            .provider
+            .as_deref()
+            .map(employee_provider)
+            .transpose()?;
+        let desired_role = params.role.as_deref().unwrap_or(&current.role);
+        let desired_instructions = params
+            .instructions
+            .as_deref()
+            .unwrap_or(&current.instructions);
+        let desired_model = params.model.as_deref().or(current.model.as_deref());
+        let desired_effort = params
+            .reasoning_effort
+            .as_deref()
+            .or(current.reasoning_effort.as_deref());
+        validate_employee_text_fields(
+            desired_role,
+            desired_instructions,
+            desired_model,
+            desired_effort,
+        )
+        .map_err(employee_validation_error)?;
+        if let Some(native_settings) = &params.native_settings {
+            validate_native_settings(native_settings).map_err(employee_validation_error)?;
+        }
+        let should_probe = provider.is_some_and(|value| value.to_string() != current.provider)
+            || params.enabled == Some(true) && !current.enabled;
+        let provider_observation = if should_probe {
+            let desired_provider = provider.unwrap_or_else(|| {
+                ProviderKind::from_str(&current.provider)
+                    .expect("stored employee providers are validated")
+            });
+            Some(self.observe_provider(desired_provider).await)
+        } else {
+            None
+        };
+        let result = self
+            .store
+            .update_employee(&UpdateEmployeeInput {
+                request_id: request.id.clone(),
+                idempotency_key: params.idempotency_key,
+                employee_id: params.id,
+                expected_revision: params.expected_revision,
+                name,
+                provider: provider.map(|value| value.to_string()),
+                role: params.role.map(|value| value.trim().to_owned()),
+                instructions: params.instructions,
+                model: normalized_optional(params.model),
+                reasoning_effort: normalized_optional(params.reasoning_effort),
+                native_settings: params.native_settings,
+                authority_mode: params.authority_mode,
+                checkout_policy: params.checkout_policy,
+                enabled: params.enabled,
+                provider_observation,
+            })
+            .map_err(store_error)?;
+        self.publish_events()?;
+        Ok(to_value(result))
+    }
+
+    fn disable_employee(&self, request: &JsonRpcRequest) -> Result<Value, RpcError> {
+        let params: DisableEmployeeParams = serde_json::from_value(request.params.clone())
+            .map_err(|error| invalid_params(error.to_string()))?;
+        require_idempotency_key(&params.idempotency_key)?;
+        if params.expected_revision == 0 {
+            return Err(employee_invalid(
+                "expectedRevision must be greater than zero",
+            ));
+        }
+        let result = self
+            .store
+            .disable_employee(&DisableEmployeeInput {
+                request_id: request.id.clone(),
+                idempotency_key: params.idempotency_key,
+                employee_id: params.id,
+                expected_revision: params.expected_revision,
+            })
+            .map_err(store_error)?;
+        self.publish_events()?;
+        Ok(to_value(result))
+    }
+
+    fn roster_get(&self, params: &Value) -> Result<Value, RpcError> {
+        require_empty_params(params, "roster.get")?;
+        self.store
+            .roster_snapshot()
+            .map(to_value)
+            .map_err(store_error)
+    }
+
+    async fn refresh_roster(&self, request: &JsonRpcRequest) -> Result<Value, RpcError> {
+        let params: RosterRefreshParams = serde_json::from_value(request.params.clone())
+            .map_err(|error| invalid_params(error.to_string()))?;
+        require_idempotency_key(&params.idempotency_key)?;
+        let providers = self
+            .store
+            .list_employees()
+            .map_err(store_error)?
+            .into_iter()
+            .filter(|employee| employee.enabled)
+            .map(|employee| employee.provider)
+            .collect::<BTreeSet<_>>();
+        let mut observations = Vec::with_capacity(providers.len());
+        for provider in providers {
+            let provider = employee_provider(&provider)?;
+            observations.push(self.observe_provider(provider).await);
+        }
+        let result = self
+            .store
+            .refresh_provider_observations(&RefreshProviderObservationsInput {
+                request_id: request.id.clone(),
+                idempotency_key: params.idempotency_key,
+                observations,
+            })
+            .map_err(store_error)?;
+        self.publish_events()?;
+        Ok(to_value(result))
+    }
+
+    async fn observe_provider(&self, provider: ProviderKind) -> ProviderObservation {
+        match self
+            .providers
+            .probe(provider, &self.provider_environment)
+            .await
+        {
+            Ok(probe) => observation_from_probe(probe),
+            Err(error) => observation_from_error(provider, &error),
+        }
+    }
+
+    fn publish_events(&self) -> Result<(), RpcError> {
+        for event in self.store.publish_pending_outbox().map_err(store_error)? {
+            let _ = self.events.send(event);
+        }
+        Ok(())
+    }
 }
 
 fn require_empty_params(params: &Value, method: &str) -> Result<(), RpcError> {
@@ -271,6 +505,130 @@ fn require_empty_params(params: &Value, method: &str) -> Result<(), RpcError> {
             "{method} accepts only an empty object"
         )))
     }
+}
+
+fn require_idempotency_key(value: &str) -> Result<(), RpcError> {
+    if value.trim().is_empty() {
+        Err(employee_invalid("idempotencyKey must not be empty"))
+    } else if value.len() > 256 {
+        Err(employee_invalid(
+            "idempotencyKey must contain at most 256 UTF-8 bytes",
+        ))
+    } else {
+        Ok(())
+    }
+}
+
+fn normalized_optional(value: Option<String>) -> Option<String> {
+    value.and_then(|value| {
+        let value = value.trim();
+        (!value.is_empty()).then(|| value.to_owned())
+    })
+}
+
+fn employee_provider(value: &str) -> Result<ProviderKind, RpcError> {
+    ProviderKind::from_str(value)
+        .map_err(|_| employee_invalid(format!("unknown employee provider: {value}")))
+}
+
+fn employee_validation_error(error: lazoo_domain::EmployeeValidationError) -> RpcError {
+    employee_invalid(error.to_string())
+}
+
+fn employee_invalid(message: impl Into<String>) -> RpcError {
+    RpcError {
+        code: "LZ-EMPLOYEE-INVALID".to_owned(),
+        message: message.into(),
+        data: None,
+    }
+}
+
+fn observation_from_probe(probe: ProviderProbe) -> ProviderObservation {
+    let verification = serialized_name(probe.verification);
+    let degradation_reason = match probe.verification {
+        ProviderVerification::NotDetected => {
+            Some("provider executable was not detected".to_owned())
+        }
+        ProviderVerification::Degraded => {
+            let authentication_blocked = matches!(
+                probe.authentication.native,
+                AuthenticationState::NeedsLogin | AuthenticationState::Blocked
+            ) || matches!(
+                probe.authentication.external,
+                AuthenticationState::NeedsLogin | AuthenticationState::Blocked
+            );
+            Some(if authentication_blocked {
+                "provider authentication is not ready".to_owned()
+            } else {
+                "provider readiness probe failed".to_owned()
+            })
+        }
+        _ => None,
+    };
+    ProviderObservation {
+        provider: probe.provider.to_string(),
+        verification,
+        version: probe.version,
+        protocol: probe.protocol,
+        capabilities: to_value(probe.capabilities),
+        authentication: json!({
+            "native": serialized_name(probe.authentication.native),
+            "external": serialized_name(probe.authentication.external),
+        }),
+        degradation_reason,
+        checked_at: probe.checked_at,
+    }
+}
+
+fn observation_from_error(provider: ProviderKind, error: &ProviderError) -> ProviderObservation {
+    let (verification, reason) = match error {
+        ProviderError::NotDetected(_) => (
+            ProviderVerification::NotDetected,
+            "provider executable was not detected",
+        ),
+        ProviderError::Authentication(_) => (
+            ProviderVerification::Degraded,
+            "provider authentication is not ready",
+        ),
+        ProviderError::Unsupported { .. } => (
+            ProviderVerification::Degraded,
+            "provider protocol is incompatible",
+        ),
+        ProviderError::Timeout { .. } | ProviderError::Stalled { .. } => (
+            ProviderVerification::Degraded,
+            "provider readiness probe timed out",
+        ),
+        ProviderError::ProcessExited { .. } => (
+            ProviderVerification::Degraded,
+            "provider readiness process exited",
+        ),
+        ProviderError::UnknownProvider(_)
+        | ProviderError::Protocol(_)
+        | ProviderError::InvalidEvent(_)
+        | ProviderError::Io(_)
+        | ProviderError::Json(_) => (
+            ProviderVerification::Degraded,
+            "provider readiness probe failed",
+        ),
+    };
+    ProviderObservation {
+        provider: provider.to_string(),
+        verification: serialized_name(verification),
+        version: None,
+        protocol: None,
+        capabilities: to_value(ProviderCapabilities::default()),
+        authentication: json!({"native": "unknown", "external": "unknown"}),
+        degradation_reason: Some(reason.to_owned()),
+        checked_at: Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true),
+    }
+}
+
+fn serialized_name(value: impl Serialize) -> String {
+    serde_json::to_value(value)
+        .expect("serializable enum")
+        .as_str()
+        .expect("enum serializes as a string")
+        .to_owned()
 }
 
 fn discovery_source_name(source: DiscoverySource) -> &'static str {
@@ -343,12 +701,21 @@ fn invalid_params(message: impl Into<String>) -> RpcError {
 fn store_error(error: lazoo_store::StoreError) -> RpcError {
     let code = match &error {
         lazoo_store::StoreError::ProjectConflict { .. } => "LZ-PROJECT-CONFLICT",
+        lazoo_store::StoreError::EmployeeConflict { .. } => "LZ-EMPLOYEE-CONFLICT",
+        lazoo_store::StoreError::EmployeeNotFound { .. } => "LZ-EMPLOYEE-NOT-FOUND",
+        lazoo_store::StoreError::EmployeeStale { .. } => "LZ-EMPLOYEE-STALE",
         _ => "LZ-STORE",
+    };
+    let data = match &error {
+        lazoo_store::StoreError::EmployeeStale {
+            current_revision, ..
+        } => Some(json!({"currentRevision": current_revision})),
+        _ => None,
     };
     RpcError {
         code: code.to_owned(),
         message: error.to_string(),
-        data: None,
+        data,
     }
 }
 
