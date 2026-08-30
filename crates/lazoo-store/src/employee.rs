@@ -162,51 +162,8 @@ impl Store {
         )?;
         require_revision(&current, input.expected_revision)?;
 
-        let mut desired = current.clone();
-        if let Some(name) = &input.name {
-            desired.name.clone_from(name);
-        }
-        if let Some(provider) = &input.provider {
-            desired.provider.clone_from(provider);
-        }
-        if let Some(role) = &input.role {
-            desired.role.clone_from(role);
-        }
-        if let Some(instructions) = &input.instructions {
-            desired.instructions.clone_from(instructions);
-        }
-        if let Some(model) = &input.model {
-            desired.model = Some(model.clone());
-        }
-        if let Some(reasoning_effort) = &input.reasoning_effort {
-            desired.reasoning_effort = Some(reasoning_effort.clone());
-        }
-        if let Some(native_settings) = &input.native_settings {
-            desired.native_settings.clone_from(native_settings);
-        }
-        if let Some(authority_mode) = input.authority_mode {
-            desired.authority_mode = authority_mode;
-        }
-        if let Some(checkout_policy) = input.checkout_policy {
-            desired.checkout_policy = checkout_policy;
-        }
-        if let Some(enabled) = input.enabled {
-            desired.enabled = enabled;
-        }
-
-        if desired.name.to_lowercase() != current.name.to_lowercase()
-            && let Some(employee_id) = transaction
-                .query_row(
-                    "SELECT id FROM employees WHERE name = ?1 COLLATE NOCASE AND id <> ?2",
-                    params![desired.name, input.employee_id.to_string()],
-                    |row| row.get::<_, String>(0),
-                )
-                .optional()?
-        {
-            return Err(StoreError::EmployeeConflict {
-                employee_id: parse_uuid(&employee_id, "employees.id")?,
-            });
-        }
+        let mut desired = apply_employee_update(&current, input);
+        ensure_unique_employee_name(&transaction, &current, &desired)?;
 
         let now = Utc::now().to_rfc3339();
         if !configuration_changed(&current, &desired) {
@@ -508,6 +465,64 @@ fn require_revision(employee: &EmployeeRecord, expected_revision: u64) -> Result
             current_revision: employee.configuration_revision,
         })
     }
+}
+
+fn apply_employee_update(current: &EmployeeRecord, input: &UpdateEmployeeInput) -> EmployeeRecord {
+    let mut desired = current.clone();
+    if let Some(name) = &input.name {
+        desired.name.clone_from(name);
+    }
+    if let Some(provider) = &input.provider {
+        desired.provider.clone_from(provider);
+    }
+    if let Some(role) = &input.role {
+        desired.role.clone_from(role);
+    }
+    if let Some(instructions) = &input.instructions {
+        desired.instructions.clone_from(instructions);
+    }
+    if let Some(model) = &input.model {
+        desired.model = Some(model.clone());
+    }
+    if let Some(reasoning_effort) = &input.reasoning_effort {
+        desired.reasoning_effort = Some(reasoning_effort.clone());
+    }
+    if let Some(native_settings) = &input.native_settings {
+        desired.native_settings.clone_from(native_settings);
+    }
+    if let Some(authority_mode) = input.authority_mode {
+        desired.authority_mode = authority_mode;
+    }
+    if let Some(checkout_policy) = input.checkout_policy {
+        desired.checkout_policy = checkout_policy;
+    }
+    if let Some(enabled) = input.enabled {
+        desired.enabled = enabled;
+    }
+    desired
+}
+
+fn ensure_unique_employee_name(
+    transaction: &Transaction<'_>,
+    current: &EmployeeRecord,
+    desired: &EmployeeRecord,
+) -> Result<(), StoreError> {
+    if desired.name.to_lowercase() == current.name.to_lowercase() {
+        return Ok(());
+    }
+    let conflicting_id = transaction
+        .query_row(
+            "SELECT id FROM employees WHERE name = ?1 COLLATE NOCASE AND id <> ?2",
+            params![desired.name, desired.id.to_string()],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()?;
+    if let Some(employee_id) = conflicting_id {
+        return Err(StoreError::EmployeeConflict {
+            employee_id: parse_uuid(&employee_id, "employees.id")?,
+        });
+    }
+    Ok(())
 }
 
 fn configuration_changed(current: &EmployeeRecord, desired: &EmployeeRecord) -> bool {

@@ -140,7 +140,10 @@ fn employee_cli_maps_mutations_and_roster_refresh() {
         *checkout_policy,
         lazoo_protocol::EmployeeCheckoutPolicy::Isolated
     );
-    assert_eq!(command_request(&create.command).0, "employee.create");
+    let (method, params, follows) = command_request(&create.command);
+    assert_eq!(method, "employee.create");
+    assert_eq!(params["nativeSettings"], json!({}));
+    assert!(!follows);
 
     let employee_id = "00000000-0000-4000-8000-000000000001";
     let update = Cli::try_parse_from([

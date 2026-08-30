@@ -38,6 +38,17 @@ fn test_app() -> (tempfile::TempDir, App) {
     )
 }
 
+async fn assert_desktop_is_roster_neutral(app: &App) {
+    let desktop = app
+        .handle(request("desktop", "desktop.snapshot", json!({})))
+        .await
+        .result
+        .unwrap();
+    assert!(desktop.get("employees").is_none());
+    assert!(desktop.get("roster").is_none());
+    assert!(desktop.get("providers").is_none());
+}
+
 #[tokio::test]
 async fn status_reports_protocol_store_and_boot_identity() {
     let (_temporary, app) = test_app();
@@ -375,14 +386,7 @@ async fn employee_create_update_disable_and_roster_are_durable_and_ui_neutral() 
     assert_eq!(disabled["employee"]["enabled"], false);
     assert_eq!(disabled["rosterRevision"], 3);
 
-    let desktop = app
-        .handle(request("desktop", "desktop.snapshot", json!({})))
-        .await
-        .result
-        .unwrap();
-    assert!(desktop.get("employees").is_none());
-    assert!(desktop.get("roster").is_none());
-    assert!(desktop.get("providers").is_none());
+    assert_desktop_is_roster_neutral(&app).await;
 }
 
 #[tokio::test]
@@ -435,4 +439,31 @@ async fn roster_refresh_is_non_model_and_does_not_advance_unchanged_state() {
     assert_eq!(refreshed["roster"]["revision"], 1);
     assert!(refreshed["eventSequence"].is_null());
     assert_eq!(refreshed["roster"]["entries"][0]["availability"], "offline");
+}
+
+#[test]
+fn employee_roster_acceptance_contract_is_backend_only() {
+    let repository = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let script_path = repository.join("scripts/acceptance/employee-roster.ps1");
+    let script = std::fs::read_to_string(&script_path).expect("employee roster acceptance script");
+
+    for required in [
+        "employee', 'create",
+        "employee', 'update",
+        "employee', 'disable",
+        "employee', 'show",
+        "roster', 'show",
+        "roster', 'refresh",
+        "LZ-EMPLOYEE-STALE",
+        "restartDurability",
+        "schemaVersion 2",
+        "providerSmokeAbsent",
+    ] {
+        assert!(
+            script.contains(required),
+            "acceptance script must contain {required}"
+        );
+    }
+    assert!(!script.contains("provider', 'smoke"));
+    assert!(!script.contains("apps\\lazoo-desktop"));
 }

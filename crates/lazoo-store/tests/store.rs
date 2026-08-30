@@ -1,4 +1,4 @@
-use std::{fs, path::Path};
+use std::{fmt::Write as _, fs, path::Path};
 
 use lazoo_protocol::CheckoutMode;
 use lazoo_runtime::DataRoot;
@@ -47,10 +47,10 @@ fn version_one_database_upgrades_to_version_two_without_rewriting_version_one() 
         .unwrap();
     let migration = include_str!("../../../migrations/0001_control_plane.sql");
     connection.execute_batch(migration).unwrap();
-    let checksum = Sha256::digest(migration.as_bytes())
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect::<String>();
+    let mut checksum = String::with_capacity(64);
+    for byte in Sha256::digest(migration.as_bytes()) {
+        write!(&mut checksum, "{byte:02x}").unwrap();
+    }
     connection
         .execute(
             "INSERT INTO schema_migrations (version, checksum, applied_at)

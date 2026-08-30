@@ -96,7 +96,7 @@ pub enum EmployeeCommand {
         model: Option<String>,
         #[arg(long)]
         reasoning_effort: Option<String>,
-        #[arg(long, default_value = "{}")]
+        #[arg(long, default_value = "{}", value_parser = parse_json_value)]
         native_settings: Value,
         #[arg(long, default_value = "ask", value_parser = parse_authority_mode)]
         authority_mode: AuthorityMode,
@@ -127,7 +127,7 @@ pub enum EmployeeCommand {
         model: Option<String>,
         #[arg(long)]
         reasoning_effort: Option<String>,
-        #[arg(long)]
+        #[arg(long, value_parser = parse_json_value)]
         native_settings: Option<Value>,
         #[arg(long, value_parser = parse_authority_mode)]
         authority_mode: Option<AuthorityMode>,
@@ -252,7 +252,22 @@ pub fn command_request(command: &Command) -> (&'static str, Value, bool) {
             json!({"provider": provider, "prompt": prompt}),
             false,
         ),
-        Command::Employee(EmployeeCommand::Create {
+        Command::Employee(command) => employee_request(command),
+        Command::Roster(RosterCommand::Show) => ("roster.get", json!({}), false),
+        Command::Roster(RosterCommand::Refresh { idempotency_key }) => (
+            "roster.refresh",
+            json!({
+                "idempotencyKey": idempotency_key.clone().unwrap_or_else(|| Uuid::new_v4().to_string()),
+            }),
+            false,
+        ),
+        Command::System(SystemCommand::Shutdown) => ("system.shutdown", json!({}), false),
+    }
+}
+
+fn employee_request(command: &EmployeeCommand) -> (&'static str, Value, bool) {
+    match command {
+        EmployeeCommand::Create {
             name,
             provider,
             role,
@@ -264,7 +279,7 @@ pub fn command_request(command: &Command) -> (&'static str, Value, bool) {
             checkout_policy,
             disabled,
             idempotency_key,
-        }) => (
+        } => (
             "employee.create",
             json!({
                 "name": name,
@@ -281,11 +296,9 @@ pub fn command_request(command: &Command) -> (&'static str, Value, bool) {
             }),
             false,
         ),
-        Command::Employee(EmployeeCommand::List) => ("employee.list", json!({}), false),
-        Command::Employee(EmployeeCommand::Show { id }) => {
-            ("employee.show", json!({"id": id}), false)
-        }
-        Command::Employee(EmployeeCommand::Update {
+        EmployeeCommand::List => ("employee.list", json!({}), false),
+        EmployeeCommand::Show { id } => ("employee.show", json!({"id": id}), false),
+        EmployeeCommand::Update {
             id,
             expected_revision,
             name,
@@ -299,7 +312,7 @@ pub fn command_request(command: &Command) -> (&'static str, Value, bool) {
             checkout_policy,
             enabled,
             idempotency_key,
-        }) => (
+        } => (
             "employee.update",
             json!({
                 "id": id,
@@ -318,11 +331,11 @@ pub fn command_request(command: &Command) -> (&'static str, Value, bool) {
             }),
             false,
         ),
-        Command::Employee(EmployeeCommand::Disable {
+        EmployeeCommand::Disable {
             id,
             expected_revision,
             idempotency_key,
-        }) => (
+        } => (
             "employee.disable",
             json!({
                 "id": id,
@@ -331,15 +344,6 @@ pub fn command_request(command: &Command) -> (&'static str, Value, bool) {
             }),
             false,
         ),
-        Command::Roster(RosterCommand::Show) => ("roster.get", json!({}), false),
-        Command::Roster(RosterCommand::Refresh { idempotency_key }) => (
-            "roster.refresh",
-            json!({
-                "idempotencyKey": idempotency_key.clone().unwrap_or_else(|| Uuid::new_v4().to_string()),
-            }),
-            false,
-        ),
-        Command::System(SystemCommand::Shutdown) => ("system.shutdown", json!({}), false),
     }
 }
 
@@ -384,6 +388,10 @@ fn parse_checkout_mode(value: &str) -> Result<CheckoutMode, String> {
         "lead-main" => Ok(CheckoutMode::LeadMain),
         _ => Err("expected isolated or lead-main".to_owned()),
     }
+}
+
+fn parse_json_value(value: &str) -> Result<Value, String> {
+    serde_json::from_str(value).map_err(|error| format!("invalid JSON: {error}"))
 }
 
 fn parse_authority_mode(value: &str) -> Result<AuthorityMode, String> {

@@ -1,6 +1,6 @@
 # Lazoo Durable Employee Roster Design
 
-**Status:** Approved by the owner-reviewed project brief and the 2026-08-30 backend-first direction
+**Status:** Implemented and verified on 2026-08-30
 
 **Scope:** Backend-only employee configuration, provider observations, and revisioned live roster. No desktop or frontend changes.
 
@@ -112,4 +112,3 @@ Test-first gates cover:
 8. full workspace tests, formatting, Clippy, check, locked release build, legacy first-slice acceptance, and a new employee-roster acceptance run.
 
 The acceptance run uses an isolated data root and a fake/missing provider environment. It proves an offline employee remains durable across daemon restart, stale updates are rejected, disable preserves history, roster revisions are monotonic, and no model smoke is invoked.
-

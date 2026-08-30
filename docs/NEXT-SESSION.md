@@ -12,28 +12,29 @@ No UI or frontend work should resume while this backend-first direction is activ
 - Native adapters for Codex, OpenCode, Grok Build, Antigravity, and Claude Code are implemented behind a versioned provider contract.
 - Codex, OpenCode, Grok Build, and Antigravity passed fresh model-backed and resume/continuation gates.
 - Claude Code passes non-model readiness checks but remains blocked before model execution by the configured organization's access policy.
-- Employee records, revisioned roster state, persistent native-session ownership, Job Objects, ConPTY, worktree automation, task/message delivery, policy approvals, and the resource governor remain unimplemented.
+- Durable employee records and revisioned roster state are implemented at database schema version 2. Create/update/disable mutations are idempotent and revision-checked, provider observations are safe and non-model, disabled identities survive restart, and employee/roster fields remain outside `desktop.snapshot`.
+- Persistent native-session ownership, Job Objects, ConPTY, worktree automation, task/message delivery, policy approvals, and the resource governor remain unimplemented.
 
 ## Next-session objective
 
-Implement the next narrow backend vertical slice: durable employee configuration plus a revisioned live roster derived from truthful provider evidence.
+Design and implement the next narrow backend vertical slice: persistent native employee-session ownership with Windows Job Object containment and restart reconciliation. Keep it daemon/CLI-only; ConPTY terminal streaming may be included only if the process-ownership contract is already proven in the same slice.
 
 The slice should establish:
 
-1. strict employee identity, provider binding, enabled state, role/instructions, model/native settings, checkout policy, and authority-mode contracts;
-2. transactional employee create/update/disable persistence with immutable audit and outbox events;
-3. a monotonic roster revision that changes only when effective roster state changes;
-4. availability derived from employee configuration and current provider probe truth, without starting a model session;
-5. daemon and CLI commands for employee create/list/show/update/disable and roster inspection;
-6. restart durability, idempotency, stale-revision rejection, redaction, and offline-provider acceptance evidence.
+1. durable desired/observed session records bound to an existing employee and provider capability contract;
+2. one Windows Job Object per owned native employee process tree, with kill-on-close and explicit resource/accounting boundaries;
+3. idempotent start/stop/reconcile commands with stable errors and immutable audit/outbox events;
+4. daemon-restart reconciliation that never adopts an unrelated process and truthfully marks lost or incompatible sessions;
+5. bounded graceful-stop, forced-stop, unexpected-exit, and crash-recovery behavior;
+6. isolated acceptance evidence for containment, restart reconciliation, stale-command rejection, and zero UI capability expansion.
 
 ## Guardrails
 
 - Preserve the Windows-first, local-first, single-user boundary.
 - Keep UI and `desktop.snapshot` unchanged.
-- Do not start provider model sessions from list or roster commands.
-- Do not claim Job Object, ConPTY, native terminal, conversation, delegation, worktree automation, approval, or peer-message support in this slice.
+- Do not start provider model sessions from employee list or roster commands.
+- Do not claim ConPTY, native terminal interaction, conversation, delegation, worktree automation, approval, or peer-message support until each is implemented and accepted.
 - Provider availability must remain evidence-based: discovery or a non-model handshake is not model support.
 - Ask remains the default authority mode; new editing employees default to isolated checkout policy.
-- Employee and roster mutations must write domain state, audit event, and outbox record transactionally.
-- Preserve tombstoned identity and history when an employee is disabled or later removed; never silently erase prior references.
+- Session mutations must write domain state, audit event, and outbox record transactionally.
+- Preserve employee identity and history; process cleanup must never delete employee records or unrelated native state.

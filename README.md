@@ -6,16 +6,16 @@ The name is a deliberately silly blend of **lazy** and **zoo**: wake the right e
 
 ## Status
 
-The first Windows control-plane slice, the polished read-only desktop-shell slice, and the backend native-provider connector slice are implemented. Lazoo now provides four native executables:
+The first Windows control-plane slice, the polished read-only desktop-shell slice, the backend native-provider connector slice, and the durable employee-roster slice are implemented. Lazoo now provides four native executables:
 
 - `lazoo-desktop.exe` opens a dark, command-first Tauri 2 control room for daemon health, projects, recent events, and recovered-incident count.
 - `lazoo-keeper.exe` supervises the daemon with a bounded restart policy and emergency spool.
-- `lazood.exe` owns the SQLite WAL store and authenticated named-pipe API.
-- `lazooctl.exe` exposes status, project registration/listing, event listing/following, native-provider diagnostics, and planned shutdown.
+- `lazood.exe` owns the SQLite WAL store, revisioned employee roster, and authenticated named-pipe API.
+- `lazooctl.exe` exposes status, project registration/listing, event listing/following, native-provider diagnostics, employee/roster control, and planned shutdown.
 
-The desktop remains deliberately read-only. Backend adapters now connect Codex App Server, OpenCode ACP, Grok Build ACP, Antigravity stream JSON, and Claude Code stream JSON without flattening their native configuration or authentication. Employee execution, task delegation, managed memory, and worktree automation remain later slices. The full product contract lives in [docs/PROJECT-BRIEF.md](docs/PROJECT-BRIEF.md).
+The desktop remains deliberately read-only. Backend adapters connect Codex App Server, OpenCode ACP, Grok Build ACP, Antigravity stream JSON, and Claude Code stream JSON without flattening native configuration or authentication. Durable named employees can now be created, revised, disabled, and inspected through a provider-truth roster without starting a model session. Native employee execution, task delegation, managed memory, and worktree automation remain later slices. The full product contract lives in [docs/PROJECT-BRIEF.md](docs/PROJECT-BRIEF.md).
 
-The target desktop information architecture is owner-approved, but UI implementation is shelved while the backend is completed. The current read-only shell remains a technical baseline. Continue from [docs/NEXT-SESSION.md](docs/NEXT-SESSION.md) with the revisioned employee roster and lifecycle foundation before exposing the approved launcher, terminals, workers, Inbox, or Settings.
+The target desktop information architecture is owner-approved, but UI implementation is shelved while the backend is completed. The current read-only shell remains a technical baseline. Continue from [docs/NEXT-SESSION.md](docs/NEXT-SESSION.md) with persistent native-session ownership and Windows process containment before exposing the approved launcher, terminals, workers, Inbox, or Settings.
 
 ## Build and run
 
@@ -81,11 +81,14 @@ cargo check --workspace --all-targets
 cargo clippy --workspace --all-targets -- -D warnings
 cargo fmt --all -- --check
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\acceptance\first-slice.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\acceptance\employee-roster.ps1
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\acceptance\desktop-shell.ps1
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\acceptance\provider-adapters.ps1 -Provider codex
 ```
 
 The acceptance script uses a unique temporary data root, builds release binaries, forces a real daemon restart, exhausts the production keeper budget with a crashing fixture, and writes `artifacts\acceptance\first-slice-manifest.json`.
+
+The employee-roster acceptance uses an isolated data root and real release binaries to verify idempotent creation, schema-2 restart durability, stale-revision rejection, non-model refresh, disable semantics, and identity preservation across a second restart. It writes `artifacts\acceptance\employee-roster-manifest.json`.
 
 The desktop-shell acceptance starts an isolated keeper and daemon, registers a disposable Git repository, opens the real WebView2 window, exercises `Ctrl+K`, arrow/Enter navigation, `Ctrl+Enter` inspector focus, Escape dismissal, and inspector focus return through Windows UI Automation, checks default and minimum-size captures, and writes `artifacts\acceptance\desktop-shell-manifest.json`. A 200% text-scale capture runs only when Windows is configured at 200%; otherwise the manifest records an explicit environment blocker.
 

@@ -1,3 +1,7 @@
+param(
+    [switch]$SkipBuild
+)
+
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
@@ -111,16 +115,18 @@ $manifestStatus = 'FAIL'
 New-Item -ItemType Directory -Force -Path $artifactDir, $dataRoot, $projectRoot | Out-Null
 
 try {
-    $commandTimer = [Diagnostics.Stopwatch]::StartNew()
-    & $cargoExe build --workspace --release
-    $buildExit = $LASTEXITCODE
-    $commandTimer.Stop()
-    $script:commands.Add([ordered]@{ command = 'cargo build --workspace --release'; exitCode = $buildExit; durationMs = $commandTimer.ElapsedMilliseconds })
-    Assert-Equal $buildExit 0 'release build'
+    if (-not $SkipBuild) {
+        $commandTimer = [Diagnostics.Stopwatch]::StartNew()
+        & $cargoExe build --workspace --release --locked
+        $buildExit = $LASTEXITCODE
+        $commandTimer.Stop()
+        $script:commands.Add([ordered]@{ command = 'cargo build --workspace --release --locked'; exitCode = $buildExit; durationMs = $commandTimer.ElapsedMilliseconds })
+        Assert-Equal $buildExit 0 'locked release build'
+    }
     foreach ($binary in @($script:keeperExe, $script:daemonExe, $script:ctlExe, $crashingExe)) {
         Assert-True (Test-Path -LiteralPath $binary) "binary exists: $binary"
     }
-    $gates.releaseBuild = 'PASS'
+    $gates.releaseBuild = if ($SkipBuild) { 'SKIPPED_BY_CALLER' } else { 'PASS' }
 
     & git init --quiet $projectRoot
     $gitInitExit = $LASTEXITCODE
@@ -130,7 +136,7 @@ try {
     $keeper = Start-Keeper $dataRoot (Join-Path $runRoot 'keeper-real-1')
     $statusBefore = Wait-Status
     Assert-Equal $statusBefore.protocolVersion 1 'protocol version'
-    Assert-Equal $statusBefore.schemaVersion 1 'schema version'
+    Assert-Equal $statusBefore.schemaVersion 2 'schema version'
     Assert-Equal $statusBefore.journalMode 'wal' 'SQLite journal mode'
     $gates.controlPlaneReady = 'PASS'
 
@@ -206,6 +212,7 @@ try {
     }
     $manifest = [ordered]@{
         schemaVersion = 1
+        databaseSchemaVersion = 2
         status = $manifestStatus
         startedAt = $startedAt.ToString('o')
         completedAt = [DateTime]::UtcNow.ToString('o')

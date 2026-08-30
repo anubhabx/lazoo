@@ -293,15 +293,17 @@ impl App {
         let params: CreateEmployeeParams = serde_json::from_value(request.params.clone())
             .map_err(|error| invalid_params(error.to_string()))?;
         require_idempotency_key(&params.idempotency_key)?;
-        let name = validate_employee_name(&params.name).map_err(employee_validation_error)?;
+        let name = validate_employee_name(&params.name)
+            .map_err(|error| employee_validation_error(&error))?;
         validate_employee_text_fields(
             &params.role,
             &params.instructions,
             params.model.as_deref(),
             params.reasoning_effort.as_deref(),
         )
-        .map_err(employee_validation_error)?;
-        validate_native_settings(&params.native_settings).map_err(employee_validation_error)?;
+        .map_err(|error| employee_validation_error(&error))?;
+        validate_native_settings(&params.native_settings)
+            .map_err(|error| employee_validation_error(&error))?;
         let provider = employee_provider(&params.provider)?;
         let observation = self.observe_provider(provider).await;
         let result = self
@@ -358,7 +360,7 @@ impl App {
             .as_deref()
             .map(validate_employee_name)
             .transpose()
-            .map_err(employee_validation_error)?;
+            .map_err(|error| employee_validation_error(&error))?;
         let provider = params
             .provider
             .as_deref()
@@ -380,9 +382,10 @@ impl App {
             desired_model,
             desired_effort,
         )
-        .map_err(employee_validation_error)?;
+        .map_err(|error| employee_validation_error(&error))?;
         if let Some(native_settings) = &params.native_settings {
-            validate_native_settings(native_settings).map_err(employee_validation_error)?;
+            validate_native_settings(native_settings)
+                .map_err(|error| employee_validation_error(&error))?;
         }
         let should_probe = provider.is_some_and(|value| value.to_string() != current.provider)
             || params.enabled == Some(true) && !current.enabled;
@@ -531,7 +534,7 @@ fn employee_provider(value: &str) -> Result<ProviderKind, RpcError> {
         .map_err(|_| employee_invalid(format!("unknown employee provider: {value}")))
 }
 
-fn employee_validation_error(error: lazoo_domain::EmployeeValidationError) -> RpcError {
+fn employee_validation_error(error: &lazoo_domain::EmployeeValidationError) -> RpcError {
     employee_invalid(error.to_string())
 }
 

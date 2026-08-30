@@ -71,8 +71,8 @@ fn refreshed_observation(verification: &str, checked_at: &str) -> ProviderObserv
     let mut observation = creation("observation", "unused")
         .provider_observation
         .unwrap();
-    observation.verification = verification.to_owned();
-    observation.checked_at = checked_at.to_owned();
+    verification.clone_into(&mut observation.verification);
+    checked_at.clone_into(&mut observation.checked_at);
     observation.degradation_reason =
         (verification == "degraded").then(|| "provider readiness failed".to_owned());
     observation

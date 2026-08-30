@@ -295,26 +295,24 @@ git commit -m "feat: expose employee roster controls"
 - Create: `scripts/acceptance/employee-roster.ps1`
 - Create: `docs/verification/2026-08-30-employee-roster.md`
 - Modify: `scripts/acceptance/first-slice.ps1`
-- Modify: `scripts/acceptance/desktop-shell.ps1`
-- Modify: `scripts/acceptance/provider-adapters.ps1`
 - Modify: `docs/NEXT-SESSION.md`
 - Modify: `docs/PROJECT-BRIEF.md`
 
-- [ ] **Step 1: Write the acceptance contract test first**
+- [x] **Step 1: Write the acceptance contract test first**
 
 Extend Rust acceptance-contract tests to require isolated data roots, create replay, restart durability, stale update rejection, monotonic roster revisions, preserved disabled identity, provider-smoke absence, and unchanged desktop capability scope.
 
-- [ ] **Step 2: Run the focused contract test and verify RED**
+- [x] **Step 2: Run the focused contract test and verify RED**
 
 Run: `cargo test -p lazood --test daemon employee_roster_acceptance_contract_is_backend_only`
 
 Expected: FAIL because the acceptance script is absent.
 
-- [ ] **Step 3: Implement the acceptance harness and synchronize schema expectations**
+- [x] **Step 3: Implement the acceptance harness and synchronize schema expectations**
 
-Use release `lazood` and `lazooctl` against a temporary data root. Update active acceptance scripts from schema version 1 to 2 while retaining protocol version 1.
+Use release `lazood` and `lazooctl` against a temporary data root. Update the first-slice database-schema expectation from 1 to 2 while retaining protocol version 1. Leave the independent manifest-format versions in the desktop and provider acceptance scripts unchanged.
 
-- [ ] **Step 4: Run full verification**
+- [x] **Step 4: Run full verification**
 
 ```powershell
 & .\scripts\verify-rust-toolchain.ps1
@@ -330,7 +328,7 @@ git diff --check
 
 Expected: every command exits 0. Live model tests remain explicit and ignored in the ordinary workspace suite.
 
-- [ ] **Step 5: Record evidence and commit**
+- [x] **Step 5: Record evidence and commit**
 
 Write exact counts, exit codes, schema/protocol versions, event/revision evidence, and exclusions in `docs/verification/2026-08-30-employee-roster.md`; update continuity docs without claiming terminals, tasks, approvals, or UI.
 

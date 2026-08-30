@@ -96,7 +96,7 @@ fn reject_secret_keys(value: &Value) -> Result<(), EmployeeValidationError> {
             for (key, child) in object {
                 let normalized = key
                     .chars()
-                    .filter(|character| character.is_ascii_alphanumeric())
+                    .filter(char::is_ascii_alphanumeric)
                     .flat_map(char::to_lowercase)
                     .collect::<String>();
                 if [
