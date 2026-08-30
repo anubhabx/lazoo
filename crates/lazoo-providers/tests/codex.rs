@@ -177,6 +177,18 @@ async fn live_codex_app_server_handshake() {
 }
 
 #[tokio::test]
+#[ignore = "requires an installed and configured Codex App Server; starts no model turn"]
+async fn live_codex_session_start_reports_contained_host() {
+    let session = CodexAdapter::default()
+        .start(&SessionRequest::new(std::env::current_dir().unwrap()))
+        .await
+        .unwrap();
+
+    assert!(session.native_host_pid().is_some());
+    session.stop().await.unwrap();
+}
+
+#[tokio::test]
 #[ignore = "uses the configured Codex account and consumes provider quota"]
 async fn live_codex_single_turn_and_resume() {
     let adapter = CodexAdapter::default();

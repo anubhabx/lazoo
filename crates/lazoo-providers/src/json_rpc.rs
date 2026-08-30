@@ -1,6 +1,5 @@
 use std::{
     collections::VecDeque,
-    process::Stdio,
     sync::{
         Arc,
         atomic::{AtomicU64, Ordering},
@@ -8,10 +7,11 @@ use std::{
     time::Duration,
 };
 
+use lazoo_runtime::{JobChild, JobCommand};
 use serde_json::{Value, json};
 use tokio::{
     io::{AsyncBufRead, AsyncBufReadExt, AsyncWriteExt, BufReader},
-    process::{Child, ChildStderr, ChildStdout, Command},
+    process::{ChildStderr, ChildStdout},
     sync::Mutex,
     task::JoinHandle,
     time::timeout,
@@ -110,7 +110,7 @@ impl JsonRpcControl {
 
 #[derive(Debug)]
 pub(crate) struct JsonRpcProcess {
-    child: Child,
+    child: JobChild,
     stdout: BufReader<ChildStdout>,
     control: JsonRpcControl,
     queued: VecDeque<Value>,
@@ -131,27 +131,18 @@ impl JsonRpcProcess {
         spec: &CommandSpec,
         standard_envelope: bool,
     ) -> Result<Self, ProviderError> {
-        let mut command = Command::new(&spec.executable);
-        command
-            .args(&spec.args)
-            .current_dir(&spec.cwd)
-            .envs(&spec.env)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .kill_on_drop(true);
-        let mut child = command.spawn()?;
+        let command = JobCommand::new(&spec.executable, &spec.cwd)
+            .args(spec.args.clone())
+            .envs(spec.env.clone());
+        let mut child = JobChild::spawn(&command)?;
         let stdin = child
-            .stdin
-            .take()
+            .take_stdin()
             .ok_or_else(|| ProviderError::Protocol("provider stdin was not piped".to_owned()))?;
         let stdout = child
-            .stdout
-            .take()
+            .take_stdout()
             .ok_or_else(|| ProviderError::Protocol("provider stdout was not piped".to_owned()))?;
         let stderr = child
-            .stderr
-            .take()
+            .take_stderr()
             .ok_or_else(|| ProviderError::Protocol("provider stderr was not piped".to_owned()))?;
         let stderr_lines = Arc::new(Mutex::new(VecDeque::new()));
         let stderr_task = tokio::spawn(drain_stderr(stderr, Arc::clone(&stderr_lines)));
@@ -171,6 +162,10 @@ impl JsonRpcProcess {
 
     pub(crate) fn control(&self) -> JsonRpcControl {
         self.control.clone()
+    }
+
+    pub(crate) fn native_host_pid(&self) -> Option<u32> {
+        self.child.id()
     }
 
     pub(crate) async fn request(
@@ -252,7 +247,7 @@ impl JsonRpcProcess {
         if let Ok(status) = timeout(wait, self.child.wait()).await {
             status?;
         } else {
-            self.child.start_kill()?;
+            self.child.terminate_tree(1)?;
             let _ = timeout(wait, self.child.wait()).await;
         }
         self.stderr_task.abort();

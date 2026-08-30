@@ -191,6 +191,10 @@ impl ProviderSession for GrokSession {
         self.0.id()
     }
 
+    fn native_host_pid(&self) -> Option<u32> {
+        self.0.native_host_pid()
+    }
+
     fn turn<'a>(&'a self, request: &'a TurnRequest) -> AdapterFuture<'a, Vec<ProviderEvent>> {
         self.0.turn(request)
     }

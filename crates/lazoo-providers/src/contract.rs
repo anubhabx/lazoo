@@ -392,6 +392,7 @@ pub type AdapterFuture<'a, T> = Pin<Box<dyn Future<Output = Result<T, ProviderEr
 
 pub trait ProviderSession: Send + Sync {
     fn id(&self) -> String;
+    fn native_host_pid(&self) -> Option<u32>;
     fn turn<'a>(&'a self, request: &'a TurnRequest) -> AdapterFuture<'a, Vec<ProviderEvent>>;
     fn cancel(&self) -> AdapterFuture<'_, ()>;
     fn stop(&self) -> AdapterFuture<'_, ()>;
@@ -434,6 +435,8 @@ pub enum ProviderError {
     ProcessExited { code: Option<i32> },
     #[error(transparent)]
     Io(#[from] std::io::Error),
+    #[error(transparent)]
+    Runtime(#[from] lazoo_runtime::RuntimeError),
     #[error(transparent)]
     Json(#[from] serde_json::Error),
 }

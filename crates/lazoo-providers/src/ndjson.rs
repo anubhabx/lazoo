@@ -1,9 +1,10 @@
-use std::{collections::VecDeque, process::Stdio, sync::Arc, time::Duration};
+use std::{collections::VecDeque, sync::Arc, time::Duration};
 
+use lazoo_runtime::{JobChild, JobCommand};
 use serde_json::Value;
 use tokio::{
     io::{AsyncBufRead, AsyncBufReadExt, AsyncWriteExt, BufReader},
-    process::{Child, ChildStderr, ChildStdout, Command},
+    process::{ChildStderr, ChildStdout},
     sync::Mutex,
     task::JoinHandle,
     time::timeout,
@@ -17,7 +18,7 @@ const MAX_STDERR_LINE_BYTES: usize = 4096;
 
 #[derive(Clone, Debug)]
 pub(crate) struct NdjsonControl {
-    child: Arc<Mutex<Child>>,
+    child: Arc<Mutex<JobChild>>,
     stdin: Arc<Mutex<tokio::process::ChildStdin>>,
 }
 
@@ -39,7 +40,7 @@ impl NdjsonControl {
     pub(crate) async fn kill(&self) -> Result<(), ProviderError> {
         let mut child = self.child.lock().await;
         if child.try_wait()?.is_none() {
-            child.start_kill()?;
+            child.terminate_tree(1)?;
         }
         Ok(())
     }
@@ -52,7 +53,7 @@ impl NdjsonControl {
 
 #[derive(Debug)]
 pub(crate) struct NdjsonProcess {
-    child: Arc<Mutex<Child>>,
+    child: Arc<Mutex<JobChild>>,
     stdout: BufReader<ChildStdout>,
     control: NdjsonControl,
     stderr_lines: Arc<Mutex<VecDeque<String>>>,
@@ -61,27 +62,18 @@ pub(crate) struct NdjsonProcess {
 
 impl NdjsonProcess {
     pub(crate) fn spawn(spec: &CommandSpec) -> Result<Self, ProviderError> {
-        let mut command = Command::new(&spec.executable);
-        command
-            .args(&spec.args)
-            .current_dir(&spec.cwd)
-            .envs(&spec.env)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .kill_on_drop(true);
-        let mut child = command.spawn()?;
+        let command = JobCommand::new(&spec.executable, &spec.cwd)
+            .args(spec.args.clone())
+            .envs(spec.env.clone());
+        let mut child = JobChild::spawn(&command)?;
         let stdin = child
-            .stdin
-            .take()
+            .take_stdin()
             .ok_or_else(|| ProviderError::Protocol("provider stdin was not piped".to_owned()))?;
         let stdout = child
-            .stdout
-            .take()
+            .take_stdout()
             .ok_or_else(|| ProviderError::Protocol("provider stdout was not piped".to_owned()))?;
         let stderr = child
-            .stderr
-            .take()
+            .take_stderr()
             .ok_or_else(|| ProviderError::Protocol("provider stderr was not piped".to_owned()))?;
         let child = Arc::new(Mutex::new(child));
         let stdin = Arc::new(Mutex::new(stdin));
@@ -98,6 +90,10 @@ impl NdjsonProcess {
 
     pub(crate) fn control(&self) -> NdjsonControl {
         self.control.clone()
+    }
+
+    pub(crate) fn native_host_pid(&self) -> Option<u32> {
+        self.child.try_lock().ok().and_then(|child| child.id())
     }
 
     pub(crate) async fn next_message(
@@ -135,7 +131,7 @@ impl NdjsonProcess {
             if let Ok(status) = timeout(wait, child.wait()).await {
                 status?;
             } else {
-                child.start_kill()?;
+                child.terminate_tree(1)?;
                 let _ = timeout(wait, child.wait()).await;
             }
         }

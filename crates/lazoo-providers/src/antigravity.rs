@@ -149,6 +149,7 @@ impl AntigravityAdapter {
             .next()
             .ok_or(ProviderError::NotDetected(ProviderKind::Antigravity))?;
         let process = NdjsonProcess::spawn(&Self::command(&candidate.path, request))?;
+        let native_host_pid = process.native_host_pid();
         let control = process.control();
         let initial_id = request
             .session_id
@@ -158,6 +159,7 @@ impl AntigravityAdapter {
             process: Mutex::new(process),
             control,
             session_id: RwLock::new(initial_id),
+            native_host_pid,
             request: request.clone(),
             active: AtomicBool::new(false),
             cancel_requested: AtomicBool::new(false),
@@ -199,6 +201,7 @@ pub struct AntigravitySession {
     process: Mutex<NdjsonProcess>,
     control: NdjsonControl,
     session_id: RwLock<String>,
+    native_host_pid: Option<u32>,
     request: SessionRequest,
     active: AtomicBool,
     cancel_requested: AtomicBool,
@@ -320,6 +323,10 @@ impl AntigravitySession {
 impl ProviderSession for AntigravitySession {
     fn id(&self) -> String {
         self.current_session_id()
+    }
+
+    fn native_host_pid(&self) -> Option<u32> {
+        self.native_host_pid
     }
 
     fn turn<'a>(&'a self, request: &'a TurnRequest) -> AdapterFuture<'a, Vec<ProviderEvent>> {

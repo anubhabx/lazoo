@@ -216,11 +216,13 @@ impl ClaudeAdapter {
             .unwrap_or_else(|| generated_id.clone());
         let process =
             NdjsonProcess::spawn(&Self::command(&candidate.path, request, &generated_id))?;
+        let native_host_pid = process.native_host_pid();
         let control = process.control();
         Ok(ClaudeSession {
             process: Mutex::new(process),
             control,
             session_id,
+            native_host_pid,
             request: request.clone(),
             active: AtomicBool::new(false),
             cancel_requested: AtomicBool::new(false),
@@ -262,6 +264,7 @@ pub struct ClaudeSession {
     process: Mutex<NdjsonProcess>,
     control: NdjsonControl,
     session_id: String,
+    native_host_pid: Option<u32>,
     request: SessionRequest,
     active: AtomicBool,
     cancel_requested: AtomicBool,
@@ -366,6 +369,10 @@ impl ClaudeSession {
 impl ProviderSession for ClaudeSession {
     fn id(&self) -> String {
         self.session_id.clone()
+    }
+
+    fn native_host_pid(&self) -> Option<u32> {
+        self.native_host_pid
     }
 
     fn turn<'a>(&'a self, request: &'a TurnRequest) -> AdapterFuture<'a, Vec<ProviderEvent>> {

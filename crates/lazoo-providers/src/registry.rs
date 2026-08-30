@@ -118,6 +118,16 @@ impl ProviderSession for ProviderSessionHandle {
         }
     }
 
+    fn native_host_pid(&self) -> Option<u32> {
+        match self {
+            Self::Codex(session) => session.native_host_pid(),
+            Self::OpenCode(session) => session.native_host_pid(),
+            Self::GrokBuild(session) => session.native_host_pid(),
+            Self::Antigravity(session) => session.native_host_pid(),
+            Self::ClaudeCode(session) => session.native_host_pid(),
+        }
+    }
+
     fn turn<'a>(&'a self, request: &'a TurnRequest) -> AdapterFuture<'a, Vec<ProviderEvent>> {
         match self {
             Self::Codex(session) => session.turn(request),

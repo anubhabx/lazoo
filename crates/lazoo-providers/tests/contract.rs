@@ -1,8 +1,15 @@
 use lazoo_providers::{
     DiscoverySource, ExecutableCandidate, ProviderCapabilities, ProviderEvent, ProviderKind,
-    ProviderVerification, rank_candidates, redact_json,
+    ProviderSession, ProviderVerification, rank_candidates, redact_json,
 };
 use serde_json::json;
+
+#[allow(dead_code)]
+fn contained_host_pid_is_part_of_the_session_contract(session: &impl ProviderSession) -> u32 {
+    session
+        .native_host_pid()
+        .expect("a live provider session must expose its contained host PID")
+}
 
 #[test]
 fn provider_kinds_are_stable_and_parseable() {

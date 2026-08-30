@@ -163,6 +163,7 @@ pub(crate) async fn start_acp_session(
         .session_capabilities
         .close
         .is_some();
+    let native_host_pid = process.native_host_pid();
     let control = process.control();
     Ok((
         AcpSession {
@@ -170,6 +171,7 @@ pub(crate) async fn start_acp_session(
             control,
             provider,
             session_id,
+            native_host_pid,
             resumed,
             request: request.clone(),
             close_supported,
@@ -205,6 +207,7 @@ pub(crate) struct AcpSession {
     control: JsonRpcControl,
     provider: ProviderKind,
     session_id: String,
+    native_host_pid: Option<u32>,
     resumed: bool,
     request: SessionRequest,
     close_supported: bool,
@@ -357,6 +360,10 @@ impl AcpSession {
 impl ProviderSession for AcpSession {
     fn id(&self) -> String {
         self.session_id.clone()
+    }
+
+    fn native_host_pid(&self) -> Option<u32> {
+        self.native_host_pid
     }
 
     fn turn<'a>(&'a self, request: &'a TurnRequest) -> AdapterFuture<'a, Vec<ProviderEvent>> {

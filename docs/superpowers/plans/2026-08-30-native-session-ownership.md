@@ -40,11 +40,11 @@
 - Modify: `crates/lazoo-providers/src/contract.rs`
 - Modify: provider session implementations and contract tests
 
-- [ ] Write failing tests for host PID exposure and complete-tree forced stop.
-- [ ] Replace direct session `tokio::process::Child` ownership with `JobChild`.
-- [ ] Expose only the host PID through `ProviderSession`; retain protocol behavior.
-- [ ] Run provider fixture tests and the existing provider conformance suite.
-- [ ] Commit as `feat: supervise provider session trees`.
+- [x] Write failing tests for host PID exposure and complete-tree forced stop.
+- [x] Replace direct session `tokio::process::Child` ownership with `JobChild`.
+- [x] Expose only the host PID through `ProviderSession`; retain protocol behavior.
+- [x] Run provider fixture tests and the existing provider conformance suite.
+- [x] Commit as `feat: supervise provider session trees`.
 
 ### Task 3: Session contracts, migration 3, and roster states
 
