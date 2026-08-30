@@ -11,7 +11,10 @@ members = [
   "apps/lazooctl",
   "apps/lazoo-keeper",
   "apps/lazoo-desktop",
+  "apps/lazoo-session-host",
   "tests/fixtures/crashing-daemon",
+  "tests/fixtures/job-containment",
+  "tests/fixtures/session-tree",
 ]
 
 [workspace.package]
@@ -51,6 +54,7 @@ windows = { version = "0.62.2", features = [
   "Win32_Security_Cryptography",
   "Win32_Storage_FileSystem",
   "Win32_System_Memory",
+  "Win32_System_JobObjects",
   "Win32_System_Pipes",
   "Win32_System_Threading",
 ] }

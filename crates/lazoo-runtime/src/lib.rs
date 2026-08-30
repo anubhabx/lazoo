@@ -2,6 +2,7 @@ mod atomic_file;
 mod data_root;
 mod installation;
 mod notification;
+mod process_job;
 mod security;
 mod single_instance;
 
@@ -9,6 +10,9 @@ pub use atomic_file::atomic_write;
 pub use data_root::DataRoot;
 pub use installation::Installation;
 pub use notification::NativeNotifier;
+pub use process_job::{
+    JobChild, JobCommand, JobObject, LaunchGate, session_host_path, wait_for_launch_gate,
+};
 pub use security::OwnerSecurity;
 pub use single_instance::SingleInstance;
 

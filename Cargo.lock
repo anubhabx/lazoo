@@ -2198,6 +2198,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "lazoo-job-containment"
+version = "0.1.0"
+dependencies = [
+ "lazoo-runtime",
+ "serde_json",
+ "tokio",
+ "uuid",
+ "windows 0.62.2",
+]
+
+[[package]]
 name = "lazoo-keeper"
 version = "0.1.0"
 dependencies = [
@@ -2244,9 +2255,21 @@ dependencies = [
  "serde_json",
  "tempfile",
  "thiserror 2.0.20",
+ "tokio",
  "uuid",
  "windows 0.62.2",
 ]
+
+[[package]]
+name = "lazoo-session-host"
+version = "0.1.0"
+dependencies = [
+ "lazoo-runtime",
+]
+
+[[package]]
+name = "lazoo-session-tree-fixture"
+version = "0.1.0"
 
 [[package]]
 name = "lazoo-store"

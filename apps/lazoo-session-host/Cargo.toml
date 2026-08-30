@@ -1,0 +1,12 @@
+[package]
+name = "lazoo-session-host"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+lazoo-runtime = { path = "../../crates/lazoo-runtime" }
+
+[lints]
+workspace = true

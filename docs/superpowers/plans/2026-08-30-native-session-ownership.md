@@ -25,11 +25,11 @@
 - Create: `tests/fixtures/job-containment/src/main.rs`
 - Test: `crates/lazoo-runtime/tests/process_job.rs`
 
-- [ ] Write failing lifecycle/containment contract tests first.
-- [ ] Implement kill-on-close `JobObject`, random launch gate, and `JobChild` wrapper.
-- [ ] Implement the transparent host and deterministic root/descendant fixture.
-- [ ] Prove the host waits for assignment, both fixture PIDs belong to the job, and job termination removes both.
-- [ ] Commit as `feat: contain native session process trees`.
+- [x] Write failing lifecycle/containment contract tests first.
+- [x] Implement kill-on-close `JobObject`, random launch gate, and `JobChild` wrapper.
+- [x] Implement the transparent host and deterministic root/descendant fixture.
+- [x] Prove the host waits for assignment, both fixture PIDs belong to the job, and job termination removes both.
+- [x] Commit as `feat: contain native session process trees`.
 
 ### Task 2: Route provider session processes through the host
 
