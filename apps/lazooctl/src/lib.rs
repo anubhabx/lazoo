@@ -25,6 +25,8 @@ pub enum Command {
     #[command(subcommand)]
     Events(EventsCommand),
     #[command(subcommand)]
+    Provider(ProviderCommand),
+    #[command(subcommand)]
     System(SystemCommand),
 }
 
@@ -59,6 +61,19 @@ pub enum EventsCommand {
 #[derive(Debug, Subcommand)]
 pub enum SystemCommand {
     Shutdown,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum ProviderCommand {
+    List,
+    Probe {
+        provider: String,
+    },
+    Smoke {
+        provider: String,
+        #[arg(long)]
+        prompt: String,
+    },
 }
 
 #[derive(Debug, Error)]
@@ -148,6 +163,15 @@ pub fn command_request(command: &Command) -> (&'static str, Value, bool) {
             json!({"after": after, "limit": 1024}),
             true,
         ),
+        Command::Provider(ProviderCommand::List) => ("provider.list", json!({}), false),
+        Command::Provider(ProviderCommand::Probe { provider }) => {
+            ("provider.probe", json!({"provider": provider}), false)
+        }
+        Command::Provider(ProviderCommand::Smoke { provider, prompt }) => (
+            "provider.smoke",
+            json!({"provider": provider, "prompt": prompt}),
+            false,
+        ),
         Command::System(SystemCommand::Shutdown) => ("system.shutdown", json!({}), false),
     }
 }
@@ -169,6 +193,7 @@ pub fn exit_code_for_rpc(error: &RpcError) -> i32 {
         "LZ-IPC-AUTH" => 5,
         "LZ-PROJECT-CONFLICT" => 6,
         "LZ-STORE" => 7,
+        code if code.starts_with("LZ-PROVIDER-") || code == "LZ-PROVIDER" => 8,
         _ => 10,
     }
 }

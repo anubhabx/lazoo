@@ -1,10 +1,15 @@
-use std::{fs, time::Instant};
+use std::{fs, str::FromStr, time::Instant};
 
 use chrono::{SecondsFormat, Utc};
 use lazoo_domain::inspect_git_repository;
 use lazoo_protocol::{
     DesktopSnapshot, EventSummary, EventsListParams, JsonRpcRequest, JsonRpcResponse, PROTOCOL_V1,
+    ProviderListEntry, ProviderProbeParams, ProviderSmokeParams, ProviderSmokeResult,
     RegisterProjectParams, RpcError, SystemStatus,
+};
+use lazoo_providers::{
+    DiscoveryEnvironment, DiscoverySource, ProviderError, ProviderKind, ProviderRegistry,
+    ProviderSession, SessionRequest, TurnRequest,
 };
 use lazoo_runtime::DataRoot;
 use lazoo_store::{RegisterProjectInput, Store, StoreStatus};
@@ -21,6 +26,7 @@ pub struct App {
     started: Instant,
     events: broadcast::Sender<EventSummary>,
     shutdown: watch::Sender<bool>,
+    providers: ProviderRegistry,
 }
 
 pub struct EventSubscription {
@@ -40,11 +46,10 @@ impl App {
             started: Instant::now(),
             events,
             shutdown,
+            providers: ProviderRegistry::default(),
         }
     }
 
-    // Keep the request boundary async so transports can await it without an API change.
-    #[allow(clippy::unused_async, clippy::unused_async_trait_impl)]
     pub async fn handle(&self, request: JsonRpcRequest) -> JsonRpcResponse {
         if request.jsonrpc != "2.0" {
             return failure(
@@ -64,6 +69,9 @@ impl App {
                 .map_err(store_error),
             "events.list" => self.list_events(request.params),
             "desktop.snapshot" => self.desktop_snapshot(&request.params),
+            "provider.list" => self.provider_list(&request.params),
+            "provider.probe" => self.provider_probe(request.params).await,
+            "provider.smoke" => self.provider_smoke(request.params).await,
             "system.shutdown" => {
                 let _ = self.shutdown.send(true);
                 Ok(json!({"planned": true}))
@@ -172,7 +180,7 @@ impl App {
     }
 
     fn desktop_snapshot(&self, params: &Value) -> Result<Value, RpcError> {
-        require_empty_params(params)?;
+        require_empty_params(params, "desktop.snapshot")?;
         let store_status = self.store.status().map_err(store_error)?;
         let recent_after = store_status.event_high_water.saturating_sub(100);
         let projects = self.store.list_projects().map_err(store_error)?;
@@ -187,16 +195,130 @@ impl App {
             events,
         }))
     }
+
+    fn provider_list(&self, params: &Value) -> Result<Value, RpcError> {
+        require_empty_params(params, "provider.list")?;
+        let providers = self
+            .providers
+            .discover(&DiscoveryEnvironment::current())
+            .into_iter()
+            .map(|discovery| ProviderListEntry {
+                provider: discovery.provider.to_string(),
+                detected: discovery.candidate.is_some(),
+                executable: discovery
+                    .candidate
+                    .as_ref()
+                    .map(|candidate| candidate.path.clone()),
+                discovery_source: discovery
+                    .candidate
+                    .map(|candidate| discovery_source_name(candidate.source).to_owned()),
+            })
+            .collect::<Vec<_>>();
+        Ok(to_value(providers))
+    }
+
+    async fn provider_probe(&self, value: Value) -> Result<Value, RpcError> {
+        let params: ProviderProbeParams =
+            serde_json::from_value(value).map_err(|error| invalid_params(error.to_string()))?;
+        let provider = ProviderKind::from_str(&params.provider).map_err(provider_error)?;
+        self.providers
+            .probe(provider, &DiscoveryEnvironment::current())
+            .await
+            .map(to_value)
+            .map_err(provider_error)
+    }
+
+    async fn provider_smoke(&self, value: Value) -> Result<Value, RpcError> {
+        const MAX_PROMPT_BYTES: usize = 16 * 1024;
+        let params: ProviderSmokeParams =
+            serde_json::from_value(value).map_err(|error| invalid_params(error.to_string()))?;
+        if params.prompt.trim().is_empty() || params.prompt.len() > MAX_PROMPT_BYTES {
+            return Err(invalid_params(
+                "prompt must contain between 1 and 16384 UTF-8 bytes",
+            ));
+        }
+        let provider = ProviderKind::from_str(&params.provider).map_err(provider_error)?;
+        let cwd = std::env::current_dir()
+            .map_err(ProviderError::from)
+            .map_err(provider_error)?;
+        let request = SessionRequest::new(cwd).with_permission_mode("untrusted");
+        let session = self
+            .providers
+            .start(provider, &request)
+            .await
+            .map_err(provider_error)?;
+        let session_id = session.id();
+        let turn = session.turn(&TurnRequest::new(params.prompt)).await;
+        let stop = session.stop().await;
+        let events = turn.map_err(provider_error)?;
+        stop.map_err(provider_error)?;
+        let (events, transcript_truncated) = concise_events(events);
+        Ok(to_value(ProviderSmokeResult {
+            provider: provider.to_string(),
+            session_id,
+            events,
+            transcript_truncated,
+            checked_at: Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true),
+        }))
+    }
 }
 
-fn require_empty_params(params: &Value) -> Result<(), RpcError> {
+fn require_empty_params(params: &Value, method: &str) -> Result<(), RpcError> {
     if params.as_object().is_some_and(serde_json::Map::is_empty) {
         Ok(())
     } else {
-        Err(invalid_params(
-            "desktop.snapshot accepts only an empty object",
-        ))
+        Err(invalid_params(format!(
+            "{method} accepts only an empty object"
+        )))
     }
+}
+
+fn discovery_source_name(source: DiscoverySource) -> &'static str {
+    match source {
+        DiscoverySource::InheritedPath => "inherited-path",
+        DiscoverySource::PersistedUserPath => "persisted-user-path",
+        DiscoverySource::PersistedMachinePath => "persisted-machine-path",
+        DiscoverySource::KnownLocation => "known-location",
+    }
+}
+
+fn concise_events(events: Vec<lazoo_providers::ProviderEvent>) -> (Vec<Value>, bool) {
+    const MAX_EVENT_STRING_BYTES: usize = 64 * 1024;
+    const MAX_TRANSCRIPT_BYTES: usize = 512 * 1024;
+    let mut output = Vec::new();
+    let mut used = 0usize;
+    let mut truncated = false;
+    for event in events {
+        let mut value = to_value(event);
+        let Some(object) = value.as_object_mut() else {
+            continue;
+        };
+        object.remove("raw");
+        for field in ["text", "output", "message"] {
+            if let Some(Value::String(text)) = object.get_mut(field)
+                && text.len() > MAX_EVENT_STRING_BYTES
+            {
+                truncate_utf8(text, MAX_EVENT_STRING_BYTES);
+                truncated = true;
+            }
+        }
+        let bytes = serde_json::to_vec(&value).map_or(MAX_TRANSCRIPT_BYTES, |bytes| bytes.len());
+        if used.saturating_add(bytes) > MAX_TRANSCRIPT_BYTES {
+            truncated = true;
+            break;
+        }
+        used += bytes;
+        output.push(value);
+    }
+    (output, truncated)
+}
+
+fn truncate_utf8(value: &mut String, maximum: usize) {
+    let mut end = maximum.min(value.len());
+    while end > 0 && !value.is_char_boundary(end) {
+        end -= 1;
+    }
+    value.truncate(end);
 }
 
 fn read_optional_json(path: std::path::PathBuf) -> Option<Value> {
@@ -230,6 +352,28 @@ fn store_error(error: lazoo_store::StoreError) -> RpcError {
     }
 }
 
+#[allow(clippy::needless_pass_by_value)] // map_err owns the provider error at this RPC boundary.
+fn provider_error(error: ProviderError) -> RpcError {
+    let message = error.to_string();
+    let code = match error {
+        ProviderError::UnknownProvider(_) => "LZ-PROVIDER-UNKNOWN",
+        ProviderError::NotDetected(_) => "LZ-PROVIDER-NOT-DETECTED",
+        ProviderError::Unsupported { .. } => "LZ-PROVIDER-UNSUPPORTED",
+        ProviderError::Authentication(_) => "LZ-PROVIDER-AUTH",
+        ProviderError::Timeout { .. } | ProviderError::Stalled { .. } => "LZ-PROVIDER-TIMEOUT",
+        ProviderError::ProcessExited { .. } => "LZ-PROVIDER-PROCESS",
+        ProviderError::Protocol(_)
+        | ProviderError::InvalidEvent(_)
+        | ProviderError::Io(_)
+        | ProviderError::Json(_) => "LZ-PROVIDER",
+    };
+    RpcError {
+        code: code.to_owned(),
+        message,
+        data: None,
+    }
+}
+
 fn failure(id: &str, code: &str, message: &str, data: Option<Value>) -> JsonRpcResponse {
     JsonRpcResponse::failure(
         id,
@@ -239,4 +383,29 @@ fn failure(id: &str, code: &str, message: &str, data: Option<Value>) -> JsonRpcR
             data,
         },
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use lazoo_providers::{ProviderEvent, ProviderKind};
+    use serde_json::json;
+
+    use super::concise_events;
+
+    #[test]
+    fn concise_provider_transcripts_remove_raw_payloads_and_bound_strings() {
+        let (events, truncated) = concise_events(vec![ProviderEvent::TextDelta {
+            provider: ProviderKind::Codex,
+            session_id: "session-1".to_owned(),
+            turn_id: None,
+            text: "x".repeat(70 * 1024),
+            raw: Some(json!({"authorization": "secret"})),
+        }]);
+
+        assert!(truncated);
+        assert_eq!(events.len(), 1);
+        assert!(events[0].get("raw").is_none());
+        assert_eq!(events[0]["text"].as_str().unwrap().len(), 64 * 1024);
+        assert!(!events[0].to_string().contains("secret"));
+    }
 }

@@ -6,16 +6,16 @@ The name is a deliberately silly blend of **lazy** and **zoo**: wake the right e
 
 ## Status
 
-The first Windows control-plane slice and the polished read-only desktop-shell slice are implemented. Lazoo now provides four native executables:
+The first Windows control-plane slice, the polished read-only desktop-shell slice, and the backend native-provider connector slice are implemented. Lazoo now provides four native executables:
 
 - `lazoo-desktop.exe` opens a dark, command-first Tauri 2 control room for daemon health, projects, recent events, and recovered-incident count.
 - `lazoo-keeper.exe` supervises the daemon with a bounded restart policy and emergency spool.
 - `lazood.exe` owns the SQLite WAL store and authenticated named-pipe API.
-- `lazooctl.exe` exposes status, project registration/listing, event listing/following, and planned shutdown.
+- `lazooctl.exe` exposes status, project registration/listing, event listing/following, native-provider diagnostics, and planned shutdown.
 
-The desktop is deliberately read-only in this slice. Provider adapters, employee execution, task delegation, managed memory, and worktree automation remain later slices. The full product contract lives in [docs/PROJECT-BRIEF.md](docs/PROJECT-BRIEF.md).
+The desktop remains deliberately read-only. Backend adapters now connect Codex App Server, OpenCode ACP, Grok Build ACP, Antigravity stream JSON, and Claude Code stream JSON without flattening their native configuration or authentication. Employee execution, task delegation, managed memory, and worktree automation remain later slices. The full product contract lives in [docs/PROJECT-BRIEF.md](docs/PROJECT-BRIEF.md).
 
-The visual system and interaction mechanics are technically verified, but the desktop information architecture is not owner-approved: the current UI is still not sufficiently understandable. Before any further UI implementation, use [docs/NEXT-SESSION.md](docs/NEXT-SESSION.md) to decide the screen structure, sitemap, navigation model, and core user flows.
+The target desktop information architecture is owner-approved, but UI implementation is shelved while the backend is completed. The current read-only shell remains a technical baseline. Continue from [docs/NEXT-SESSION.md](docs/NEXT-SESSION.md) with the revisioned employee roster and lifecycle foundation before exposing the approved launcher, terminals, workers, Inbox, or Settings.
 
 ## Build and run
 
@@ -41,10 +41,20 @@ The shell reconnects every ten seconds and keeps the last successful snapshot vi
 & .\target\release\lazooctl.exe project register C:\path\to\git-repository
 & .\target\release\lazooctl.exe project list
 & .\target\release\lazooctl.exe events list
+& .\target\release\lazooctl.exe provider list
+& .\target\release\lazooctl.exe provider probe codex
 & .\target\release\lazooctl.exe system shutdown
 ```
 
 Add `--json` for a stable machine-readable result. Mutable state defaults to `%LOCALAPPDATA%\Lazoo`; set `LAZOO_DATA_ROOT` to isolate a test installation.
+
+`provider list` performs discovery only and never launches a provider. `provider probe <provider>` launches a bounded, non-model native readiness check. A model-backed diagnostic is always explicit because it may consume provider quota:
+
+```powershell
+& .\target\release\lazooctl.exe provider smoke codex --prompt "Reply with exactly LAZOO_CODEX_OK. Do not use tools."
+```
+
+Provider names are `codex`, `opencode`, `grok-build`, `antigravity`, and `claude-code`. Provider failures use the `LZ-PROVIDER-*` RPC family and CLI exit code 8. Provider diagnostics are intentionally absent from `desktop.snapshot`; no desktop UI was added for this slice.
 
 For the frontend development loop, run the app from its Tauri directory with Tauri CLI 2 installed. The Tauri configuration starts Vite on `127.0.0.1:1420` automatically:
 
@@ -66,6 +76,7 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo fmt --all -- --check
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\acceptance\first-slice.ps1
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\acceptance\desktop-shell.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\acceptance\provider-adapters.ps1 -Provider codex
 ```
 
 The acceptance script uses a unique temporary data root, builds release binaries, forces a real daemon restart, exhausts the production keeper budget with a crashing fixture, and writes `artifacts\acceptance\first-slice-manifest.json`.

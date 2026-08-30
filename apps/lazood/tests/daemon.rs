@@ -229,3 +229,41 @@ async fn desktop_snapshot_rejects_nonempty_parameters() {
     let error = response.error.expect("nonempty params must fail");
     assert_eq!(error.code, "LZ-INVALID-PARAMS");
 }
+
+#[tokio::test]
+async fn provider_list_reports_all_providers_without_changing_desktop_snapshot() {
+    let (_temporary, app) = test_app();
+
+    let providers = app
+        .handle(request("providers", "provider.list", json!({})))
+        .await
+        .result
+        .unwrap();
+    assert_eq!(providers.as_array().unwrap().len(), 5);
+
+    let snapshot = app
+        .handle(request("desktop", "desktop.snapshot", json!({})))
+        .await
+        .result
+        .unwrap();
+    assert!(snapshot.get("providers").is_none());
+}
+
+#[tokio::test]
+async fn provider_methods_reject_unknown_names_with_a_stable_error() {
+    let (_temporary, app) = test_app();
+
+    for method in ["provider.probe", "provider.smoke"] {
+        let params = if method == "provider.smoke" {
+            json!({"provider": "missing", "prompt": "Reply OK"})
+        } else {
+            json!({"provider": "missing"})
+        };
+        let error = app
+            .handle(request("provider-error", method, params))
+            .await
+            .error
+            .unwrap();
+        assert_eq!(error.code, "LZ-PROVIDER-UNKNOWN");
+    }
+}

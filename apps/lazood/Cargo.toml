@@ -10,6 +10,7 @@ chrono.workspace = true
 lazoo-domain = { path = "../../crates/lazoo-domain" }
 lazoo-ipc = { path = "../../crates/lazoo-ipc" }
 lazoo-protocol = { path = "../../crates/lazoo-protocol" }
+lazoo-providers = { path = "../../crates/lazoo-providers" }
 lazoo-runtime = { path = "../../crates/lazoo-runtime" }
 lazoo-store = { path = "../../crates/lazoo-store" }
 serde.workspace = true

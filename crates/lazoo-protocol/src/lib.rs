@@ -4,6 +4,7 @@ mod types;
 pub use rpc::{JsonRpcRequest, JsonRpcResponse, RpcError};
 pub use types::{
     CheckoutMode, DesktopSnapshot, EventSummary, EventsListParams, ProjectRecord,
+    ProviderListEntry, ProviderProbeParams, ProviderSmokeParams, ProviderSmokeResult,
     RegisterProjectParams, RegisterProjectResult, SystemStatus,
 };
 

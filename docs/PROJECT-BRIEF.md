@@ -4,7 +4,7 @@
 - **Research snapshot:** 2026-08-28
 - **Owner review:** 2026-08-28
 - **Product boundary:** Windows-first, single-user, local desktop software
-- **Repository stage:** Control-plane foundation and redesigned read-only Tauri desktop shell implemented and technically verified; target desktop information architecture approved on 2026-08-30 but not implemented, and provider, employee, terminal, and collaboration slices remain unimplemented
+- **Repository stage:** Control-plane foundation, redesigned read-only Tauri desktop shell, and backend native-provider adapters implemented and technically verified; target desktop information architecture is approved but shelved while employee, terminal, and collaboration backend slices are completed
 
 ## 1. Executive summary
 
@@ -907,7 +907,7 @@ The first implementation milestone was a narrow Stage 1/Stage 2 bridge: a runnab
 - incidents, watchdog, emergency spool;
 - live roster and resource governor.
 
-Current Stage 2 status: daemon, keeper, CLI, SQLite event/outbox storage, named-pipe IPC, watchdog/emergency spool, and a redesigned read-only Tauri shell are implemented and technically verified. The shell retains one explicit `desktop.snapshot` product-data command and presents daemon health, registered projects, recent events, and recovered-incident count through a dark command-first UI with truthful loading, degraded, offline, and last-good-snapshot states. Its only added capabilities are the narrow core-window permissions required by the custom titlebar. The owner approved the target desktop information architecture on 2026-08-30: a work-first Home launcher, Discord-style Home/project rail with conversation history, actual native harness TUIs for the lead and workers, an expandable bottom worker dock, one global Inbox, and full-page Settings. That target structure is specified but not implemented. Employee lifecycle, ConPTY/Job Objects, the worktree manager, task/message bus, approvals, and the live roster/resource governor remain unimplemented.
+Current Stage 2 status: daemon, keeper, CLI, SQLite event/outbox storage, named-pipe IPC, watchdog/emergency spool, and a redesigned read-only Tauri shell are implemented and technically verified. The backend provider registry and diagnostics are also implemented for Codex, OpenCode, Grok Build, Antigravity, and Claude Code. The shell retains one explicit `desktop.snapshot` product-data command and presents daemon health, registered projects, recent events, and recovered-incident count through a dark command-first UI with truthful loading, degraded, offline, and last-good-snapshot states. Its only added capabilities are the narrow core-window permissions required by the custom titlebar. The owner approved the target desktop information architecture on 2026-08-30, then explicitly shelved UI implementation until the backend is complete. Employee lifecycle, ConPTY/Job Objects, the worktree manager, task/message bus, approvals, and the live roster/resource governor remain unimplemented.
 
 ### Stage 3: first live provider adapters
 
@@ -919,6 +919,8 @@ Current Stage 2 status: daemon, keeper, CLI, SQLite event/outbox storage, named-
 
 These three are first because their local installations are currently usable and expose documented machine-oriented interfaces.
 
+Current Stage 3 status: Codex, OpenCode, and Grok Build adapters are implemented. Fresh exact-output model and resume gates passed through the full CLI, named-pipe, daemon, and native-adapter path.
+
 ### Stage 4: remaining provider adapters
 
 - validate agy authentication and a model-backed stream, then build the Antigravity adapter against the installed CLI;
@@ -926,6 +928,8 @@ These three are first because their local installations are currently usable and
 - complete Claude live harness acceptance through a configured external endpoint/model;
 - verify and report the native Anthropic subscription path separately when a subscription is available;
 - validate optional native-message acceleration without weakening the Lazoo bus.
+
+Current Stage 4 status: the Antigravity adapter is implemented and passed fresh model and same-process continuation gates. The Claude Code adapter is implemented and passes discovery, version, authentication-status, and stream-protocol startup checks, but model execution is blocked by the configured organization's access policy. Claude is not claimed as fully supported.
 
 ### Stage 5: memory and integration federation
 
@@ -1071,4 +1075,4 @@ The owner accepted this product and engineering contract on 2026-08-28 with the 
 - Delegated workers appear in a bottom dock, and one worker terminal may expand below the still-visible lead terminal.
 - One global Inbox owns approvals, permissions, failures, and incidents; Settings is a pinned full-page destination.
 
-The runnable control-plane milestone and the polished read-only Tauri desktop-shell slice are implemented with separate design, plan, verification, and acceptance evidence. The target desktop structure is documented in `docs/superpowers/specs/2026-08-30-lazoo-desktop-information-architecture-design.md` and awaits final written-spec review before implementation planning. The next recommended product dependency remains provider truth and the revisioned live employee roster; provider execution or embedded native terminals must not be claimed until their own live conformance gates pass. Each later slice still requires its own design, plan, and acceptance evidence.
+The runnable control-plane milestone, polished read-only Tauri desktop shell, and backend native-provider adapters are implemented with separate design, plan, verification, and acceptance evidence. The target desktop structure is documented in `docs/superpowers/specs/2026-08-30-lazoo-desktop-information-architecture-design.md`; the owner has shelved its implementation until the backend is complete. Provider truth is now available through the daemon and CLI. The next backend dependency is the durable, revisioned employee roster and lifecycle foundation; embedded native terminals must not be claimed until Job Object, ConPTY, persistent session ownership, and recovery gates pass. Each later slice still requires its own design, plan, and acceptance evidence.

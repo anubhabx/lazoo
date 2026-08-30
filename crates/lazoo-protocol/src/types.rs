@@ -99,3 +99,35 @@ pub struct DesktopSnapshot {
     pub projects: Vec<ProjectRecord>,
     pub events: Vec<EventSummary>,
 }
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct ProviderListEntry {
+    pub provider: String,
+    pub detected: bool,
+    pub executable: Option<PathBuf>,
+    pub discovery_source: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct ProviderProbeParams {
+    pub provider: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct ProviderSmokeParams {
+    pub provider: String,
+    pub prompt: String,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct ProviderSmokeResult {
+    pub provider: String,
+    pub session_id: String,
+    pub events: Vec<Value>,
+    pub transcript_truncated: bool,
+    pub checked_at: String,
+}
