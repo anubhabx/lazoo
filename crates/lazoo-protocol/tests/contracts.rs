@@ -1,8 +1,9 @@
 use std::path::PathBuf;
 
 use lazoo_protocol::{
-    CheckoutMode, DesktopSnapshot, JsonRpcRequest, JsonRpcResponse, MAX_FRAME_BYTES, PROTOCOL_V1,
-    ProviderProbeParams, ProviderSmokeParams, ProviderSmokeResult, SystemStatus,
+    AuthorityMode, CheckoutMode, CreateEmployeeParams, DesktopSnapshot, EmployeeCheckoutPolicy,
+    JsonRpcRequest, JsonRpcResponse, MAX_FRAME_BYTES, PROTOCOL_V1, ProviderProbeParams,
+    ProviderSmokeParams, ProviderSmokeResult, SystemStatus,
 };
 use serde_json::json;
 use uuid::Uuid;
@@ -58,6 +59,48 @@ fn checkout_modes_round_trip_as_kebab_case() {
     assert_eq!(
         serde_json::from_str::<CheckoutMode>(r#""isolated""#).unwrap(),
         CheckoutMode::Isolated
+    );
+}
+
+#[test]
+fn employee_defaults_are_ask_isolated_enabled_and_strict() {
+    let params: CreateEmployeeParams = serde_json::from_value(json!({
+        "name": "Rhea",
+        "provider": "codex",
+        "idempotencyKey": "create-rhea"
+    }))
+    .unwrap();
+
+    assert_eq!(params.authority_mode, AuthorityMode::Ask);
+    assert_eq!(params.checkout_policy, EmployeeCheckoutPolicy::Isolated);
+    assert!(params.enabled);
+    assert_eq!(params.role, "");
+    assert_eq!(params.instructions, "");
+    assert_eq!(params.native_settings, json!({}));
+    assert!(
+        serde_json::from_value::<CreateEmployeeParams>(json!({
+            "name": "Rhea",
+            "provider": "codex",
+            "idempotencyKey": "create-rhea",
+            "unexpected": true
+        }))
+        .is_err()
+    );
+}
+
+#[test]
+fn employee_policy_enums_round_trip_as_kebab_case() {
+    assert_eq!(
+        serde_json::to_string(&AuthorityMode::SelfDecision).unwrap(),
+        r#""self-decision""#
+    );
+    assert_eq!(
+        serde_json::to_string(&AuthorityMode::FullAutonomy).unwrap(),
+        r#""full-autonomy""#
+    );
+    assert_eq!(
+        serde_json::to_string(&EmployeeCheckoutPolicy::ReadOnly).unwrap(),
+        r#""read-only""#
     );
 }
 

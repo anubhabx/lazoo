@@ -12,6 +12,165 @@ pub enum CheckoutMode {
     LeadMain,
 }
 
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum AuthorityMode {
+    #[default]
+    Ask,
+    SelfDecision,
+    FullAutonomy,
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum EmployeeCheckoutPolicy {
+    #[default]
+    Isolated,
+    ReadOnly,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum EmployeeAvailability {
+    Disabled,
+    Offline,
+    Unverified,
+    Dormant,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct EmployeeRecord {
+    pub id: Uuid,
+    pub name: String,
+    pub provider: String,
+    pub role: String,
+    pub instructions: String,
+    pub model: Option<String>,
+    pub reasoning_effort: Option<String>,
+    pub native_settings: Value,
+    pub authority_mode: AuthorityMode,
+    pub checkout_policy: EmployeeCheckoutPolicy,
+    pub enabled: bool,
+    pub configuration_revision: u64,
+    pub created_at: String,
+    pub updated_at: String,
+    pub disabled_at: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct ProviderObservation {
+    pub provider: String,
+    pub verification: String,
+    pub version: Option<String>,
+    pub protocol: Option<String>,
+    pub capabilities: Value,
+    pub authentication: Value,
+    pub degradation_reason: Option<String>,
+    pub checked_at: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct RosterEntry {
+    pub employee: EmployeeRecord,
+    pub availability: EmployeeAvailability,
+    pub availability_reason: Option<String>,
+    pub provider_observation: Option<ProviderObservation>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct RosterSnapshot {
+    pub revision: u64,
+    pub entries: Vec<RosterEntry>,
+    pub updated_at: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct EmployeeMutationResult {
+    pub employee: EmployeeRecord,
+    pub roster_revision: u64,
+    pub event_sequence: Option<u64>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct RosterRefreshResult {
+    pub roster: RosterSnapshot,
+    pub event_sequence: Option<u64>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct CreateEmployeeParams {
+    pub name: String,
+    pub provider: String,
+    #[serde(default)]
+    pub role: String,
+    #[serde(default)]
+    pub instructions: String,
+    pub model: Option<String>,
+    pub reasoning_effort: Option<String>,
+    #[serde(default = "empty_object")]
+    pub native_settings: Value,
+    #[serde(default)]
+    pub authority_mode: AuthorityMode,
+    #[serde(default)]
+    pub checkout_policy: EmployeeCheckoutPolicy,
+    #[serde(default = "default_enabled")]
+    pub enabled: bool,
+    pub idempotency_key: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct UpdateEmployeeParams {
+    pub id: Uuid,
+    pub expected_revision: u64,
+    pub name: Option<String>,
+    pub provider: Option<String>,
+    pub role: Option<String>,
+    pub instructions: Option<String>,
+    pub model: Option<String>,
+    pub reasoning_effort: Option<String>,
+    pub native_settings: Option<Value>,
+    pub authority_mode: Option<AuthorityMode>,
+    pub checkout_policy: Option<EmployeeCheckoutPolicy>,
+    pub enabled: Option<bool>,
+    pub idempotency_key: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct DisableEmployeeParams {
+    pub id: Uuid,
+    pub expected_revision: u64,
+    pub idempotency_key: String,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct EmployeeShowParams {
+    pub id: Uuid,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct RosterRefreshParams {
+    pub idempotency_key: String,
+}
+
+fn empty_object() -> Value {
+    Value::Object(serde_json::Map::new())
+}
+
+const fn default_enabled() -> bool {
+    true
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct ProjectRecord {

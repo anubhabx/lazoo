@@ -20,7 +20,7 @@
 - Modify: `crates/lazoo-domain/src/lib.rs`
 - Test: `crates/lazoo-domain/tests/employee.rs`
 
-- [ ] **Step 1: Write failing protocol and validation tests**
+- [x] **Step 1: Write failing protocol and validation tests**
 
 ```rust
 #[test]
@@ -46,23 +46,23 @@ fn native_settings_reject_nested_secret_like_keys() {
 }
 ```
 
-- [ ] **Step 2: Run and verify RED**
+- [x] **Step 2: Run and verify RED**
 
 Run: `cargo test -p lazoo-protocol -p lazoo-domain`
 
 Expected: FAIL because employee and roster types/validation do not exist.
 
-- [ ] **Step 3: Implement strict contracts and validation**
+- [x] **Step 3: Implement strict contracts and validation**
 
 Add `AuthorityMode`, `EmployeeCheckoutPolicy`, `EmployeeAvailability`, `EmployeeRecord`, `ProviderObservation`, `RosterEntry`, `RosterSnapshot`, create/update/disable/show/refresh params, and mutation results. Add bounded validation for names, text, provider-native settings, and secret-like keys.
 
-- [ ] **Step 4: Run focused tests and verify GREEN**
+- [x] **Step 4: Run focused tests and verify GREEN**
 
 Run: `cargo test -p lazoo-protocol -p lazoo-domain`
 
 Expected: PASS with zero failures.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```powershell
 git add crates/lazoo-protocol crates/lazoo-domain docs/superpowers/specs/2026-08-30-employee-roster-design.md docs/superpowers/plans/2026-08-30-employee-roster.md
@@ -338,4 +338,3 @@ Write exact counts, exit codes, schema/protocol versions, event/revision evidenc
 git add scripts docs artifacts/acceptance
 git commit -m "test: verify durable employee roster"
 ```
-
