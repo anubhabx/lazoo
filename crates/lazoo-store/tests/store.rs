@@ -23,13 +23,13 @@ fn store_enables_wal_foreign_keys_and_schema_version() {
 
     let status = store.status().unwrap();
 
-    assert_eq!(status.schema_version, 2);
+    assert_eq!(status.schema_version, 3);
     assert_eq!(status.journal_mode.to_lowercase(), "wal");
     assert!(status.foreign_keys);
 }
 
 #[test]
-fn version_one_database_upgrades_to_version_two_without_rewriting_version_one() {
+fn version_one_database_upgrades_to_version_three_without_rewriting_version_one() {
     use rusqlite::{Connection, params};
     use sha2::{Digest, Sha256};
 
@@ -62,7 +62,7 @@ fn version_one_database_upgrades_to_version_two_without_rewriting_version_one() 
 
     let store = Store::open_path(&database).unwrap();
 
-    assert_eq!(store.status().unwrap().schema_version, 2);
+    assert_eq!(store.status().unwrap().schema_version, 3);
     store
         .execute_for_test(
             "INSERT INTO employees (
@@ -73,6 +73,75 @@ fn version_one_database_upgrades_to_version_two_without_rewriting_version_one() 
                 '00000000-0000-4000-8000-000000000001', 'Rhea', 'codex', '', '',
                 '{}', 'ask', 'isolated', 1, 1,
                 '2026-08-30T00:00:00Z', '2026-08-30T00:00:00Z'
+             )",
+        )
+        .unwrap();
+}
+
+#[test]
+fn version_two_database_upgrades_to_version_three_with_session_tables() {
+    use rusqlite::{Connection, params};
+    use sha2::{Digest, Sha256};
+
+    let temporary = tempdir().unwrap();
+    let database = temporary.path().join("lazoo.db");
+    let connection = Connection::open(&database).unwrap();
+    connection
+        .execute_batch(
+            "CREATE TABLE schema_migrations (
+                version INTEGER PRIMARY KEY,
+                checksum TEXT NOT NULL,
+                applied_at TEXT NOT NULL
+            );",
+        )
+        .unwrap();
+    for (version, migration) in [
+        (
+            1,
+            include_str!("../../../migrations/0001_control_plane.sql"),
+        ),
+        (
+            2,
+            include_str!("../../../migrations/0002_employee_roster.sql"),
+        ),
+    ] {
+        connection.execute_batch(migration).unwrap();
+        let mut checksum = String::with_capacity(64);
+        for byte in Sha256::digest(migration.as_bytes()) {
+            write!(&mut checksum, "{byte:02x}").unwrap();
+        }
+        connection
+            .execute(
+                "INSERT INTO schema_migrations (version, checksum, applied_at)
+                 VALUES (?1, ?2, '2026-08-30T00:00:00Z')",
+                params![version, checksum],
+            )
+            .unwrap();
+    }
+    drop(connection);
+
+    let store = Store::open_path(&database).unwrap();
+
+    assert_eq!(store.status().unwrap().schema_version, 3);
+    store
+        .execute_for_test(
+            "INSERT INTO employees (
+                id, name, provider, role, instructions, native_settings_json,
+                authority_mode, checkout_policy, enabled, configuration_revision,
+                created_at, updated_at
+             ) VALUES (
+                '00000000-0000-4000-8000-000000000001', 'Rhea', 'codex', '', '',
+                '{}', 'ask', 'isolated', 1, 1,
+                '2026-08-31T00:00:00Z', '2026-08-31T00:00:00Z'
+             );
+             INSERT INTO employee_sessions (
+                id, employee_id, employee_configuration_revision, provider, state,
+                revision, owner_boot_id, created_at, updated_at
+             ) VALUES (
+                '00000000-0000-4000-8000-000000000002',
+                '00000000-0000-4000-8000-000000000001', 1, 'codex', 'starting', 1,
+                '00000000-0000-4000-8000-000000000003',
+                '2026-08-31T00:00:00Z', '2026-08-31T00:00:00Z'
              )",
         )
         .unwrap();

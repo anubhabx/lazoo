@@ -1,6 +1,7 @@
 mod emergency;
 mod employee;
 mod migration;
+mod session;
 
 use std::{
     path::{Path, PathBuf},
@@ -20,6 +21,10 @@ pub use emergency::EmergencyIncident;
 pub use employee::{
     CreateEmployeeInput, DisableEmployeeInput, RefreshProviderObservationsInput,
     UpdateEmployeeInput,
+};
+pub use session::{
+    BeginSessionInput, BeginSessionStopInput, FailSessionInput, FinishSessionStopInput,
+    MarkSessionReadyInput,
 };
 
 use crate::{emergency::import_pending_incidents, migration::apply_migrations};
@@ -74,6 +79,25 @@ pub enum StoreError {
         employee_id: Uuid,
         current_revision: u64,
     },
+    #[error("employee {employee_id} is disabled")]
+    EmployeeDisabled { employee_id: Uuid },
+    #[error("employee {employee_id} already has active session {session_id}")]
+    SessionConflict { employee_id: Uuid, session_id: Uuid },
+    #[error("session {session_id} was not found")]
+    SessionNotFound { session_id: Uuid },
+    #[error("session {session_id} changed; current revision is {current_revision}")]
+    SessionStale {
+        session_id: Uuid,
+        current_revision: u64,
+    },
+    #[error("session {session_id} is {state}, expected {expected}")]
+    SessionState {
+        session_id: Uuid,
+        state: String,
+        expected: &'static str,
+    },
+    #[error("session {session_id} is owned by another daemon boot")]
+    SessionOwnership { session_id: Uuid },
     #[error("stored {field} is invalid: {message}")]
     InvalidRecord {
         field: &'static str,

@@ -1,5 +1,5 @@
 use chrono::Utc;
-use lazoo_domain::derive_availability;
+use lazoo_domain::{apply_session_availability, derive_availability};
 use lazoo_protocol::{
     AuthorityMode, EmployeeCheckoutPolicy, EmployeeMutationResult, EmployeeRecord,
     ProviderObservation, RosterEntry, RosterRefreshResult, RosterSnapshot,
@@ -434,7 +434,7 @@ fn upsert_provider_observation(
     Ok(())
 }
 
-fn advance_roster(transaction: &Transaction<'_>, now: &str) -> Result<u64, StoreError> {
+pub(crate) fn advance_roster(transaction: &Transaction<'_>, now: &str) -> Result<u64, StoreError> {
     transaction.execute(
         "UPDATE roster_state SET revision = revision + 1, updated_at = ?1 WHERE singleton = 1",
         [now],
@@ -447,7 +447,7 @@ fn advance_roster(transaction: &Transaction<'_>, now: &str) -> Result<u64, Store
     u64::try_from(revision).map_err(|_| StoreError::NegativeSequence)
 }
 
-fn roster_revision(connection: &Connection) -> Result<u64, StoreError> {
+pub(crate) fn roster_revision(connection: &Connection) -> Result<u64, StoreError> {
     let revision: i64 = connection.query_row(
         "SELECT revision FROM roster_state WHERE singleton = 1",
         [],
@@ -570,7 +570,7 @@ fn write_employee(
     Ok(())
 }
 
-fn insert_event(
+pub(crate) fn insert_event(
     transaction: &Transaction<'_>,
     event_type: &str,
     payload: &Value,
@@ -611,7 +611,7 @@ fn query_employees(connection: &Connection) -> Result<Vec<EmployeeRecord>, Store
     rows.map(|row| employee_from_raw(row?)).collect()
 }
 
-fn query_employee(
+pub(crate) fn query_employee(
     connection: &Connection,
     employee_id: Uuid,
 ) -> Result<Option<EmployeeRecord>, StoreError> {
@@ -681,11 +681,19 @@ fn query_roster_snapshot(connection: &Connection) -> Result<RosterSnapshot, Stor
             let observation = query_provider_observation(connection, &employee.provider)?;
             let (availability, availability_reason) =
                 derive_availability(employee.enabled, observation.as_ref());
+            let session = crate::session::latest_session_for_employee(
+                connection,
+                employee.id,
+                employee.configuration_revision,
+            )?;
+            let (availability, availability_reason) =
+                apply_session_availability(availability, availability_reason, session.as_ref());
             Ok(RosterEntry {
                 employee,
                 availability,
                 availability_reason,
                 provider_observation: observation,
+                session,
             })
         })
         .collect::<Result<Vec<_>, StoreError>>()?;
@@ -767,7 +775,7 @@ fn employee_from_raw(row: RawEmployee) -> Result<EmployeeRecord, StoreError> {
     })
 }
 
-fn parse_uuid(value: &str, field: &'static str) -> Result<Uuid, StoreError> {
+pub(crate) fn parse_uuid(value: &str, field: &'static str) -> Result<Uuid, StoreError> {
     Uuid::parse_str(value).map_err(|error| StoreError::InvalidRecord {
         field,
         message: error.to_string(),

@@ -60,11 +60,11 @@
 - Create: `crates/lazoo-store/tests/session.rs`
 - Modify: `crates/lazoo-store/tests/store.rs`
 
-- [ ] Write failing strict-contract, migration, idempotency, stale-revision, and reconciliation tests.
-- [ ] Add durable session rows and command-to-session mappings in schema 3.
-- [ ] Implement begin/ready/fail/stop/suspend/reconcile transactions with audit/outbox and roster revisions.
-- [ ] Map latest session state into truthful roster availability.
-- [ ] Commit as `feat: persist native session ownership`.
+- [x] Write failing strict-contract, migration, idempotency, stale-revision, and reconciliation tests.
+- [x] Add durable session rows and command-to-session mappings in schema 3.
+- [x] Implement begin/ready/fail/stop/suspend/reconcile transactions with audit/outbox and roster revisions.
+- [x] Map latest session state into truthful roster availability.
+- [x] Commit as `feat: persist native session ownership`.
 
 ### Task 4: Daemon and CLI warm/stop workflow
 

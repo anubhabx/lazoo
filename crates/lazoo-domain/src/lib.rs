@@ -9,4 +9,4 @@ pub use employee::{
 pub use project::{
     GitRepositoryInspection, ProjectError, inspect_git_repository, normalize_windows_identity,
 };
-pub use roster::derive_availability;
+pub use roster::{apply_session_availability, derive_availability};

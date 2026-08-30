@@ -3,7 +3,8 @@ use std::path::PathBuf;
 use lazoo_protocol::{
     AuthorityMode, CheckoutMode, CreateEmployeeParams, DesktopSnapshot, EmployeeCheckoutPolicy,
     JsonRpcRequest, JsonRpcResponse, MAX_FRAME_BYTES, PROTOCOL_V1, ProviderProbeParams,
-    ProviderSmokeParams, ProviderSmokeResult, SystemStatus,
+    ProviderSmokeParams, ProviderSmokeResult, SessionLifecycleState, SystemStatus,
+    WarmSessionParams,
 };
 use serde_json::json;
 use uuid::Uuid;
@@ -101,6 +102,32 @@ fn employee_policy_enums_round_trip_as_kebab_case() {
     assert_eq!(
         serde_json::to_string(&EmployeeCheckoutPolicy::ReadOnly).unwrap(),
         r#""read-only""#
+    );
+}
+
+#[test]
+fn session_contracts_are_strict_and_states_are_kebab_case() {
+    let employee_id = Uuid::new_v4();
+    let params: WarmSessionParams = serde_json::from_value(json!({
+        "employeeId": employee_id,
+        "expectedEmployeeRevision": 3,
+        "idempotencyKey": "warm-rhea"
+    }))
+    .unwrap();
+    assert_eq!(params.employee_id, employee_id);
+    assert_eq!(params.expected_employee_revision, 3);
+    assert!(
+        serde_json::from_value::<WarmSessionParams>(json!({
+            "employeeId": employee_id,
+            "expectedEmployeeRevision": 3,
+            "idempotencyKey": "warm-rhea",
+            "unexpected": true
+        }))
+        .is_err()
+    );
+    assert_eq!(
+        serde_json::to_string(&SessionLifecycleState::Starting).unwrap(),
+        r#""starting""#
     );
 }
 

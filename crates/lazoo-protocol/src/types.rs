@@ -36,6 +36,40 @@ pub enum EmployeeAvailability {
     Offline,
     Unverified,
     Dormant,
+    Starting,
+    Idle,
+    Suspended,
+    Failed,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum SessionLifecycleState {
+    Starting,
+    Idle,
+    Stopping,
+    Suspended,
+    Failed,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct EmployeeSessionRecord {
+    pub id: Uuid,
+    pub employee_id: Uuid,
+    pub employee_configuration_revision: u64,
+    pub provider: String,
+    pub state: SessionLifecycleState,
+    pub revision: u64,
+    pub owner_boot_id: Option<Uuid>,
+    pub native_session_id: Option<String>,
+    pub native_host_pid: Option<u32>,
+    pub failure_code: Option<String>,
+    pub failure_message: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
+    pub started_at: Option<String>,
+    pub stopped_at: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -78,6 +112,7 @@ pub struct RosterEntry {
     pub availability: EmployeeAvailability,
     pub availability_reason: Option<String>,
     pub provider_observation: Option<ProviderObservation>,
+    pub session: Option<EmployeeSessionRecord>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -161,6 +196,44 @@ pub struct EmployeeShowParams {
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct RosterRefreshParams {
     pub idempotency_key: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct WarmSessionParams {
+    pub employee_id: Uuid,
+    pub expected_employee_revision: u64,
+    pub idempotency_key: String,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct SessionShowParams {
+    pub id: Uuid,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct StopSessionParams {
+    pub id: Uuid,
+    pub expected_revision: u64,
+    pub idempotency_key: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct SessionMutationResult {
+    pub session: EmployeeSessionRecord,
+    pub roster_revision: u64,
+    pub event_sequence: Option<u64>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct SessionReconcileResult {
+    pub sessions: Vec<EmployeeSessionRecord>,
+    pub roster_revision: u64,
+    pub event_sequence: Option<u64>,
 }
 
 fn empty_object() -> Value {

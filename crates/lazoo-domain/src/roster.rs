@@ -1,4 +1,6 @@
-use lazoo_protocol::{EmployeeAvailability, ProviderObservation};
+use lazoo_protocol::{
+    EmployeeAvailability, EmployeeSessionRecord, ProviderObservation, SessionLifecycleState,
+};
 
 #[must_use]
 pub fn derive_availability(
@@ -82,6 +84,34 @@ pub fn derive_availability(
         EmployeeAvailability::Unverified,
         Some("provider verification state is unknown".to_owned()),
     )
+}
+
+#[must_use]
+pub fn apply_session_availability(
+    availability: EmployeeAvailability,
+    availability_reason: Option<String>,
+    session: Option<&EmployeeSessionRecord>,
+) -> (EmployeeAvailability, Option<String>) {
+    if availability != EmployeeAvailability::Dormant {
+        return (availability, availability_reason);
+    }
+    let Some(session) = session else {
+        return (availability, availability_reason);
+    };
+    match session.state {
+        SessionLifecycleState::Starting => (EmployeeAvailability::Starting, None),
+        SessionLifecycleState::Idle | SessionLifecycleState::Stopping => {
+            (EmployeeAvailability::Idle, None)
+        }
+        SessionLifecycleState::Suspended => (EmployeeAvailability::Suspended, None),
+        SessionLifecycleState::Failed => (
+            EmployeeAvailability::Failed,
+            session
+                .failure_message
+                .clone()
+                .or_else(|| session.failure_code.clone()),
+        ),
+    }
 }
 
 fn authentication_state<'a>(

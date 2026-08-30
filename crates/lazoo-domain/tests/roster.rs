@@ -1,5 +1,7 @@
-use lazoo_domain::derive_availability;
-use lazoo_protocol::{EmployeeAvailability, ProviderObservation};
+use lazoo_domain::{apply_session_availability, derive_availability};
+use lazoo_protocol::{
+    EmployeeAvailability, EmployeeSessionRecord, ProviderObservation, SessionLifecycleState,
+};
 use serde_json::json;
 
 fn observation(
@@ -73,4 +75,51 @@ fn degraded_reason_is_preserved_without_raw_probe_evidence() {
 
     assert_eq!(availability, EmployeeAvailability::Offline);
     assert_eq!(reason.as_deref(), Some("protocol handshake failed"));
+}
+
+#[test]
+fn session_state_only_overlays_a_route_ready_provider() {
+    let mut session = EmployeeSessionRecord {
+        id: uuid::Uuid::new_v4(),
+        employee_id: uuid::Uuid::new_v4(),
+        employee_configuration_revision: 1,
+        provider: "codex".to_owned(),
+        state: SessionLifecycleState::Starting,
+        revision: 1,
+        owner_boot_id: Some(uuid::Uuid::new_v4()),
+        native_session_id: None,
+        native_host_pid: None,
+        failure_code: None,
+        failure_message: None,
+        created_at: "2026-08-31T00:00:00Z".to_owned(),
+        updated_at: "2026-08-31T00:00:00Z".to_owned(),
+        started_at: None,
+        stopped_at: None,
+    };
+
+    assert_eq!(
+        apply_session_availability(EmployeeAvailability::Dormant, None, Some(&session)).0,
+        EmployeeAvailability::Starting
+    );
+    assert_eq!(
+        apply_session_availability(
+            EmployeeAvailability::Offline,
+            Some("provider unavailable".to_owned()),
+            Some(&session),
+        ),
+        (
+            EmployeeAvailability::Offline,
+            Some("provider unavailable".to_owned())
+        )
+    );
+
+    session.state = SessionLifecycleState::Failed;
+    session.failure_code = Some("LZ-SESSION-OWNER-LOST".to_owned());
+    assert_eq!(
+        apply_session_availability(EmployeeAvailability::Dormant, None, Some(&session)),
+        (
+            EmployeeAvailability::Failed,
+            Some("LZ-SESSION-OWNER-LOST".to_owned())
+        )
+    );
 }
