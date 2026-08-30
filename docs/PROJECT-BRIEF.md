@@ -4,7 +4,7 @@
 - **Research snapshot:** 2026-08-28
 - **Owner review:** 2026-08-28
 - **Product boundary:** Windows-first, single-user, local desktop software
-- **Repository stage:** Control-plane foundation and redesigned read-only Tauri desktop shell implemented and technically verified; desktop information architecture/sitemap awaits owner approval, and provider, employee, and collaboration slices remain unimplemented
+- **Repository stage:** Control-plane foundation and redesigned read-only Tauri desktop shell implemented and technically verified; target desktop information architecture approved on 2026-08-30 but not implemented, and provider, employee, terminal, and collaboration slices remain unimplemented
 
 ## 1. Executive summary
 
@@ -907,7 +907,7 @@ The first implementation milestone was a narrow Stage 1/Stage 2 bridge: a runnab
 - incidents, watchdog, emergency spool;
 - live roster and resource governor.
 
-Current Stage 2 status: daemon, keeper, CLI, SQLite event/outbox storage, named-pipe IPC, watchdog/emergency spool, and a redesigned read-only Tauri shell are implemented and technically verified. The shell retains one explicit `desktop.snapshot` product-data command and presents daemon health, registered projects, recent events, and recovered-incident count through a dark command-first UI with truthful loading, degraded, offline, and last-good-snapshot states. Its only added capabilities are the narrow core-window permissions required by the custom titlebar. Post-implementation owner review found the current UI structure insufficiently understandable, so its information architecture and sitemap are not accepted and must be decided before further UI implementation. Employee lifecycle, ConPTY/Job Objects, the worktree manager, task/message bus, approvals, and the live roster/resource governor remain unimplemented.
+Current Stage 2 status: daemon, keeper, CLI, SQLite event/outbox storage, named-pipe IPC, watchdog/emergency spool, and a redesigned read-only Tauri shell are implemented and technically verified. The shell retains one explicit `desktop.snapshot` product-data command and presents daemon health, registered projects, recent events, and recovered-incident count through a dark command-first UI with truthful loading, degraded, offline, and last-good-snapshot states. Its only added capabilities are the narrow core-window permissions required by the custom titlebar. The owner approved the target desktop information architecture on 2026-08-30: a work-first Home launcher, Discord-style Home/project rail with conversation history, actual native harness TUIs for the lead and workers, an expandable bottom worker dock, one global Inbox, and full-page Settings. That target structure is specified but not implemented. Employee lifecycle, ConPTY/Job Objects, the worktree manager, task/message bus, approvals, and the live roster/resource governor remain unimplemented.
 
 ### Stage 3: first live provider adapters
 
@@ -1065,5 +1065,10 @@ The owner accepted this product and engineering contract on 2026-08-28 with the 
 - Managed indexed typed memory is the default active mode. A dedicated worker or approved external API may produce it.
 - Compressed source transcripts are retained by default within visible limits, with global and per-project opt-out.
 - Claude Code live harness verification may use a configured external endpoint/model; native Anthropic subscription verification is tracked separately.
+- Desktop Home is a new-work launcher with first-class projectless conversations; registered projects use stable rail icons and conversation-first history.
+- The user chooses a lead per Home/project space and Lazoo remembers the choice; prompt, lead, and authority remain visible while advanced launch controls stay behind Options.
+- Lazoo embeds each lead and worker's actual native harness TUI in its own supervised terminal. It does not substitute a generic merged chat UI.
+- Delegated workers appear in a bottom dock, and one worker terminal may expand below the still-visible lead terminal.
+- One global Inbox owns approvals, permissions, failures, and incidents; Settings is a pinned full-page destination.
 
-The runnable control-plane milestone and the polished read-only Tauri desktop-shell slice are implemented with separate design, plan, verification, and acceptance evidence. The next recommended slice is provider truth and the revisioned live employee roster; provider execution must not be claimed until its own live conformance gates pass. Each later slice still requires its own design, plan, and acceptance evidence.
+The runnable control-plane milestone and the polished read-only Tauri desktop-shell slice are implemented with separate design, plan, verification, and acceptance evidence. The target desktop structure is documented in `docs/superpowers/specs/2026-08-30-lazoo-desktop-information-architecture-design.md` and awaits final written-spec review before implementation planning. The next recommended product dependency remains provider truth and the revisioned live employee roster; provider execution or embedded native terminals must not be claimed until their own live conformance gates pass. Each later slice still requires its own design, plan, and acceptance evidence.

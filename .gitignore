@@ -20,6 +20,7 @@ node_modules/
 # Lazoo runtime data
 .lazoo/
 .worktrees/
+.superpowers/
 *.db
 *.db-shm
 *.db-wal

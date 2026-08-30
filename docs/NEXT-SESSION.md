@@ -1,39 +1,51 @@
-# Next session: decide desktop structure before implementation
+# Next session: review the approved desktop structure specification
 
 ## Current owner verdict
 
-The dark visual system, frontend behavior, and packaged-window mechanics are technically verified, but the current desktop UI is still not sufficiently understandable. Treat the existing shell as an implementation baseline, not as an approved information architecture.
+The owner approved the Lazoo desktop information architecture and low-fidelity interaction design on 2026-08-30.
 
-Do not continue adding screens, visual polish, navigation items, provider surfaces, or other desktop UI implementation until the structure below is reviewed and approved.
+The target desktop is work-focused:
+
+- Home is a new-work launcher and owns projectless conversation history.
+- A Discord-style rail selects Home or a registered project.
+- The contextual sidebar contains New work and user conversation history.
+- The lead and every delegated worker use their actual native harness TUI in separate embedded terminal sessions.
+- Worker cards occupy a bottom dock; one selected worker expands into a resizable terminal below the lead.
+- One global Inbox collects approvals, permissions, failures, and incidents.
+- Settings is a pinned full-page destination.
+
+The written contract is `docs/superpowers/specs/2026-08-30-lazoo-desktop-information-architecture-design.md`. It is awaiting the owner's final written-spec review.
 
 ## Next-session objective
 
-Decide the Lazoo desktop information architecture and sitemap before writing more UI code.
+Review the written specification for any wording or scope changes. After explicit approval, write a narrow implementation plan. Do not begin UI implementation before that review gate.
 
-The session must establish:
+The implementation plan must respect dependency truth:
 
-1. The primary jobs the owner needs Lazoo to make easy.
-2. The first-run and everyday user journeys, including what should be understandable within the first minute.
-3. The sitemap: every top-level destination, its purpose, and why it deserves navigation space.
-4. The screen inventory beneath each destination, including inspector, modal, command-palette, and settings responsibilities.
-5. The navigation model: persistent navigation, contextual navigation, command search, breadcrumbs, and back behavior.
-6. The information hierarchy for each screen: primary question, essential data, primary action, secondary actions, and progressive disclosure.
-7. The terminology and labels used for projects, employees, providers, tasks, activity, incidents, approvals, and system state.
-8. Required loading, empty, degraded, disconnected, permission, and first-run states for each approved surface.
+1. Provider/harness status and first employee setup must be real before the launcher claims a startable lead.
+2. The native lead terminal requires an approved ConPTY/provider-adapter slice.
+3. The worker dock requires durable delegation, task, and employee-session state.
+4. Inbox actions require typed approval, permission, and incident contracts.
+5. Settings pages appear only as their underlying configuration contracts become functional.
 
-## Required deliverables before implementation resumes
+## Approved navigation summary
 
-- An owner-approved sitemap.
-- A screen-by-screen purpose and content inventory.
-- The core navigation and task-flow diagrams.
-- Low-fidelity wireframes for the primary route and the most important operational screen.
-- A decision on what remains visible globally versus what belongs in contextual inspectors or commands.
-- A revised UI specification and implementation plan based on those decisions.
+```text
+Home
+Projects (one rail icon each)
+Add project
+Inbox
+Settings
+```
+
+There is no target top-level Control room, Activity, System, global task board, or synthetic multi-provider chat screen.
 
 ## Guardrails
 
-- Start from user intent and comprehension, not from the current navigation labels or existing component layout.
-- Preserve the Windows-first, local-first, single-user product boundary.
-- Keep the current backend and `load_desktop_snapshot` boundary unchanged unless a separately reviewed product slice requires expansion.
-- Do not treat the technically passing redesign acceptance as evidence that the sitemap or UX structure is accepted.
-- Do not begin the next implementation slice until the owner explicitly approves the proposed structure.
+- Preserve the Windows-first, local-first, single-user boundary.
+- Preserve the approved dark visual system and existing minimum 860 by 620 window.
+- Treat the current desktop as a technically verified baseline, not the target structure.
+- Keep `load_desktop_snapshot` unchanged until an approved implementation slice defines additive typed contracts.
+- Do not show fake terminals, workers, settings, or optimistic harness status.
+- Use actual harness TUIs in supervised embedded terminals; Lazoo supplies the orchestration shell.
+- Keep the generated visual-companion artifacts under ignored `.superpowers/`; they are not product assets.
