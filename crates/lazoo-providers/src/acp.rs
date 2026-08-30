@@ -355,8 +355,8 @@ impl AcpSession {
 }
 
 impl ProviderSession for AcpSession {
-    fn id(&self) -> &str {
-        &self.session_id
+    fn id(&self) -> String {
+        self.session_id.clone()
     }
 
     fn turn<'a>(&'a self, request: &'a TurnRequest) -> AdapterFuture<'a, Vec<ProviderEvent>> {

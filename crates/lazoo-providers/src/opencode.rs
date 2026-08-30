@@ -158,7 +158,7 @@ impl ProviderAdapter for OpenCodeAdapter {
 pub struct OpenCodeSession(AcpSession);
 
 impl ProviderSession for OpenCodeSession {
-    fn id(&self) -> &str {
+    fn id(&self) -> String {
         self.0.id()
     }
 

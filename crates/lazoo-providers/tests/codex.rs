@@ -182,7 +182,7 @@ async fn live_codex_single_turn_and_resume() {
     let adapter = CodexAdapter::default();
     let request = SessionRequest::new(std::env::current_dir().unwrap());
     let session = adapter.start(&request).await.unwrap();
-    let session_id = session.id().to_owned();
+    let session_id = session.id();
     let events = session
         .turn(&TurnRequest::new(
             "Reply with exactly LAZOO_CODEX_OK. Do not use tools.",

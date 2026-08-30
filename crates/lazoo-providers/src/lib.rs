@@ -1,13 +1,16 @@
 mod acp;
+mod antigravity;
 mod codex;
 mod contract;
 mod discovery;
 mod grok;
 mod json_rpc;
+mod ndjson;
 mod opencode;
 mod redaction;
 
 pub use acp::{ProgressDeadline, normalize_acp_message};
+pub use antigravity::{AntigravityAdapter, AntigravitySession, normalize_antigravity_message};
 pub use codex::{CodexAdapter, CodexSession, normalize_codex_message};
 pub use contract::{
     ADAPTER_CONTRACT_V1, AdapterFuture, AuthenticationEvidence, AuthenticationState, CommandSpec,

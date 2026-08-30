@@ -297,7 +297,7 @@ git commit -m "feat: connect Grok Build over ACP"
 - Test: `crates/lazoo-providers/tests/antigravity.rs`
 - Create: `crates/lazoo-providers/tests/fixtures/antigravity/*.jsonl`
 
-- [ ] **Step 1: Write failing agy tests**
+- [x] **Step 1: Write failing agy tests**
 
 ```rust
 #[test]
@@ -328,17 +328,17 @@ fn agy_resume_uses_conversation_id_without_copying_credentials() {
 }
 ```
 
-- [ ] **Step 2: Verify RED**
+- [x] **Step 2: Verify RED**
 
 Run: `cargo test -p lazoo-providers --test antigravity`
 
 Expected: FAIL because the NDJSON/agy modules are absent.
 
-- [ ] **Step 3: Implement long-lived agy stream JSON**
+- [x] **Step 3: Implement long-lived agy stream JSON**
 
 Launch print mode with paired stream-json input/output, explicit project/workspace/model/effort/mode options, one input record per turn, persisted conversation ID, bounded progress/turn deadlines, cancellation via owned process stop, and redacted stderr/raw evidence.
 
-- [ ] **Step 4: Verify agy tests and non-model probe**
+- [x] **Step 4: Verify agy tests and non-model probe**
 
 Run: `cargo test -p lazoo-providers --test antigravity`
 
@@ -346,7 +346,7 @@ Run: `powershell -NoProfile -ExecutionPolicy Bypass -File scripts/acceptance/pro
 
 Expected: tests PASS; executable/version/command contract is recorded as unverified until live model output is observed.
 
-- [ ] **Step 5: Commit Antigravity**
+- [x] **Step 5: Commit Antigravity**
 
 ```powershell
 git add crates/lazoo-providers scripts/acceptance/provider-adapters.ps1

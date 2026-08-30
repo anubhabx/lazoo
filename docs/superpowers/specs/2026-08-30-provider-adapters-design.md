@@ -51,7 +51,7 @@ Launch Grok agent stdio with explicit process-level model/reasoning options and 
 
 ### Antigravity
 
-Launch `agy --print --input-format stream-json --output-format stream-json` with an explicit project/workspace context. Send one NDJSON user message per turn, persist returned conversation identifiers, use `--conversation` on resume, and normalize assistant, tool, usage, result, and error records. Until a model-backed run completes, report `unverified`.
+Launch `agy --input-format stream-json --output-format stream-json` with an explicit project/workspace context; `--print` is intentionally omitted because stdin is the prompt channel in paired stream mode. Send one native NDJSON user event per turn, retain the child for continued turns, persist returned conversation identifiers, use `--conversation` on resume, and normalize assistant, tool, terminal, usage, result, and error records. The bounded `/usage` probe may report native authentication as configured; only the opt-in smoke gate proves model-backed execution.
 
 ### Claude Code
 

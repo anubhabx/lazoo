@@ -187,7 +187,7 @@ impl ProviderAdapter for GrokAdapter {
 pub struct GrokSession(AcpSession);
 
 impl ProviderSession for GrokSession {
-    fn id(&self) -> &str {
+    fn id(&self) -> String {
         self.0.id()
     }
 

@@ -391,7 +391,7 @@ pub enum ProviderEvent {
 pub type AdapterFuture<'a, T> = Pin<Box<dyn Future<Output = Result<T, ProviderError>> + Send + 'a>>;
 
 pub trait ProviderSession: Send + Sync {
-    fn id(&self) -> &str;
+    fn id(&self) -> String;
     fn turn<'a>(&'a self, request: &'a TurnRequest) -> AdapterFuture<'a, Vec<ProviderEvent>>;
     fn cancel(&self) -> AdapterFuture<'_, ()>;
     fn stop(&self) -> AdapterFuture<'_, ()>;

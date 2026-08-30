@@ -119,7 +119,7 @@ async fn live_grok_model_backed_turn_and_resume() {
         ))
         .await
         .unwrap();
-    let session_id = session.id().to_owned();
+    let session_id = session.id();
     assert!(events.iter().any(|event| {
         matches!(event, ProviderEvent::TurnCompleted { output: Some(output), .. }
             if output.trim() == "LAZOO_GROK_OK")

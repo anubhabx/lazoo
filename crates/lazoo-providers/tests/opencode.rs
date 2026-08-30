@@ -96,7 +96,7 @@ async fn live_opencode_model_backed_turn() {
         .await
         .unwrap();
 
-    let session_id = session.id().to_owned();
+    let session_id = session.id();
     assert!(events.iter().any(|event| {
         matches!(event, ProviderEvent::TurnCompleted { output: Some(output), .. }
             if output.trim() == "LAZOO_OPENCODE_OK")
