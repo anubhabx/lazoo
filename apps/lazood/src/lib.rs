@@ -1,7 +1,7 @@
 mod app;
 mod server;
 
-pub use app::{App, EventSubscription};
+pub use app::{App, EventSubscription, ManagedSession, SessionBackend, SessionBackendFuture};
 pub use server::run;
 
 #[derive(Debug, thiserror::Error)]

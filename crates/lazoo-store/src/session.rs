@@ -1,6 +1,8 @@
 use chrono::Utc;
+use lazoo_domain::derive_availability;
 use lazoo_protocol::{
-    EmployeeSessionRecord, SessionLifecycleState, SessionMutationResult, SessionReconcileResult,
+    EmployeeAvailability, EmployeeSessionRecord, SessionLifecycleState, SessionMutationResult,
+    SessionReconcileResult,
 };
 use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, params};
 use serde_json::json;
@@ -81,6 +83,14 @@ impl Store {
         if !employee.enabled {
             return Err(StoreError::EmployeeDisabled {
                 employee_id: employee.id,
+            });
+        }
+        let observation = employee::query_provider_observation(&transaction, &employee.provider)?;
+        let (availability, reason) = derive_availability(true, observation.as_ref());
+        if availability != EmployeeAvailability::Dormant {
+            return Err(StoreError::SessionProviderNotReady {
+                employee_id: employee.id,
+                reason: reason.unwrap_or_else(|| "provider is not route ready".to_owned()),
             });
         }
         if let Some(active) = active_session_for_employee(&transaction, employee.id)? {
@@ -371,6 +381,13 @@ pub(crate) fn latest_session_for_employee(
         .optional()?
         .map(session_from_raw)
         .transpose()
+}
+
+pub(crate) fn active_session_id_for_employee(
+    connection: &Connection,
+    employee_id: Uuid,
+) -> Result<Option<Uuid>, StoreError> {
+    Ok(active_session_for_employee(connection, employee_id)?.map(|session| session.id))
 }
 
 fn transition_with_roster_event(

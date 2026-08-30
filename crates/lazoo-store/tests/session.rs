@@ -4,7 +4,7 @@ use lazoo_protocol::{
 };
 use lazoo_store::{
     BeginSessionInput, BeginSessionStopInput, CreateEmployeeInput, FailSessionInput,
-    FinishSessionStopInput, MarkSessionReadyInput, Store, StoreError,
+    FinishSessionStopInput, MarkSessionReadyInput, Store, StoreError, UpdateEmployeeInput,
 };
 use serde_json::json;
 use tempfile::tempdir;
@@ -231,4 +231,52 @@ fn prior_boot_active_sessions_reconcile_to_failed_without_pid_adoption() {
     let replay = store.reconcile_sessions(Uuid::new_v4()).unwrap();
     assert!(replay.sessions.is_empty());
     assert!(replay.event_sequence.is_none());
+}
+
+#[test]
+fn warm_requires_route_ready_provider_and_active_sessions_lock_employee_configuration() {
+    let temporary = tempdir().unwrap();
+    let store = Store::open_path(temporary.path().join("lazoo.db")).unwrap();
+    let mut offline = employee();
+    offline.name = "Offline".to_owned();
+    offline.idempotency_key = "create-offline".to_owned();
+    offline.provider_observation = None;
+    let offline = store.create_employee(&offline).unwrap().employee;
+    assert!(matches!(
+        store
+            .begin_session(&begin(offline.id, Uuid::new_v4(), "warm-offline"))
+            .unwrap_err(),
+        StoreError::SessionProviderNotReady { .. }
+    ));
+
+    let employee = store.create_employee(&employee()).unwrap().employee;
+    let active = store
+        .begin_session(&begin(employee.id, Uuid::new_v4(), "warm-rhea"))
+        .unwrap();
+    let error = store
+        .update_employee(&UpdateEmployeeInput {
+            request_id: "update-request".to_owned(),
+            idempotency_key: "update-active".to_owned(),
+            employee_id: employee.id,
+            expected_revision: 1,
+            name: None,
+            provider: None,
+            role: Some("Principal lead".to_owned()),
+            instructions: None,
+            model: None,
+            reasoning_effort: None,
+            native_settings: None,
+            authority_mode: None,
+            checkout_policy: None,
+            enabled: None,
+            provider_observation: None,
+        })
+        .unwrap_err();
+    assert!(matches!(
+        error,
+        StoreError::EmployeeSessionActive {
+            session_id,
+            ..
+        } if session_id == active.session.id
+    ));
 }

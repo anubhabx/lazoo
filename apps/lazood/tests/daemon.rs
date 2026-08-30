@@ -1,10 +1,23 @@
-use std::{path::Path, process::Command, time::Duration};
+use std::{
+    future::Future,
+    path::{Path, PathBuf},
+    pin::Pin,
+    process::Command,
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicUsize, Ordering},
+    },
+    time::Duration,
+};
 
-use lazoo_protocol::{CheckoutMode, DesktopSnapshot, JsonRpcRequest};
-use lazoo_providers::DiscoveryEnvironment;
+use lazoo_protocol::{
+    AuthorityMode, CheckoutMode, DesktopSnapshot, EmployeeCheckoutPolicy, JsonRpcRequest,
+    ProviderObservation,
+};
+use lazoo_providers::{DiscoveryEnvironment, ProviderError, ProviderKind, SessionRequest};
 use lazoo_runtime::DataRoot;
-use lazoo_store::Store;
-use lazood::App;
+use lazoo_store::{CreateEmployeeInput, Store};
+use lazood::{App, ManagedSession, SessionBackend, SessionBackendFuture};
 use serde_json::json;
 use tempfile::tempdir;
 use tokio::time::timeout;
@@ -34,8 +47,120 @@ fn test_app() -> (tempfile::TempDir, App) {
     let store = Store::open_path(root.state_db()).unwrap();
     (
         temporary,
-        App::new_with_provider_environment(store, root, DiscoveryEnvironment::empty()),
+        App::new_with_provider_environment(store, root, DiscoveryEnvironment::empty()).unwrap(),
     )
+}
+
+#[derive(Clone, Default)]
+struct FakeSessionBackend {
+    starts: Arc<AtomicUsize>,
+    stops: Arc<AtomicUsize>,
+    working_directories: Arc<Mutex<Vec<PathBuf>>>,
+}
+
+struct FakeManagedSession {
+    id: String,
+    stops: Arc<AtomicUsize>,
+}
+
+impl ManagedSession for FakeManagedSession {
+    fn id(&self) -> String {
+        self.id.clone()
+    }
+
+    fn native_host_pid(&self) -> Option<u32> {
+        Some(4242)
+    }
+
+    fn stop(&self) -> Pin<Box<dyn Future<Output = Result<(), ProviderError>> + Send + '_>> {
+        Box::pin(async move {
+            self.stops.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        })
+    }
+}
+
+impl SessionBackend for FakeSessionBackend {
+    fn start<'a>(
+        &'a self,
+        _provider: ProviderKind,
+        request: &'a SessionRequest,
+    ) -> SessionBackendFuture<'a> {
+        Box::pin(async move {
+            let number = self.starts.fetch_add(1, Ordering::SeqCst) + 1;
+            self.working_directories
+                .lock()
+                .unwrap()
+                .push(request.cwd.clone());
+            Ok(Box::new(FakeManagedSession {
+                id: format!("native-{number}"),
+                stops: Arc::clone(&self.stops),
+            }) as Box<dyn ManagedSession>)
+        })
+    }
+}
+
+struct FailingSessionBackend;
+
+impl SessionBackend for FailingSessionBackend {
+    fn start<'a>(
+        &'a self,
+        _provider: ProviderKind,
+        _request: &'a SessionRequest,
+    ) -> SessionBackendFuture<'a> {
+        Box::pin(async {
+            Err(ProviderError::Protocol(
+                "private provider diagnostic".to_owned(),
+            ))
+        })
+    }
+}
+
+fn configured_employee(store: &Store) -> lazoo_protocol::EmployeeRecord {
+    store
+        .create_employee(&CreateEmployeeInput {
+            request_id: "create-rhea-request".to_owned(),
+            idempotency_key: "create-rhea".to_owned(),
+            name: "Rhea".to_owned(),
+            provider: "codex".to_owned(),
+            role: "Lead".to_owned(),
+            instructions: String::new(),
+            model: Some("test-model".to_owned()),
+            reasoning_effort: Some("low".to_owned()),
+            native_settings: json!({}),
+            authority_mode: AuthorityMode::Ask,
+            checkout_policy: EmployeeCheckoutPolicy::Isolated,
+            enabled: true,
+            provider_observation: Some(ProviderObservation {
+                provider: "codex".to_owned(),
+                verification: "configured".to_owned(),
+                version: Some("test".to_owned()),
+                protocol: Some("app-server/v2".to_owned()),
+                capabilities: json!({"session": true}),
+                authentication: json!({"native": "ready", "external": "unknown"}),
+                degradation_reason: None,
+                checked_at: "2026-08-31T00:00:00Z".to_owned(),
+            }),
+        })
+        .unwrap()
+        .employee
+}
+
+fn session_test_app() -> (tempfile::TempDir, App, FakeSessionBackend, uuid::Uuid) {
+    let temporary = tempdir().unwrap();
+    let root = DataRoot::from_path(temporary.path().join("data"));
+    root.ensure().unwrap();
+    let store = Store::open_path(root.state_db()).unwrap();
+    let employee = configured_employee(&store);
+    let backend = FakeSessionBackend::default();
+    let app = App::new_with_session_backend(
+        store,
+        root,
+        DiscoveryEnvironment::empty(),
+        Arc::new(backend.clone()),
+    )
+    .unwrap();
+    (temporary, app, backend, employee.id)
 }
 
 async fn assert_desktop_is_roster_neutral(app: &App) {
@@ -59,7 +184,7 @@ async fn status_reports_protocol_store_and_boot_identity() {
     let result = response.result.unwrap();
 
     assert_eq!(result["protocolVersion"], 1);
-    assert_eq!(result["schemaVersion"], 2);
+    assert_eq!(result["schemaVersion"], 3);
     assert_eq!(result["journalMode"], "wal");
     assert!(
         result["bootId"]
@@ -439,6 +564,229 @@ async fn roster_refresh_is_non_model_and_does_not_advance_unchanged_state() {
     assert_eq!(refreshed["roster"]["revision"], 1);
     assert!(refreshed["eventSequence"].is_null());
     assert_eq!(refreshed["roster"]["entries"][0]["availability"], "offline");
+}
+
+#[tokio::test]
+async fn session_warm_list_show_stop_is_idempotent_and_backend_only() {
+    let (_temporary, app, backend, employee_id) = session_test_app();
+    let warm_params = json!({
+        "employeeId": employee_id,
+        "expectedEmployeeRevision": 1,
+        "idempotencyKey": "warm-rhea"
+    });
+
+    let first = app
+        .handle(request("warm-1", "session.warm", warm_params.clone()))
+        .await
+        .result
+        .unwrap();
+    let replay = app
+        .handle(request("warm-2", "session.warm", warm_params))
+        .await
+        .result
+        .unwrap();
+    let session_id = first["session"]["id"].as_str().unwrap();
+
+    assert_eq!(first["session"]["state"], "idle");
+    assert_eq!(first["session"]["nativeSessionId"], "native-1");
+    assert_eq!(first["session"]["nativeHostPid"], 4242);
+    assert_eq!(first["session"], replay["session"]);
+    assert_eq!(backend.starts.load(Ordering::SeqCst), 1);
+    {
+        let working_directories = backend.working_directories.lock().unwrap();
+        assert_eq!(working_directories.len(), 1);
+        assert!(working_directories[0].starts_with(app.data_root().root()));
+    }
+
+    let listed = app
+        .handle(request("list", "session.list", json!({})))
+        .await
+        .result
+        .unwrap();
+    assert_eq!(listed.as_array().unwrap().len(), 1);
+    let shown = app
+        .handle(request("show", "session.show", json!({"id": session_id})))
+        .await
+        .result
+        .unwrap();
+    assert_eq!(shown["id"], session_id);
+
+    let stop_params = json!({
+        "id": session_id,
+        "expectedRevision": 2,
+        "idempotencyKey": "stop-rhea"
+    });
+    let stopped = app
+        .handle(request("stop-1", "session.stop", stop_params.clone()))
+        .await
+        .result
+        .unwrap();
+    let stop_replay = app
+        .handle(request("stop-2", "session.stop", stop_params))
+        .await
+        .result
+        .unwrap();
+
+    assert_eq!(stopped["session"]["state"], "suspended");
+    assert_eq!(stopped["session"], stop_replay["session"]);
+    assert_eq!(backend.stops.load(Ordering::SeqCst), 1);
+    let roster = app
+        .handle(request("roster", "roster.get", json!({})))
+        .await
+        .result
+        .unwrap();
+    assert_eq!(roster["entries"][0]["availability"], "suspended");
+    assert_desktop_is_roster_neutral(&app).await;
+}
+
+#[tokio::test]
+async fn session_stale_revision_has_a_stable_error_family() {
+    let (_temporary, app, _backend, employee_id) = session_test_app();
+    let warmed = app
+        .handle(request(
+            "warm",
+            "session.warm",
+            json!({
+                "employeeId": employee_id,
+                "expectedEmployeeRevision": 1,
+                "idempotencyKey": "warm-rhea"
+            }),
+        ))
+        .await
+        .result
+        .unwrap();
+    let session_id = warmed["session"]["id"].as_str().unwrap();
+
+    let error = app
+        .handle(request(
+            "stale-stop",
+            "session.stop",
+            json!({
+                "id": session_id,
+                "expectedRevision": 1,
+                "idempotencyKey": "stale-stop"
+            }),
+        ))
+        .await
+        .error
+        .unwrap();
+
+    assert_eq!(error.code, "LZ-SESSION-STALE");
+    assert_eq!(error.data.unwrap(), json!({"currentRevision": 2}));
+}
+
+#[tokio::test]
+async fn planned_shutdown_stops_and_suspends_live_sessions() {
+    let (_temporary, app, backend, employee_id) = session_test_app();
+    app.handle(request(
+        "warm",
+        "session.warm",
+        json!({
+            "employeeId": employee_id,
+            "expectedEmployeeRevision": 1,
+            "idempotencyKey": "warm-rhea"
+        }),
+    ))
+    .await;
+
+    app.shutdown_live_sessions().await;
+
+    assert_eq!(backend.stops.load(Ordering::SeqCst), 1);
+    let sessions = app
+        .handle(request("sessions", "session.list", json!({})))
+        .await
+        .result
+        .unwrap();
+    assert_eq!(sessions[0]["state"], "suspended");
+}
+
+#[tokio::test]
+async fn failed_native_start_is_redacted_and_persisted() {
+    let temporary = tempdir().unwrap();
+    let root = DataRoot::from_path(temporary.path().join("data"));
+    root.ensure().unwrap();
+    let store = Store::open_path(root.state_db()).unwrap();
+    let employee = configured_employee(&store);
+    let app = App::new_with_session_backend(
+        store,
+        root,
+        DiscoveryEnvironment::empty(),
+        Arc::new(FailingSessionBackend),
+    )
+    .unwrap();
+
+    let error = app
+        .handle(request(
+            "warm",
+            "session.warm",
+            json!({
+                "employeeId": employee.id,
+                "expectedEmployeeRevision": 1,
+                "idempotencyKey": "warm-rhea"
+            }),
+        ))
+        .await
+        .error
+        .unwrap();
+
+    assert_eq!(error.code, "LZ-SESSION-START-FAILED");
+    assert!(!error.message.contains("private provider diagnostic"));
+    let sessions = app
+        .handle(request("sessions", "session.list", json!({})))
+        .await
+        .result
+        .unwrap();
+    assert_eq!(sessions[0]["state"], "failed");
+    assert_eq!(sessions[0]["failureCode"], "LZ-SESSION-START-FAILED");
+}
+
+#[test]
+fn app_startup_reconciles_prior_boot_sessions_without_adopting_a_pid() {
+    use lazoo_store::{BeginSessionInput, MarkSessionReadyInput};
+
+    let temporary = tempdir().unwrap();
+    let root = DataRoot::from_path(temporary.path().join("data"));
+    root.ensure().unwrap();
+    let store = Store::open_path(root.state_db()).unwrap();
+    let employee = configured_employee(&store);
+    let prior_boot = uuid::Uuid::new_v4();
+    let starting = store
+        .begin_session(&BeginSessionInput {
+            request_id: "warm-request".to_owned(),
+            idempotency_key: "warm-rhea".to_owned(),
+            employee_id: employee.id,
+            expected_employee_revision: 1,
+            owner_boot_id: prior_boot,
+        })
+        .unwrap();
+    store
+        .mark_session_ready(&MarkSessionReadyInput {
+            session_id: starting.session.id,
+            expected_revision: 1,
+            owner_boot_id: prior_boot,
+            native_session_id: "prior-native".to_owned(),
+            native_host_pid: 4242,
+        })
+        .unwrap();
+
+    let _app = App::new_with_session_backend(
+        store.clone(),
+        root,
+        DiscoveryEnvironment::empty(),
+        Arc::new(FakeSessionBackend::default()),
+    )
+    .unwrap();
+
+    let reconciled = store.get_session(starting.session.id).unwrap();
+    assert_eq!(
+        reconciled.state,
+        lazoo_protocol::SessionLifecycleState::Failed
+    );
+    assert_eq!(
+        reconciled.failure_code.as_deref(),
+        Some("LZ-SESSION-OWNER-LOST")
+    );
+    assert!(reconciled.native_host_pid.is_none());
 }
 
 #[test]

@@ -3,6 +3,8 @@ use std::{
     path::{Path, PathBuf},
 };
 
+use uuid::Uuid;
+
 use crate::{OwnerSecurity, RuntimeError, io_error};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -32,6 +34,7 @@ impl DataRoot {
         let directories = [
             self.state_dir(),
             self.runtime_dir(),
+            self.sessions_dir(),
             self.spool_pending(),
             self.spool_reconciled(),
             self.daemon_logs(),
@@ -66,6 +69,23 @@ impl DataRoot {
     #[must_use]
     pub fn state_db(&self) -> PathBuf {
         self.state_dir().join("lazoo.db")
+    }
+
+    #[must_use]
+    pub fn sessions_dir(&self) -> PathBuf {
+        self.root.join("sessions")
+    }
+
+    #[must_use]
+    pub fn session_working_dir(&self, session_id: Uuid) -> PathBuf {
+        self.sessions_dir().join(session_id.to_string())
+    }
+
+    pub fn ensure_session_working_dir(&self, session_id: Uuid) -> Result<PathBuf, RuntimeError> {
+        let path = self.session_working_dir(session_id);
+        std::fs::create_dir_all(&path).map_err(|error| io_error(&path, error))?;
+        OwnerSecurity::current()?.apply_to_path(&path)?;
+        Ok(path)
     }
 
     #[must_use]

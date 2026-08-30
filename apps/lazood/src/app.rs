@@ -1,4 +1,12 @@
-use std::{collections::BTreeSet, fs, str::FromStr, time::Instant};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    fs,
+    future::Future,
+    pin::Pin,
+    str::FromStr,
+    sync::Arc,
+    time::Instant,
+};
 
 use chrono::{SecondsFormat, Utc};
 use lazoo_domain::{
@@ -6,27 +14,84 @@ use lazoo_domain::{
     validate_native_settings,
 };
 use lazoo_protocol::{
-    CreateEmployeeParams, DesktopSnapshot, DisableEmployeeParams, EmployeeShowParams, EventSummary,
-    EventsListParams, JsonRpcRequest, JsonRpcResponse, PROTOCOL_V1, ProviderListEntry,
-    ProviderObservation, ProviderProbeParams, ProviderSmokeParams, ProviderSmokeResult,
-    RegisterProjectParams, RosterRefreshParams, RpcError, SystemStatus, UpdateEmployeeParams,
+    AuthorityMode, CreateEmployeeParams, DesktopSnapshot, DisableEmployeeParams,
+    EmployeeShowParams, EventSummary, EventsListParams, JsonRpcRequest, JsonRpcResponse,
+    PROTOCOL_V1, ProviderListEntry, ProviderObservation, ProviderProbeParams, ProviderSmokeParams,
+    ProviderSmokeResult, RegisterProjectParams, RosterRefreshParams, RpcError, SessionShowParams,
+    StopSessionParams, SystemStatus, UpdateEmployeeParams, WarmSessionParams,
 };
 use lazoo_providers::{
     AuthenticationState, DiscoveryEnvironment, DiscoverySource, ProviderCapabilities,
     ProviderError, ProviderKind, ProviderProbe, ProviderRegistry, ProviderSession,
-    ProviderVerification, SessionRequest, TurnRequest,
+    ProviderSessionHandle, ProviderVerification, SessionRequest, TurnRequest,
 };
 use lazoo_runtime::DataRoot;
 use lazoo_store::{
-    CreateEmployeeInput, DisableEmployeeInput, RefreshProviderObservationsInput,
-    RegisterProjectInput, Store, StoreStatus, UpdateEmployeeInput,
+    BeginSessionInput, BeginSessionStopInput, CreateEmployeeInput, DisableEmployeeInput,
+    FailSessionInput, FinishSessionStopInput, MarkSessionReadyInput,
+    RefreshProviderObservationsInput, RegisterProjectInput, Store, StoreStatus,
+    UpdateEmployeeInput,
 };
 use serde::Serialize;
 use serde_json::{Value, json};
-use tokio::sync::{broadcast, watch};
+use tokio::{
+    sync::{Mutex, broadcast, watch},
+    time::{Duration, timeout},
+};
 use uuid::Uuid;
 
+pub type SessionBackendFuture<'a> =
+    Pin<Box<dyn Future<Output = Result<Box<dyn ManagedSession>, ProviderError>> + Send + 'a>>;
+
+pub trait ManagedSession: Send + Sync {
+    fn id(&self) -> String;
+    fn native_host_pid(&self) -> Option<u32>;
+    fn stop(&self) -> Pin<Box<dyn Future<Output = Result<(), ProviderError>> + Send + '_>>;
+}
+
+pub trait SessionBackend: Send + Sync {
+    fn start<'a>(
+        &'a self,
+        provider: ProviderKind,
+        request: &'a SessionRequest,
+    ) -> SessionBackendFuture<'a>;
+}
+
 #[derive(Clone, Debug)]
+struct ProviderSessionBackend {
+    providers: ProviderRegistry,
+}
+
+impl ManagedSession for ProviderSessionHandle {
+    fn id(&self) -> String {
+        ProviderSession::id(self)
+    }
+
+    fn native_host_pid(&self) -> Option<u32> {
+        ProviderSession::native_host_pid(self)
+    }
+
+    fn stop(&self) -> Pin<Box<dyn Future<Output = Result<(), ProviderError>> + Send + '_>> {
+        ProviderSession::stop(self)
+    }
+}
+
+impl SessionBackend for ProviderSessionBackend {
+    fn start<'a>(
+        &'a self,
+        provider: ProviderKind,
+        request: &'a SessionRequest,
+    ) -> SessionBackendFuture<'a> {
+        Box::pin(async move {
+            self.providers
+                .start(provider, request)
+                .await
+                .map(|session| Box::new(session) as Box<dyn ManagedSession>)
+        })
+    }
+}
+
+#[derive(Clone)]
 pub struct App {
     store: Store,
     root: DataRoot,
@@ -36,6 +101,8 @@ pub struct App {
     shutdown: watch::Sender<bool>,
     providers: ProviderRegistry,
     provider_environment: DiscoveryEnvironment,
+    session_backend: Arc<dyn SessionBackend>,
+    live_sessions: Arc<Mutex<BTreeMap<Uuid, Arc<dyn ManagedSession>>>>,
 }
 
 pub struct EventSubscription {
@@ -44,30 +111,68 @@ pub struct EventSubscription {
 }
 
 impl App {
-    #[must_use]
-    pub fn new(store: Store, root: DataRoot) -> Self {
+    pub fn new(store: Store, root: DataRoot) -> Result<Self, lazoo_store::StoreError> {
         Self::new_with_provider_environment(store, root, DiscoveryEnvironment::current())
     }
 
     #[doc(hidden)]
-    #[must_use]
     pub fn new_with_provider_environment(
         store: Store,
         root: DataRoot,
         provider_environment: DiscoveryEnvironment,
-    ) -> Self {
-        let (events, _) = broadcast::channel(1024);
-        let (shutdown, _) = watch::channel(false);
-        Self {
+    ) -> Result<Self, lazoo_store::StoreError> {
+        let providers = ProviderRegistry::default();
+        let session_backend = Arc::new(ProviderSessionBackend {
+            providers: providers.clone(),
+        });
+        Self::new_with_dependencies(
             store,
             root,
-            boot_id: Uuid::new_v4(),
+            provider_environment,
+            providers,
+            session_backend,
+        )
+    }
+
+    #[doc(hidden)]
+    pub fn new_with_session_backend(
+        store: Store,
+        root: DataRoot,
+        provider_environment: DiscoveryEnvironment,
+        session_backend: Arc<dyn SessionBackend>,
+    ) -> Result<Self, lazoo_store::StoreError> {
+        Self::new_with_dependencies(
+            store,
+            root,
+            provider_environment,
+            ProviderRegistry::default(),
+            session_backend,
+        )
+    }
+
+    fn new_with_dependencies(
+        store: Store,
+        root: DataRoot,
+        provider_environment: DiscoveryEnvironment,
+        providers: ProviderRegistry,
+        session_backend: Arc<dyn SessionBackend>,
+    ) -> Result<Self, lazoo_store::StoreError> {
+        let (events, _) = broadcast::channel(1024);
+        let (shutdown, _) = watch::channel(false);
+        let boot_id = Uuid::new_v4();
+        store.reconcile_sessions(boot_id)?;
+        Ok(Self {
+            store,
+            root,
+            boot_id,
             started: Instant::now(),
             events,
             shutdown,
-            providers: ProviderRegistry::default(),
+            providers,
             provider_environment,
-        }
+            session_backend,
+            live_sessions: Arc::new(Mutex::new(BTreeMap::new())),
+        })
     }
 
     pub async fn handle(&self, request: JsonRpcRequest) -> JsonRpcResponse {
@@ -99,6 +204,10 @@ impl App {
             "employee.disable" => self.disable_employee(&request),
             "roster.get" => self.roster_get(&request.params),
             "roster.refresh" => self.refresh_roster(&request).await,
+            "session.warm" => self.warm_session(&request).await,
+            "session.list" => self.session_list(&request.params),
+            "session.show" => self.session_show(request.params),
+            "session.stop" => self.stop_session(&request).await,
             "system.shutdown" => {
                 let _ = self.shutdown.send(true);
                 Ok(json!({"planned": true}))
@@ -133,6 +242,11 @@ impl App {
     #[must_use]
     pub fn shutdown_receiver(&self) -> watch::Receiver<bool> {
         self.shutdown.subscribe()
+    }
+
+    #[must_use]
+    pub fn data_root(&self) -> &DataRoot {
+        &self.root
     }
 
     fn status(&self) -> Result<Value, RpcError> {
@@ -274,9 +388,9 @@ impl App {
             .start(provider, &request)
             .await
             .map_err(provider_error)?;
-        let session_id = session.id();
+        let session_id = ProviderSession::id(&session);
         let turn = session.turn(&TurnRequest::new(params.prompt)).await;
-        let stop = session.stop().await;
+        let stop = ProviderSession::stop(&session).await;
         let events = turn.map_err(provider_error)?;
         stop.map_err(provider_error)?;
         let (events, transcript_truncated) = concise_events(events);
@@ -481,6 +595,280 @@ impl App {
         Ok(to_value(result))
     }
 
+    async fn warm_session(&self, request: &JsonRpcRequest) -> Result<Value, RpcError> {
+        let params: WarmSessionParams = serde_json::from_value(request.params.clone())
+            .map_err(|error| invalid_params(error.to_string()))?;
+        require_session_idempotency_key(&params.idempotency_key)?;
+        if params.expected_employee_revision == 0 {
+            return Err(session_invalid(
+                "expectedEmployeeRevision must be greater than zero",
+            ));
+        }
+        let employee = self
+            .store
+            .get_employee(params.employee_id)
+            .map_err(session_store_error)?;
+        let provider = ProviderKind::from_str(&employee.provider).map_err(provider_error)?;
+        let starting = self
+            .store
+            .begin_session(&BeginSessionInput {
+                request_id: request.id.clone(),
+                idempotency_key: params.idempotency_key,
+                employee_id: params.employee_id,
+                expected_employee_revision: params.expected_employee_revision,
+                owner_boot_id: self.boot_id,
+            })
+            .map_err(session_store_error)?;
+        self.publish_events()?;
+        if starting.event_sequence.is_none() {
+            return Ok(to_value(starting));
+        }
+        self.start_new_session(employee, provider, starting).await
+    }
+
+    async fn start_new_session(
+        &self,
+        employee: lazoo_protocol::EmployeeRecord,
+        provider: ProviderKind,
+        starting: lazoo_protocol::SessionMutationResult,
+    ) -> Result<Value, RpcError> {
+        let session_id = starting.session.id;
+        let Ok(working_directory) = self.root.ensure_session_working_dir(session_id) else {
+            self.record_session_failure(
+                session_id,
+                starting.session.revision,
+                "LZ-SESSION-START-FAILED",
+                "session working directory could not be prepared",
+            )?;
+            return Err(session_failure(
+                "LZ-SESSION-START-FAILED",
+                "session working directory could not be prepared",
+                session_id,
+            ));
+        };
+        let mut session_request = SessionRequest::new(working_directory)
+            .with_permission_mode(authority_permission_mode(employee.authority_mode));
+        if let Some(model) = employee.model {
+            session_request = session_request.with_model(model);
+        }
+        if let Some(effort) = employee.reasoning_effort {
+            session_request = session_request.with_effort(effort);
+        }
+
+        let Ok(session) = self.session_backend.start(provider, &session_request).await else {
+            self.record_session_failure(
+                session_id,
+                starting.session.revision,
+                "LZ-SESSION-START-FAILED",
+                "provider session did not become ready",
+            )?;
+            return Err(session_failure(
+                "LZ-SESSION-START-FAILED",
+                "provider session did not become ready",
+                session_id,
+            ));
+        };
+        let session = Arc::<dyn ManagedSession>::from(session);
+        let native_session_id = session.id();
+        let Some(native_host_pid) = session.native_host_pid() else {
+            let _ = timeout(Duration::from_secs(10), session.stop()).await;
+            self.record_session_failure(
+                session_id,
+                starting.session.revision,
+                "LZ-SESSION-START-FAILED",
+                "provider session did not report an owned host process",
+            )?;
+            return Err(session_failure(
+                "LZ-SESSION-START-FAILED",
+                "provider session did not report an owned host process",
+                session_id,
+            ));
+        };
+        self.live_sessions
+            .lock()
+            .await
+            .insert(session_id, Arc::clone(&session));
+        let ready = match self.store.mark_session_ready(&MarkSessionReadyInput {
+            session_id,
+            expected_revision: starting.session.revision,
+            owner_boot_id: self.boot_id,
+            native_session_id,
+            native_host_pid,
+        }) {
+            Ok(ready) => ready,
+            Err(error) => {
+                self.live_sessions.lock().await.remove(&session_id);
+                let _ = timeout(Duration::from_secs(10), session.stop()).await;
+                let _ = self.record_session_failure(
+                    session_id,
+                    starting.session.revision,
+                    "LZ-SESSION-START-FAILED",
+                    "session readiness could not be recorded",
+                );
+                return Err(session_store_error(error));
+            }
+        };
+        self.publish_events()?;
+        Ok(to_value(ready))
+    }
+
+    fn session_list(&self, params: &Value) -> Result<Value, RpcError> {
+        require_empty_params(params, "session.list")?;
+        self.store
+            .list_sessions()
+            .map(to_value)
+            .map_err(session_store_error)
+    }
+
+    fn session_show(&self, value: Value) -> Result<Value, RpcError> {
+        let params: SessionShowParams =
+            serde_json::from_value(value).map_err(|error| invalid_params(error.to_string()))?;
+        self.store
+            .get_session(params.id)
+            .map(to_value)
+            .map_err(session_store_error)
+    }
+
+    async fn stop_session(&self, request: &JsonRpcRequest) -> Result<Value, RpcError> {
+        let params: StopSessionParams = serde_json::from_value(request.params.clone())
+            .map_err(|error| invalid_params(error.to_string()))?;
+        require_session_idempotency_key(&params.idempotency_key)?;
+        if params.expected_revision == 0 {
+            return Err(session_invalid(
+                "expectedRevision must be greater than zero",
+            ));
+        }
+        self.stop_session_command(
+            params.id,
+            params.expected_revision,
+            request.id.clone(),
+            params.idempotency_key,
+        )
+        .await
+        .map(to_value)
+    }
+
+    async fn stop_session_command(
+        &self,
+        session_id: Uuid,
+        expected_revision: u64,
+        request_id: String,
+        idempotency_key: String,
+    ) -> Result<lazoo_protocol::SessionMutationResult, RpcError> {
+        let stopping = self
+            .store
+            .begin_session_stop(&BeginSessionStopInput {
+                request_id,
+                idempotency_key,
+                session_id,
+                expected_revision,
+            })
+            .map_err(session_store_error)?;
+        self.publish_events()?;
+        if stopping.event_sequence.is_none() {
+            return Ok(stopping);
+        }
+
+        let session = self.live_sessions.lock().await.remove(&session_id);
+        let Some(session) = session else {
+            self.record_session_failure(
+                session_id,
+                stopping.session.revision,
+                "LZ-SESSION-HANDLE-MISSING",
+                "the daemon no longer owns a live handle for this session",
+            )?;
+            return Err(session_failure(
+                "LZ-SESSION-HANDLE-MISSING",
+                "the daemon no longer owns a live handle for this session",
+                session_id,
+            ));
+        };
+        if let Ok(Ok(())) = timeout(Duration::from_secs(10), session.stop()).await {
+            let stopped = self
+                .store
+                .finish_session_stop(&FinishSessionStopInput {
+                    session_id,
+                    expected_revision: stopping.session.revision,
+                })
+                .map_err(session_store_error)?;
+            self.publish_events()?;
+            Ok(stopped)
+        } else {
+            drop(session);
+            self.record_session_failure(
+                session_id,
+                stopping.session.revision,
+                "LZ-SESSION-STOP-FAILED",
+                "provider session did not stop cleanly",
+            )?;
+            Err(session_failure(
+                "LZ-SESSION-STOP-FAILED",
+                "provider session did not stop cleanly",
+                session_id,
+            ))
+        }
+    }
+
+    fn record_session_failure(
+        &self,
+        session_id: Uuid,
+        expected_revision: u64,
+        code: &str,
+        message: &str,
+    ) -> Result<(), RpcError> {
+        self.store
+            .fail_session(&FailSessionInput {
+                session_id,
+                expected_revision,
+                failure_code: code.to_owned(),
+                failure_message: message.to_owned(),
+            })
+            .map_err(session_store_error)?;
+        self.publish_events()
+    }
+
+    pub async fn shutdown_live_sessions(&self) {
+        let session_ids = self
+            .live_sessions
+            .lock()
+            .await
+            .keys()
+            .copied()
+            .collect::<Vec<_>>();
+        for session_id in session_ids {
+            let Ok(session) = self.store.get_session(session_id) else {
+                self.live_sessions.lock().await.remove(&session_id);
+                continue;
+            };
+            if session.state == lazoo_protocol::SessionLifecycleState::Idle {
+                let _ = self
+                    .stop_session_command(
+                        session_id,
+                        session.revision,
+                        format!("shutdown-{}-{session_id}", self.boot_id),
+                        format!("shutdown-{}-{session_id}", self.boot_id),
+                    )
+                    .await;
+                continue;
+            }
+            if let Some(handle) = self.live_sessions.lock().await.remove(&session_id) {
+                let _ = timeout(Duration::from_secs(10), handle.stop()).await;
+            }
+            if matches!(
+                session.state,
+                lazoo_protocol::SessionLifecycleState::Starting
+                    | lazoo_protocol::SessionLifecycleState::Stopping
+            ) {
+                let _ = self.record_session_failure(
+                    session_id,
+                    session.revision,
+                    "LZ-SESSION-SHUTDOWN",
+                    "daemon shutdown interrupted the session transition",
+                );
+            }
+        }
+    }
+
     async fn observe_provider(&self, provider: ProviderKind) -> ProviderObservation {
         match self
             .providers
@@ -519,6 +907,26 @@ fn require_idempotency_key(value: &str) -> Result<(), RpcError> {
         ))
     } else {
         Ok(())
+    }
+}
+
+fn require_session_idempotency_key(value: &str) -> Result<(), RpcError> {
+    if value.trim().is_empty() {
+        Err(session_invalid("idempotencyKey must not be empty"))
+    } else if value.len() > 256 {
+        Err(session_invalid(
+            "idempotencyKey must contain at most 256 UTF-8 bytes",
+        ))
+    } else {
+        Ok(())
+    }
+}
+
+const fn authority_permission_mode(authority: AuthorityMode) -> &'static str {
+    match authority {
+        AuthorityMode::Ask => "ask",
+        AuthorityMode::SelfDecision => "accept-edits",
+        AuthorityMode::FullAutonomy => "auto",
     }
 }
 
@@ -609,7 +1017,8 @@ fn observation_from_error(provider: ProviderKind, error: &ProviderError) -> Prov
         | ProviderError::Protocol(_)
         | ProviderError::InvalidEvent(_)
         | ProviderError::Io(_)
-        | ProviderError::Json(_) => (
+        | ProviderError::Json(_)
+        | ProviderError::Runtime(_) => (
             ProviderVerification::Degraded,
             "provider readiness probe failed",
         ),
@@ -707,18 +1116,89 @@ fn store_error(error: lazoo_store::StoreError) -> RpcError {
         lazoo_store::StoreError::EmployeeConflict { .. } => "LZ-EMPLOYEE-CONFLICT",
         lazoo_store::StoreError::EmployeeNotFound { .. } => "LZ-EMPLOYEE-NOT-FOUND",
         lazoo_store::StoreError::EmployeeStale { .. } => "LZ-EMPLOYEE-STALE",
+        lazoo_store::StoreError::EmployeeSessionActive { .. } => "LZ-EMPLOYEE-SESSION-ACTIVE",
         _ => "LZ-STORE",
     };
     let data = match &error {
         lazoo_store::StoreError::EmployeeStale {
             current_revision, ..
         } => Some(json!({"currentRevision": current_revision})),
+        lazoo_store::StoreError::EmployeeSessionActive { session_id, .. } => {
+            Some(json!({"sessionId": session_id}))
+        }
         _ => None,
     };
     RpcError {
         code: code.to_owned(),
         message: error.to_string(),
         data,
+    }
+}
+
+#[allow(clippy::needless_pass_by_value)]
+fn session_store_error(error: lazoo_store::StoreError) -> RpcError {
+    let (code, data) = match &error {
+        lazoo_store::StoreError::EmployeeNotFound { employee_id } => (
+            "LZ-SESSION-EMPLOYEE-NOT-FOUND",
+            Some(json!({"employeeId": employee_id})),
+        ),
+        lazoo_store::StoreError::EmployeeStale {
+            current_revision, ..
+        } => (
+            "LZ-SESSION-EMPLOYEE-STALE",
+            Some(json!({"currentRevision": current_revision})),
+        ),
+        lazoo_store::StoreError::EmployeeDisabled { employee_id } => (
+            "LZ-SESSION-EMPLOYEE-DISABLED",
+            Some(json!({"employeeId": employee_id})),
+        ),
+        lazoo_store::StoreError::SessionConflict { session_id, .. } => (
+            "LZ-SESSION-CONFLICT",
+            Some(json!({"sessionId": session_id})),
+        ),
+        lazoo_store::StoreError::SessionNotFound { session_id } => (
+            "LZ-SESSION-NOT-FOUND",
+            Some(json!({"sessionId": session_id})),
+        ),
+        lazoo_store::StoreError::SessionStale {
+            current_revision, ..
+        } => (
+            "LZ-SESSION-STALE",
+            Some(json!({"currentRevision": current_revision})),
+        ),
+        lazoo_store::StoreError::SessionState { session_id, .. } => {
+            ("LZ-SESSION-STATE", Some(json!({"sessionId": session_id})))
+        }
+        lazoo_store::StoreError::SessionOwnership { session_id } => (
+            "LZ-SESSION-OWNERSHIP",
+            Some(json!({"sessionId": session_id})),
+        ),
+        lazoo_store::StoreError::SessionProviderNotReady { employee_id, .. } => (
+            "LZ-SESSION-PROVIDER-NOT-READY",
+            Some(json!({"employeeId": employee_id})),
+        ),
+        _ => ("LZ-SESSION-STORE", None),
+    };
+    RpcError {
+        code: code.to_owned(),
+        message: error.to_string(),
+        data,
+    }
+}
+
+fn session_invalid(message: impl Into<String>) -> RpcError {
+    RpcError {
+        code: "LZ-SESSION-INVALID".to_owned(),
+        message: message.into(),
+        data: None,
+    }
+}
+
+fn session_failure(code: &str, message: &str, session_id: Uuid) -> RpcError {
+    RpcError {
+        code: code.to_owned(),
+        message: message.to_owned(),
+        data: Some(json!({"sessionId": session_id})),
     }
 }
 
@@ -735,7 +1215,8 @@ fn provider_error(error: ProviderError) -> RpcError {
         ProviderError::Protocol(_)
         | ProviderError::InvalidEvent(_)
         | ProviderError::Io(_)
-        | ProviderError::Json(_) => "LZ-PROVIDER",
+        | ProviderError::Json(_)
+        | ProviderError::Runtime(_) => "LZ-PROVIDER",
     };
     RpcError {
         code: code.to_owned(),

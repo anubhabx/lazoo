@@ -184,6 +184,14 @@ impl Store {
             transaction.commit()?;
             return Ok(result);
         }
+        if let Some(session_id) =
+            crate::session::active_session_id_for_employee(&transaction, current.id)?
+        {
+            return Err(StoreError::EmployeeSessionActive {
+                employee_id: current.id,
+                session_id,
+            });
+        }
 
         desired.configuration_revision = current.configuration_revision.saturating_add(1);
         desired.updated_at.clone_from(&now);
@@ -259,6 +267,14 @@ impl Store {
             )?;
             transaction.commit()?;
             return Ok(result);
+        }
+        if let Some(session_id) =
+            crate::session::active_session_id_for_employee(&transaction, employee.id)?
+        {
+            return Err(StoreError::EmployeeSessionActive {
+                employee_id: employee.id,
+                session_id,
+            });
         }
 
         employee.enabled = false;
@@ -629,7 +645,7 @@ pub(crate) fn query_employee(
         .transpose()
 }
 
-fn query_provider_observation(
+pub(crate) fn query_provider_observation(
     connection: &Connection,
     provider: &str,
 ) -> Result<Option<ProviderObservation>, StoreError> {

@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use clap::Parser;
 use lazoo_protocol::{CheckoutMode, RpcError};
 use lazooctl::{
-    Cli, Command, EmployeeCommand, ProjectCommand, RosterCommand, command_request,
+    Cli, Command, EmployeeCommand, ProjectCommand, RosterCommand, SessionCommand, command_request,
     exit_code_for_rpc, render_result,
 };
 use serde_json::json;
@@ -69,6 +69,7 @@ fn rpc_error_families_have_stable_exit_codes() {
         ("LZ-PROVIDER-NOT-DETECTED", 8),
         ("LZ-EMPLOYEE-STALE", 9),
         ("LZ-EMPLOYEE-NOT-FOUND", 9),
+        ("LZ-SESSION-STALE", 10),
         ("LZ-UNEXPECTED", 10),
     ];
     for (code, expected) in cases {
@@ -81,6 +82,75 @@ fn rpc_error_families_have_stable_exit_codes() {
             expected
         );
     }
+}
+
+#[test]
+fn session_cli_maps_warm_list_show_and_stop() {
+    let employee_id = "00000000-0000-4000-8000-000000000001";
+    let session_id = "00000000-0000-4000-8000-000000000002";
+    let warm = Cli::try_parse_from([
+        "lazooctl",
+        "session",
+        "warm",
+        employee_id,
+        "--expected-employee-revision",
+        "3",
+        "--idempotency-key",
+        "warm-rhea",
+    ])
+    .unwrap();
+    assert!(matches!(
+        warm.command,
+        Command::Session(SessionCommand::Warm { .. })
+    ));
+    assert_eq!(
+        command_request(&warm.command),
+        (
+            "session.warm",
+            json!({
+                "employeeId": employee_id,
+                "expectedEmployeeRevision": 3,
+                "idempotencyKey": "warm-rhea"
+            }),
+            false
+        )
+    );
+
+    let list = Cli::try_parse_from(["lazooctl", "session", "list"]).unwrap();
+    assert_eq!(
+        command_request(&list.command),
+        ("session.list", json!({}), false)
+    );
+
+    let show = Cli::try_parse_from(["lazooctl", "session", "show", session_id]).unwrap();
+    assert_eq!(
+        command_request(&show.command),
+        ("session.show", json!({"id": session_id}), false)
+    );
+
+    let stop = Cli::try_parse_from([
+        "lazooctl",
+        "session",
+        "stop",
+        session_id,
+        "--expected-revision",
+        "2",
+        "--idempotency-key",
+        "stop-rhea",
+    ])
+    .unwrap();
+    assert_eq!(
+        command_request(&stop.command),
+        (
+            "session.stop",
+            json!({
+                "id": session_id,
+                "expectedRevision": 2,
+                "idempotencyKey": "stop-rhea"
+            }),
+            false
+        )
+    );
 }
 
 #[test]

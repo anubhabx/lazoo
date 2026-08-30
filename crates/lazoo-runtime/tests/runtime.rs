@@ -15,11 +15,28 @@ fn data_root_creates_the_documented_layout() {
 
     assert!(root.state_dir().is_dir());
     assert!(root.runtime_dir().is_dir());
+    assert!(root.sessions_dir().is_dir());
     assert!(root.spool_active().parent().unwrap().is_dir());
     assert!(root.spool_pending().is_dir());
     assert!(root.spool_reconciled().is_dir());
     assert!(root.daemon_logs().is_dir());
     assert!(root.keeper_logs().is_dir());
+}
+
+#[test]
+fn session_working_directory_is_owner_protected() {
+    let temporary = tempdir().unwrap();
+    let root = DataRoot::from_path(temporary.path());
+    root.ensure().unwrap();
+    let session_id = uuid::Uuid::new_v4();
+
+    let path = root.ensure_session_working_dir(session_id).unwrap();
+    let sddl = OwnerSecurity::read_path_sddl(&path).unwrap();
+
+    assert_eq!(path, root.session_working_dir(session_id));
+    assert!(sddl.contains(OwnerSecurity::current().unwrap().sid()));
+    assert!(!sddl.contains(";;;BU)"));
+    assert!(!sddl.contains(";;;AU)"));
 }
 
 #[test]

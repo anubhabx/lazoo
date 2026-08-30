@@ -33,6 +33,8 @@ pub enum Command {
     #[command(subcommand)]
     Roster(RosterCommand),
     #[command(subcommand)]
+    Session(SessionCommand),
+    #[command(subcommand)]
     System(SystemCommand),
 }
 
@@ -156,6 +158,28 @@ pub enum RosterCommand {
     },
 }
 
+#[derive(Debug, Subcommand)]
+pub enum SessionCommand {
+    Warm {
+        employee_id: Uuid,
+        #[arg(long)]
+        expected_employee_revision: u64,
+        #[arg(long)]
+        idempotency_key: Option<String>,
+    },
+    List,
+    Show {
+        id: Uuid,
+    },
+    Stop {
+        id: Uuid,
+        #[arg(long)]
+        expected_revision: u64,
+        #[arg(long)]
+        idempotency_key: Option<String>,
+    },
+}
+
 #[derive(Debug, Error)]
 pub enum CliError {
     #[error("RPC request failed: {0:?}")]
@@ -261,7 +285,41 @@ pub fn command_request(command: &Command) -> (&'static str, Value, bool) {
             }),
             false,
         ),
+        Command::Session(command) => session_request(command),
         Command::System(SystemCommand::Shutdown) => ("system.shutdown", json!({}), false),
+    }
+}
+
+fn session_request(command: &SessionCommand) -> (&'static str, Value, bool) {
+    match command {
+        SessionCommand::Warm {
+            employee_id,
+            expected_employee_revision,
+            idempotency_key,
+        } => (
+            "session.warm",
+            json!({
+                "employeeId": employee_id,
+                "expectedEmployeeRevision": expected_employee_revision,
+                "idempotencyKey": idempotency_key.clone().unwrap_or_else(|| Uuid::new_v4().to_string()),
+            }),
+            false,
+        ),
+        SessionCommand::List => ("session.list", json!({}), false),
+        SessionCommand::Show { id } => ("session.show", json!({"id": id}), false),
+        SessionCommand::Stop {
+            id,
+            expected_revision,
+            idempotency_key,
+        } => (
+            "session.stop",
+            json!({
+                "id": id,
+                "expectedRevision": expected_revision,
+                "idempotencyKey": idempotency_key.clone().unwrap_or_else(|| Uuid::new_v4().to_string()),
+            }),
+            false,
+        ),
     }
 }
 
@@ -366,6 +424,7 @@ pub fn exit_code_for_rpc(error: &RpcError) -> i32 {
         "LZ-STORE" => 7,
         code if code.starts_with("LZ-PROVIDER-") || code == "LZ-PROVIDER" => 8,
         code if code.starts_with("LZ-EMPLOYEE-") => 9,
+        code if code.starts_with("LZ-SESSION-") => 10,
         _ => 10,
     }
 }

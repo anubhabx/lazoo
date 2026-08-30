@@ -17,7 +17,7 @@ pub async fn run() -> Result<(), DaemonError> {
     let _instance = SingleInstance::acquire(installation.id(), "daemon")?;
     let store = Store::open_path(root.state_db())?;
     store.import_pending_incidents(&root)?;
-    let app = App::new(store, root);
+    let app = App::new(store, root)?;
     let owner = OwnerSecurity::current()?;
     let mut server = PipeServer::bind(&installation, &owner)?;
     let mut shutdown = app.shutdown_receiver();
@@ -39,6 +39,7 @@ pub async fn run() -> Result<(), DaemonError> {
     })
     .await;
     clients.abort_all();
+    app.shutdown_live_sessions().await;
     Ok(())
 }
 

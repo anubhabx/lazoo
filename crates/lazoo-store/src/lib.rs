@@ -79,6 +79,10 @@ pub enum StoreError {
         employee_id: Uuid,
         current_revision: u64,
     },
+    #[error(
+        "employee {employee_id} has active session {session_id}; stop it before changing configuration"
+    )]
+    EmployeeSessionActive { employee_id: Uuid, session_id: Uuid },
     #[error("employee {employee_id} is disabled")]
     EmployeeDisabled { employee_id: Uuid },
     #[error("employee {employee_id} already has active session {session_id}")]
@@ -98,6 +102,8 @@ pub enum StoreError {
     },
     #[error("session {session_id} is owned by another daemon boot")]
     SessionOwnership { session_id: Uuid },
+    #[error("employee {employee_id} provider is not ready for a session: {reason}")]
+    SessionProviderNotReady { employee_id: Uuid, reason: String },
     #[error("stored {field} is invalid: {message}")]
     InvalidRecord {
         field: &'static str,

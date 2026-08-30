@@ -76,12 +76,12 @@
 - Modify: `apps/lazooctl/tests/cli.rs`
 - Modify: `crates/lazoo-runtime/src/data_root.rs`
 
-- [ ] Write failing daemon/CLI tests using an injected fake session backend.
-- [ ] Add shared live-handle ownership to `App` and startup reconciliation.
-- [ ] Implement `session.warm/list/show/stop` with stable `LZ-SESSION-*` errors and CLI exit code 10.
-- [ ] Gracefully stop live sessions during planned daemon shutdown.
-- [ ] Keep `desktop.snapshot` and Tauri capability scope unchanged.
-- [ ] Commit as `feat: control native employee sessions`.
+- [x] Write failing daemon/CLI tests using an injected fake session backend.
+- [x] Add shared live-handle ownership to `App` and startup reconciliation.
+- [x] Implement `session.warm/list/show/stop` with stable `LZ-SESSION-*` errors and CLI exit code 10.
+- [x] Gracefully stop live sessions during planned daemon shutdown.
+- [x] Keep `desktop.snapshot` and Tauri capability scope unchanged.
+- [x] Commit as `feat: control native employee sessions`.
 
 ### Task 5: Crash/restart acceptance and closeout
 
