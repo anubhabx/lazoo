@@ -132,7 +132,7 @@ git commit -m "feat: persist employee identities"
 - Modify: `crates/lazoo-store/src/lib.rs`
 - Modify: `crates/lazoo-store/tests/employee.rs`
 
-- [ ] **Step 1: Write failing revision tests**
+- [x] **Step 1: Write failing revision tests**
 
 ```rust
 #[test]
@@ -158,23 +158,23 @@ fn disable_preserves_record_and_rejects_stale_revision() {
 }
 ```
 
-- [ ] **Step 2: Run and verify RED**
+- [x] **Step 2: Run and verify RED**
 
 Run: `cargo test -p lazoo-store --test employee`
 
 Expected: FAIL on missing update/disable behavior.
 
-- [ ] **Step 3: Implement revision-checked mutations**
+- [x] **Step 3: Implement revision-checked mutations**
 
 Apply patches only after expected-revision validation; compare effective configuration before incrementing revisions; retain disabled rows and timestamps; replay idempotent responses exactly.
 
-- [ ] **Step 4: Run and verify GREEN**
+- [x] **Step 4: Run and verify GREEN**
 
 Run: `cargo test -p lazoo-store --test employee`
 
 Expected: PASS with no duplicate events or revision inflation.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```powershell
 git add crates/lazoo-store

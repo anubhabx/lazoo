@@ -17,7 +17,7 @@ use thiserror::Error;
 use uuid::Uuid;
 
 pub use emergency::EmergencyIncident;
-pub use employee::CreateEmployeeInput;
+pub use employee::{CreateEmployeeInput, DisableEmployeeInput, UpdateEmployeeInput};
 
 use crate::{emergency::import_pending_incidents, migration::apply_migrations};
 
@@ -66,6 +66,11 @@ pub enum StoreError {
     EmployeeConflict { employee_id: Uuid },
     #[error("employee {employee_id} was not found")]
     EmployeeNotFound { employee_id: Uuid },
+    #[error("employee {employee_id} changed; current configuration revision is {current_revision}")]
+    EmployeeStale {
+        employee_id: Uuid,
+        current_revision: u64,
+    },
     #[error("stored {field} is invalid: {message}")]
     InvalidRecord {
         field: &'static str,

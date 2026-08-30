@@ -26,6 +26,33 @@ pub struct CreateEmployeeInput {
     pub provider_observation: Option<ProviderObservation>,
 }
 
+#[derive(Clone, Debug)]
+pub struct UpdateEmployeeInput {
+    pub request_id: String,
+    pub idempotency_key: String,
+    pub employee_id: Uuid,
+    pub expected_revision: u64,
+    pub name: Option<String>,
+    pub provider: Option<String>,
+    pub role: Option<String>,
+    pub instructions: Option<String>,
+    pub model: Option<String>,
+    pub reasoning_effort: Option<String>,
+    pub native_settings: Option<Value>,
+    pub authority_mode: Option<AuthorityMode>,
+    pub checkout_policy: Option<EmployeeCheckoutPolicy>,
+    pub enabled: Option<bool>,
+    pub provider_observation: Option<ProviderObservation>,
+}
+
+#[derive(Clone, Debug)]
+pub struct DisableEmployeeInput {
+    pub request_id: String,
+    pub idempotency_key: String,
+    pub employee_id: Uuid,
+    pub expected_revision: u64,
+}
+
 impl Store {
     pub fn create_employee(
         &self,
@@ -107,6 +134,195 @@ impl Store {
     pub fn list_employees(&self) -> Result<Vec<EmployeeRecord>, StoreError> {
         let connection = self.lock()?;
         query_employees(&connection)
+    }
+
+    pub fn update_employee(
+        &self,
+        input: &UpdateEmployeeInput,
+    ) -> Result<EmployeeMutationResult, StoreError> {
+        let mut connection = self.lock()?;
+        if let Some(response) =
+            processed_response(&connection, "employee.update", &input.idempotency_key)?
+        {
+            return Ok(serde_json::from_str(&response)?);
+        }
+        let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let current = query_employee(&transaction, input.employee_id)?.ok_or(
+            StoreError::EmployeeNotFound {
+                employee_id: input.employee_id,
+            },
+        )?;
+        require_revision(&current, input.expected_revision)?;
+
+        let mut desired = current.clone();
+        if let Some(name) = &input.name {
+            desired.name.clone_from(name);
+        }
+        if let Some(provider) = &input.provider {
+            desired.provider.clone_from(provider);
+        }
+        if let Some(role) = &input.role {
+            desired.role.clone_from(role);
+        }
+        if let Some(instructions) = &input.instructions {
+            desired.instructions.clone_from(instructions);
+        }
+        if let Some(model) = &input.model {
+            desired.model = Some(model.clone());
+        }
+        if let Some(reasoning_effort) = &input.reasoning_effort {
+            desired.reasoning_effort = Some(reasoning_effort.clone());
+        }
+        if let Some(native_settings) = &input.native_settings {
+            desired.native_settings.clone_from(native_settings);
+        }
+        if let Some(authority_mode) = input.authority_mode {
+            desired.authority_mode = authority_mode;
+        }
+        if let Some(checkout_policy) = input.checkout_policy {
+            desired.checkout_policy = checkout_policy;
+        }
+        if let Some(enabled) = input.enabled {
+            desired.enabled = enabled;
+        }
+
+        if desired.name.to_lowercase() != current.name.to_lowercase()
+            && let Some(employee_id) = transaction
+                .query_row(
+                    "SELECT id FROM employees WHERE name = ?1 COLLATE NOCASE AND id <> ?2",
+                    params![desired.name, input.employee_id.to_string()],
+                    |row| row.get::<_, String>(0),
+                )
+                .optional()?
+        {
+            return Err(StoreError::EmployeeConflict {
+                employee_id: parse_uuid(&employee_id, "employees.id")?,
+            });
+        }
+
+        let now = Utc::now().to_rfc3339();
+        if !configuration_changed(&current, &desired) {
+            let roster_revision = roster_revision(&transaction)?;
+            let result = EmployeeMutationResult {
+                employee: current,
+                roster_revision,
+                event_sequence: None,
+            };
+            insert_processed_response(
+                &transaction,
+                "employee.update",
+                &input.idempotency_key,
+                &input.request_id,
+                &result,
+                &now,
+            )?;
+            transaction.commit()?;
+            return Ok(result);
+        }
+
+        desired.configuration_revision = current.configuration_revision.saturating_add(1);
+        desired.updated_at.clone_from(&now);
+        desired.disabled_at = match (current.enabled, desired.enabled) {
+            (true, false) => Some(now.clone()),
+            (false, true) => None,
+            _ => current.disabled_at.clone(),
+        };
+        if let Some(observation) = &input.provider_observation {
+            upsert_provider_observation(&transaction, observation)?;
+        }
+        write_employee(&transaction, &desired)?;
+        let roster_revision = advance_roster(&transaction, &now)?;
+        let employee = query_employee(&transaction, input.employee_id)?.ok_or(
+            StoreError::EmployeeNotFound {
+                employee_id: input.employee_id,
+            },
+        )?;
+        let event_sequence = insert_event(
+            &transaction,
+            "employee.updated",
+            &json!({"employee": employee, "rosterRevision": roster_revision}),
+            &now,
+        )?;
+        let result = EmployeeMutationResult {
+            employee,
+            roster_revision,
+            event_sequence: Some(event_sequence),
+        };
+        insert_processed_response(
+            &transaction,
+            "employee.update",
+            &input.idempotency_key,
+            &input.request_id,
+            &result,
+            &now,
+        )?;
+        transaction.commit()?;
+        Ok(result)
+    }
+
+    pub fn disable_employee(
+        &self,
+        input: &DisableEmployeeInput,
+    ) -> Result<EmployeeMutationResult, StoreError> {
+        let mut connection = self.lock()?;
+        if let Some(response) =
+            processed_response(&connection, "employee.disable", &input.idempotency_key)?
+        {
+            return Ok(serde_json::from_str(&response)?);
+        }
+        let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let mut employee = query_employee(&transaction, input.employee_id)?.ok_or(
+            StoreError::EmployeeNotFound {
+                employee_id: input.employee_id,
+            },
+        )?;
+        require_revision(&employee, input.expected_revision)?;
+        let now = Utc::now().to_rfc3339();
+        if !employee.enabled {
+            let result = EmployeeMutationResult {
+                roster_revision: roster_revision(&transaction)?,
+                employee,
+                event_sequence: None,
+            };
+            insert_processed_response(
+                &transaction,
+                "employee.disable",
+                &input.idempotency_key,
+                &input.request_id,
+                &result,
+                &now,
+            )?;
+            transaction.commit()?;
+            return Ok(result);
+        }
+
+        employee.enabled = false;
+        employee.configuration_revision = employee.configuration_revision.saturating_add(1);
+        employee.updated_at.clone_from(&now);
+        employee.disabled_at = Some(now.clone());
+        write_employee(&transaction, &employee)?;
+        let roster_revision = advance_roster(&transaction, &now)?;
+        let event_sequence = insert_event(
+            &transaction,
+            "employee.disabled",
+            &json!({"employee": employee, "rosterRevision": roster_revision}),
+            &now,
+        )?;
+        let result = EmployeeMutationResult {
+            employee,
+            roster_revision,
+            event_sequence: Some(event_sequence),
+        };
+        insert_processed_response(
+            &transaction,
+            "employee.disable",
+            &input.idempotency_key,
+            &input.request_id,
+            &result,
+            &now,
+        )?;
+        transaction.commit()?;
+        Ok(result)
     }
 
     pub fn get_employee(&self, employee_id: Uuid) -> Result<EmployeeRecord, StoreError> {
@@ -230,6 +446,71 @@ fn advance_roster(transaction: &Transaction<'_>, now: &str) -> Result<u64, Store
         |row| row.get(0),
     )?;
     u64::try_from(revision).map_err(|_| StoreError::NegativeSequence)
+}
+
+fn roster_revision(connection: &Connection) -> Result<u64, StoreError> {
+    let revision: i64 = connection.query_row(
+        "SELECT revision FROM roster_state WHERE singleton = 1",
+        [],
+        |row| row.get(0),
+    )?;
+    u64::try_from(revision).map_err(|_| StoreError::NegativeSequence)
+}
+
+fn require_revision(employee: &EmployeeRecord, expected_revision: u64) -> Result<(), StoreError> {
+    if employee.configuration_revision == expected_revision {
+        Ok(())
+    } else {
+        Err(StoreError::EmployeeStale {
+            employee_id: employee.id,
+            current_revision: employee.configuration_revision,
+        })
+    }
+}
+
+fn configuration_changed(current: &EmployeeRecord, desired: &EmployeeRecord) -> bool {
+    current.name != desired.name
+        || current.provider != desired.provider
+        || current.role != desired.role
+        || current.instructions != desired.instructions
+        || current.model != desired.model
+        || current.reasoning_effort != desired.reasoning_effort
+        || current.native_settings != desired.native_settings
+        || current.authority_mode != desired.authority_mode
+        || current.checkout_policy != desired.checkout_policy
+        || current.enabled != desired.enabled
+}
+
+fn write_employee(
+    transaction: &Transaction<'_>,
+    employee: &EmployeeRecord,
+) -> Result<(), StoreError> {
+    transaction.execute(
+        "UPDATE employees SET
+            name = ?2, provider = ?3, role = ?4, instructions = ?5, model = ?6,
+            reasoning_effort = ?7, native_settings_json = ?8, authority_mode = ?9,
+            checkout_policy = ?10, enabled = ?11, configuration_revision = ?12,
+            updated_at = ?13, disabled_at = ?14
+         WHERE id = ?1",
+        params![
+            employee.id.to_string(),
+            employee.name,
+            employee.provider,
+            employee.role,
+            employee.instructions,
+            employee.model,
+            employee.reasoning_effort,
+            serde_json::to_string(&employee.native_settings)?,
+            serde_json::to_string(&employee.authority_mode)?,
+            serde_json::to_string(&employee.checkout_policy)?,
+            i64::from(employee.enabled),
+            i64::try_from(employee.configuration_revision)
+                .map_err(|_| StoreError::NegativeSequence)?,
+            employee.updated_at,
+            employee.disabled_at,
+        ],
+    )?;
+    Ok(())
 }
 
 fn insert_event(
