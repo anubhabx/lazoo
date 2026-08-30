@@ -360,7 +360,7 @@ git commit -m "feat: connect Antigravity stream JSON"
 - Test: `crates/lazoo-providers/tests/claude.rs`
 - Create: `crates/lazoo-providers/tests/fixtures/claude/*.jsonl`
 
-- [ ] **Step 1: Write failing Claude tests**
+- [x] **Step 1: Write failing Claude tests**
 
 ```rust
 #[test]
@@ -391,13 +391,13 @@ fn claude_resume_reuses_session_id_and_default_permissions_are_not_bypassed() {
 }
 ```
 
-- [ ] **Step 2: Verify RED**
+- [x] **Step 2: Verify RED**
 
 Run: `cargo test -p lazoo-providers --test claude`
 
 Expected: FAIL because `ClaudeAdapter` is absent.
 
-- [ ] **Step 3: Implement Claude long-lived stream JSON**
+- [x] **Step 3: Implement Claude long-lived stream JSON**
 
 Launch print mode with stream-json input/output and replay acknowledgements, explicit UUID/session resume, model/effort/permission/workspace options, event normalization, graceful EOF/cancel behavior, and distinct native/external authentication evidence.
 
