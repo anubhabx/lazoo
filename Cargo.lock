@@ -2253,6 +2253,7 @@ name = "lazoo-store"
 version = "0.1.0"
 dependencies = [
  "chrono",
+ "lazoo-domain",
  "lazoo-protocol",
  "lazoo-runtime",
  "rusqlite",

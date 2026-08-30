@@ -1,7 +1,8 @@
 use chrono::Utc;
+use lazoo_domain::derive_availability;
 use lazoo_protocol::{
-    AuthorityMode, EmployeeAvailability, EmployeeCheckoutPolicy, EmployeeMutationResult,
-    EmployeeRecord, ProviderObservation, RosterEntry, RosterSnapshot,
+    AuthorityMode, EmployeeCheckoutPolicy, EmployeeMutationResult, EmployeeRecord,
+    ProviderObservation, RosterEntry, RosterRefreshResult, RosterSnapshot,
 };
 use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, params};
 use serde_json::{Value, json};
@@ -51,6 +52,13 @@ pub struct DisableEmployeeInput {
     pub idempotency_key: String,
     pub employee_id: Uuid,
     pub expected_revision: u64,
+}
+
+#[derive(Clone, Debug)]
+pub struct RefreshProviderObservationsInput {
+    pub request_id: String,
+    pub idempotency_key: String,
+    pub observations: Vec<ProviderObservation>,
 }
 
 impl Store {
@@ -333,37 +341,71 @@ impl Store {
 
     pub fn roster_snapshot(&self) -> Result<RosterSnapshot, StoreError> {
         let connection = self.lock()?;
-        let (revision, updated_at) = connection.query_row(
-            "SELECT revision, updated_at FROM roster_state WHERE singleton = 1",
-            [],
-            |row| Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?)),
+        query_roster_snapshot(&connection)
+    }
+
+    pub fn refresh_provider_observations(
+        &self,
+        input: &RefreshProviderObservationsInput,
+    ) -> Result<RosterRefreshResult, StoreError> {
+        let mut connection = self.lock()?;
+        if let Some(response) =
+            processed_response(&connection, "roster.refresh", &input.idempotency_key)?
+        {
+            return Ok(serde_json::from_str(&response)?);
+        }
+        let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let mut effective_change = false;
+        let mut changed_providers = Vec::new();
+        for observation in &input.observations {
+            let used_by_employee: i64 = transaction.query_row(
+                "SELECT COUNT(*) FROM employees WHERE provider = ?1",
+                [&observation.provider],
+                |row| row.get(0),
+            )?;
+            let existing = query_provider_observation(&transaction, &observation.provider)?;
+            if used_by_employee > 0
+                && existing
+                    .as_ref()
+                    .is_none_or(|current| !effective_observation_equal(current, observation))
+            {
+                effective_change = true;
+                changed_providers.push(observation.provider.clone());
+            }
+            upsert_provider_observation(&transaction, observation)?;
+        }
+        let now = Utc::now().to_rfc3339();
+        let (roster_revision, event_sequence) = if effective_change {
+            let revision = advance_roster(&transaction, &now)?;
+            let sequence = insert_event(
+                &transaction,
+                "roster.refreshed",
+                &json!({
+                    "providers": changed_providers,
+                    "rosterRevision": revision
+                }),
+                &now,
+            )?;
+            (revision, Some(sequence))
+        } else {
+            (roster_revision(&transaction)?, None)
+        };
+        let roster = query_roster_snapshot(&transaction)?;
+        debug_assert_eq!(roster.revision, roster_revision);
+        let result = RosterRefreshResult {
+            roster,
+            event_sequence,
+        };
+        insert_processed_response(
+            &transaction,
+            "roster.refresh",
+            &input.idempotency_key,
+            &input.request_id,
+            &result,
+            &now,
         )?;
-        let employees = query_employees(&connection)?;
-        let entries = employees
-            .into_iter()
-            .map(|employee| {
-                let observation = query_provider_observation(&connection, &employee.provider)?;
-                let availability = if employee.enabled {
-                    EmployeeAvailability::Offline
-                } else {
-                    EmployeeAvailability::Disabled
-                };
-                Ok(RosterEntry {
-                    employee,
-                    availability,
-                    availability_reason: Some(match availability {
-                        EmployeeAvailability::Disabled => "employee is disabled".to_owned(),
-                        _ => "provider availability has not been derived".to_owned(),
-                    }),
-                    provider_observation: observation,
-                })
-            })
-            .collect::<Result<Vec<_>, StoreError>>()?;
-        Ok(RosterSnapshot {
-            revision: u64::try_from(revision).map_err(|_| StoreError::NegativeSequence)?,
-            entries,
-            updated_at,
-        })
+        transaction.commit()?;
+        Ok(result)
     }
 }
 
@@ -609,6 +651,47 @@ fn query_provider_observation(
             })
         })
         .transpose()
+}
+
+fn query_roster_snapshot(connection: &Connection) -> Result<RosterSnapshot, StoreError> {
+    let (revision, updated_at) = connection.query_row(
+        "SELECT revision, updated_at FROM roster_state WHERE singleton = 1",
+        [],
+        |row| Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?)),
+    )?;
+    let employees = query_employees(connection)?;
+    let entries = employees
+        .into_iter()
+        .map(|employee| {
+            let observation = query_provider_observation(connection, &employee.provider)?;
+            let (availability, availability_reason) =
+                derive_availability(employee.enabled, observation.as_ref());
+            Ok(RosterEntry {
+                employee,
+                availability,
+                availability_reason,
+                provider_observation: observation,
+            })
+        })
+        .collect::<Result<Vec<_>, StoreError>>()?;
+    Ok(RosterSnapshot {
+        revision: u64::try_from(revision).map_err(|_| StoreError::NegativeSequence)?,
+        entries,
+        updated_at,
+    })
+}
+
+fn effective_observation_equal(
+    current: &ProviderObservation,
+    observed: &ProviderObservation,
+) -> bool {
+    current.provider == observed.provider
+        && current.verification == observed.verification
+        && current.version == observed.version
+        && current.protocol == observed.protocol
+        && current.capabilities == observed.capabilities
+        && current.authentication == observed.authentication
+        && current.degradation_reason == observed.degradation_reason
 }
 
 type RawEmployee = (

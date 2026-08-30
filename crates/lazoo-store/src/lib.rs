@@ -17,7 +17,10 @@ use thiserror::Error;
 use uuid::Uuid;
 
 pub use emergency::EmergencyIncident;
-pub use employee::{CreateEmployeeInput, DisableEmployeeInput, UpdateEmployeeInput};
+pub use employee::{
+    CreateEmployeeInput, DisableEmployeeInput, RefreshProviderObservationsInput,
+    UpdateEmployeeInput,
+};
 
 use crate::{emergency::import_pending_incidents, migration::apply_migrations};
 

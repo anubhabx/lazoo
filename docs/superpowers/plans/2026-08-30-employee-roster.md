@@ -190,7 +190,7 @@ git commit -m "feat: revision employee configuration"
 - Modify: `crates/lazoo-store/src/employee.rs`
 - Modify: `crates/lazoo-store/tests/employee.rs`
 
-- [ ] **Step 1: Write failing availability and refresh tests**
+- [x] **Step 1: Write failing availability and refresh tests**
 
 ```rust
 #[test]
@@ -210,23 +210,23 @@ fn observation_timestamp_only_refresh_does_not_advance_roster_revision() {
 }
 ```
 
-- [ ] **Step 2: Run and verify RED**
+- [x] **Step 2: Run and verify RED**
 
 Run: `cargo test -p lazoo-domain --test roster && cargo test -p lazoo-store --test employee`
 
 Expected: FAIL because availability and observation refresh are absent.
 
-- [ ] **Step 3: Implement safe observations and roster derivation**
+- [x] **Step 3: Implement safe observations and roster derivation**
 
 Persist normalized probe fields without executable paths or raw evidence. Compare effective fields excluding `checkedAt`; increment roster revision and emit `roster.refreshed` only when effective employee-facing state changes.
 
-- [ ] **Step 4: Run and verify GREEN**
+- [x] **Step 4: Run and verify GREEN**
 
 Run: `cargo test -p lazoo-domain --test roster && cargo test -p lazoo-store --test employee`
 
 Expected: PASS with deterministic state mapping.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```powershell
 git add crates/lazoo-domain crates/lazoo-store
