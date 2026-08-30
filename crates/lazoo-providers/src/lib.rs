@@ -9,6 +9,7 @@ mod json_rpc;
 mod ndjson;
 mod opencode;
 mod redaction;
+mod registry;
 
 pub use acp::{ProgressDeadline, normalize_acp_message};
 pub use antigravity::{AntigravityAdapter, AntigravitySession, normalize_antigravity_message};
@@ -24,3 +25,4 @@ pub use discovery::{DiscoveryEnvironment, DiscoverySource, rank_candidates};
 pub use grok::{GrokAdapter, GrokSession};
 pub use opencode::{OpenCodeAdapter, OpenCodeSession};
 pub use redaction::redact_json;
+pub use registry::{ProviderDiscovery, ProviderRegistry, ProviderSessionHandle};

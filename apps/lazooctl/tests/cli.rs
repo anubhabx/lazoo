@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use clap::Parser;
 use lazoo_protocol::{CheckoutMode, RpcError};
-use lazooctl::{Cli, Command, ProjectCommand, exit_code_for_rpc, render_result};
+use lazooctl::{Cli, Command, ProjectCommand, command_request, exit_code_for_rpc, render_result};
 use serde_json::json;
 
 #[test]
@@ -62,6 +62,8 @@ fn rpc_error_families_have_stable_exit_codes() {
         ("LZ-IPC-AUTH", 5),
         ("LZ-PROJECT-CONFLICT", 6),
         ("LZ-STORE", 7),
+        ("LZ-PROVIDER-TIMEOUT", 8),
+        ("LZ-PROVIDER-NOT-DETECTED", 8),
         ("LZ-UNEXPECTED", 10),
     ];
     for (code, expected) in cases {
@@ -74,4 +76,37 @@ fn rpc_error_families_have_stable_exit_codes() {
             expected
         );
     }
+}
+
+#[test]
+fn provider_cli_maps_list_probe_and_explicit_smoke_commands() {
+    let list = Cli::try_parse_from(["lazooctl", "provider", "list"]).unwrap();
+    assert_eq!(
+        command_request(&list.command),
+        ("provider.list", json!({}), false)
+    );
+
+    let probe = Cli::try_parse_from(["lazooctl", "provider", "probe", "codex"]).unwrap();
+    assert_eq!(
+        command_request(&probe.command),
+        ("provider.probe", json!({"provider": "codex"}), false)
+    );
+
+    let smoke = Cli::try_parse_from([
+        "lazooctl",
+        "provider",
+        "smoke",
+        "grok-build",
+        "--prompt",
+        "Reply OK",
+    ])
+    .unwrap();
+    assert_eq!(
+        command_request(&smoke.command),
+        (
+            "provider.smoke",
+            json!({"provider": "grok-build", "prompt": "Reply OK"}),
+            false
+        )
+    );
 }

@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use lazoo_protocol::{
     CheckoutMode, DesktopSnapshot, JsonRpcRequest, JsonRpcResponse, MAX_FRAME_BYTES, PROTOCOL_V1,
-    SystemStatus,
+    ProviderProbeParams, ProviderSmokeParams, ProviderSmokeResult, SystemStatus,
 };
 use serde_json::json;
 use uuid::Uuid;
@@ -11,6 +11,37 @@ use uuid::Uuid;
 fn protocol_constants_are_stable() {
     assert_eq!(PROTOCOL_V1, 1);
     assert_eq!(MAX_FRAME_BYTES, 1024 * 1024);
+}
+
+#[test]
+fn provider_parameters_and_smoke_result_use_strict_camel_case_contracts() {
+    let probe: ProviderProbeParams = serde_json::from_value(json!({"provider": "codex"})).unwrap();
+    assert_eq!(probe.provider, "codex");
+    assert!(
+        serde_json::from_value::<ProviderProbeParams>(
+            json!({"provider": "codex", "unexpected": true})
+        )
+        .is_err()
+    );
+
+    let smoke: ProviderSmokeParams = serde_json::from_value(json!({
+        "provider": "grok-build",
+        "prompt": "Reply OK"
+    }))
+    .unwrap();
+    assert_eq!(smoke.prompt, "Reply OK");
+
+    let result = ProviderSmokeResult {
+        provider: "grok-build".to_owned(),
+        session_id: "session-1".to_owned(),
+        events: vec![json!({"type": "turnCompleted"})],
+        transcript_truncated: false,
+        checked_at: "2026-08-30T00:00:00Z".to_owned(),
+    };
+    let value = serde_json::to_value(result).unwrap();
+    assert_eq!(value["sessionId"], "session-1");
+    assert_eq!(value["transcriptTruncated"], false);
+    assert!(value.get("session_id").is_none());
 }
 
 #[test]

@@ -401,7 +401,7 @@ Expected: FAIL because `ClaudeAdapter` is absent.
 
 Launch print mode with stream-json input/output and replay acknowledgements, explicit UUID/session resume, model/effort/permission/workspace options, event normalization, graceful EOF/cancel behavior, and distinct native/external authentication evidence.
 
-- [ ] **Step 4: Verify Claude tests and readiness probe**
+- [x] **Step 4: Verify Claude tests and readiness probe**
 
 Run: `cargo test -p lazoo-providers --test claude`
 
@@ -409,7 +409,7 @@ Run: `powershell -NoProfile -ExecutionPolicy Bypass -File scripts/acceptance/pro
 
 Expected: tests PASS; the acceptance record reports the current live blocker rather than upgrading it to verified.
 
-- [ ] **Step 5: Commit Claude**
+- [x] **Step 5: Commit Claude**
 
 ```powershell
 git add crates/lazoo-providers scripts/acceptance/provider-adapters.ps1
@@ -429,7 +429,7 @@ git commit -m "feat: connect Claude Code stream JSON"
 - Modify: `apps/lazooctl/tests/cli.rs`
 - Modify: `README.md`
 
-- [ ] **Step 1: Write failing protocol, daemon, and CLI tests**
+- [x] **Step 1: Write failing protocol, daemon, and CLI tests**
 
 ```rust
 #[test]
@@ -476,17 +476,17 @@ fn provider_cli_maps_list_probe_and_explicit_smoke_commands() {
 }
 ```
 
-- [ ] **Step 2: Verify RED**
+- [x] **Step 2: Verify RED**
 
 Run: `cargo test -p lazoo-protocol -p lazood -p lazooctl`
 
 Expected: FAIL because provider RPC and CLI commands are absent.
 
-- [ ] **Step 3: Implement bounded provider RPC and CLI commands**
+- [x] **Step 3: Implement bounded provider RPC and CLI commands**
 
 Add `provider.list`, `provider.probe`, and explicit `provider.smoke`; keep provider fields out of `desktop.snapshot`; map provider/config/timeout failures to stable `LZ-PROVIDER-*` errors and exit code 8.
 
-- [ ] **Step 4: Verify focused integration tests**
+- [x] **Step 4: Verify focused integration tests**
 
 Run: `cargo test -p lazoo-protocol -p lazood -p lazooctl`
 

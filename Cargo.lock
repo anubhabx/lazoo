@@ -2286,6 +2286,7 @@ dependencies = [
  "lazoo-domain",
  "lazoo-ipc",
  "lazoo-protocol",
+ "lazoo-providers",
  "lazoo-runtime",
  "lazoo-store",
  "serde",
