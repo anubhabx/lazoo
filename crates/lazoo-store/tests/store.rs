@@ -23,9 +23,59 @@ fn store_enables_wal_foreign_keys_and_schema_version() {
 
     let status = store.status().unwrap();
 
-    assert_eq!(status.schema_version, 1);
+    assert_eq!(status.schema_version, 2);
     assert_eq!(status.journal_mode.to_lowercase(), "wal");
     assert!(status.foreign_keys);
+}
+
+#[test]
+fn version_one_database_upgrades_to_version_two_without_rewriting_version_one() {
+    use rusqlite::{Connection, params};
+    use sha2::{Digest, Sha256};
+
+    let temporary = tempdir().unwrap();
+    let database = temporary.path().join("lazoo.db");
+    let connection = Connection::open(&database).unwrap();
+    connection
+        .execute_batch(
+            "CREATE TABLE schema_migrations (
+                version INTEGER PRIMARY KEY,
+                checksum TEXT NOT NULL,
+                applied_at TEXT NOT NULL
+            );",
+        )
+        .unwrap();
+    let migration = include_str!("../../../migrations/0001_control_plane.sql");
+    connection.execute_batch(migration).unwrap();
+    let checksum = Sha256::digest(migration.as_bytes())
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    connection
+        .execute(
+            "INSERT INTO schema_migrations (version, checksum, applied_at)
+             VALUES (1, ?1, '2026-08-28T00:00:00Z')",
+            params![checksum],
+        )
+        .unwrap();
+    drop(connection);
+
+    let store = Store::open_path(&database).unwrap();
+
+    assert_eq!(store.status().unwrap().schema_version, 2);
+    store
+        .execute_for_test(
+            "INSERT INTO employees (
+                id, name, provider, role, instructions, native_settings_json,
+                authority_mode, checkout_policy, enabled, configuration_revision,
+                created_at, updated_at
+             ) VALUES (
+                '00000000-0000-4000-8000-000000000001', 'Rhea', 'codex', '', '',
+                '{}', 'ask', 'isolated', 1, 1,
+                '2026-08-30T00:00:00Z', '2026-08-30T00:00:00Z'
+             )",
+        )
+        .unwrap();
 }
 
 #[test]

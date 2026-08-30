@@ -1,4 +1,5 @@
 mod emergency;
+mod employee;
 mod migration;
 
 use std::{
@@ -16,6 +17,7 @@ use thiserror::Error;
 use uuid::Uuid;
 
 pub use emergency::EmergencyIncident;
+pub use employee::CreateEmployeeInput;
 
 use crate::{emergency::import_pending_incidents, migration::apply_migrations};
 
@@ -60,6 +62,15 @@ pub enum StoreError {
     UnknownMigration { found: u32, supported: u32 },
     #[error("project repository is already registered as {project_id}")]
     ProjectConflict { project_id: Uuid },
+    #[error("employee name is already registered as {employee_id}")]
+    EmployeeConflict { employee_id: Uuid },
+    #[error("employee {employee_id} was not found")]
+    EmployeeNotFound { employee_id: Uuid },
+    #[error("stored {field} is invalid: {message}")]
+    InvalidRecord {
+        field: &'static str,
+        message: String,
+    },
     #[error("event sequence is negative")]
     NegativeSequence,
     #[error("emergency incident segment is invalid: {path}: {message}")]
@@ -293,7 +304,7 @@ impl Store {
         Ok(())
     }
 
-    fn lock(&self) -> Result<MutexGuard<'_, Connection>, StoreError> {
+    pub(crate) fn lock(&self) -> Result<MutexGuard<'_, Connection>, StoreError> {
         self.connection.lock().map_err(|_| StoreError::Poisoned)
     }
 }

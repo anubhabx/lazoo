@@ -79,7 +79,7 @@ git commit -m "feat: define employee roster contracts"
 - Modify: `crates/lazoo-store/tests/store.rs`
 - Create: `crates/lazoo-store/tests/employee.rs`
 
-- [ ] **Step 1: Write failing migration and creation tests**
+- [x] **Step 1: Write failing migration and creation tests**
 
 ```rust
 #[test]
@@ -102,23 +102,23 @@ fn employee_creation_is_atomic_idempotent_and_case_insensitively_unique() {
 }
 ```
 
-- [ ] **Step 2: Run and verify RED**
+- [x] **Step 2: Run and verify RED**
 
 Run: `cargo test -p lazoo-store --test store --test employee`
 
 Expected: FAIL because migration 2 and employee persistence are absent.
 
-- [ ] **Step 3: Implement ordered migrations and create/list/show**
+- [x] **Step 3: Implement ordered migrations and create/list/show**
 
 Refactor migration application to validate and apply `[(1, 0001), (2, 0002)]` in order. Add employee, provider-observation, and roster-state tables. Implement atomic create with processed-command replay, audit event, outbox row, and global roster revision.
 
-- [ ] **Step 4: Run focused and workspace store tests**
+- [x] **Step 4: Run focused and workspace store tests**
 
 Run: `cargo test -p lazoo-store --test store --test employee`
 
 Expected: PASS with schema version 2 and zero failures.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```powershell
 git add migrations crates/lazoo-store
