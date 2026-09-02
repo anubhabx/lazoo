@@ -23,7 +23,10 @@ pub use employee::{
     CreateEmployeeInput, DisableEmployeeInput, RefreshProviderObservationsInput,
     UpdateEmployeeInput,
 };
-pub use message::SendMessageInput;
+pub use message::{
+    AcknowledgeMessageInput, CancelMessageInput, ClaimMessageInput, FailMessageInput,
+    RetryMessageInput, SendMessageInput,
+};
 pub use session::{
     BeginSessionInput, BeginSessionStopInput, FailSessionInput, FinishSessionStopInput,
     MarkSessionReadyInput,
