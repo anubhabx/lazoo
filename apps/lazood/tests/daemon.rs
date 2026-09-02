@@ -523,8 +523,10 @@ async fn message_restart_reconciles_an_uncertain_attempt() {
     drop(store);
 
     let reopened = Store::open_path(root.state_db()).unwrap();
+    let status_store = reopened.clone();
     let restarted =
         App::new_with_provider_environment(reopened, root, DiscoveryEnvironment::empty()).unwrap();
+    assert_eq!(status_store.status().unwrap().outbox_pending, 0);
     let shown = restarted
         .handle(request(
             "show-reconciled",
@@ -1168,7 +1170,7 @@ fn employee_roster_acceptance_contract_is_backend_only() {
         "roster', 'refresh",
         "LZ-EMPLOYEE-STALE",
         "restartDurability",
-        "schemaVersion 3",
+        "schemaVersion 4",
         "providerSmokeAbsent",
     ] {
         assert!(
@@ -1176,8 +1178,18 @@ fn employee_roster_acceptance_contract_is_backend_only() {
             "acceptance script must contain {required}"
         );
     }
-    assert!(!script.contains("provider', 'smoke"));
-    assert!(!script.contains("apps\\lazoo-desktop"));
+    for forbidden in [
+        "provider', 'smoke",
+        "session', 'warm",
+        "conpty",
+        "worktree",
+        "apps\\lazoo-desktop",
+    ] {
+        assert!(
+            !script.contains(forbidden),
+            "acceptance script must not contain {forbidden}"
+        );
+    }
 }
 
 #[test]
@@ -1196,7 +1208,7 @@ fn native_session_acceptance_contract_covers_containment_and_owner_loss() {
         "completeTreeTerminated",
         "nativeHostPid",
         "providerSmokeAbsent",
-        "schemaVersion 3",
+        "schemaVersion 4",
     ] {
         assert!(
             script.contains(required),
@@ -1205,4 +1217,46 @@ fn native_session_acceptance_contract_covers_containment_and_owner_loss() {
     }
     assert!(!script.contains("provider', 'smoke"));
     assert!(!script.contains("apps\\lazoo-desktop"));
+}
+
+#[test]
+fn collaboration_bus_acceptance_contract_is_backend_only() {
+    let repository = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let script_path = repository.join("scripts/acceptance/collaboration-bus.ps1");
+    let script =
+        std::fs::read_to_string(&script_path).expect("collaboration bus acceptance script");
+
+    for required in [
+        "message', 'send",
+        "message', 'claim",
+        "message', 'acknowledge",
+        "message', 'fail",
+        "message', 'retry",
+        "message', 'cancel",
+        "LZ-MESSAGE-RETRY-NOT-DUE",
+        "LZ-MESSAGE-OWNER-LOST",
+        "deadLetterEvidence",
+        "restartDurability",
+        "auditOutboxEvidence",
+        "schemaVersion 4",
+        "providerSmokeAbsent",
+        "desktopCapabilityExpansionAbsent",
+    ] {
+        assert!(
+            script.contains(required),
+            "acceptance script must contain {required}"
+        );
+    }
+    for forbidden in [
+        "provider', 'smoke",
+        "session', 'warm",
+        "conpty",
+        "worktree",
+        "apps\\lazoo-desktop",
+    ] {
+        assert!(
+            !script.contains(forbidden),
+            "acceptance script must not contain {forbidden}"
+        );
+    }
 }

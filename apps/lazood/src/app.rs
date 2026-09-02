@@ -165,6 +165,9 @@ impl App {
         let boot_id = Uuid::new_v4();
         store.reconcile_sessions(boot_id)?;
         store.reconcile_messages()?;
+        for event in store.publish_pending_outbox()? {
+            let _ = events.send(event);
+        }
         Ok(Self {
             store,
             root,

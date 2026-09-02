@@ -20,7 +20,7 @@
 - Modify: `crates/lazoo-domain/src/lib.rs`
 - Create: `crates/lazoo-domain/tests/message.rs`
 
-- [ ] **Step 1: Write the failing protocol contract test**
+- [x] **Step 1: Write the failing protocol contract test**
 
 Add a test that deserializes strict camel-case send parameters, verifies `MessageKind` and `MessageDeliveryState` kebab-case names, verifies the default maximum of three attempts, and rejects an unknown field:
 
@@ -49,13 +49,13 @@ fn message_contracts_are_strict_versioned_and_kebab_case() {
 }
 ```
 
-- [ ] **Step 2: Run the focused protocol test and verify RED**
+- [x] **Step 2: Run the focused protocol test and verify RED**
 
 Run: `cargo test -p lazoo-protocol --test contracts message_contracts_are_strict_versioned_and_kebab_case`
 
 Expected: compilation fails because message contract types are not exported.
 
-- [ ] **Step 3: Add the complete protocol surface**
+- [x] **Step 3: Add the complete protocol surface**
 
 Define and export these strict camel-case records from `message.rs`:
 
@@ -75,27 +75,27 @@ pub struct MessageSummary { pub sequence: u64, pub id: Uuid, pub correlation_id:
 
 Also define strict parameters for send, claim, acknowledge, fail, retry, cancel, list, and show plus `MessageMutationResult` and `MessageReconcileResult`. Send defaults `references` to an empty vector and `maxAttempts` to three. List defaults to `afterSequence = 0` and `limit = 100`.
 
-- [ ] **Step 4: Run the protocol suite and verify GREEN**
+- [x] **Step 4: Run the protocol suite and verify GREEN**
 
 Run: `cargo test -p lazoo-protocol`
 
 Expected: all protocol tests pass.
 
-- [ ] **Step 5: Write failing domain validation tests**
+- [x] **Step 5: Write failing domain validation tests**
 
 Cover non-null bodies, the 256 KiB body limit, at most 32 references, nonempty bounded reference kind/target, JSON-object metadata capped at 16 KiB, 1..=5 attempts, bounded idempotency/acknowledgement/failure fields, and the fixed retry delays `[1, 5, 30, 120]` seconds.
 
-- [ ] **Step 6: Run the focused domain test and verify RED**
+- [x] **Step 6: Run the focused domain test and verify RED**
 
 Run: `cargo test -p lazoo-domain --test message`
 
 Expected: compilation fails because message validators do not exist.
 
-- [ ] **Step 7: Implement minimal domain validation**
+- [x] **Step 7: Implement minimal domain validation**
 
 Expose `validate_message_content`, `validate_message_command_key`, `validate_acknowledgement`, `validate_message_failure`, `validate_max_attempts`, and `retry_delay_seconds`. Each function returns a stable `MessageValidationError` variant and performs only the limits from the design.
 
-- [ ] **Step 8: Run protocol/domain suites and commit**
+- [x] **Step 8: Run protocol/domain suites and commit**
 
 Run: `cargo test -p lazoo-protocol -p lazoo-domain`
 
@@ -113,7 +113,7 @@ Commit: `feat: define collaboration message contracts`
 - Create: `crates/lazoo-store/tests/message.rs`
 - Modify: `crates/lazoo-store/tests/store.rs`
 
-- [ ] **Step 1: Write failing migration and send/list/show tests**
+- [x] **Step 1: Write failing migration and send/list/show tests**
 
 Create employees through the existing store helpers, send two projectless messages, replay the first idempotency key, and assert:
 
@@ -128,17 +128,17 @@ assert_eq!(store.get_message(first.message.envelope.id)?.envelope.body, json!({"
 
 Extend migration tests to assert schema 4 on new databases and upgrades from versions 1, 2, and 3 while retaining the existing checksum checks.
 
-- [ ] **Step 2: Run store tests and verify RED**
+- [x] **Step 2: Run store tests and verify RED**
 
 Run: `cargo test -p lazoo-store --test message --test store`
 
 Expected: compilation fails because schema 4 and message store methods are absent.
 
-- [ ] **Step 3: Add schema 4**
+- [x] **Step 3: Add schema 4**
 
 Create `messages`, `message_deliveries`, `message_delivery_attempts`, `message_dead_letters`, and `message_commands`. Enforce the six delivery states with SQL checks, use foreign keys for existing employee/session/project records, use a monotonic `messages.sequence`, and use unique `(message_id, attempt_number)` plus one dead-letter row per message.
 
-- [ ] **Step 4: Implement record-first send and ordered reads**
+- [x] **Step 4: Implement record-first send and ordered reads**
 
 Add `SendMessageInput` and these store methods:
 
@@ -150,13 +150,13 @@ pub fn get_message(&self, message_id: Uuid) -> Result<MessageRecord, StoreError>
 
 Within one immediate transaction, `send_message` must validate durable references, resolve causation/correlation, insert the immutable envelope, insert queued revision 1, insert the command mapping, append `message.queued`, and create its outbox row. Resolve an idempotent replay before revalidating current employee state.
 
-- [ ] **Step 5: Run focused store tests and verify GREEN**
+- [x] **Step 5: Run focused store tests and verify GREEN**
 
 Run: `cargo test -p lazoo-store --test message --test store`
 
 Expected: all focused tests pass, including version 1/2/3 upgrades.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 Run: `git diff --check`
 
@@ -169,7 +169,7 @@ Commit: `feat: persist collaboration message envelopes`
 - Modify: `crates/lazoo-store/src/lib.rs`
 - Modify: `crates/lazoo-store/tests/message.rs`
 
-- [ ] **Step 1: Write failing state-machine tests**
+- [x] **Step 1: Write failing state-machine tests**
 
 Cover these behaviors with one assertion-focused test per transition:
 
@@ -192,13 +192,13 @@ assert!(exhausted.message.dead_letter.is_some());
 
 Also assert stale revisions, stale attempt IDs, invalid source states, early retry, command replay, cancellation, and no duplicate dead-letter row.
 
-- [ ] **Step 2: Run the state-machine tests and verify RED**
+- [x] **Step 2: Run the state-machine tests and verify RED**
 
 Run: `cargo test -p lazoo-store --test message`
 
 Expected: compilation fails because mutation methods and message-specific errors are absent.
 
-- [ ] **Step 3: Implement transactional transitions**
+- [x] **Step 3: Implement transactional transitions**
 
 Add inputs and methods for `claim_message`, `acknowledge_message`, `fail_message`, `retry_message`, and `cancel_message`. Each method must:
 
@@ -211,11 +211,11 @@ Add inputs and methods for `claim_message`, `acknowledge_message`, `fail_message
 
 Use `retry_delay_seconds(attempt_count)` and RFC 3339 timestamps. Return `MessageRetryNotDue { next_attempt_at }` before changing state.
 
-- [ ] **Step 4: Write failing restart-reconciliation test**
+- [x] **Step 4: Write failing restart-reconciliation test**
 
 Claim a message, drop the store, reopen it, call `reconcile_messages`, and assert that the attempt is closed with `LZ-MESSAGE-OWNER-LOST`, the message becomes retryable when budget remains, the logical message ID is unchanged, and the event/outbox row is durable. Add the max-attempts-one variant and assert one terminal dead letter.
 
-- [ ] **Step 5: Implement restart reconciliation and verify GREEN**
+- [x] **Step 5: Implement restart reconciliation and verify GREEN**
 
 Add:
 
@@ -229,7 +229,7 @@ Run: `cargo test -p lazoo-store --test message`
 
 Expected: all message store tests pass.
 
-- [ ] **Step 6: Run the complete store suite and commit**
+- [x] **Step 6: Run the complete store suite and commit**
 
 Run: `cargo test -p lazoo-store`
 
@@ -245,35 +245,35 @@ Commit: `feat: manage collaboration delivery attempts`
 - Modify: `apps/lazooctl/src/lib.rs`
 - Modify: `apps/lazooctl/tests/cli.rs`
 
-- [ ] **Step 1: Write failing CLI mapping tests**
+- [x] **Step 1: Write failing CLI mapping tests**
 
 Parse and map `message send/claim/acknowledge/fail/retry/cancel/list/show`. Assert exact RPC method names, camel-case payload keys, automatic UUID idempotency defaults, one JSON-array references input, and CLI exit code 11 for every `LZ-MESSAGE-*` error.
 
-- [ ] **Step 2: Run CLI tests and verify RED**
+- [x] **Step 2: Run CLI tests and verify RED**
 
 Run: `cargo test -p lazooctl --test cli`
 
 Expected: compilation fails because `MessageCommand` is absent.
 
-- [ ] **Step 3: Implement the CLI surface**
+- [x] **Step 3: Implement the CLI surface**
 
 Add a `MessageCommand` Clap enum and a `message_request` mapper. `send` accepts employee IDs, optional session/project/conversation/task/correlation/causation IDs, `--kind`, `--body` JSON, `--references` JSON array, `--max-attempts`, and optional idempotency key. Mutation commands accept expected revision and the attempt/acknowledgement/failure fields defined by the protocol.
 
-- [ ] **Step 4: Write failing daemon RPC tests**
+- [x] **Step 4: Write failing daemon RPC tests**
 
 Using the test store, create two employees and cover record-first send, list ordering, show, claim, stale revision, attempt-correlated acknowledgement, retry scheduling/exhaustion, cancellation, command replay, restart reconciliation, and stable error data. Snapshot the serialized `DesktopSnapshot` before and after message operations and assert it gains no message field or command.
 
-- [ ] **Step 5: Run daemon tests and verify RED**
+- [x] **Step 5: Run daemon tests and verify RED**
 
 Run: `cargo test -p lazood --test daemon message_`
 
 Expected: tests fail with `LZ-METHOD-NOT-FOUND` for message RPCs.
 
-- [ ] **Step 6: Implement daemon validation and error mapping**
+- [x] **Step 6: Implement daemon validation and error mapping**
 
 Add the eight RPC methods to `App::handle`, call `store.reconcile_messages()` during construction after session reconciliation, publish pending outbox events after each effective mutation, and map store/domain failures to stable `LZ-MESSAGE-*` errors. `message.list` must reject limits outside 1..=1024. Do not call provider registry/session backends from any message method.
 
-- [ ] **Step 7: Verify daemon and CLI suites and commit**
+- [x] **Step 7: Verify daemon and CLI suites and commit**
 
 Run: `cargo test -p lazooctl -p lazood`
 
@@ -293,21 +293,21 @@ Commit: `feat: expose collaboration bus controls`
 - Modify: `docs/PROJECT-BRIEF.md`
 - Modify: `README.md`
 
-- [ ] **Step 1: Write the failing acceptance-contract test**
+- [x] **Step 1: Write the failing acceptance-contract test**
 
 Require the script to contain markers for schema 4, idempotent record-first send, ordered replay, acknowledgement correlation, early-retry rejection, retry exhaustion, dead-letter evidence, restart reconciliation, cancellation, audit/outbox evidence, and `providerSmokeAbsent`. Assert the script does not contain `provider smoke`, desktop paths, ConPTY, worktree mutations, or model-turn commands.
 
-- [ ] **Step 2: Run the contract test and verify RED**
+- [x] **Step 2: Run the contract test and verify RED**
 
 Run: `cargo test -p lazood --test daemon collaboration_bus_acceptance_contract_is_backend_only`
 
 Expected: test fails because the acceptance script is absent.
 
-- [ ] **Step 3: Implement isolated release acceptance**
+- [x] **Step 3: Implement isolated release acceptance**
 
 The PowerShell script must use a verified temporary data root, hidden daemon process, release binaries, and JSON CLI calls. It must create two employees, exercise every message mutation, wait only for the one-second first retry deadline, force daemon loss while one attempt is delivering, restart, inspect durable state, verify ordered event evidence, and always clean up only its validated temporary root/process.
 
-- [ ] **Step 4: Run focused and full gates**
+- [x] **Step 4: Run focused and full gates**
 
 Run in this order:
 
@@ -326,7 +326,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\acceptance\collabora
 
 Expected: every command exits 0; the workspace test count and ignored live-only count are recorded exactly from output; all four acceptance manifests report `PASS`.
 
-- [ ] **Step 5: Verify boundaries and line endings**
+- [x] **Step 5: Verify boundaries and line endings**
 
 Run:
 
@@ -339,11 +339,11 @@ git diff --quiet main...HEAD -- apps/lazoo-desktop
 
 Expected: no desktop file is listed or changed, no whitespace errors are reported, and only collaboration-bus scope plus synchronized continuity documentation is present.
 
-- [ ] **Step 6: Record verification and next handoff**
+- [x] **Step 6: Record verification and next handoff**
 
 Write the exact commands, exit codes, test counts, manifest markers, exclusions, and any manual/blocked gates in the verification document. Update the project brief, README, first-slice schema expectation, and `NEXT-SESSION.md` to mark the collaboration bus implemented and identify conversation/turn plus provider-delivery transport as the next backend dependency without claiming ConPTY or product readiness.
 
-- [ ] **Step 7: Commit closeout**
+- [x] **Step 7: Commit closeout**
 
 Run: `git diff --check`
 
