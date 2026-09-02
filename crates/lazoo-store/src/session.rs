@@ -483,7 +483,7 @@ fn query_sessions(connection: &Connection) -> Result<Vec<EmployeeSessionRecord>,
     rows.map(|row| session_from_raw(row?)).collect()
 }
 
-fn query_session(
+pub(crate) fn query_session(
     connection: &Connection,
     session_id: Uuid,
 ) -> Result<Option<EmployeeSessionRecord>, StoreError> {

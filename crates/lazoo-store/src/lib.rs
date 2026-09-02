@@ -1,5 +1,6 @@
 mod emergency;
 mod employee;
+mod message;
 mod migration;
 mod session;
 
@@ -22,6 +23,7 @@ pub use employee::{
     CreateEmployeeInput, DisableEmployeeInput, RefreshProviderObservationsInput,
     UpdateEmployeeInput,
 };
+pub use message::SendMessageInput;
 pub use session::{
     BeginSessionInput, BeginSessionStopInput, FailSessionInput, FinishSessionStopInput,
     MarkSessionReadyInput,
@@ -104,6 +106,55 @@ pub enum StoreError {
     SessionOwnership { session_id: Uuid },
     #[error("employee {employee_id} provider is not ready for a session: {reason}")]
     SessionProviderNotReady { employee_id: Uuid, reason: String },
+    #[error("message {message_id} was not found")]
+    MessageNotFound { message_id: Uuid },
+    #[error("message {role} employee {employee_id} was not found")]
+    MessageEmployeeNotFound {
+        role: &'static str,
+        employee_id: Uuid,
+    },
+    #[error("message {role} employee {employee_id} is disabled")]
+    MessageEmployeeDisabled {
+        role: &'static str,
+        employee_id: Uuid,
+    },
+    #[error("message {role} session {session_id} was not found")]
+    MessageSessionNotFound {
+        role: &'static str,
+        session_id: Uuid,
+    },
+    #[error("message {role} session {session_id} does not belong to employee {employee_id}")]
+    MessageSessionEmployeeMismatch {
+        role: &'static str,
+        session_id: Uuid,
+        employee_id: Uuid,
+    },
+    #[error("message project {project_id} was not found")]
+    MessageProjectNotFound { project_id: Uuid },
+    #[error("causal message {message_id} was not found")]
+    MessageCausationNotFound { message_id: Uuid },
+    #[error("message correlation {provided} does not match causal correlation {expected}")]
+    MessageCorrelation { provided: Uuid, expected: Uuid },
+    #[error("message {message_id} changed; current revision is {current_revision}")]
+    MessageStale {
+        message_id: Uuid,
+        current_revision: u64,
+    },
+    #[error("message {message_id} is {state}, expected {expected}")]
+    MessageState {
+        message_id: Uuid,
+        state: String,
+        expected: &'static str,
+    },
+    #[error("message {message_id} does not have active attempt {attempt_id}")]
+    MessageAttempt { message_id: Uuid, attempt_id: Uuid },
+    #[error("message {message_id} retry is not due until {next_attempt_at}")]
+    MessageRetryNotDue {
+        message_id: Uuid,
+        next_attempt_at: String,
+    },
+    #[error(transparent)]
+    MessageValidation(#[from] lazoo_domain::MessageValidationError),
     #[error("stored {field} is invalid: {message}")]
     InvalidRecord {
         field: &'static str,
