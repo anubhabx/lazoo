@@ -1,6 +1,14 @@
+mod message;
 mod rpc;
 mod types;
 
+pub use message::{
+    AcknowledgeMessageParams, CancelMessageParams, ClaimMessageParams, FailMessageParams,
+    MESSAGE_ENVELOPE_V1, MessageActivationIntent, MessageDeadLetter, MessageDelivery,
+    MessageDeliveryAttempt, MessageDeliveryState, MessageEndpoint, MessageEnvelope, MessageKind,
+    MessageListParams, MessageMutationResult, MessageReconcileResult, MessageRecord,
+    MessageReference, MessageShowParams, MessageSummary, RetryMessageParams, SendMessageParams,
+};
 pub use rpc::{JsonRpcRequest, JsonRpcResponse, RpcError};
 pub use types::{
     AuthorityMode, CheckoutMode, CreateEmployeeParams, DesktopSnapshot, DisableEmployeeParams,

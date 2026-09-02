@@ -2,9 +2,9 @@ use std::path::PathBuf;
 
 use lazoo_protocol::{
     AuthorityMode, CheckoutMode, CreateEmployeeParams, DesktopSnapshot, EmployeeCheckoutPolicy,
-    JsonRpcRequest, JsonRpcResponse, MAX_FRAME_BYTES, PROTOCOL_V1, ProviderProbeParams,
-    ProviderSmokeParams, ProviderSmokeResult, SessionLifecycleState, SystemStatus,
-    WarmSessionParams,
+    JsonRpcRequest, JsonRpcResponse, MAX_FRAME_BYTES, MessageDeliveryState, MessageKind,
+    PROTOCOL_V1, ProviderProbeParams, ProviderSmokeParams, ProviderSmokeResult, SendMessageParams,
+    SessionLifecycleState, SystemStatus, WarmSessionParams,
 };
 use serde_json::json;
 use uuid::Uuid;
@@ -128,6 +128,41 @@ fn session_contracts_are_strict_and_states_are_kebab_case() {
     assert_eq!(
         serde_json::to_string(&SessionLifecycleState::Starting).unwrap(),
         r#""starting""#
+    );
+}
+
+#[test]
+fn message_contracts_are_strict_versioned_and_kebab_case() {
+    let sender = Uuid::new_v4();
+    let recipient = Uuid::new_v4();
+    let params: SendMessageParams = serde_json::from_value(json!({
+        "sender": {"employeeId": sender},
+        "recipient": {"employeeId": recipient},
+        "kind": "peer",
+        "body": {"text": "Need the spacing token."},
+        "idempotencyKey": "message-1"
+    }))
+    .unwrap();
+
+    assert_eq!(params.sender.employee_id, sender);
+    assert_eq!(params.recipient.employee_id, recipient);
+    assert_eq!(params.kind, MessageKind::Peer);
+    assert_eq!(params.max_attempts, 3);
+    assert!(params.references.is_empty());
+    assert_eq!(
+        serde_json::to_string(&MessageDeliveryState::RetryableFailed).unwrap(),
+        r#""retryable-failed""#
+    );
+    assert!(
+        serde_json::from_value::<SendMessageParams>(json!({
+            "sender": {"employeeId": sender},
+            "recipient": {"employeeId": recipient},
+            "kind": "peer",
+            "body": {"text": "Need the spacing token."},
+            "idempotencyKey": "message-1",
+            "unexpected": true
+        }))
+        .is_err()
     );
 }
 
