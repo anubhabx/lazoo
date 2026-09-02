@@ -1,12 +1,17 @@
 use std::path::PathBuf;
 
 use clap::Parser;
-use lazoo_protocol::{CheckoutMode, RpcError};
+use lazoo_protocol::{CheckoutMode, MessageKind, RpcError};
 use lazooctl::{
-    Cli, Command, EmployeeCommand, ProjectCommand, RosterCommand, SessionCommand, command_request,
-    exit_code_for_rpc, render_result,
+    Cli, Command, EmployeeCommand, MessageCommand, ProjectCommand, RosterCommand, SessionCommand,
+    command_request, exit_code_for_rpc, render_result,
 };
 use serde_json::json;
+
+const SENDER_ID: &str = "00000000-0000-4000-8000-000000000001";
+const RECIPIENT_ID: &str = "00000000-0000-4000-8000-000000000002";
+const MESSAGE_ID: &str = "00000000-0000-4000-8000-000000000003";
+const ATTEMPT_ID: &str = "00000000-0000-4000-8000-000000000004";
 
 #[test]
 fn project_register_defaults_to_isolated() {
@@ -70,6 +75,7 @@ fn rpc_error_families_have_stable_exit_codes() {
         ("LZ-EMPLOYEE-STALE", 9),
         ("LZ-EMPLOYEE-NOT-FOUND", 9),
         ("LZ-SESSION-STALE", 10),
+        ("LZ-MESSAGE-STALE", 11),
         ("LZ-UNEXPECTED", 10),
     ];
     for (code, expected) in cases {
@@ -82,6 +88,181 @@ fn rpc_error_families_have_stable_exit_codes() {
             expected
         );
     }
+}
+
+#[test]
+fn message_cli_maps_send_envelope() {
+    let send = Cli::try_parse_from([
+        "lazooctl",
+        "message",
+        "send",
+        SENDER_ID,
+        RECIPIENT_ID,
+        "--kind",
+        "peer",
+        "--body",
+        r#"{"text":"Need the spacing token."}"#,
+        "--references",
+        r#"[{"kind":"file","target":"tokens.css","metadata":{}}]"#,
+        "--max-attempts",
+        "2",
+        "--idempotency-key",
+        "send-message",
+    ])
+    .unwrap();
+    let Command::Message(MessageCommand::Send { kind, .. }) = &send.command else {
+        panic!("expected message send command");
+    };
+    assert_eq!(*kind, MessageKind::Peer);
+    assert_eq!(
+        command_request(&send.command),
+        (
+            "message.send",
+            json!({
+                "sender": {"employeeId": SENDER_ID, "sessionId": null},
+                "recipient": {"employeeId": RECIPIENT_ID, "sessionId": null},
+                "projectId": null,
+                "conversationId": null,
+                "taskId": null,
+                "correlationId": null,
+                "causationId": null,
+                "kind": "peer",
+                "body": {"text": "Need the spacing token."},
+                "references": [{"kind": "file", "target": "tokens.css", "metadata": {}}],
+                "maxAttempts": 2,
+                "idempotencyKey": "send-message"
+            }),
+            false
+        )
+    );
+}
+
+#[test]
+fn message_cli_maps_delivery_outcomes() {
+    let claim = Cli::try_parse_from([
+        "lazooctl",
+        "message",
+        "claim",
+        MESSAGE_ID,
+        "--expected-revision",
+        "1",
+        "--idempotency-key",
+        "claim-message",
+    ])
+    .unwrap();
+    assert_eq!(command_request(&claim.command).0, "message.claim");
+
+    let acknowledge = Cli::try_parse_from([
+        "lazooctl",
+        "message",
+        "acknowledge",
+        MESSAGE_ID,
+        "--expected-revision",
+        "2",
+        "--attempt-id",
+        ATTEMPT_ID,
+        "--acknowledgement-key",
+        "provider-ack-1",
+        "--evidence",
+        r#"{"progress":true}"#,
+        "--idempotency-key",
+        "ack-message",
+    ])
+    .unwrap();
+    assert_eq!(
+        command_request(&acknowledge.command),
+        (
+            "message.acknowledge",
+            json!({
+                "id": MESSAGE_ID,
+                "expectedRevision": 2,
+                "attemptId": ATTEMPT_ID,
+                "acknowledgementKey": "provider-ack-1",
+                "evidence": {"progress": true},
+                "idempotencyKey": "ack-message"
+            }),
+            false
+        )
+    );
+
+    let fail = Cli::try_parse_from([
+        "lazooctl",
+        "message",
+        "fail",
+        MESSAGE_ID,
+        "--expected-revision",
+        "2",
+        "--attempt-id",
+        ATTEMPT_ID,
+        "--retryable",
+        "true",
+        "--failure-code",
+        "LZ-MESSAGE-TIMEOUT",
+        "--failure-message",
+        "acknowledgement timed out",
+        "--idempotency-key",
+        "fail-message",
+    ])
+    .unwrap();
+    assert_eq!(command_request(&fail.command).0, "message.fail");
+}
+
+#[test]
+fn message_cli_maps_retry_cancel_and_reads() {
+    for (arguments, method) in [
+        (
+            vec![
+                "lazooctl",
+                "message",
+                "retry",
+                MESSAGE_ID,
+                "--expected-revision",
+                "3",
+                "--idempotency-key",
+                "retry-message",
+            ],
+            "message.retry",
+        ),
+        (
+            vec![
+                "lazooctl",
+                "message",
+                "cancel",
+                MESSAGE_ID,
+                "--expected-revision",
+                "3",
+                "--idempotency-key",
+                "cancel-message",
+            ],
+            "message.cancel",
+        ),
+        (
+            vec!["lazooctl", "message", "list", "--after-sequence", "4"],
+            "message.list",
+        ),
+        (
+            vec!["lazooctl", "message", "show", MESSAGE_ID],
+            "message.show",
+        ),
+    ] {
+        let cli = Cli::try_parse_from(arguments).unwrap();
+        assert_eq!(command_request(&cli.command).0, method);
+    }
+
+    let generated_key = Cli::try_parse_from([
+        "lazooctl",
+        "message",
+        "claim",
+        MESSAGE_ID,
+        "--expected-revision",
+        "1",
+    ])
+    .unwrap();
+    assert!(
+        command_request(&generated_key.command).1["idempotencyKey"]
+            .as_str()
+            .is_some_and(|value| !value.is_empty())
+    );
 }
 
 #[test]

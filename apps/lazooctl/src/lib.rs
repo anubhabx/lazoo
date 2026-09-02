@@ -3,7 +3,8 @@ use std::path::PathBuf;
 use clap::{Parser, Subcommand};
 use lazoo_ipc::{IpcError, PipeClient};
 use lazoo_protocol::{
-    AuthorityMode, CheckoutMode, EmployeeCheckoutPolicy, JsonRpcRequest, JsonRpcResponse, RpcError,
+    AuthorityMode, CheckoutMode, EmployeeCheckoutPolicy, JsonRpcRequest, JsonRpcResponse,
+    MessageKind, RpcError,
 };
 use lazoo_runtime::{DataRoot, Installation, RuntimeError};
 use serde_json::{Value, json};
@@ -34,6 +35,8 @@ pub enum Command {
     Roster(RosterCommand),
     #[command(subcommand)]
     Session(SessionCommand),
+    #[command(subcommand)]
+    Message(MessageCommand),
     #[command(subcommand)]
     System(SystemCommand),
 }
@@ -180,6 +183,96 @@ pub enum SessionCommand {
     },
 }
 
+#[derive(Debug, Subcommand)]
+pub enum MessageCommand {
+    Send {
+        sender_employee_id: Uuid,
+        recipient_employee_id: Uuid,
+        #[arg(long)]
+        sender_session_id: Option<Uuid>,
+        #[arg(long)]
+        recipient_session_id: Option<Uuid>,
+        #[arg(long)]
+        project_id: Option<Uuid>,
+        #[arg(long)]
+        conversation_id: Option<Uuid>,
+        #[arg(long)]
+        task_id: Option<Uuid>,
+        #[arg(long)]
+        correlation_id: Option<Uuid>,
+        #[arg(long)]
+        causation_id: Option<Uuid>,
+        #[arg(long, value_parser = parse_message_kind)]
+        kind: MessageKind,
+        #[arg(long, value_parser = parse_json_value)]
+        body: Value,
+        #[arg(long, default_value = "[]", value_parser = parse_json_array)]
+        references: Value,
+        #[arg(long, default_value_t = 3)]
+        max_attempts: u32,
+        #[arg(long)]
+        idempotency_key: Option<String>,
+    },
+    Claim {
+        id: Uuid,
+        #[arg(long)]
+        expected_revision: u64,
+        #[arg(long)]
+        idempotency_key: Option<String>,
+    },
+    Acknowledge {
+        id: Uuid,
+        #[arg(long)]
+        expected_revision: u64,
+        #[arg(long)]
+        attempt_id: Uuid,
+        #[arg(long)]
+        acknowledgement_key: String,
+        #[arg(long, default_value = "{}", value_parser = parse_json_value)]
+        evidence: Value,
+        #[arg(long)]
+        idempotency_key: Option<String>,
+    },
+    Fail {
+        id: Uuid,
+        #[arg(long)]
+        expected_revision: u64,
+        #[arg(long)]
+        attempt_id: Uuid,
+        #[arg(long, action = clap::ArgAction::Set)]
+        retryable: bool,
+        #[arg(long)]
+        failure_code: String,
+        #[arg(long)]
+        failure_message: String,
+        #[arg(long)]
+        idempotency_key: Option<String>,
+    },
+    Retry {
+        id: Uuid,
+        #[arg(long)]
+        expected_revision: u64,
+        #[arg(long)]
+        idempotency_key: Option<String>,
+    },
+    Cancel {
+        id: Uuid,
+        #[arg(long)]
+        expected_revision: u64,
+        #[arg(long)]
+        idempotency_key: Option<String>,
+    },
+    List {
+        #[arg(long, default_value_t = 0)]
+        after_sequence: u64,
+        #[arg(long, default_value_t = 100)]
+        limit: u32,
+    },
+    Show {
+        id: Uuid,
+    },
+}
+
 #[derive(Debug, Error)]
 pub enum CliError {
     #[error("RPC request failed: {0:?}")]
@@ -286,8 +379,159 @@ pub fn command_request(command: &Command) -> (&'static str, Value, bool) {
             false,
         ),
         Command::Session(command) => session_request(command),
+        Command::Message(command) => message_request(command),
         Command::System(SystemCommand::Shutdown) => ("system.shutdown", json!({}), false),
     }
+}
+
+fn message_request(command: &MessageCommand) -> (&'static str, Value, bool) {
+    match command {
+        MessageCommand::Send { .. } => message_send_request(command),
+        MessageCommand::Claim {
+            id,
+            expected_revision,
+            idempotency_key,
+        } => message_revision_request(
+            "message.claim",
+            *id,
+            *expected_revision,
+            idempotency_key.as_deref(),
+        ),
+        MessageCommand::Acknowledge {
+            id,
+            expected_revision,
+            attempt_id,
+            acknowledgement_key,
+            evidence,
+            idempotency_key,
+        } => (
+            "message.acknowledge",
+            json!({
+                "id": id,
+                "expectedRevision": expected_revision,
+                "attemptId": attempt_id,
+                "acknowledgementKey": acknowledgement_key,
+                "evidence": evidence,
+                "idempotencyKey": idempotency_key.clone().unwrap_or_else(|| Uuid::new_v4().to_string()),
+            }),
+            false,
+        ),
+        MessageCommand::Fail {
+            id,
+            expected_revision,
+            attempt_id,
+            retryable,
+            failure_code,
+            failure_message,
+            idempotency_key,
+        } => (
+            "message.fail",
+            json!({
+                "id": id,
+                "expectedRevision": expected_revision,
+                "attemptId": attempt_id,
+                "retryable": retryable,
+                "failureCode": failure_code,
+                "failureMessage": failure_message,
+                "idempotencyKey": idempotency_key.clone().unwrap_or_else(|| Uuid::new_v4().to_string()),
+            }),
+            false,
+        ),
+        MessageCommand::Retry {
+            id,
+            expected_revision,
+            idempotency_key,
+        } => message_revision_request(
+            "message.retry",
+            *id,
+            *expected_revision,
+            idempotency_key.as_deref(),
+        ),
+        MessageCommand::Cancel {
+            id,
+            expected_revision,
+            idempotency_key,
+        } => message_revision_request(
+            "message.cancel",
+            *id,
+            *expected_revision,
+            idempotency_key.as_deref(),
+        ),
+        MessageCommand::List {
+            after_sequence,
+            limit,
+        } => (
+            "message.list",
+            json!({"afterSequence": after_sequence, "limit": limit}),
+            false,
+        ),
+        MessageCommand::Show { id } => ("message.show", json!({"id": id}), false),
+    }
+}
+
+fn message_send_request(command: &MessageCommand) -> (&'static str, Value, bool) {
+    let MessageCommand::Send {
+        sender_employee_id,
+        recipient_employee_id,
+        sender_session_id,
+        recipient_session_id,
+        project_id,
+        conversation_id,
+        task_id,
+        correlation_id,
+        causation_id,
+        kind,
+        body,
+        references,
+        max_attempts,
+        idempotency_key,
+    } = command
+    else {
+        unreachable!("message_send_request only accepts message send commands")
+    };
+
+    (
+        "message.send",
+        json!({
+            "sender": {
+                "employeeId": sender_employee_id,
+                "sessionId": sender_session_id,
+            },
+            "recipient": {
+                "employeeId": recipient_employee_id,
+                "sessionId": recipient_session_id,
+            },
+            "projectId": project_id,
+            "conversationId": conversation_id,
+            "taskId": task_id,
+            "correlationId": correlation_id,
+            "causationId": causation_id,
+            "kind": kind,
+            "body": body,
+            "references": references,
+            "maxAttempts": max_attempts,
+            "idempotencyKey": idempotency_key.clone().unwrap_or_else(|| Uuid::new_v4().to_string()),
+        }),
+        false,
+    )
+}
+
+fn message_revision_request(
+    method: &'static str,
+    id: Uuid,
+    expected_revision: u64,
+    idempotency_key: Option<&str>,
+) -> (&'static str, Value, bool) {
+    (
+        method,
+        json!({
+            "id": id,
+            "expectedRevision": expected_revision,
+            "idempotencyKey": idempotency_key
+                .map_or_else(|| Uuid::new_v4().to_string(), str::to_owned),
+        }),
+        false,
+    )
 }
 
 fn session_request(command: &SessionCommand) -> (&'static str, Value, bool) {
@@ -425,6 +669,7 @@ pub fn exit_code_for_rpc(error: &RpcError) -> i32 {
         code if code.starts_with("LZ-PROVIDER-") || code == "LZ-PROVIDER" => 8,
         code if code.starts_with("LZ-EMPLOYEE-") => 9,
         code if code.starts_with("LZ-SESSION-") => 10,
+        code if code.starts_with("LZ-MESSAGE-") => 11,
         _ => 10,
     }
 }
@@ -451,6 +696,27 @@ fn parse_checkout_mode(value: &str) -> Result<CheckoutMode, String> {
 
 fn parse_json_value(value: &str) -> Result<Value, String> {
     serde_json::from_str(value).map_err(|error| format!("invalid JSON: {error}"))
+}
+
+fn parse_json_array(value: &str) -> Result<Value, String> {
+    let value = parse_json_value(value)?;
+    if value.is_array() {
+        Ok(value)
+    } else {
+        Err("expected a JSON array".to_owned())
+    }
+}
+
+fn parse_message_kind(value: &str) -> Result<MessageKind, String> {
+    match value {
+        "delegation" => Ok(MessageKind::Delegation),
+        "peer" => Ok(MessageKind::Peer),
+        "reply" => Ok(MessageKind::Reply),
+        "result" => Ok(MessageKind::Result),
+        "status" => Ok(MessageKind::Status),
+        "system" => Ok(MessageKind::System),
+        _ => Err("expected delegation, peer, reply, result, status, or system".to_owned()),
+    }
 }
 
 fn parse_authority_mode(value: &str) -> Result<AuthorityMode, String> {

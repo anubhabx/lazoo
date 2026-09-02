@@ -117,11 +117,19 @@ impl SessionBackend for FailingSessionBackend {
 }
 
 fn configured_employee(store: &Store) -> lazoo_protocol::EmployeeRecord {
+    configured_employee_named(store, "Rhea", "create-rhea")
+}
+
+fn configured_employee_named(
+    store: &Store,
+    name: &str,
+    idempotency_key: &str,
+) -> lazoo_protocol::EmployeeRecord {
     store
         .create_employee(&CreateEmployeeInput {
-            request_id: "create-rhea-request".to_owned(),
-            idempotency_key: "create-rhea".to_owned(),
-            name: "Rhea".to_owned(),
+            request_id: format!("{idempotency_key}-request"),
+            idempotency_key: idempotency_key.to_owned(),
+            name: name.to_owned(),
             provider: "codex".to_owned(),
             role: "Lead".to_owned(),
             instructions: String::new(),
@@ -144,6 +152,29 @@ fn configured_employee(store: &Store) -> lazoo_protocol::EmployeeRecord {
         })
         .unwrap()
         .employee
+}
+
+fn message_test_app() -> (
+    tempfile::TempDir,
+    DataRoot,
+    Store,
+    App,
+    uuid::Uuid,
+    uuid::Uuid,
+) {
+    let temporary = tempdir().unwrap();
+    let root = DataRoot::from_path(temporary.path().join("data"));
+    root.ensure().unwrap();
+    let store = Store::open_path(root.state_db()).unwrap();
+    let sender = configured_employee_named(&store, "Rhea", "create-rhea");
+    let recipient = configured_employee_named(&store, "Mira", "create-mira");
+    let app = App::new_with_provider_environment(
+        store.clone(),
+        root.clone(),
+        DiscoveryEnvironment::empty(),
+    )
+    .unwrap();
+    (temporary, root, store, app, sender.id, recipient.id)
 }
 
 fn session_test_app() -> (tempfile::TempDir, App, FakeSessionBackend, uuid::Uuid) {
@@ -172,6 +203,339 @@ async fn assert_desktop_is_roster_neutral(app: &App) {
     assert!(desktop.get("employees").is_none());
     assert!(desktop.get("roster").is_none());
     assert!(desktop.get("providers").is_none());
+    assert!(desktop.get("messages").is_none());
+    assert!(desktop.get("collaboration").is_none());
+}
+
+#[tokio::test]
+#[allow(clippy::too_many_lines)] // Keep the end-to-end transition assertions in one scenario.
+async fn message_send_claim_and_acknowledge_are_idempotent_and_backend_only() {
+    let (_temporary, _root, _store, app, sender, recipient) = message_test_app();
+    let send_params = json!({
+        "sender": {"employeeId": sender},
+        "recipient": {"employeeId": recipient},
+        "kind": "peer",
+        "body": {"text": "Need the spacing token."},
+        "idempotencyKey": "send-message"
+    });
+    let sent = app
+        .handle(request("send-1", "message.send", send_params.clone()))
+        .await
+        .result
+        .unwrap();
+    let replay = app
+        .handle(request("send-2", "message.send", send_params))
+        .await
+        .result
+        .unwrap();
+    assert_eq!(
+        sent["message"]["envelope"]["id"],
+        replay["message"]["envelope"]["id"]
+    );
+    assert_eq!(sent["message"]["envelope"]["version"], 1);
+    assert_eq!(sent["message"]["delivery"]["state"], "queued");
+    assert_eq!(sent["message"]["delivery"]["revision"], 1);
+    assert_eq!(sent["message"]["attempts"], json!([]));
+    assert_eq!(
+        sent["message"]["activationIntent"]["requiresActivation"],
+        true
+    );
+    assert!(sent["eventSequence"].is_number());
+    assert!(replay["eventSequence"].is_null());
+    let message_id = sent["message"]["envelope"]["id"].as_str().unwrap();
+
+    let listed = app
+        .handle(request(
+            "list",
+            "message.list",
+            json!({"afterSequence": 0, "limit": 100}),
+        ))
+        .await
+        .result
+        .unwrap();
+    assert_eq!(listed.as_array().unwrap().len(), 1);
+    assert_eq!(listed[0]["id"], message_id);
+    let shown = app
+        .handle(request("show", "message.show", json!({"id": message_id})))
+        .await
+        .result
+        .unwrap();
+    assert_eq!(
+        shown["envelope"]["body"],
+        json!({"text": "Need the spacing token."})
+    );
+
+    let claimed = app
+        .handle(request(
+            "claim",
+            "message.claim",
+            json!({
+                "id": message_id,
+                "expectedRevision": 1,
+                "idempotencyKey": "claim-message"
+            }),
+        ))
+        .await
+        .result
+        .unwrap();
+    assert_eq!(claimed["message"]["delivery"]["state"], "delivering");
+    let attempt_id = claimed["message"]["attempts"][0]["id"].as_str().unwrap();
+
+    let wrong_attempt = app
+        .handle(request(
+            "wrong-ack",
+            "message.acknowledge",
+            json!({
+                "id": message_id,
+                "expectedRevision": 2,
+                "attemptId": uuid::Uuid::new_v4(),
+                "acknowledgementKey": "provider-ack-1",
+                "evidence": {"progress": true},
+                "idempotencyKey": "wrong-ack"
+            }),
+        ))
+        .await
+        .error
+        .unwrap();
+    assert_eq!(wrong_attempt.code, "LZ-MESSAGE-ATTEMPT");
+
+    let acknowledge_params = json!({
+        "id": message_id,
+        "expectedRevision": 2,
+        "attemptId": attempt_id,
+        "acknowledgementKey": "provider-ack-1",
+        "evidence": {"progress": true},
+        "idempotencyKey": "ack-message"
+    });
+    let acknowledged = app
+        .handle(request(
+            "ack-1",
+            "message.acknowledge",
+            acknowledge_params.clone(),
+        ))
+        .await
+        .result
+        .unwrap();
+    let ack_replay = app
+        .handle(request("ack-2", "message.acknowledge", acknowledge_params))
+        .await
+        .result
+        .unwrap();
+    assert_eq!(acknowledged["message"]["delivery"]["state"], "acknowledged");
+    assert_eq!(acknowledged["message"], ack_replay["message"]);
+    assert!(ack_replay["eventSequence"].is_null());
+    assert_desktop_is_roster_neutral(&app).await;
+}
+
+#[tokio::test]
+#[allow(clippy::too_many_lines)] // Retry, exhaustion, and cancellation share one durable fixture.
+async fn message_retry_dead_letter_cancel_and_errors_are_stable() {
+    let (_temporary, _root, store, app, sender, recipient) = message_test_app();
+    let sent = app
+        .handle(request(
+            "send-retry",
+            "message.send",
+            json!({
+                "sender": {"employeeId": sender},
+                "recipient": {"employeeId": recipient},
+                "kind": "peer",
+                "body": {"text": "Retry me."},
+                "maxAttempts": 2,
+                "idempotencyKey": "send-retry"
+            }),
+        ))
+        .await
+        .result
+        .unwrap();
+    let message_id = sent["message"]["envelope"]["id"].as_str().unwrap();
+    let stale = app
+        .handle(request(
+            "stale-claim",
+            "message.claim",
+            json!({
+                "id": message_id,
+                "expectedRevision": 2,
+                "idempotencyKey": "stale-claim"
+            }),
+        ))
+        .await
+        .error
+        .unwrap();
+    assert_eq!(stale.code, "LZ-MESSAGE-STALE");
+    assert_eq!(stale.data.unwrap()["currentRevision"], 1);
+
+    let claimed = app
+        .handle(request(
+            "claim-retry",
+            "message.claim",
+            json!({
+                "id": message_id,
+                "expectedRevision": 1,
+                "idempotencyKey": "claim-retry"
+            }),
+        ))
+        .await
+        .result
+        .unwrap();
+    let attempt_id = claimed["message"]["attempts"][0]["id"].as_str().unwrap();
+    let failed = app
+        .handle(request(
+            "fail-retry",
+            "message.fail",
+            json!({
+                "id": message_id,
+                "expectedRevision": 2,
+                "attemptId": attempt_id,
+                "retryable": true,
+                "failureCode": "LZ-MESSAGE-TIMEOUT",
+                "failureMessage": "recipient acknowledgement was not observed",
+                "idempotencyKey": "fail-retry"
+            }),
+        ))
+        .await
+        .result
+        .unwrap();
+    assert_eq!(failed["message"]["delivery"]["state"], "retryable-failed");
+    let early = app
+        .handle(request(
+            "early-retry",
+            "message.retry",
+            json!({
+                "id": message_id,
+                "expectedRevision": 3,
+                "idempotencyKey": "early-retry"
+            }),
+        ))
+        .await
+        .error
+        .unwrap();
+    assert_eq!(early.code, "LZ-MESSAGE-RETRY-NOT-DUE");
+    assert!(early.data.unwrap()["nextAttemptAt"].is_string());
+    store
+        .execute_for_test(&format!(
+            "UPDATE message_deliveries SET next_attempt_at = '2026-01-01T00:00:00Z' WHERE message_id = '{message_id}'"
+        ))
+        .unwrap();
+    let retrying = app
+        .handle(request(
+            "retry",
+            "message.retry",
+            json!({
+                "id": message_id,
+                "expectedRevision": 3,
+                "idempotencyKey": "retry"
+            }),
+        ))
+        .await
+        .result
+        .unwrap();
+    let final_attempt_id = retrying["message"]["attempts"][1]["id"].as_str().unwrap();
+    let exhausted = app
+        .handle(request(
+            "exhausted",
+            "message.fail",
+            json!({
+                "id": message_id,
+                "expectedRevision": 4,
+                "attemptId": final_attempt_id,
+                "retryable": true,
+                "failureCode": "LZ-MESSAGE-TIMEOUT",
+                "failureMessage": "recipient acknowledgement was not observed",
+                "idempotencyKey": "exhausted"
+            }),
+        ))
+        .await
+        .result
+        .unwrap();
+    assert_eq!(exhausted["message"]["delivery"]["state"], "terminal-failed");
+    assert_eq!(
+        exhausted["message"]["deadLetter"]["failureCode"],
+        "LZ-MESSAGE-TIMEOUT"
+    );
+
+    let cancellable = app
+        .handle(request(
+            "send-cancel",
+            "message.send",
+            json!({
+                "sender": {"employeeId": sender},
+                "recipient": {"employeeId": recipient},
+                "kind": "status",
+                "body": {"text": "Cancel me."},
+                "idempotencyKey": "send-cancel"
+            }),
+        ))
+        .await
+        .result
+        .unwrap();
+    let cancellable_id = cancellable["message"]["envelope"]["id"].as_str().unwrap();
+    let cancelled = app
+        .handle(request(
+            "cancel",
+            "message.cancel",
+            json!({
+                "id": cancellable_id,
+                "expectedRevision": 1,
+                "idempotencyKey": "cancel"
+            }),
+        ))
+        .await
+        .result
+        .unwrap();
+    assert_eq!(cancelled["message"]["delivery"]["state"], "cancelled");
+}
+
+#[tokio::test]
+async fn message_restart_reconciles_an_uncertain_attempt() {
+    let (_temporary, root, store, app, sender, recipient) = message_test_app();
+    let sent = app
+        .handle(request(
+            "send-restart",
+            "message.send",
+            json!({
+                "sender": {"employeeId": sender},
+                "recipient": {"employeeId": recipient},
+                "kind": "peer",
+                "body": {"text": "Survive restart."},
+                "idempotencyKey": "send-restart"
+            }),
+        ))
+        .await
+        .result
+        .unwrap();
+    let message_id = sent["message"]["envelope"]["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    app.handle(request(
+        "claim-restart",
+        "message.claim",
+        json!({
+            "id": message_id,
+            "expectedRevision": 1,
+            "idempotencyKey": "claim-restart"
+        }),
+    ))
+    .await
+    .result
+    .unwrap();
+    drop(app);
+    drop(store);
+
+    let reopened = Store::open_path(root.state_db()).unwrap();
+    let restarted =
+        App::new_with_provider_environment(reopened, root, DiscoveryEnvironment::empty()).unwrap();
+    let shown = restarted
+        .handle(request(
+            "show-reconciled",
+            "message.show",
+            json!({"id": message_id}),
+        ))
+        .await
+        .result
+        .unwrap();
+    assert_eq!(shown["delivery"]["state"], "retryable-failed");
+    assert_eq!(shown["attempts"][0]["failureCode"], "LZ-MESSAGE-OWNER-LOST");
 }
 
 #[tokio::test]
@@ -184,7 +548,7 @@ async fn status_reports_protocol_store_and_boot_identity() {
     let result = response.result.unwrap();
 
     assert_eq!(result["protocolVersion"], 1);
-    assert_eq!(result["schemaVersion"], 3);
+    assert_eq!(result["schemaVersion"], 4);
     assert_eq!(result["journalMode"], "wal");
     assert!(
         result["bootId"]

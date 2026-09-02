@@ -14,11 +14,13 @@ use lazoo_domain::{
     validate_native_settings,
 };
 use lazoo_protocol::{
-    AuthorityMode, CreateEmployeeParams, DesktopSnapshot, DisableEmployeeParams,
-    EmployeeShowParams, EventSummary, EventsListParams, JsonRpcRequest, JsonRpcResponse,
-    PROTOCOL_V1, ProviderListEntry, ProviderObservation, ProviderProbeParams, ProviderSmokeParams,
-    ProviderSmokeResult, RegisterProjectParams, RosterRefreshParams, RpcError, SessionShowParams,
-    StopSessionParams, SystemStatus, UpdateEmployeeParams, WarmSessionParams,
+    AcknowledgeMessageParams, AuthorityMode, CancelMessageParams, ClaimMessageParams,
+    CreateEmployeeParams, DesktopSnapshot, DisableEmployeeParams, EmployeeShowParams, EventSummary,
+    EventsListParams, FailMessageParams, JsonRpcRequest, JsonRpcResponse, MessageListParams,
+    MessageShowParams, PROTOCOL_V1, ProviderListEntry, ProviderObservation, ProviderProbeParams,
+    ProviderSmokeParams, ProviderSmokeResult, RegisterProjectParams, RetryMessageParams,
+    RosterRefreshParams, RpcError, SendMessageParams, SessionShowParams, StopSessionParams,
+    SystemStatus, UpdateEmployeeParams, WarmSessionParams,
 };
 use lazoo_providers::{
     AuthenticationState, DiscoveryEnvironment, DiscoverySource, ProviderCapabilities,
@@ -27,10 +29,11 @@ use lazoo_providers::{
 };
 use lazoo_runtime::DataRoot;
 use lazoo_store::{
-    BeginSessionInput, BeginSessionStopInput, CreateEmployeeInput, DisableEmployeeInput,
+    AcknowledgeMessageInput, BeginSessionInput, BeginSessionStopInput, CancelMessageInput,
+    ClaimMessageInput, CreateEmployeeInput, DisableEmployeeInput, FailMessageInput,
     FailSessionInput, FinishSessionStopInput, MarkSessionReadyInput,
-    RefreshProviderObservationsInput, RegisterProjectInput, Store, StoreStatus,
-    UpdateEmployeeInput,
+    RefreshProviderObservationsInput, RegisterProjectInput, RetryMessageInput, SendMessageInput,
+    Store, StoreStatus, UpdateEmployeeInput,
 };
 use serde::Serialize;
 use serde_json::{Value, json};
@@ -161,6 +164,7 @@ impl App {
         let (shutdown, _) = watch::channel(false);
         let boot_id = Uuid::new_v4();
         store.reconcile_sessions(boot_id)?;
+        store.reconcile_messages()?;
         Ok(Self {
             store,
             root,
@@ -208,6 +212,14 @@ impl App {
             "session.list" => self.session_list(&request.params),
             "session.show" => self.session_show(request.params),
             "session.stop" => self.stop_session(&request).await,
+            "message.send" => self.send_message(&request),
+            "message.claim" => self.claim_message(&request),
+            "message.acknowledge" => self.acknowledge_message(&request),
+            "message.fail" => self.fail_message(&request),
+            "message.retry" => self.retry_message(&request),
+            "message.cancel" => self.cancel_message(&request),
+            "message.list" => self.message_list(request.params),
+            "message.show" => self.message_show(request.params),
             "system.shutdown" => {
                 let _ = self.shutdown.send(true);
                 Ok(json!({"planned": true}))
@@ -827,6 +839,144 @@ impl App {
         self.publish_events()
     }
 
+    fn send_message(&self, request: &JsonRpcRequest) -> Result<Value, RpcError> {
+        let params: SendMessageParams = serde_json::from_value(request.params.clone())
+            .map_err(|error| message_invalid(error.to_string()))?;
+        let result = self
+            .store
+            .send_message(&SendMessageInput {
+                request_id: request.id.clone(),
+                idempotency_key: params.idempotency_key,
+                sender: params.sender,
+                recipient: params.recipient,
+                project_id: params.project_id,
+                conversation_id: params.conversation_id,
+                task_id: params.task_id,
+                correlation_id: params.correlation_id,
+                causation_id: params.causation_id,
+                kind: params.kind,
+                body: params.body,
+                references: params.references,
+                max_attempts: params.max_attempts,
+            })
+            .map_err(message_store_error)?;
+        self.publish_events()?;
+        Ok(to_value(result))
+    }
+
+    fn claim_message(&self, request: &JsonRpcRequest) -> Result<Value, RpcError> {
+        let params: ClaimMessageParams = serde_json::from_value(request.params.clone())
+            .map_err(|error| message_invalid(error.to_string()))?;
+        require_message_revision_value(params.expected_revision)?;
+        let result = self
+            .store
+            .claim_message(&ClaimMessageInput {
+                request_id: request.id.clone(),
+                idempotency_key: params.idempotency_key,
+                message_id: params.id,
+                expected_revision: params.expected_revision,
+            })
+            .map_err(message_store_error)?;
+        self.publish_events()?;
+        Ok(to_value(result))
+    }
+
+    fn acknowledge_message(&self, request: &JsonRpcRequest) -> Result<Value, RpcError> {
+        let params: AcknowledgeMessageParams = serde_json::from_value(request.params.clone())
+            .map_err(|error| message_invalid(error.to_string()))?;
+        require_message_revision_value(params.expected_revision)?;
+        let result = self
+            .store
+            .acknowledge_message(&AcknowledgeMessageInput {
+                request_id: request.id.clone(),
+                idempotency_key: params.idempotency_key,
+                message_id: params.id,
+                expected_revision: params.expected_revision,
+                attempt_id: params.attempt_id,
+                acknowledgement_key: params.acknowledgement_key,
+                evidence: params.evidence,
+            })
+            .map_err(message_store_error)?;
+        self.publish_events()?;
+        Ok(to_value(result))
+    }
+
+    fn fail_message(&self, request: &JsonRpcRequest) -> Result<Value, RpcError> {
+        let params: FailMessageParams = serde_json::from_value(request.params.clone())
+            .map_err(|error| message_invalid(error.to_string()))?;
+        require_message_revision_value(params.expected_revision)?;
+        let result = self
+            .store
+            .fail_message(&FailMessageInput {
+                request_id: request.id.clone(),
+                idempotency_key: params.idempotency_key,
+                message_id: params.id,
+                expected_revision: params.expected_revision,
+                attempt_id: params.attempt_id,
+                retryable: params.retryable,
+                failure_code: params.failure_code,
+                failure_message: params.failure_message,
+            })
+            .map_err(message_store_error)?;
+        self.publish_events()?;
+        Ok(to_value(result))
+    }
+
+    fn retry_message(&self, request: &JsonRpcRequest) -> Result<Value, RpcError> {
+        let params: RetryMessageParams = serde_json::from_value(request.params.clone())
+            .map_err(|error| message_invalid(error.to_string()))?;
+        require_message_revision_value(params.expected_revision)?;
+        let result = self
+            .store
+            .retry_message(&RetryMessageInput {
+                request_id: request.id.clone(),
+                idempotency_key: params.idempotency_key,
+                message_id: params.id,
+                expected_revision: params.expected_revision,
+            })
+            .map_err(message_store_error)?;
+        self.publish_events()?;
+        Ok(to_value(result))
+    }
+
+    fn cancel_message(&self, request: &JsonRpcRequest) -> Result<Value, RpcError> {
+        let params: CancelMessageParams = serde_json::from_value(request.params.clone())
+            .map_err(|error| message_invalid(error.to_string()))?;
+        require_message_revision_value(params.expected_revision)?;
+        let result = self
+            .store
+            .cancel_message(&CancelMessageInput {
+                request_id: request.id.clone(),
+                idempotency_key: params.idempotency_key,
+                message_id: params.id,
+                expected_revision: params.expected_revision,
+            })
+            .map_err(message_store_error)?;
+        self.publish_events()?;
+        Ok(to_value(result))
+    }
+
+    fn message_list(&self, value: Value) -> Result<Value, RpcError> {
+        let params: MessageListParams =
+            serde_json::from_value(value).map_err(|error| message_invalid(error.to_string()))?;
+        if params.limit == 0 || params.limit > 1024 {
+            return Err(message_invalid("limit must be between 1 and 1024"));
+        }
+        self.store
+            .list_messages(params.after_sequence, params.limit)
+            .map(to_value)
+            .map_err(message_store_error)
+    }
+
+    fn message_show(&self, value: Value) -> Result<Value, RpcError> {
+        let params: MessageShowParams =
+            serde_json::from_value(value).map_err(|error| message_invalid(error.to_string()))?;
+        self.store
+            .get_message(params.id)
+            .map(to_value)
+            .map_err(message_store_error)
+    }
+
     pub async fn shutdown_live_sessions(&self) {
         let session_ids = self
             .live_sessions
@@ -1191,6 +1341,146 @@ fn session_invalid(message: impl Into<String>) -> RpcError {
         code: "LZ-SESSION-INVALID".to_owned(),
         message: message.into(),
         data: None,
+    }
+}
+
+fn require_message_revision_value(value: u64) -> Result<(), RpcError> {
+    if value == 0 {
+        Err(message_invalid(
+            "expectedRevision must be greater than zero",
+        ))
+    } else {
+        Ok(())
+    }
+}
+
+fn message_invalid(message: impl Into<String>) -> RpcError {
+    RpcError {
+        code: "LZ-MESSAGE-INVALID".to_owned(),
+        message: message.into(),
+        data: None,
+    }
+}
+
+#[allow(clippy::needless_pass_by_value)]
+fn message_store_error(error: lazoo_store::StoreError) -> RpcError {
+    let (code, data, safe_message) = message_store_error_parts(&error);
+    RpcError {
+        code: code.to_owned(),
+        message: safe_message,
+        data,
+    }
+}
+
+type MessageErrorParts = (&'static str, Option<Value>, String);
+
+fn message_store_error_parts(error: &lazoo_store::StoreError) -> MessageErrorParts {
+    match error {
+        lazoo_store::StoreError::MessageNotFound { message_id } => (
+            "LZ-MESSAGE-NOT-FOUND",
+            Some(json!({"messageId": message_id})),
+            error.to_string(),
+        ),
+        lazoo_store::StoreError::MessageEmployeeNotFound { role, employee_id } => (
+            "LZ-MESSAGE-EMPLOYEE-NOT-FOUND",
+            Some(json!({"role": role, "employeeId": employee_id})),
+            error.to_string(),
+        ),
+        lazoo_store::StoreError::MessageEmployeeDisabled { role, employee_id } => (
+            "LZ-MESSAGE-EMPLOYEE-DISABLED",
+            Some(json!({"role": role, "employeeId": employee_id})),
+            error.to_string(),
+        ),
+        lazoo_store::StoreError::MessageSessionNotFound { role, session_id } => (
+            "LZ-MESSAGE-SESSION-NOT-FOUND",
+            Some(json!({"role": role, "sessionId": session_id})),
+            error.to_string(),
+        ),
+        lazoo_store::StoreError::MessageSessionEmployeeMismatch {
+            role,
+            session_id,
+            employee_id,
+        } => (
+            "LZ-MESSAGE-SESSION-EMPLOYEE-MISMATCH",
+            Some(json!({
+                "role": role,
+                "sessionId": session_id,
+                "employeeId": employee_id
+            })),
+            error.to_string(),
+        ),
+        lazoo_store::StoreError::MessageProjectNotFound { project_id } => (
+            "LZ-MESSAGE-PROJECT-NOT-FOUND",
+            Some(json!({"projectId": project_id})),
+            error.to_string(),
+        ),
+        lazoo_store::StoreError::MessageCausationNotFound { message_id } => (
+            "LZ-MESSAGE-CAUSATION-NOT-FOUND",
+            Some(json!({"messageId": message_id})),
+            error.to_string(),
+        ),
+        lazoo_store::StoreError::MessageCorrelation { provided, expected } => (
+            "LZ-MESSAGE-CORRELATION",
+            Some(json!({"provided": provided, "expected": expected})),
+            error.to_string(),
+        ),
+        _ => message_delivery_store_error_parts(error),
+    }
+}
+
+fn message_delivery_store_error_parts(error: &lazoo_store::StoreError) -> MessageErrorParts {
+    match error {
+        lazoo_store::StoreError::MessageStale {
+            message_id,
+            current_revision,
+        } => (
+            "LZ-MESSAGE-STALE",
+            Some(json!({
+                "messageId": message_id,
+                "currentRevision": current_revision
+            })),
+            error.to_string(),
+        ),
+        lazoo_store::StoreError::MessageState {
+            message_id,
+            state,
+            expected,
+        } => (
+            "LZ-MESSAGE-STATE",
+            Some(json!({
+                "messageId": message_id,
+                "state": state,
+                "expected": expected
+            })),
+            error.to_string(),
+        ),
+        lazoo_store::StoreError::MessageAttempt {
+            message_id,
+            attempt_id,
+        } => (
+            "LZ-MESSAGE-ATTEMPT",
+            Some(json!({"messageId": message_id, "attemptId": attempt_id})),
+            error.to_string(),
+        ),
+        lazoo_store::StoreError::MessageRetryNotDue {
+            message_id,
+            next_attempt_at,
+        } => (
+            "LZ-MESSAGE-RETRY-NOT-DUE",
+            Some(json!({
+                "messageId": message_id,
+                "nextAttemptAt": next_attempt_at
+            })),
+            error.to_string(),
+        ),
+        lazoo_store::StoreError::MessageValidation(_) => {
+            ("LZ-MESSAGE-INVALID", None, error.to_string())
+        }
+        _ => (
+            "LZ-MESSAGE-STORE",
+            None,
+            "message store operation failed".to_owned(),
+        ),
     }
 }
 
