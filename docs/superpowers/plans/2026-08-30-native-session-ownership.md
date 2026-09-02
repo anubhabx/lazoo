@@ -94,9 +94,9 @@
 - Modify: `docs/PROJECT-BRIEF.md`
 - Modify: `README.md`
 
-- [ ] Write the backend-only acceptance contract test and verify RED.
-- [ ] Verify creation-time root/descendant containment with release fixtures.
-- [ ] Warm a real installed provider without sending a prompt, verify idempotency and idle truth, then stop it.
-- [ ] Force daemon loss, prove the job removes the tree, restart, and verify `LZ-SESSION-OWNER-LOST` reconciliation.
-- [ ] Run the complete workspace, lint, format, locked release, original control-plane, roster, and new session acceptances.
-- [ ] Record exact evidence and exclusions; commit as `test: verify native session ownership`.
+- [x] Write the backend-only acceptance contract test and verify RED.
+- [x] Verify creation-time root/descendant containment with release fixtures.
+- [x] Warm a real installed provider without sending a prompt, verify idempotency and idle truth, then stop it.
+- [x] Force daemon loss, prove the job removes the tree, restart, and verify `LZ-SESSION-OWNER-LOST` reconciliation.
+- [x] Run the complete workspace, lint, format, locked release, original control-plane, roster, and new session acceptances.
+- [x] Record exact evidence and exclusions; commit as `test: verify native session ownership`.

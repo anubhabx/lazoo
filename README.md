@@ -6,16 +6,17 @@ The name is a deliberately silly blend of **lazy** and **zoo**: wake the right e
 
 ## Status
 
-The first Windows control-plane slice, the polished read-only desktop-shell slice, the backend native-provider connector slice, and the durable employee-roster slice are implemented. Lazoo now provides four native executables:
+The first Windows control-plane slice, the polished read-only desktop-shell slice, the backend native-provider connector slice, the durable employee-roster slice, and native employee-session ownership are implemented. Lazoo now provides five native executables:
 
 - `lazoo-desktop.exe` opens a dark, command-first Tauri 2 control room for daemon health, projects, recent events, and recovered-incident count.
 - `lazoo-keeper.exe` supervises the daemon with a bounded restart policy and emergency spool.
-- `lazood.exe` owns the SQLite WAL store, revisioned employee roster, and authenticated named-pipe API.
-- `lazooctl.exe` exposes status, project registration/listing, event listing/following, native-provider diagnostics, employee/roster control, and planned shutdown.
+- `lazood.exe` owns the SQLite WAL store, revisioned employee roster, native-session lifecycle, and authenticated named-pipe API.
+- `lazooctl.exe` exposes status, project registration/listing, event listing/following, native-provider diagnostics, employee/roster/session control, and planned shutdown.
+- `lazoo-session-host.exe` is the protocol-transparent launch gate that places each native provider tree in its daemon-owned Windows Job Object before provider startup.
 
-The desktop remains deliberately read-only. Backend adapters connect Codex App Server, OpenCode ACP, Grok Build ACP, Antigravity stream JSON, and Claude Code stream JSON without flattening native configuration or authentication. Durable named employees can now be created, revised, disabled, and inspected through a provider-truth roster without starting a model session. Native employee execution, task delegation, managed memory, and worktree automation remain later slices. The full product contract lives in [docs/PROJECT-BRIEF.md](docs/PROJECT-BRIEF.md).
+The desktop remains deliberately read-only. Backend adapters connect Codex App Server, OpenCode ACP, Grok Build ACP, Antigravity stream JSON, and Claude Code stream JSON without flattening native configuration or authentication. Durable named employees can be created, revised, disabled, inspected, warmed into an idle native session, stopped, and reconciled after daemon loss. Warm starts a provider-native session but sends no model prompt. Conversations, task delegation, managed memory, and worktree automation remain later slices. The full product contract lives in [docs/PROJECT-BRIEF.md](docs/PROJECT-BRIEF.md).
 
-The target desktop information architecture is owner-approved, but UI implementation is shelved while the backend is completed. The current read-only shell remains a technical baseline. Continue from [docs/NEXT-SESSION.md](docs/NEXT-SESSION.md) with persistent native-session ownership and Windows process containment before exposing the approved launcher, terminals, workers, Inbox, or Settings.
+The target desktop information architecture is owner-approved, but UI implementation is owned separately while backend work continues. The current read-only shell remains this branch's technical baseline. Continue from [docs/NEXT-SESSION.md](docs/NEXT-SESSION.md) with the durable canonical collaboration bus; no launcher, terminal, worker, Inbox, or Settings contract is added by the backend slice.
 
 ## Build and run
 
@@ -47,6 +48,11 @@ The shell reconnects every ten seconds and keeps the last successful snapshot vi
 & .\target\release\lazooctl.exe employee list
 & .\target\release\lazooctl.exe roster show
 & .\target\release\lazooctl.exe roster refresh
+$employeeId = '<employee-uuid>'
+$sessionId = '<session-uuid>'
+& .\target\release\lazooctl.exe session warm $employeeId --expected-employee-revision 1
+& .\target\release\lazooctl.exe session list
+& .\target\release\lazooctl.exe session stop $sessionId --expected-revision 2
 & .\target\release\lazooctl.exe system shutdown
 ```
 
@@ -61,6 +67,8 @@ Add `--json` for a stable machine-readable result. Mutable state defaults to `%L
 Provider names are `codex`, `opencode`, `grok-build`, `antigravity`, and `claude-code`. Provider failures use the `LZ-PROVIDER-*` RPC family and CLI exit code 8. Provider diagnostics are intentionally absent from `desktop.snapshot`; no desktop UI was added for this slice.
 
 `employee create` performs one bounded non-model readiness probe, then stores the named employee and safe normalized provider evidence transactionally. `employee list`, `employee show`, and `roster show` are read-only and never launch a provider. `roster refresh` explicitly reruns one non-model probe per enabled provider; it never invokes a model smoke. Employee conflicts and stale revisions use the `LZ-EMPLOYEE-*` RPC family and CLI exit code 9. Employee and roster fields remain absent from `desktop.snapshot`.
+
+`session warm` is the only session command that launches a provider. It requires the employee configuration revision, records `starting` before launch, and returns only after the provider-native session reports an ID and owned host PID; it does not send a turn. Warm and stop are idempotent. Stop is revision-checked and bounded, while prior-boot active sessions reconcile to `failed` with `LZ-SESSION-OWNER-LOST` instead of adopting a PID. Session failures use CLI exit code 10. Session and roster fields remain absent from `desktop.snapshot`.
 
 For the frontend development loop, run the app from its Tauri directory with Tauri CLI 2 installed. The Tauri configuration starts Vite on `127.0.0.1:1420` automatically:
 
@@ -80,15 +88,19 @@ cargo test --workspace
 cargo check --workspace --all-targets
 cargo clippy --workspace --all-targets -- -D warnings
 cargo fmt --all -- --check
+cargo build --workspace --release --locked
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\acceptance\first-slice.ps1
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\acceptance\employee-roster.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\acceptance\native-session-ownership.ps1 -Provider codex
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\acceptance\desktop-shell.ps1
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\acceptance\provider-adapters.ps1 -Provider codex
 ```
 
 The acceptance script uses a unique temporary data root, builds release binaries, forces a real daemon restart, exhausts the production keeper budget with a crashing fixture, and writes `artifacts\acceptance\first-slice-manifest.json`.
 
-The employee-roster acceptance uses an isolated data root and real release binaries to verify idempotent creation, schema-2 restart durability, stale-revision rejection, non-model refresh, disable semantics, and identity preservation across a second restart. It writes `artifacts\acceptance\employee-roster-manifest.json`.
+The employee-roster acceptance uses an isolated data root and real release binaries to verify idempotent creation, schema-3 restart durability, stale-revision rejection, non-model refresh, disable semantics, and identity preservation across a second restart. It writes `artifacts\acceptance\employee-roster-manifest.json`.
+
+The native-session acceptance runs an independent release containment fixture, warms Codex without a prompt, proves warm/stop idempotency and revision checks, forces daemon loss, verifies complete-tree termination, and checks restart reconciliation to `LZ-SESSION-OWNER-LOST`. It writes `artifacts\acceptance\native-session-ownership-manifest.json`.
 
 The desktop-shell acceptance starts an isolated keeper and daemon, registers a disposable Git repository, opens the real WebView2 window, exercises `Ctrl+K`, arrow/Enter navigation, `Ctrl+Enter` inspector focus, Escape dismissal, and inspector focus return through Windows UI Automation, checks default and minimum-size captures, and writes `artifacts\acceptance\desktop-shell-manifest.json`. A 200% text-scale capture runs only when Windows is configured at 200%; otherwise the manifest records an explicit environment blocker.
 

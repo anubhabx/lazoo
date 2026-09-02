@@ -1,40 +1,43 @@
-# Next session: continue the backend before resuming desktop implementation
+# Next session: durable backend collaboration bus
 
-## Current owner verdict
+## Current owner boundary
 
-The owner approved the target Lazoo desktop information architecture, then explicitly shelved UI implementation until the backend is complete.
+Backend and communication layers remain this branch's scope. UI implementation is owned separately. Do not change the desktop frontend, Tauri command surface, `desktop.snapshot`, or UI capabilities while continuing this backend sequence.
 
-No UI or frontend work should resume while this backend-first direction is active. The current read-only desktop remains the technically verified baseline. The approved target structure remains documented in `docs/superpowers/specs/2026-08-30-lazoo-desktop-information-architecture-design.md`.
+The approved desktop information architecture remains documented in `docs/superpowers/specs/2026-08-30-lazoo-desktop-information-architecture-design.md`. Backend contracts must become truthful before a UI consumes them, but this handoff does not prescribe or implement UI behavior.
 
 ## Current backend state
 
-- The daemon, keeper, CLI, SQLite WAL store, transactional outbox, authenticated named-pipe IPC, project registration, restart recovery, emergency spool, and read-only desktop snapshot are implemented.
+- The daemon, keeper, CLI, SQLite WAL store, transactional outbox, authenticated named-pipe IPC, project registration, restart recovery, and emergency spool are implemented.
 - Native adapters for Codex, OpenCode, Grok Build, Antigravity, and Claude Code are implemented behind a versioned provider contract.
-- Codex, OpenCode, Grok Build, and Antigravity passed fresh model-backed and resume/continuation gates.
-- Claude Code passes non-model readiness checks but remains blocked before model execution by the configured organization's access policy.
-- Durable employee records and revisioned roster state are implemented at database schema version 2. Create/update/disable mutations are idempotent and revision-checked, provider observations are safe and non-model, disabled identities survive restart, and employee/roster fields remain outside `desktop.snapshot`.
-- Persistent native-session ownership, Job Objects, ConPTY, worktree automation, task/message delivery, policy approvals, and the resource governor remain unimplemented.
+- The last recorded model-backed gates passed for Codex, OpenCode, Grok Build, and Antigravity. Claude Code's last model gate was blocked by organization policy; refresh that evidence before claiming current live support.
+- Database schema 3 stores durable employees, provider observations, revisioned roster state, and native employee-session history.
+- `session.warm`, `session.list`, `session.show`, and `session.stop` are available through the daemon and CLI. Warm starts an idle provider-native session without sending a model prompt.
+- Every owned provider tree is placed in a dedicated kill-on-close Windows Job Object before provider launch. Warm/stop are idempotent and revision-checked; forced daemon loss removes the tree, and the next boot records `LZ-SESSION-OWNER-LOST` without PID adoption.
+- The native-session acceptance manifest records creation-time containment, complete-tree termination, real Codex warm/stop, native host PID evidence, stale-stop rejection, bounded stop, durable suspension, daemon-loss cleanup, and owner-loss reconciliation.
+- ConPTY, conversation turns, the canonical task/message bus, delivery acknowledgements, worktree automation, policy approvals, resource governance, and managed memory remain unimplemented.
 
 ## Next-session objective
 
-Design and implement the next narrow backend vertical slice: persistent native employee-session ownership with Windows Job Object containment and restart reconciliation. Keep it daemon/CLI-only; ConPTY terminal streaming may be included only if the process-ownership contract is already proven in the same slice.
+Implement the next narrow backend vertical slice: the durable canonical collaboration bus. Keep it daemon/CLI-only and stop before provider turn delivery.
 
 The slice should establish:
 
-1. durable desired/observed session records bound to an existing employee and provider capability contract;
-2. one Windows Job Object per owned native employee process tree, with kill-on-close and explicit resource/accounting boundaries;
-3. idempotent start/stop/reconcile commands with stable errors and immutable audit/outbox events;
-4. daemon-restart reconciliation that never adopts an unrelated process and truthfully marks lost or incompatible sessions;
-5. bounded graceful-stop, forced-stop, unexpected-exit, and crash-recovery behavior;
-6. isolated acceptance evidence for containment, restart reconciliation, stale-command rejection, and zero UI capability expansion.
+1. immutable versioned message envelopes with sender, recipient, correlation, causation, project, task, session, message kind, body/reference metadata, and idempotency identity;
+2. transactional record-first send semantics that write the envelope, audit event, and outbox row before any delivery attempt;
+3. explicit queued, delivering, acknowledged, retryable-failed, terminal-failed, and cancelled states with monotonic revisions;
+4. idempotent send, acknowledge, fail, retry, list, and show commands with stable `LZ-MESSAGE-*` errors;
+5. bounded retry scheduling and dead-letter evidence without claiming that bytes written or an accepted native request equals delivery;
+6. recipient activation intent that can reference a durable employee/session but does not yet start a model turn or inject a message into a provider;
+7. backend-only acceptance evidence for replay, ordering, acknowledgement correlation, retry exhaustion, restart durability, and zero desktop capability expansion.
 
 ## Guardrails
 
 - Preserve the Windows-first, local-first, single-user boundary.
-- Keep UI and `desktop.snapshot` unchanged.
-- Do not start provider model sessions from employee list or roster commands.
-- Do not claim ConPTY, native terminal interaction, conversation, delegation, worktree automation, approval, or peer-message support until each is implemented and accepted.
-- Provider availability must remain evidence-based: discovery or a non-model handshake is not model support.
-- Ask remains the default authority mode; new editing employees default to isolated checkout policy.
-- Session mutations must write domain state, audit event, and outbox record transactionally.
-- Preserve employee identity and history; process cleanup must never delete employee records or unrelated native state.
+- Record every collaboration envelope durably before using any future provider-native peer-messaging optimization.
+- Delivery is at least once; every delivery command and recipient-side acknowledgement must be idempotent by message key.
+- Never call a message delivered merely because stdin accepted bytes, an RPC returned success, or an asynchronous provider session was accepted. Later provider delivery must require acknowledgement or session progress evidence.
+- Keep UI, `desktop.snapshot`, Tauri permissions, ConPTY, provider turns, worktree mutation, and model quota outside this slice.
+- Preserve provider-native authentication, tools, plugins, MCP, skills, permissions, terminals, and session semantics.
+- Ask remains the default authority mode. No model may grant user approval or broaden its own authority.
+- Do not run `provider smoke` as part of collaboration-bus acceptance.

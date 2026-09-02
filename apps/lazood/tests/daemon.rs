@@ -804,8 +804,35 @@ fn employee_roster_acceptance_contract_is_backend_only() {
         "roster', 'refresh",
         "LZ-EMPLOYEE-STALE",
         "restartDurability",
-        "schemaVersion 2",
+        "schemaVersion 3",
         "providerSmokeAbsent",
+    ] {
+        assert!(
+            script.contains(required),
+            "acceptance script must contain {required}"
+        );
+    }
+    assert!(!script.contains("provider', 'smoke"));
+    assert!(!script.contains("apps\\lazoo-desktop"));
+}
+
+#[test]
+fn native_session_acceptance_contract_covers_containment_and_owner_loss() {
+    let repository = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let script_path = repository.join("scripts/acceptance/native-session-ownership.ps1");
+    let script =
+        std::fs::read_to_string(&script_path).expect("native session ownership acceptance script");
+
+    for required in [
+        "lazoo-job-containment.exe",
+        "session', 'warm",
+        "session', 'stop",
+        "LZ-SESSION-OWNER-LOST",
+        "creationTimeContainment",
+        "completeTreeTerminated",
+        "nativeHostPid",
+        "providerSmokeAbsent",
+        "schemaVersion 3",
     ] {
         assert!(
             script.contains(required),
