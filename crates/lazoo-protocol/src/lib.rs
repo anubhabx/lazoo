@@ -1,13 +1,22 @@
+mod conversation;
 mod message;
 mod rpc;
 mod types;
 
+pub use conversation::{
+    CONVERSATION_CONTRACT_V1, CancelTurnParams, ConversationDetail, ConversationListParams,
+    ConversationMutationResult, ConversationRecord, ConversationShowParams, ConversationSummary,
+    ConversationTurnEvent, ConversationTurnRecord, ConversationTurnSummary,
+    CreateConversationParams, RetryTurnParams, SubmitTurnParams, TurnListParams,
+    TurnMutationResult, TurnReconcileResult, TurnShowParams, TurnState,
+};
 pub use message::{
     AcknowledgeMessageParams, CancelMessageParams, ClaimMessageParams, FailMessageParams,
-    MESSAGE_ENVELOPE_V1, MessageActivationIntent, MessageDeadLetter, MessageDelivery,
-    MessageDeliveryAttempt, MessageDeliveryState, MessageEndpoint, MessageEnvelope, MessageKind,
-    MessageListParams, MessageMutationResult, MessageReconcileResult, MessageRecord,
-    MessageReference, MessageShowParams, MessageSummary, RetryMessageParams, SendMessageParams,
+    MESSAGE_ENVELOPE_V1, MESSAGE_ENVELOPE_V2, MessageActivationIntent, MessageDeadLetter,
+    MessageDelivery, MessageDeliveryAttempt, MessageDeliveryState, MessageEndpoint,
+    MessageEnvelope, MessageKind, MessageListParams, MessageMutationResult, MessageReconcileResult,
+    MessageRecord, MessageReference, MessageSender, MessageShowParams, MessageSummary,
+    RetryMessageParams, SendMessageParams, UserMessageEndpoint, UserMessageKind,
 };
 pub use rpc::{JsonRpcRequest, JsonRpcResponse, RpcError};
 pub use types::{

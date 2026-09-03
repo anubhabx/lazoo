@@ -43,7 +43,7 @@
 - Consumes: existing `MessageEndpoint`, `MessageKind`, `AuthorityMode`, strict camel-case Serde conventions, and message size limits.
 - Produces: `MessageSender`, `UserMessageEndpoint`, `ConversationRecord`, `ConversationSummary`, `ConversationTurnRecord`, `ConversationTurnSummary`, `ConversationTurnEvent`, `ConversationMutationResult`, `TurnMutationResult`, `TurnReconcileResult`, `TurnState`, conversation/turn RPC parameter types, and conversation validation helpers.
 
-- [ ] **Step 1: Write failing message-version and conversation serialization tests**
+- [x] **Step 1: Write failing message-version and conversation serialization tests**
 
 Add contract assertions that version-1 employee senders retain the existing JSON shape and version-2 user senders serialize distinctly:
 
@@ -65,7 +65,7 @@ assert_eq!(serde_json::to_value(user).unwrap(), json!({"kind": "user"}));
 
 Add strict round-trip tests for `ConversationRecord`, every `TurnState`, `CreateConversationParams`, `ConversationListParams`, `ConversationShowParams`, `SubmitTurnParams`, `RetryTurnParams`, `CancelTurnParams`, `TurnListParams`, and `TurnShowParams`. Assert unknown fields fail deserialization and list defaults are `afterSequence = 0`, `limit = 100`.
 
-- [ ] **Step 2: Run protocol tests and verify RED**
+- [x] **Step 2: Run protocol tests and verify RED**
 
 Run:
 
@@ -76,7 +76,7 @@ cargo test -p lazoo-protocol --test contracts message_contracts_are_strict_versi
 
 Expected: compilation fails because actor-aware senders and conversation types do not exist.
 
-- [ ] **Step 3: Implement the strict protocol types**
+- [x] **Step 3: Implement the strict protocol types**
 
 Define these public shapes in `conversation.rs` and re-export them from `lib.rs`:
 
@@ -113,7 +113,7 @@ pub struct SubmitTurnParams {
 
 Define records with every field from the design, including `owner_boot_id`, native identifiers, safe failure fields, lifecycle timestamps, and per-turn event sequence. Change `MessageEnvelope.sender` and `MessageSummary.sender` from `MessageEndpoint` to `MessageSender`. Keep `SendMessageParams.sender` as `MessageEndpoint` so the existing `message.send` RPC remains employee-to-employee and version 1.
 
-- [ ] **Step 4: Write failing domain validation tests**
+- [x] **Step 4: Write failing domain validation tests**
 
 Cover title trimming and its 200-byte limit, nonempty UTF-8 turn text capped at 256 KiB, idempotency keys capped at 200 bytes, event payload objects capped at 64 KiB, transcript bytes capped at 512 KiB, list limits `1..=1024`, user activation restrictions, envelope-version/sender compatibility, and allowed state transitions.
 
@@ -130,13 +130,13 @@ assert_eq!(
 assert!(validate_envelope_sender(2, &user).is_ok());
 ```
 
-- [ ] **Step 5: Run domain tests and verify RED**
+- [x] **Step 5: Run domain tests and verify RED**
 
 Run: `cargo test -p lazoo-domain --test conversation`
 
 Expected: compilation fails because conversation validators and transition checks are absent.
 
-- [ ] **Step 6: Implement minimal validation and transitions**
+- [x] **Step 6: Implement minimal validation and transitions**
 
 Add `validate_conversation_title`, `validate_turn_text`, `validate_conversation_command_key`, `validate_turn_event_payload`, `validate_envelope_sender`, `validate_turn_transition`, and size constants. Permit only:
 
@@ -148,7 +148,7 @@ retryable-failed -> recorded | cancelled
 completed | terminal-failed | cancelled | uncertain -> no transition
 ```
 
-- [ ] **Step 7: Verify focused suites and commit**
+- [x] **Step 7: Verify focused suites and commit**
 
 Run:
 

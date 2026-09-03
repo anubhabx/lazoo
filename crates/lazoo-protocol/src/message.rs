@@ -3,6 +3,7 @@ use serde_json::Value;
 use uuid::Uuid;
 
 pub const MESSAGE_ENVELOPE_V1: u32 = 1;
+pub const MESSAGE_ENVELOPE_V2: u32 = 2;
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "kebab-case")]
@@ -33,6 +34,25 @@ pub struct MessageEndpoint {
     pub session_id: Option<Uuid>,
 }
 
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum UserMessageKind {
+    User,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct UserMessageEndpoint {
+    pub kind: UserMessageKind,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(untagged)]
+pub enum MessageSender {
+    Employee(MessageEndpoint),
+    User(UserMessageEndpoint),
+}
+
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct MessageReference {
@@ -50,7 +70,7 @@ pub struct MessageEnvelope {
     pub idempotency_key: String,
     pub correlation_id: Uuid,
     pub causation_id: Option<Uuid>,
-    pub sender: MessageEndpoint,
+    pub sender: MessageSender,
     pub recipient: MessageEndpoint,
     pub project_id: Option<Uuid>,
     pub conversation_id: Option<Uuid>,
@@ -125,7 +145,7 @@ pub struct MessageSummary {
     pub id: Uuid,
     pub correlation_id: Uuid,
     pub causation_id: Option<Uuid>,
-    pub sender: MessageEndpoint,
+    pub sender: MessageSender,
     pub recipient: MessageEndpoint,
     pub project_id: Option<Uuid>,
     pub conversation_id: Option<Uuid>,

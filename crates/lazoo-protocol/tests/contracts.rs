@@ -1,10 +1,13 @@
 use std::path::PathBuf;
 
 use lazoo_protocol::{
-    AuthorityMode, CheckoutMode, CreateEmployeeParams, DesktopSnapshot, EmployeeCheckoutPolicy,
-    JsonRpcRequest, JsonRpcResponse, MAX_FRAME_BYTES, MessageDeliveryState, MessageKind,
-    PROTOCOL_V1, ProviderProbeParams, ProviderSmokeParams, ProviderSmokeResult, SendMessageParams,
-    SessionLifecycleState, SystemStatus, WarmSessionParams,
+    AuthorityMode, CancelTurnParams, CheckoutMode, ConversationListParams,
+    CreateConversationParams, CreateEmployeeParams, DesktopSnapshot, EmployeeCheckoutPolicy,
+    JsonRpcRequest, JsonRpcResponse, MAX_FRAME_BYTES, MessageDeliveryState, MessageEndpoint,
+    MessageKind, MessageSender, PROTOCOL_V1, ProviderProbeParams, ProviderSmokeParams,
+    ProviderSmokeResult, RetryTurnParams, SendMessageParams, SessionLifecycleState,
+    SubmitTurnParams, SystemStatus, TurnListParams, TurnState, UserMessageEndpoint,
+    UserMessageKind, WarmSessionParams,
 };
 use serde_json::json;
 use uuid::Uuid;
@@ -160,6 +163,111 @@ fn message_contracts_are_strict_versioned_and_kebab_case() {
             "kind": "peer",
             "body": {"text": "Need the spacing token."},
             "idempotencyKey": "message-1",
+            "unexpected": true
+        }))
+        .is_err()
+    );
+}
+
+#[test]
+fn message_senders_preserve_employee_shape_and_identify_the_local_user() {
+    let employee_id = Uuid::new_v4();
+    let employee = MessageSender::Employee(MessageEndpoint {
+        employee_id,
+        session_id: None,
+    });
+    assert_eq!(
+        serde_json::to_value(employee).unwrap(),
+        json!({"employeeId": employee_id, "sessionId": null})
+    );
+
+    let user = MessageSender::User(UserMessageEndpoint {
+        kind: UserMessageKind::User,
+    });
+    assert_eq!(serde_json::to_value(user).unwrap(), json!({"kind": "user"}));
+    assert!(
+        serde_json::from_value::<MessageSender>(json!({"kind": "user", "extra": true})).is_err()
+    );
+}
+
+#[test]
+fn conversation_contracts_are_strict_and_use_bounded_list_defaults() {
+    let lead_employee_id = Uuid::new_v4();
+    let create: CreateConversationParams = serde_json::from_value(json!({
+        "leadEmployeeId": lead_employee_id,
+        "title": "First task",
+        "idempotencyKey": "conversation-1"
+    }))
+    .unwrap();
+    assert_eq!(create.lead_employee_id, lead_employee_id);
+    assert_eq!(create.project_id, None);
+    assert_eq!(create.title.as_deref(), Some("First task"));
+
+    let list: ConversationListParams = serde_json::from_value(json!({})).unwrap();
+    assert_eq!(list.after_sequence, 0);
+    assert_eq!(list.limit, 100);
+    assert!(
+        serde_json::from_value::<CreateConversationParams>(json!({
+            "leadEmployeeId": lead_employee_id,
+            "idempotencyKey": "conversation-1",
+            "unexpected": true
+        }))
+        .is_err()
+    );
+}
+
+#[test]
+fn turn_contracts_are_strict_versioned_and_kebab_case() {
+    let conversation_id = Uuid::new_v4();
+    let submit: SubmitTurnParams = serde_json::from_value(json!({
+        "conversationId": conversation_id,
+        "author": {"kind": "user"},
+        "text": "Reply with exactly READY",
+        "idempotencyKey": "turn-1"
+    }))
+    .unwrap();
+    assert_eq!(submit.conversation_id, conversation_id);
+    assert_eq!(
+        submit.author,
+        MessageSender::User(UserMessageEndpoint {
+            kind: UserMessageKind::User
+        })
+    );
+    assert_eq!(submit.recipient, None);
+    assert!(!submit.activate_if_needed);
+    assert_eq!(submit.max_attempts, 3);
+
+    let retry: RetryTurnParams = serde_json::from_value(json!({
+        "id": Uuid::new_v4(),
+        "expectedRevision": 3,
+        "idempotencyKey": "retry-1"
+    }))
+    .unwrap();
+    assert_eq!(retry.expected_revision, 3);
+    let cancel: CancelTurnParams = serde_json::from_value(json!({
+        "id": Uuid::new_v4(),
+        "expectedRevision": 2,
+        "idempotencyKey": "cancel-1"
+    }))
+    .unwrap();
+    assert_eq!(cancel.expected_revision, 2);
+
+    let list: TurnListParams = serde_json::from_value(json!({
+        "conversationId": conversation_id
+    }))
+    .unwrap();
+    assert_eq!(list.after_sequence, 0);
+    assert_eq!(list.limit, 100);
+    assert_eq!(
+        serde_json::to_string(&TurnState::RetryableFailed).unwrap(),
+        r#""retryable-failed""#
+    );
+    assert!(
+        serde_json::from_value::<SubmitTurnParams>(json!({
+            "conversationId": conversation_id,
+            "author": {"kind": "user"},
+            "text": "hello",
+            "idempotencyKey": "turn-1",
             "unexpected": true
         }))
         .is_err()
