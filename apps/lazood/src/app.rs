@@ -1,3 +1,5 @@
+mod turn;
+
 use std::{
     collections::{BTreeMap, BTreeSet},
     fs,
@@ -24,8 +26,8 @@ use lazoo_protocol::{
 };
 use lazoo_providers::{
     AuthenticationState, DiscoveryEnvironment, DiscoverySource, ProviderCapabilities,
-    ProviderError, ProviderKind, ProviderProbe, ProviderRegistry, ProviderSession,
-    ProviderSessionHandle, ProviderVerification, SessionRequest, TurnRequest,
+    ProviderError, ProviderEvent, ProviderKind, ProviderProbe, ProviderRegistry, ProviderSession,
+    ProviderSessionHandle, ProviderVerification, SessionRequest, TurnEventObserver, TurnRequest,
 };
 use lazoo_runtime::DataRoot;
 use lazoo_store::{
@@ -49,6 +51,12 @@ pub type SessionBackendFuture<'a> =
 pub trait ManagedSession: Send + Sync {
     fn id(&self) -> String;
     fn native_host_pid(&self) -> Option<u32>;
+    fn turn_observed<'a>(
+        &'a self,
+        request: &'a TurnRequest,
+        observer: &'a dyn TurnEventObserver,
+    ) -> Pin<Box<dyn Future<Output = Result<Vec<ProviderEvent>, ProviderError>> + Send + 'a>>;
+    fn cancel(&self) -> Pin<Box<dyn Future<Output = Result<(), ProviderError>> + Send + '_>>;
     fn stop(&self) -> Pin<Box<dyn Future<Output = Result<(), ProviderError>> + Send + '_>>;
 }
 
@@ -72,6 +80,18 @@ impl ManagedSession for ProviderSessionHandle {
 
     fn native_host_pid(&self) -> Option<u32> {
         ProviderSession::native_host_pid(self)
+    }
+
+    fn turn_observed<'a>(
+        &'a self,
+        request: &'a TurnRequest,
+        observer: &'a dyn TurnEventObserver,
+    ) -> Pin<Box<dyn Future<Output = Result<Vec<ProviderEvent>, ProviderError>> + Send + 'a>> {
+        ProviderSession::turn_observed(self, request, observer)
+    }
+
+    fn cancel(&self) -> Pin<Box<dyn Future<Output = Result<(), ProviderError>> + Send + '_>> {
+        ProviderSession::cancel(self)
     }
 
     fn stop(&self) -> Pin<Box<dyn Future<Output = Result<(), ProviderError>> + Send + '_>> {
@@ -106,6 +126,7 @@ pub struct App {
     provider_environment: DiscoveryEnvironment,
     session_backend: Arc<dyn SessionBackend>,
     live_sessions: Arc<Mutex<BTreeMap<Uuid, Arc<dyn ManagedSession>>>>,
+    live_turns: Arc<Mutex<BTreeMap<Uuid, Arc<dyn ManagedSession>>>>,
 }
 
 pub struct EventSubscription {
@@ -165,6 +186,7 @@ impl App {
         let boot_id = Uuid::new_v4();
         store.reconcile_sessions(boot_id)?;
         store.reconcile_messages()?;
+        store.reconcile_turns(boot_id)?;
         for event in store.publish_pending_outbox()? {
             let _ = events.send(event);
         }
@@ -179,6 +201,7 @@ impl App {
             provider_environment,
             session_backend,
             live_sessions: Arc::new(Mutex::new(BTreeMap::new())),
+            live_turns: Arc::new(Mutex::new(BTreeMap::new())),
         })
     }
 
@@ -215,6 +238,14 @@ impl App {
             "session.list" => self.session_list(&request.params),
             "session.show" => self.session_show(request.params),
             "session.stop" => self.stop_session(&request).await,
+            "conversation.create" => self.create_conversation(&request),
+            "conversation.list" => self.conversation_list(request.params),
+            "conversation.show" => self.conversation_show(request.params),
+            "turn.submit" => self.submit_turn(&request).await,
+            "turn.retry" => self.retry_turn(&request).await,
+            "turn.cancel" => self.cancel_turn(&request).await,
+            "turn.list" => self.turn_list(request.params),
+            "turn.show" => self.turn_show(request.params),
             "message.send" => self.send_message(&request),
             "message.claim" => self.claim_message(&request),
             "message.acknowledge" => self.acknowledge_message(&request),
@@ -638,7 +669,9 @@ impl App {
         if starting.event_sequence.is_none() {
             return Ok(to_value(starting));
         }
-        self.start_new_session(employee, provider, starting).await
+        self.start_new_session(employee, provider, starting)
+            .await
+            .map(to_value)
     }
 
     async fn start_new_session(
@@ -646,7 +679,7 @@ impl App {
         employee: lazoo_protocol::EmployeeRecord,
         provider: ProviderKind,
         starting: lazoo_protocol::SessionMutationResult,
-    ) -> Result<Value, RpcError> {
+    ) -> Result<lazoo_protocol::SessionMutationResult, RpcError> {
         let session_id = starting.session.id;
         let Ok(working_directory) = self.root.ensure_session_working_dir(session_id) else {
             self.record_session_failure(
@@ -724,7 +757,7 @@ impl App {
             }
         };
         self.publish_events()?;
-        Ok(to_value(ready))
+        Ok(ready)
     }
 
     fn session_list(&self, params: &Value) -> Result<Value, RpcError> {
@@ -981,6 +1014,7 @@ impl App {
     }
 
     pub async fn shutdown_live_sessions(&self) {
+        self.live_turns.lock().await.clear();
         let session_ids = self
             .live_sessions
             .lock()
@@ -1169,6 +1203,7 @@ fn observation_from_error(provider: ProviderKind, error: &ProviderError) -> Prov
         ProviderError::UnknownProvider(_)
         | ProviderError::Protocol(_)
         | ProviderError::InvalidEvent(_)
+        | ProviderError::Observer(_)
         | ProviderError::Io(_)
         | ProviderError::Json(_)
         | ProviderError::Runtime(_) => (
@@ -1507,6 +1542,7 @@ fn provider_error(error: ProviderError) -> RpcError {
         ProviderError::ProcessExited { .. } => "LZ-PROVIDER-PROCESS",
         ProviderError::Protocol(_)
         | ProviderError::InvalidEvent(_)
+        | ProviderError::Observer(_)
         | ProviderError::Io(_)
         | ProviderError::Json(_)
         | ProviderError::Runtime(_) => "LZ-PROVIDER",

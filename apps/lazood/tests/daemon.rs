@@ -5,22 +5,25 @@ use std::{
     process::Command,
     sync::{
         Arc, Mutex,
-        atomic::{AtomicUsize, Ordering},
+        atomic::{AtomicBool, AtomicUsize, Ordering},
     },
     time::Duration,
 };
 
 use lazoo_protocol::{
     AuthorityMode, CheckoutMode, DesktopSnapshot, EmployeeCheckoutPolicy, JsonRpcRequest,
-    ProviderObservation,
+    MessageDeliveryState, ProviderObservation, TurnState,
 };
-use lazoo_providers::{DiscoveryEnvironment, ProviderError, ProviderKind, SessionRequest};
+use lazoo_providers::{
+    DiscoveryEnvironment, ProviderError, ProviderEvent, ProviderKind, SessionRequest,
+    TurnEventObserver, TurnRequest,
+};
 use lazoo_runtime::DataRoot;
-use lazoo_store::{CreateEmployeeInput, Store};
+use lazoo_store::{CreateConversationInput, CreateEmployeeInput, Store};
 use lazood::{App, ManagedSession, SessionBackend, SessionBackendFuture};
 use serde_json::json;
 use tempfile::tempdir;
-use tokio::time::timeout;
+use tokio::{sync::Semaphore, time::timeout};
 
 fn git_init(path: &Path) {
     let status = Command::new("git")
@@ -51,16 +54,47 @@ fn test_app() -> (tempfile::TempDir, App) {
     )
 }
 
-#[derive(Clone, Default)]
+#[derive(Clone)]
 struct FakeSessionBackend {
     starts: Arc<AtomicUsize>,
     stops: Arc<AtomicUsize>,
+    turns: Arc<AtomicUsize>,
+    cancels: Arc<AtomicUsize>,
+    gate_events: Arc<AtomicBool>,
+    event_permits: Arc<Semaphore>,
+    turn_events: Arc<Mutex<Vec<ProviderEvent>>>,
+    turn_failure: Arc<Mutex<Option<String>>>,
+    turn_retryable_failure: Arc<AtomicBool>,
     working_directories: Arc<Mutex<Vec<PathBuf>>>,
+}
+
+impl Default for FakeSessionBackend {
+    fn default() -> Self {
+        Self {
+            starts: Arc::new(AtomicUsize::new(0)),
+            stops: Arc::new(AtomicUsize::new(0)),
+            turns: Arc::new(AtomicUsize::new(0)),
+            cancels: Arc::new(AtomicUsize::new(0)),
+            gate_events: Arc::new(AtomicBool::new(false)),
+            event_permits: Arc::new(Semaphore::new(0)),
+            turn_events: Arc::new(Mutex::new(Vec::new())),
+            turn_failure: Arc::new(Mutex::new(None)),
+            turn_retryable_failure: Arc::new(AtomicBool::new(false)),
+            working_directories: Arc::new(Mutex::new(Vec::new())),
+        }
+    }
 }
 
 struct FakeManagedSession {
     id: String,
     stops: Arc<AtomicUsize>,
+    turns: Arc<AtomicUsize>,
+    cancels: Arc<AtomicUsize>,
+    gate_events: Arc<AtomicBool>,
+    event_permits: Arc<Semaphore>,
+    turn_events: Arc<Mutex<Vec<ProviderEvent>>>,
+    turn_failure: Arc<Mutex<Option<String>>>,
+    turn_retryable_failure: Arc<AtomicBool>,
 }
 
 impl ManagedSession for FakeManagedSession {
@@ -70,6 +104,40 @@ impl ManagedSession for FakeManagedSession {
 
     fn native_host_pid(&self) -> Option<u32> {
         Some(4242)
+    }
+
+    fn turn_observed<'a>(
+        &'a self,
+        _request: &'a TurnRequest,
+        observer: &'a dyn TurnEventObserver,
+    ) -> Pin<Box<dyn Future<Output = Result<Vec<ProviderEvent>, ProviderError>> + Send + 'a>> {
+        Box::pin(async move {
+            self.turns.fetch_add(1, Ordering::SeqCst);
+            if self.turn_retryable_failure.load(Ordering::SeqCst) {
+                return Err(ProviderError::Timeout { phase: "fake turn" });
+            }
+            let failure = self.turn_failure.lock().unwrap().clone();
+            if let Some(message) = failure {
+                return Err(ProviderError::Protocol(message));
+            }
+            let scripted = self.turn_events.lock().unwrap().clone();
+            let mut returned = Vec::with_capacity(scripted.len());
+            for event in scripted {
+                if self.gate_events.load(Ordering::SeqCst) {
+                    self.event_permits.acquire().await.unwrap().forget();
+                }
+                observer.observe(&event)?;
+                returned.push(event);
+            }
+            Ok(returned)
+        })
+    }
+
+    fn cancel(&self) -> Pin<Box<dyn Future<Output = Result<(), ProviderError>> + Send + '_>> {
+        Box::pin(async move {
+            self.cancels.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        })
     }
 
     fn stop(&self) -> Pin<Box<dyn Future<Output = Result<(), ProviderError>> + Send + '_>> {
@@ -95,6 +163,13 @@ impl SessionBackend for FakeSessionBackend {
             Ok(Box::new(FakeManagedSession {
                 id: format!("native-{number}"),
                 stops: Arc::clone(&self.stops),
+                turns: Arc::clone(&self.turns),
+                cancels: Arc::clone(&self.cancels),
+                gate_events: Arc::clone(&self.gate_events),
+                event_permits: Arc::clone(&self.event_permits),
+                turn_events: Arc::clone(&self.turn_events),
+                turn_failure: Arc::clone(&self.turn_failure),
+                turn_retryable_failure: Arc::clone(&self.turn_retryable_failure),
             }) as Box<dyn ManagedSession>)
         })
     }
@@ -194,6 +269,62 @@ fn session_test_app() -> (tempfile::TempDir, App, FakeSessionBackend, uuid::Uuid
     (temporary, app, backend, employee.id)
 }
 
+fn turn_test_app() -> (
+    tempfile::TempDir,
+    DataRoot,
+    Store,
+    App,
+    FakeSessionBackend,
+    uuid::Uuid,
+    uuid::Uuid,
+) {
+    let temporary = tempdir().unwrap();
+    let root = DataRoot::from_path(temporary.path().join("data"));
+    root.ensure().unwrap();
+    let store = Store::open_path(root.state_db()).unwrap();
+    let employee = configured_employee(&store);
+    let conversation = store
+        .create_conversation(&CreateConversationInput {
+            request_id: "create-conversation-request".to_owned(),
+            idempotency_key: "create-conversation".to_owned(),
+            project_id: None,
+            lead_employee_id: employee.id,
+            title: Some("Delivery fixture".to_owned()),
+        })
+        .unwrap()
+        .conversation;
+    let backend = FakeSessionBackend::default();
+    let app = App::new_with_session_backend(
+        store.clone(),
+        root.clone(),
+        DiscoveryEnvironment::empty(),
+        Arc::new(backend.clone()),
+    )
+    .unwrap();
+    (
+        temporary,
+        root,
+        store,
+        app,
+        backend,
+        employee.id,
+        conversation.id,
+    )
+}
+
+async fn wait_until(mut predicate: impl FnMut() -> bool) {
+    timeout(Duration::from_secs(2), async {
+        loop {
+            if predicate() {
+                return;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("condition should become true");
+}
+
 async fn assert_desktop_is_roster_neutral(app: &App) {
     let desktop = app
         .handle(request("desktop", "desktop.snapshot", json!({})))
@@ -205,6 +336,1018 @@ async fn assert_desktop_is_roster_neutral(app: &App) {
     assert!(desktop.get("providers").is_none());
     assert!(desktop.get("messages").is_none());
     assert!(desktop.get("collaboration").is_none());
+    assert!(desktop.get("conversations").is_none());
+    assert!(desktop.get("turns").is_none());
+}
+
+#[tokio::test]
+async fn conversation_create_list_and_show_are_idempotent_and_backend_only() {
+    let temporary = tempdir().unwrap();
+    let root = DataRoot::from_path(temporary.path().join("data"));
+    root.ensure().unwrap();
+    let store = Store::open_path(root.state_db()).unwrap();
+    let employee = configured_employee(&store);
+    let app =
+        App::new_with_provider_environment(store, root, DiscoveryEnvironment::empty()).unwrap();
+
+    let create_params = json!({
+        "projectId": null,
+        "leadEmployeeId": employee.id,
+        "title": "  Provider delivery  ",
+        "idempotencyKey": "create-conversation"
+    });
+    let created = app
+        .handle(request(
+            "conversation-create-1",
+            "conversation.create",
+            create_params.clone(),
+        ))
+        .await
+        .result
+        .unwrap();
+    let replay = app
+        .handle(request(
+            "conversation-create-2",
+            "conversation.create",
+            create_params,
+        ))
+        .await
+        .result
+        .unwrap();
+
+    assert_eq!(created["conversation"]["id"], replay["conversation"]["id"]);
+    assert_eq!(created["conversation"]["title"], "Provider delivery");
+    assert!(created["eventSequence"].is_number());
+    assert!(replay["eventSequence"].is_null());
+
+    let conversation_id = created["conversation"]["id"].as_str().unwrap();
+    let listed = app
+        .handle(request(
+            "conversation-list",
+            "conversation.list",
+            json!({"afterSequence": 0, "limit": 100}),
+        ))
+        .await
+        .result
+        .unwrap();
+    assert_eq!(listed.as_array().unwrap().len(), 1);
+    assert_eq!(listed[0]["id"], conversation_id);
+
+    let shown = app
+        .handle(request(
+            "conversation-show",
+            "conversation.show",
+            json!({"id": conversation_id}),
+        ))
+        .await
+        .result
+        .unwrap();
+    assert_eq!(shown["conversation"]["id"], conversation_id);
+    assert_eq!(shown["turns"], json!([]));
+    assert_desktop_is_roster_neutral(&app).await;
+}
+
+#[tokio::test]
+async fn conversation_create_supports_project_scope_and_stable_errors() {
+    let temporary = tempdir().unwrap();
+    let root = DataRoot::from_path(temporary.path().join("data"));
+    root.ensure().unwrap();
+    let store = Store::open_path(root.state_db()).unwrap();
+    let employee = configured_employee(&store);
+    let app =
+        App::new_with_provider_environment(store, root, DiscoveryEnvironment::empty()).unwrap();
+
+    let repository = temporary.path().join("repository");
+    git_init(&repository);
+    let registered = app
+        .handle(request(
+            "project-register",
+            "project.register",
+            json!({
+                "path": repository,
+                "displayName": "Fixture",
+                "checkoutMode": "isolated",
+                "idempotencyKey": "register-fixture"
+            }),
+        ))
+        .await
+        .result
+        .unwrap();
+    let project_id = registered["project"]["id"].as_str().unwrap();
+    let scoped = app
+        .handle(request(
+            "conversation-create",
+            "conversation.create",
+            json!({
+                "projectId": project_id,
+                "leadEmployeeId": employee.id,
+                "title": null,
+                "idempotencyKey": "create-scoped-conversation"
+            }),
+        ))
+        .await
+        .result
+        .unwrap();
+    assert_eq!(scoped["conversation"]["projectId"], project_id);
+
+    let missing_lead = app
+        .handle(request(
+            "conversation-missing-lead",
+            "conversation.create",
+            json!({
+                "projectId": null,
+                "leadEmployeeId": uuid::Uuid::new_v4(),
+                "title": null,
+                "idempotencyKey": "missing-lead"
+            }),
+        ))
+        .await
+        .error
+        .unwrap();
+    assert_eq!(missing_lead.code, "LZ-CONVERSATION-LEAD-NOT-FOUND");
+
+    let invalid_limit = app
+        .handle(request(
+            "conversation-invalid-limit",
+            "conversation.list",
+            json!({"afterSequence": 0, "limit": 0}),
+        ))
+        .await
+        .error
+        .unwrap();
+    assert_eq!(invalid_limit.code, "LZ-CONVERSATION-INVALID");
+}
+
+#[tokio::test]
+#[allow(clippy::too_many_lines)] // Keep the durable pre/post-acceptance checkpoints together.
+async fn turn_submit_persists_before_provider_acceptance_and_acknowledges_on_evidence() {
+    let (_temporary, root, _store, app, backend, employee_id, conversation_id) = turn_test_app();
+    backend.gate_events.store(true, Ordering::SeqCst);
+    backend.turn_events.lock().unwrap().extend([
+        ProviderEvent::TurnStarted {
+            provider: ProviderKind::Codex,
+            session_id: "native-1".to_owned(),
+            turn_id: Some("native-turn-1".to_owned()),
+            raw: Some(json!({"private": "discard"})),
+        },
+        ProviderEvent::TurnCompleted {
+            provider: ProviderKind::Codex,
+            session_id: "native-1".to_owned(),
+            turn_id: Some("native-turn-1".to_owned()),
+            status: "completed".to_owned(),
+            output: Some("done".to_owned()),
+            raw: None,
+        },
+    ]);
+    app.handle(request(
+        "warm-turn-session",
+        "session.warm",
+        json!({
+            "employeeId": employee_id,
+            "expectedEmployeeRevision": 1,
+            "idempotencyKey": "warm-turn-session"
+        }),
+    ))
+    .await
+    .result
+    .unwrap();
+
+    let submit_params = json!({
+        "conversationId": conversation_id,
+        "author": {"kind": "user"},
+        "recipient": null,
+        "text": "Reply with done.",
+        "activateIfNeeded": false,
+        "maxAttempts": 3,
+        "idempotencyKey": "submit-turn"
+    });
+    let pending = tokio::spawn({
+        let app = app.clone();
+        let submit_params = submit_params.clone();
+        async move {
+            app.handle(request("turn-submit-1", "turn.submit", submit_params))
+                .await
+        }
+    });
+    wait_until(|| backend.turns.load(Ordering::SeqCst) == 1).await;
+
+    let durable_store = Store::open_path(root.state_db()).unwrap();
+    let summary = durable_store
+        .list_turns(conversation_id, 0, 100)
+        .unwrap()
+        .into_iter()
+        .next()
+        .unwrap();
+    let submitting = durable_store.get_turn(summary.id).unwrap();
+    let delivering = durable_store.get_message(submitting.message_id).unwrap();
+    assert_eq!(submitting.state, TurnState::Submitting);
+    assert_eq!(submitting.text, "Reply with done.");
+    assert!(submitting.message_attempt_id.is_some());
+    assert_eq!(delivering.delivery.state, MessageDeliveryState::Delivering);
+    assert_eq!(delivering.attempts.len(), 1);
+    let recorded_events = durable_store.list_events(0, 100).unwrap();
+    assert!(
+        recorded_events
+            .iter()
+            .any(|event| event.event_type == "turn.recorded")
+    );
+    assert!(
+        recorded_events
+            .iter()
+            .any(|event| event.event_type == "turn.submitting")
+    );
+
+    backend.event_permits.add_permits(1);
+    wait_until(|| {
+        durable_store
+            .get_turn(summary.id)
+            .is_ok_and(|turn| turn.state == TurnState::Accepted)
+    })
+    .await;
+    let accepted = durable_store.get_turn(summary.id).unwrap();
+    let acknowledged = durable_store.get_message(accepted.message_id).unwrap();
+    assert_eq!(accepted.native_session_id.as_deref(), Some("native-1"));
+    assert_eq!(accepted.native_turn_id.as_deref(), Some("native-turn-1"));
+    assert_eq!(
+        acknowledged.delivery.state,
+        MessageDeliveryState::Acknowledged
+    );
+
+    backend.event_permits.add_permits(1);
+    let completed = timeout(Duration::from_secs(2), pending)
+        .await
+        .unwrap()
+        .unwrap()
+        .result
+        .unwrap();
+    assert_eq!(completed["turn"]["state"], "completed");
+    assert_eq!(completed["turn"]["events"].as_array().unwrap().len(), 2);
+    assert!(
+        completed["turn"]["events"][0]["payload"]
+            .get("raw")
+            .is_none()
+    );
+
+    let replay = app
+        .handle(request("turn-submit-2", "turn.submit", submit_params))
+        .await
+        .result
+        .unwrap();
+    assert_eq!(replay["turn"]["id"], completed["turn"]["id"]);
+    assert_eq!(backend.turns.load(Ordering::SeqCst), 1);
+
+    let listed = app
+        .handle(request(
+            "turn-list",
+            "turn.list",
+            json!({"conversationId": conversation_id, "afterSequence": 0, "limit": 100}),
+        ))
+        .await
+        .result
+        .unwrap();
+    assert_eq!(listed.as_array().unwrap().len(), 1);
+    assert_eq!(listed[0]["id"], completed["turn"]["id"]);
+    let shown = app
+        .handle(request(
+            "turn-show",
+            "turn.show",
+            json!({"id": completed["turn"]["id"]}),
+        ))
+        .await
+        .result
+        .unwrap();
+    assert_eq!(shown["state"], "completed");
+    let invalid_limit = app
+        .handle(request(
+            "turn-list-invalid",
+            "turn.list",
+            json!({"conversationId": conversation_id, "afterSequence": 0, "limit": 0}),
+        ))
+        .await
+        .error
+        .unwrap();
+    assert_eq!(invalid_limit.code, "LZ-TURN-INVALID");
+}
+
+#[tokio::test]
+async fn turn_submit_without_observed_evidence_never_acknowledges_message() {
+    let (_temporary, _root, store, app, backend, employee_id, conversation_id) = turn_test_app();
+    app.handle(request(
+        "warm-turn-session",
+        "session.warm",
+        json!({
+            "employeeId": employee_id,
+            "expectedEmployeeRevision": 1,
+            "idempotencyKey": "warm-turn-session"
+        }),
+    ))
+    .await
+    .result
+    .unwrap();
+
+    let error = app
+        .handle(request(
+            "turn-submit",
+            "turn.submit",
+            json!({
+                "conversationId": conversation_id,
+                "author": {"kind": "user"},
+                "recipient": null,
+                "text": "No event fixture",
+                "idempotencyKey": "submit-no-evidence"
+            }),
+        ))
+        .await
+        .error
+        .unwrap();
+    assert_eq!(error.code, "LZ-TURN-UNCERTAIN");
+    assert_eq!(backend.turns.load(Ordering::SeqCst), 1);
+    let turn = store
+        .get_turn(store.list_turns(conversation_id, 0, 100).unwrap()[0].id)
+        .unwrap();
+    assert_eq!(turn.state, TurnState::Uncertain);
+    assert_ne!(
+        store.get_message(turn.message_id).unwrap().delivery.state,
+        MessageDeliveryState::Acknowledged
+    );
+}
+
+#[tokio::test]
+async fn turn_submit_rejects_non_codex_provider_before_turn_io() {
+    let temporary = tempdir().unwrap();
+    let root = DataRoot::from_path(temporary.path().join("data"));
+    root.ensure().unwrap();
+    let store = Store::open_path(root.state_db()).unwrap();
+    let employee = store
+        .create_employee(&CreateEmployeeInput {
+            request_id: "create-claude-request".to_owned(),
+            idempotency_key: "create-claude".to_owned(),
+            name: "Claude lead".to_owned(),
+            provider: "claude".to_owned(),
+            role: "Lead".to_owned(),
+            instructions: String::new(),
+            model: None,
+            reasoning_effort: None,
+            native_settings: json!({}),
+            authority_mode: AuthorityMode::Ask,
+            checkout_policy: EmployeeCheckoutPolicy::Isolated,
+            enabled: true,
+            provider_observation: Some(ProviderObservation {
+                provider: "claude".to_owned(),
+                verification: "configured".to_owned(),
+                version: Some("test".to_owned()),
+                protocol: Some("acp".to_owned()),
+                capabilities: json!({"session": true}),
+                authentication: json!({"native": "ready", "external": "unknown"}),
+                degradation_reason: None,
+                checked_at: "2026-08-31T00:00:00Z".to_owned(),
+            }),
+        })
+        .unwrap()
+        .employee;
+    let conversation = store
+        .create_conversation(&CreateConversationInput {
+            request_id: "create-conversation-request".to_owned(),
+            idempotency_key: "create-conversation".to_owned(),
+            project_id: None,
+            lead_employee_id: employee.id,
+            title: None,
+        })
+        .unwrap()
+        .conversation;
+    let backend = FakeSessionBackend::default();
+    let app = App::new_with_session_backend(
+        store.clone(),
+        root,
+        DiscoveryEnvironment::empty(),
+        Arc::new(backend.clone()),
+    )
+    .unwrap();
+    app.handle(request(
+        "warm-claude",
+        "session.warm",
+        json!({
+            "employeeId": employee.id,
+            "expectedEmployeeRevision": 1,
+            "idempotencyKey": "warm-claude"
+        }),
+    ))
+    .await
+    .result
+    .unwrap();
+
+    let error = app
+        .handle(request(
+            "turn-submit",
+            "turn.submit",
+            json!({
+                "conversationId": conversation.id,
+                "author": {"kind": "user"},
+                "recipient": null,
+                "text": "Unsupported provider fixture",
+                "idempotencyKey": "submit-claude"
+            }),
+        ))
+        .await
+        .error
+        .unwrap();
+    assert_eq!(error.code, "LZ-TURN-PROVIDER-UNSUPPORTED");
+    assert_eq!(backend.turns.load(Ordering::SeqCst), 0);
+    let turn = store
+        .get_turn(store.list_turns(conversation.id, 0, 100).unwrap()[0].id)
+        .unwrap();
+    assert_eq!(turn.state, TurnState::Recorded);
+    assert_eq!(
+        store.get_message(turn.message_id).unwrap().delivery.state,
+        MessageDeliveryState::Queued
+    );
+}
+
+#[tokio::test]
+async fn turn_submit_activation_defaults_false_and_explicit_user_activation_waits_for_ready() {
+    let (_temporary, _root, store, app, backend, employee_id, conversation_id) = turn_test_app();
+    let inactive = app
+        .handle(request(
+            "turn-inactive",
+            "turn.submit",
+            json!({
+                "conversationId": conversation_id,
+                "author": {"kind": "user"},
+                "recipient": null,
+                "text": "Do not activate",
+                "idempotencyKey": "inactive-turn"
+            }),
+        ))
+        .await
+        .error
+        .unwrap();
+    assert_eq!(inactive.code, "LZ-TURN-SESSION-NOT-READY");
+    assert_eq!(backend.starts.load(Ordering::SeqCst), 0);
+    assert_eq!(backend.turns.load(Ordering::SeqCst), 0);
+
+    let second_conversation = store
+        .create_conversation(&CreateConversationInput {
+            request_id: "create-activation-conversation-request".to_owned(),
+            idempotency_key: "create-activation-conversation".to_owned(),
+            project_id: None,
+            lead_employee_id: employee_id,
+            title: None,
+        })
+        .unwrap()
+        .conversation;
+    backend.turn_events.lock().unwrap().extend([
+        ProviderEvent::TurnStarted {
+            provider: ProviderKind::Codex,
+            session_id: "native-1".to_owned(),
+            turn_id: Some("activated-turn".to_owned()),
+            raw: None,
+        },
+        ProviderEvent::TurnCompleted {
+            provider: ProviderKind::Codex,
+            session_id: "native-1".to_owned(),
+            turn_id: Some("activated-turn".to_owned()),
+            status: "completed".to_owned(),
+            output: Some("ready first".to_owned()),
+            raw: None,
+        },
+    ]);
+    let activated = app
+        .handle(request(
+            "turn-activated",
+            "turn.submit",
+            json!({
+                "conversationId": second_conversation.id,
+                "author": {"kind": "user"},
+                "recipient": null,
+                "text": "Activate then deliver",
+                "activateIfNeeded": true,
+                "idempotencyKey": "activated-turn"
+            }),
+        ))
+        .await
+        .result
+        .unwrap();
+    assert_eq!(activated["turn"]["state"], "completed");
+    assert_eq!(backend.starts.load(Ordering::SeqCst), 1);
+    assert_eq!(backend.turns.load(Ordering::SeqCst), 1);
+    assert_eq!(activated["turn"]["nativeSessionId"], "native-1");
+}
+
+#[tokio::test]
+async fn turn_submit_employee_author_cannot_activate_dormant_recipient() {
+    let (_temporary, _root, store, app, backend, employee_id, conversation_id) = turn_test_app();
+    let error = app
+        .handle(request(
+            "turn-employee-activation",
+            "turn.submit",
+            json!({
+                "conversationId": conversation_id,
+                "author": {"employeeId": employee_id, "sessionId": null},
+                "recipient": null,
+                "text": "Employee activation is forbidden",
+                "activateIfNeeded": true,
+                "idempotencyKey": "employee-activation"
+            }),
+        ))
+        .await
+        .error
+        .unwrap();
+    assert_eq!(error.code, "LZ-TURN-INVALID");
+    assert_eq!(backend.starts.load(Ordering::SeqCst), 0);
+    assert!(
+        store
+            .list_turns(conversation_id, 0, 100)
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[tokio::test]
+async fn turn_submit_replay_resumes_only_recorded_queued_work_after_session_warm() {
+    let (_temporary, _root, store, app, backend, employee_id, conversation_id) = turn_test_app();
+    let submit_params = json!({
+        "conversationId": conversation_id,
+        "author": {"kind": "user"},
+        "recipient": null,
+        "text": "Resume after warm",
+        "idempotencyKey": "resume-recorded"
+    });
+    let first = app
+        .handle(request(
+            "turn-submit-before-warm",
+            "turn.submit",
+            submit_params.clone(),
+        ))
+        .await
+        .error
+        .unwrap();
+    assert_eq!(first.code, "LZ-TURN-SESSION-NOT-READY");
+    let recorded = store
+        .get_turn(store.list_turns(conversation_id, 0, 100).unwrap()[0].id)
+        .unwrap();
+    assert_eq!(recorded.state, TurnState::Recorded);
+    assert!(recorded.message_attempt_id.is_none());
+    assert_eq!(
+        store
+            .get_message(recorded.message_id)
+            .unwrap()
+            .delivery
+            .state,
+        MessageDeliveryState::Queued
+    );
+
+    app.handle(request(
+        "warm-resume-session",
+        "session.warm",
+        json!({
+            "employeeId": employee_id,
+            "expectedEmployeeRevision": 1,
+            "idempotencyKey": "warm-resume-session"
+        }),
+    ))
+    .await
+    .result
+    .unwrap();
+    backend.turn_events.lock().unwrap().extend([
+        ProviderEvent::TurnStarted {
+            provider: ProviderKind::Codex,
+            session_id: "native-1".to_owned(),
+            turn_id: Some("resumed-native-turn".to_owned()),
+            raw: None,
+        },
+        ProviderEvent::TurnCompleted {
+            provider: ProviderKind::Codex,
+            session_id: "native-1".to_owned(),
+            turn_id: Some("resumed-native-turn".to_owned()),
+            status: "completed".to_owned(),
+            output: None,
+            raw: None,
+        },
+    ]);
+    let resumed = app
+        .handle(request(
+            "turn-submit-after-warm",
+            "turn.submit",
+            submit_params,
+        ))
+        .await
+        .result
+        .unwrap();
+    assert_eq!(resumed["turn"]["id"], recorded.id.to_string());
+    assert_eq!(resumed["turn"]["state"], "completed");
+    assert_eq!(resumed["message"]["attempts"].as_array().unwrap().len(), 1);
+    assert_eq!(backend.turns.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn turn_submit_replay_revalidates_configuration_and_provider_availability() {
+    use lazoo_store::RefreshProviderObservationsInput;
+
+    let (_temporary, _root, store, app, backend, employee_id, conversation_id) = turn_test_app();
+    let stale_params = json!({
+        "conversationId": conversation_id,
+        "author": {"kind": "user"},
+        "recipient": null,
+        "text": "Configuration guard",
+        "idempotencyKey": "configuration-guard"
+    });
+    app.handle(request(
+        "turn-record-configuration",
+        "turn.submit",
+        stale_params.clone(),
+    ))
+    .await;
+    app.handle(request(
+        "employee-update-before-delivery",
+        "employee.update",
+        json!({
+            "id": employee_id,
+            "expectedRevision": 1,
+            "role": "Changed lead",
+            "idempotencyKey": "change-lead-role"
+        }),
+    ))
+    .await
+    .result
+    .unwrap();
+    let stale = app
+        .handle(request(
+            "turn-replay-configuration",
+            "turn.submit",
+            stale_params,
+        ))
+        .await
+        .error
+        .unwrap();
+    assert_eq!(stale.code, "LZ-TURN-EMPLOYEE-STALE");
+
+    let second_conversation = store
+        .create_conversation(&CreateConversationInput {
+            request_id: "create-availability-conversation-request".to_owned(),
+            idempotency_key: "create-availability-conversation".to_owned(),
+            project_id: None,
+            lead_employee_id: employee_id,
+            title: None,
+        })
+        .unwrap()
+        .conversation;
+    let availability_params = json!({
+        "conversationId": second_conversation.id,
+        "author": {"kind": "user"},
+        "recipient": null,
+        "text": "Availability guard",
+        "idempotencyKey": "availability-guard"
+    });
+    app.handle(request(
+        "turn-record-availability",
+        "turn.submit",
+        availability_params.clone(),
+    ))
+    .await;
+    store
+        .refresh_provider_observations(&RefreshProviderObservationsInput {
+            request_id: "degrade-provider-request".to_owned(),
+            idempotency_key: "degrade-provider".to_owned(),
+            observations: vec![ProviderObservation {
+                provider: "codex".to_owned(),
+                verification: "degraded".to_owned(),
+                version: Some("test".to_owned()),
+                protocol: Some("app-server/v2".to_owned()),
+                capabilities: json!({"session": true}),
+                authentication: json!({"native": "blocked", "external": "unknown"}),
+                degradation_reason: Some("fixture degraded".to_owned()),
+                checked_at: "2026-09-04T00:00:00Z".to_owned(),
+            }],
+        })
+        .unwrap();
+    let unavailable = app
+        .handle(request(
+            "turn-replay-availability",
+            "turn.submit",
+            availability_params,
+        ))
+        .await
+        .error
+        .unwrap();
+    assert_eq!(unavailable.code, "LZ-TURN-EMPLOYEE-NOT-READY");
+    assert_eq!(backend.starts.load(Ordering::SeqCst), 0);
+    assert_eq!(backend.turns.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test]
+async fn turn_retry_reuses_turn_and_message_after_retry_is_due() {
+    let (_temporary, _root, store, app, backend, employee_id, conversation_id) = turn_test_app();
+    app.handle(request(
+        "warm-retry-session",
+        "session.warm",
+        json!({
+            "employeeId": employee_id,
+            "expectedEmployeeRevision": 1,
+            "idempotencyKey": "warm-retry-session"
+        }),
+    ))
+    .await
+    .result
+    .unwrap();
+    backend.turn_retryable_failure.store(true, Ordering::SeqCst);
+    let failed_error = app
+        .handle(request(
+            "turn-submit-retryable",
+            "turn.submit",
+            json!({
+                "conversationId": conversation_id,
+                "author": {"kind": "user"},
+                "recipient": null,
+                "text": "Retry me",
+                "maxAttempts": 3,
+                "idempotencyKey": "retryable-turn"
+            }),
+        ))
+        .await
+        .error
+        .unwrap();
+    assert_eq!(failed_error.code, "LZ-TURN-PROVIDER");
+    let failed = store
+        .get_turn(store.list_turns(conversation_id, 0, 100).unwrap()[0].id)
+        .unwrap();
+    assert_eq!(failed.state, TurnState::RetryableFailed);
+    let message_id = failed.message_id;
+
+    let early = app
+        .handle(request(
+            "turn-retry-early",
+            "turn.retry",
+            json!({
+                "id": failed.id,
+                "expectedRevision": failed.revision,
+                "idempotencyKey": "retry-early"
+            }),
+        ))
+        .await
+        .error
+        .unwrap();
+    assert_eq!(early.code, "LZ-TURN-RETRY-NOT-DUE");
+
+    store
+        .execute_for_test(&format!(
+            "UPDATE message_deliveries SET next_attempt_at = '2020-01-01T00:00:00Z' WHERE message_id = '{message_id}';"
+        ))
+        .unwrap();
+    backend
+        .turn_retryable_failure
+        .store(false, Ordering::SeqCst);
+    backend.turn_events.lock().unwrap().extend([
+        ProviderEvent::TurnStarted {
+            provider: ProviderKind::Codex,
+            session_id: "native-1".to_owned(),
+            turn_id: Some("retried-native-turn".to_owned()),
+            raw: None,
+        },
+        ProviderEvent::TurnCompleted {
+            provider: ProviderKind::Codex,
+            session_id: "native-1".to_owned(),
+            turn_id: Some("retried-native-turn".to_owned()),
+            status: "completed".to_owned(),
+            output: Some("retried".to_owned()),
+            raw: None,
+        },
+    ]);
+    let retried = app
+        .handle(request(
+            "turn-retry",
+            "turn.retry",
+            json!({
+                "id": failed.id,
+                "expectedRevision": failed.revision,
+                "idempotencyKey": "retry-due"
+            }),
+        ))
+        .await
+        .result
+        .unwrap();
+    assert_eq!(retried["turn"]["id"], failed.id.to_string());
+    assert_eq!(retried["message"]["envelope"]["id"], message_id.to_string());
+    assert_eq!(retried["message"]["attempts"].as_array().unwrap().len(), 2);
+    assert_eq!(retried["turn"]["state"], "completed");
+    assert_eq!(backend.turns.load(Ordering::SeqCst), 2);
+}
+
+#[tokio::test]
+async fn turn_cancel_before_provider_io_cancels_turn_and_message() {
+    let (_temporary, _root, store, app, backend, _employee_id, conversation_id) = turn_test_app();
+    app.handle(request(
+        "turn-record-only",
+        "turn.submit",
+        json!({
+            "conversationId": conversation_id,
+            "author": {"kind": "user"},
+            "recipient": null,
+            "text": "Cancel before delivery",
+            "idempotencyKey": "cancel-recorded"
+        }),
+    ))
+    .await;
+    let recorded = store
+        .get_turn(store.list_turns(conversation_id, 0, 100).unwrap()[0].id)
+        .unwrap();
+    let cancelled = app
+        .handle(request(
+            "turn-cancel-recorded",
+            "turn.cancel",
+            json!({
+                "id": recorded.id,
+                "expectedRevision": recorded.revision,
+                "idempotencyKey": "cancel-recorded-command"
+            }),
+        ))
+        .await
+        .result
+        .unwrap();
+    assert_eq!(cancelled["turn"]["state"], "cancelled");
+    assert_eq!(cancelled["message"]["delivery"]["state"], "cancelled");
+    assert_eq!(backend.cancels.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test]
+async fn turn_cancel_after_acceptance_waits_for_native_cancellation_evidence() {
+    let (_temporary, _root, store, app, backend, employee_id, conversation_id) = turn_test_app();
+    backend.gate_events.store(true, Ordering::SeqCst);
+    backend.turn_events.lock().unwrap().extend([
+        ProviderEvent::TurnStarted {
+            provider: ProviderKind::Codex,
+            session_id: "native-1".to_owned(),
+            turn_id: Some("cancel-native-turn".to_owned()),
+            raw: None,
+        },
+        ProviderEvent::Cancelled {
+            provider: ProviderKind::Codex,
+            session_id: "native-1".to_owned(),
+            turn_id: Some("cancel-native-turn".to_owned()),
+            raw: None,
+        },
+    ]);
+    app.handle(request(
+        "warm-cancel-session",
+        "session.warm",
+        json!({
+            "employeeId": employee_id,
+            "expectedEmployeeRevision": 1,
+            "idempotencyKey": "warm-cancel-session"
+        }),
+    ))
+    .await
+    .result
+    .unwrap();
+    let submitting = tokio::spawn({
+        let app = app.clone();
+        async move {
+            app.handle(request(
+                "turn-submit-cancel",
+                "turn.submit",
+                json!({
+                    "conversationId": conversation_id,
+                    "author": {"kind": "user"},
+                    "recipient": null,
+                    "text": "Cancel after acceptance",
+                    "idempotencyKey": "cancel-accepted"
+                }),
+            ))
+            .await
+        }
+    });
+    wait_until(|| backend.turns.load(Ordering::SeqCst) == 1).await;
+    let turn_id = store.list_turns(conversation_id, 0, 100).unwrap()[0].id;
+    backend.event_permits.add_permits(1);
+    wait_until(|| {
+        store
+            .get_turn(turn_id)
+            .is_ok_and(|turn| turn.state == TurnState::Accepted)
+    })
+    .await;
+    let accepted = store.get_turn(turn_id).unwrap();
+    let cancelling = tokio::spawn({
+        let app = app.clone();
+        async move {
+            app.handle(request(
+                "turn-cancel-accepted",
+                "turn.cancel",
+                json!({
+                    "id": turn_id,
+                    "expectedRevision": accepted.revision,
+                    "idempotencyKey": "cancel-accepted-command"
+                }),
+            ))
+            .await
+        }
+    });
+    wait_until(|| backend.cancels.load(Ordering::SeqCst) == 1).await;
+    let requested = store.get_turn(turn_id).unwrap();
+    assert_eq!(requested.state, TurnState::Accepted);
+    assert!(requested.cancel_requested_at.is_some());
+    assert!(!cancelling.is_finished());
+
+    backend.event_permits.add_permits(1);
+    let cancelled = timeout(Duration::from_secs(2), cancelling)
+        .await
+        .unwrap()
+        .unwrap()
+        .result
+        .unwrap();
+    let submitted = timeout(Duration::from_secs(2), submitting)
+        .await
+        .unwrap()
+        .unwrap()
+        .result
+        .unwrap();
+    assert_eq!(cancelled["turn"]["state"], "cancelled");
+    assert_eq!(submitted["turn"]["state"], "cancelled");
+    assert_eq!(cancelled["message"]["delivery"]["state"], "acknowledged");
+}
+
+#[tokio::test]
+async fn turn_cancel_with_missing_live_handle_becomes_uncertain() {
+    let (_temporary, _root, store, app, backend, employee_id, conversation_id) = turn_test_app();
+    backend.gate_events.store(true, Ordering::SeqCst);
+    backend.turn_events.lock().unwrap().extend([
+        ProviderEvent::TurnStarted {
+            provider: ProviderKind::Codex,
+            session_id: "native-1".to_owned(),
+            turn_id: Some("orphaned-native-turn".to_owned()),
+            raw: None,
+        },
+        ProviderEvent::Progress {
+            provider: ProviderKind::Codex,
+            session_id: "native-1".to_owned(),
+            message: Some("still running".to_owned()),
+            raw: None,
+        },
+    ]);
+    app.handle(request(
+        "warm-orphan-session",
+        "session.warm",
+        json!({
+            "employeeId": employee_id,
+            "expectedEmployeeRevision": 1,
+            "idempotencyKey": "warm-orphan-session"
+        }),
+    ))
+    .await
+    .result
+    .unwrap();
+    let submitting = tokio::spawn({
+        let app = app.clone();
+        async move {
+            app.handle(request(
+                "turn-submit-orphan",
+                "turn.submit",
+                json!({
+                    "conversationId": conversation_id,
+                    "author": {"kind": "user"},
+                    "recipient": null,
+                    "text": "Lose the live handle",
+                    "idempotencyKey": "orphaned-turn"
+                }),
+            ))
+            .await
+        }
+    });
+    wait_until(|| backend.turns.load(Ordering::SeqCst) == 1).await;
+    let turn_id = store.list_turns(conversation_id, 0, 100).unwrap()[0].id;
+    backend.event_permits.add_permits(1);
+    wait_until(|| {
+        store
+            .get_turn(turn_id)
+            .is_ok_and(|turn| turn.state == TurnState::Accepted)
+    })
+    .await;
+    app.shutdown_live_sessions().await;
+    let accepted = store.get_turn(turn_id).unwrap();
+
+    let error = app
+        .handle(request(
+            "turn-cancel-orphan",
+            "turn.cancel",
+            json!({
+                "id": turn_id,
+                "expectedRevision": accepted.revision,
+                "idempotencyKey": "cancel-orphaned-turn"
+            }),
+        ))
+        .await
+        .error
+        .unwrap();
+    assert_eq!(error.code, "LZ-TURN-UNCERTAIN");
+    assert_eq!(backend.cancels.load(Ordering::SeqCst), 0);
+    assert_eq!(store.get_turn(turn_id).unwrap().state, TurnState::Uncertain);
+
+    backend.event_permits.add_permits(1);
+    let submitted = timeout(Duration::from_secs(2), submitting)
+        .await
+        .unwrap()
+        .unwrap()
+        .result
+        .unwrap();
+    assert_eq!(submitted["turn"]["state"], "uncertain");
 }
 
 #[tokio::test]
@@ -550,7 +1693,7 @@ async fn status_reports_protocol_store_and_boot_identity() {
     let result = response.result.unwrap();
 
     assert_eq!(result["protocolVersion"], 1);
-    assert_eq!(result["schemaVersion"], 4);
+    assert_eq!(result["schemaVersion"], 5);
     assert_eq!(result["journalMode"], "wal");
     assert!(
         result["bootId"]
@@ -1153,6 +2296,120 @@ fn app_startup_reconciles_prior_boot_sessions_without_adopting_a_pid() {
         Some("LZ-SESSION-OWNER-LOST")
     );
     assert!(reconciled.native_host_pid.is_none());
+}
+
+#[test]
+#[allow(clippy::too_many_lines)] // Prior-boot session and turn state form one recovery fixture.
+fn app_startup_reconciles_prior_boot_turns_without_adopting_provider_work() {
+    use lazoo_protocol::{MessageSender, UserMessageEndpoint, UserMessageKind};
+    use lazoo_store::{
+        BeginSessionInput, BeginTurnSubmissionInput, MarkSessionReadyInput, ObserveTurnInput,
+        RecordTurnInput,
+    };
+
+    let temporary = tempdir().unwrap();
+    let root = DataRoot::from_path(temporary.path().join("data"));
+    root.ensure().unwrap();
+    let store = Store::open_path(root.state_db()).unwrap();
+    let employee = configured_employee(&store);
+    let prior_boot = uuid::Uuid::new_v4();
+    let starting = store
+        .begin_session(&BeginSessionInput {
+            request_id: "warm-prior-turn".to_owned(),
+            idempotency_key: "warm-prior-turn".to_owned(),
+            employee_id: employee.id,
+            expected_employee_revision: 1,
+            owner_boot_id: prior_boot,
+        })
+        .unwrap();
+    let ready = store
+        .mark_session_ready(&MarkSessionReadyInput {
+            session_id: starting.session.id,
+            expected_revision: starting.session.revision,
+            owner_boot_id: prior_boot,
+            native_session_id: "prior-native".to_owned(),
+            native_host_pid: 4242,
+        })
+        .unwrap();
+    let conversation = store
+        .create_conversation(&CreateConversationInput {
+            request_id: "prior-conversation-request".to_owned(),
+            idempotency_key: "prior-conversation".to_owned(),
+            project_id: None,
+            lead_employee_id: employee.id,
+            title: None,
+        })
+        .unwrap()
+        .conversation;
+    let recorded = store
+        .record_turn(&RecordTurnInput {
+            request_id: "prior-turn-request".to_owned(),
+            idempotency_key: "prior-turn".to_owned(),
+            conversation_id: conversation.id,
+            author: MessageSender::User(UserMessageEndpoint {
+                kind: UserMessageKind::User,
+            }),
+            recipient: None,
+            text: "Prior accepted turn".to_owned(),
+            activate_if_needed: false,
+            max_attempts: 3,
+        })
+        .unwrap();
+    let submitting = store
+        .begin_turn_submission(&BeginTurnSubmissionInput {
+            request_id: "prior-turn-begin-request".to_owned(),
+            idempotency_key: "prior-turn-begin".to_owned(),
+            turn_id: recorded.turn.id,
+            expected_revision: recorded.turn.revision,
+            owner_boot_id: prior_boot,
+            recipient_session_id: ready.session.id,
+        })
+        .unwrap();
+    let accepted = store
+        .observe_turn(&ObserveTurnInput {
+            request_id: "prior-turn-accepted-request".to_owned(),
+            idempotency_key: "prior-turn-accepted".to_owned(),
+            turn_id: recorded.turn.id,
+            expected_revision: submitting.turn.revision,
+            kind: "turn-started".to_owned(),
+            provider: "codex".to_owned(),
+            native_session_id: Some("prior-native".to_owned()),
+            native_turn_id: Some("prior-native-turn".to_owned()),
+            payload: json!({"progress": true}),
+            transition: Some(TurnState::Accepted),
+        })
+        .unwrap();
+    assert_eq!(
+        accepted.message.delivery.state,
+        MessageDeliveryState::Acknowledged
+    );
+
+    let backend = FakeSessionBackend::default();
+    let _app = App::new_with_session_backend(
+        store.clone(),
+        root,
+        DiscoveryEnvironment::empty(),
+        Arc::new(backend.clone()),
+    )
+    .unwrap();
+
+    let reconciled = store.get_turn(recorded.turn.id).unwrap();
+    assert_eq!(reconciled.state, TurnState::Uncertain);
+    assert_eq!(
+        reconciled.failure_code.as_deref(),
+        Some("LZ-TURN-OWNER-LOST")
+    );
+    assert!(reconciled.owner_boot_id.is_none());
+    assert_eq!(
+        store
+            .get_message(reconciled.message_id)
+            .unwrap()
+            .delivery
+            .state,
+        MessageDeliveryState::Acknowledged
+    );
+    assert_eq!(backend.starts.load(Ordering::SeqCst), 0);
+    assert_eq!(backend.turns.load(Ordering::SeqCst), 0);
 }
 
 #[test]

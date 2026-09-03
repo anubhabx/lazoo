@@ -434,11 +434,11 @@ Commit: `feat: observe codex turn acceptance`
 - Consumes: Task 2 store transitions, Task 3 observed provider path, existing session warm/start/stop lifecycle, provider registry, event publication, and RPC error conventions.
 - Produces: daemon RPC handlers for conversation/turn operations, `ManagedSession::turn_observed`, cancellation, deterministic fake delivery, and startup reconciliation.
 
-- [ ] **Step 1: Extend the fake managed-session contract in tests**
+- [x] **Step 1: Extend the fake managed-session contract in tests**
 
 Add `turn_observed` and `cancel` to the daemon's `ManagedSession` trait and update `FakeSessionBackend` so each fake can emit an exact event script, reject before acceptance, block until released, or fail an observer call. Retain existing session start/stop counters.
 
-- [ ] **Step 2: Write failing conversation RPC tests**
+- [x] **Step 2: Write failing conversation RPC tests**
 
 Cover `conversation.create/list/show` for projectless and registered-project scope, idempotent replay, route-ready lead validation, stable errors, list bounds, and unchanged `DesktopSnapshot` serialization.
 
@@ -446,7 +446,7 @@ Run: `cargo test -p lazood --test daemon conversation_`
 
 Expected: RPC responses contain `LZ-METHOD-NOT-FOUND`.
 
-- [ ] **Step 3: Implement conversation RPC handlers in the focused module**
+- [x] **Step 3: Implement conversation RPC handlers in the focused module**
 
 Declare `mod turn;` from `app.rs`. Put the new parameter parsing, store calls, and conversation/turn error mapping in `app/turn.rs`, exposing only `pub(super)` methods needed by `App::handle`. Add these dispatch cases:
 
@@ -463,19 +463,19 @@ Declare `mod turn;` from `app.rs`. Put the new parameter parsing, store calls, a
 
 Map conversation/turn failures to exit-family codes `LZ-CONVERSATION-*` and `LZ-TURN-*`. Do not add a desktop field or command.
 
-- [ ] **Step 4: Write failing record-first and acceptance-evidence tests**
+- [x] **Step 4: Write failing record-first and acceptance-evidence tests**
 
 Submit a user turn to an already warm fake Codex session. Pause the fake before its first event and assert through a second store handle that the turn is `submitting`, the message attempt exists, and input/audit/outbox rows are durable. Release `TurnStarted`, then assert the turn becomes `accepted` and the linked message becomes `acknowledged` with native IDs. Release completion and assert ordered durable events plus `completed` state.
 
 Add tests proving a fake successful write without an observed event does not acknowledge the message, and a non-Codex employee returns `LZ-TURN-PROVIDER-UNSUPPORTED` before provider I/O.
 
-- [ ] **Step 5: Run turn delivery tests and verify RED**
+- [x] **Step 5: Run turn delivery tests and verify RED**
 
 Run: `cargo test -p lazood --test daemon turn_submit_`
 
 Expected: `turn.submit` is unavailable and the fake session cannot accept observed turns.
 
-- [ ] **Step 6: Implement active-session delivery and observation**
+- [x] **Step 6: Implement active-session delivery and observation**
 
 Add `live_turns: Arc<Mutex<BTreeMap<Uuid, Arc<dyn ManagedSession>>>>` to `App`. Implement an `AppTurnObserver` that owns a cloned `Store` and event sender, converts `ProviderEvent` into bounded `ObserveTurnInput`, commits it, and publishes resulting outbox rows.
 
@@ -494,7 +494,7 @@ For `turn.submit`:
 
 Refactor `start_new_session` only enough to return the typed ready session record to both `session.warm` and turn activation. Do not change its ownership or Job Object guarantees.
 
-- [ ] **Step 7: Write failing activation, retry, cancel, and reconciliation tests**
+- [x] **Step 7: Write failing activation, retry, cancel, and reconciliation tests**
 
 Cover:
 
@@ -510,7 +510,7 @@ Cover:
 - missing live handle produces `uncertain`, not `cancelled`; and
 - startup reconciliation marks `submitting`/`accepted` prior-boot turns uncertain without PID/session adoption.
 
-- [ ] **Step 8: Run lifecycle tests and verify RED**
+- [x] **Step 8: Run lifecycle tests and verify RED**
 
 Run:
 
@@ -521,11 +521,11 @@ cargo test -p lazood --test daemon app_startup_reconciles_
 
 Expected: the missing lifecycle handlers and reconciliation assertions fail.
 
-- [ ] **Step 9: Implement retry, cancel, and startup reconciliation**
+- [x] **Step 9: Implement retry, cancel, and startup reconciliation**
 
 Use Task 2 atomic transitions. `turn.retry` first advances the due canonical message and local turn, then uses the same delivery function. `turn.cancel` persists its request before calling `ManagedSession::cancel`; only an observed native cancellation finishes as cancelled. Call `store.reconcile_turns(boot_id)` after session and message reconciliation during `App` construction, then publish pending outbox events.
 
-- [ ] **Step 10: Verify daemon suites and commit**
+- [x] **Step 10: Verify daemon suites and commit**
 
 Run:
 
