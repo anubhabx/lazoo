@@ -5,7 +5,7 @@ use sha2::{Digest, Sha256};
 
 use crate::StoreError;
 
-const VERSION: u32 = 4;
+const VERSION: u32 = 5;
 const MIGRATIONS: &[(u32, &str)] = &[
     (
         1,
@@ -22,6 +22,10 @@ const MIGRATIONS: &[(u32, &str)] = &[
     (
         4,
         include_str!("../../../migrations/0004_collaboration_bus.sql"),
+    ),
+    (
+        5,
+        include_str!("../../../migrations/0005_conversations.sql"),
     ),
 ];
 

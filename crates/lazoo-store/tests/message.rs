@@ -1,5 +1,6 @@
 use lazoo_protocol::{
     AuthorityMode, EmployeeCheckoutPolicy, MessageDeliveryState, MessageEndpoint, MessageKind,
+    MessageSender,
 };
 use lazoo_store::{
     AcknowledgeMessageInput, CancelMessageInput, ClaimMessageInput, FailMessageInput,
@@ -88,6 +89,14 @@ fn send_is_record_first_idempotent_and_ordered() {
         first.message.envelope.correlation_id
     );
     assert_eq!(first.message.delivery.state, MessageDeliveryState::Queued);
+    assert_eq!(first.message.envelope.version, 1);
+    assert_eq!(
+        first.message.envelope.sender,
+        MessageSender::Employee(MessageEndpoint {
+            employee_id: sender.id,
+            session_id: None,
+        })
+    );
     assert_eq!(first.message.delivery.revision, 1);
     assert_eq!(first.message.delivery.attempt_count, 0);
     assert!(first.message.attempts.is_empty());

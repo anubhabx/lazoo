@@ -180,7 +180,7 @@ Commit: `feat: define conversation turn contracts`
 - Consumes: Task 1 protocol/domain types plus existing message transaction, audit, outbox, retry, command-replay, employee, session, and project helpers.
 - Produces: `CreateConversationInput`, `RecordTurnInput`, `BeginTurnSubmissionInput`, `ObserveTurnInput`, `FailTurnInput`, `RetryTurnInput`, `RequestTurnCancelInput`, `FinishTurnCancelInput`, `MarkTurnUncertainInput`, and `reconcile_turns` store methods.
 
-- [ ] **Step 1: Write failing migration compatibility tests**
+- [x] **Step 1: Write failing migration compatibility tests**
 
 Extend `store.rs` to require schema 5 for new databases and upgrades from schemas 1, 2, 3, and 4. Seed a schema-4 employee message before upgrade, reopen the store, and assert its envelope is still version 1 with the same employee sender and delivery history. End every migration case with:
 
@@ -193,7 +193,7 @@ let violations: i64 = connection.query_row(
 assert_eq!(violations, 0);
 ```
 
-- [ ] **Step 2: Run migration tests and verify RED**
+- [x] **Step 2: Run migration tests and verify RED**
 
 Run:
 
@@ -204,7 +204,7 @@ cargo test -p lazoo-store --test store version_
 
 Expected: assertions report schema 4 because migration 5 is absent.
 
-- [ ] **Step 3: Add the schema-5 migration**
+- [x] **Step 3: Add the schema-5 migration**
 
 Rebuild `messages`, `message_deliveries`, `message_delivery_attempts`, `message_dead_letters`, and `message_commands` in dependency order. Preserve all existing IDs, sequences, revisions, attempts, dead letters, and command mappings. The rebuilt message parent uses:
 
@@ -221,7 +221,7 @@ CHECK (
 
 Create `conversations`, `conversation_turns`, `conversation_turn_events`, `conversation_commands`, and `turn_commands`. Add checks for scope, states, revisions, unique per-turn event sequences, one canonical message per turn, nullable owner boot/native IDs, and foreign keys to projects, employees, sessions, conversations, and messages.
 
-- [ ] **Step 4: Make message loading actor-aware**
+- [x] **Step 4: Make message loading actor-aware**
 
 Update message row parsing and insertion so existing `send_message` creates version 1 with `sender_kind = 'employee'`. Add transaction-scoped internal helpers used by conversation persistence:
 
@@ -239,7 +239,7 @@ pub(crate) fn claim_message_tx(
 
 `InsertMessageInput` contains every existing send field plus `version: u32` and `sender: MessageSender`; public `send_message` constructs version 1 with an employee sender. Add equivalent internal helpers for acknowledge, fail, retry, and cancel so a turn transition and its canonical delivery transition can commit atomically.
 
-- [ ] **Step 5: Write failing conversation and turn persistence tests**
+- [x] **Step 5: Write failing conversation and turn persistence tests**
 
 Cover:
 
@@ -268,13 +268,13 @@ assert_eq!(replay.turn.id, recorded.turn.id);
 assert_eq!(replay.event_sequence, None);
 ```
 
-- [ ] **Step 6: Run store tests and verify RED**
+- [x] **Step 6: Run store tests and verify RED**
 
 Run: `cargo test -p lazoo-store --test conversation --test message --test store`
 
 Expected: compilation fails because conversation store methods and schema-5 types are absent.
 
-- [ ] **Step 7: Implement conversation creation and record-first turn insertion**
+- [x] **Step 7: Implement conversation creation and record-first turn insertion**
 
 Expose these methods on `Store`:
 
@@ -295,7 +295,7 @@ pub fn get_turn(&self, id: Uuid)
 
 `record_turn` must insert the turn, version-2 message, delivery intent, both command mappings, audit events, and outbox rows in one immediate transaction. Resolve command replay before current-state validation.
 
-- [ ] **Step 8: Implement atomic delivery transitions**
+- [x] **Step 8: Implement atomic delivery transitions**
 
 Expose:
 
@@ -320,7 +320,7 @@ pub fn reconcile_turns(&self, current_boot_id: Uuid)
 
 Every effective mutation must update the linked message when required, append exactly one audit/outbox event per public state change, persist the command mapping, and return no new event sequence on replay. `ObserveTurnInput` accepts only normalized/redacted payloads and handles acceptance plus message acknowledgement in one transaction.
 
-- [ ] **Step 9: Verify the complete store suite and commit**
+- [x] **Step 9: Verify the complete store suite and commit**
 
 Run:
 

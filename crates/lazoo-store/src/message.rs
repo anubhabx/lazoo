@@ -1,12 +1,13 @@
 use chrono::{DateTime, Duration, Utc};
 use lazoo_domain::{
-    retry_delay_seconds, validate_acknowledgement, validate_max_attempts,
+    retry_delay_seconds, validate_acknowledgement, validate_envelope_sender, validate_max_attempts,
     validate_message_command_key, validate_message_content, validate_message_failure,
 };
 use lazoo_protocol::{
     MESSAGE_ENVELOPE_V1, MessageActivationIntent, MessageDeadLetter, MessageDelivery,
     MessageDeliveryAttempt, MessageDeliveryState, MessageEndpoint, MessageEnvelope, MessageKind,
-    MessageMutationResult, MessageReconcileResult, MessageRecord, MessageReference, MessageSummary,
+    MessageMutationResult, MessageReconcileResult, MessageRecord, MessageReference, MessageSender,
+    MessageSummary, UserMessageEndpoint, UserMessageKind,
 };
 use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, params};
 use serde::Serialize;
@@ -84,91 +85,28 @@ impl Store {
         &self,
         input: &SendMessageInput,
     ) -> Result<MessageMutationResult, StoreError> {
-        validate_message_command_key(&input.idempotency_key)?;
-        validate_message_content(&input.body, &input.references)?;
-        validate_max_attempts(input.max_attempts)?;
-
         let mut connection = self.lock()?;
         let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        if let Some(message) =
-            message_for_command(&transaction, "message.send", &input.idempotency_key)?
-        {
-            let result = MessageMutationResult {
-                message,
-                event_sequence: None,
-            };
-            transaction.commit()?;
-            return Ok(result);
-        }
-
-        require_endpoint(&transaction, input.sender, "sender")?;
-        require_endpoint(&transaction, input.recipient, "recipient")?;
-        if let Some(project_id) = input.project_id {
-            require_project(&transaction, project_id)?;
-        }
-
-        let message_id = Uuid::new_v4();
-        let correlation_id = resolve_correlation(
+        let result = insert_message_tx(
             &transaction,
-            message_id,
-            input.correlation_id,
-            input.causation_id,
+            &InsertMessageInput {
+                request_id: input.request_id.clone(),
+                command_scope: "message.send",
+                idempotency_key: input.idempotency_key.clone(),
+                version: MESSAGE_ENVELOPE_V1,
+                sender: MessageSender::Employee(input.sender),
+                recipient: input.recipient,
+                project_id: input.project_id,
+                conversation_id: input.conversation_id,
+                task_id: input.task_id,
+                correlation_id: input.correlation_id,
+                causation_id: input.causation_id,
+                kind: input.kind,
+                body: input.body.clone(),
+                references: input.references.clone(),
+                max_attempts: input.max_attempts,
+            },
         )?;
-        let now = Utc::now().to_rfc3339();
-        transaction.execute(
-            "INSERT INTO messages (
-                id, envelope_version, idempotency_key, correlation_id, causation_id,
-                sender_employee_id, sender_session_id, recipient_employee_id,
-                recipient_session_id, project_id, conversation_id, task_id, kind,
-                body_json, references_json, created_at
-             ) VALUES (
-                ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16
-             )",
-            params![
-                message_id.to_string(),
-                i64::from(MESSAGE_ENVELOPE_V1),
-                input.idempotency_key,
-                correlation_id.to_string(),
-                input.causation_id.map(|value| value.to_string()),
-                input.sender.employee_id.to_string(),
-                input.sender.session_id.map(|value| value.to_string()),
-                input.recipient.employee_id.to_string(),
-                input.recipient.session_id.map(|value| value.to_string()),
-                input.project_id.map(|value| value.to_string()),
-                input.conversation_id.map(|value| value.to_string()),
-                input.task_id.map(|value| value.to_string()),
-                serialized_name(input.kind)?,
-                serde_json::to_string(&input.body)?,
-                serde_json::to_string(&input.references)?,
-                now,
-            ],
-        )?;
-        transaction.execute(
-            "INSERT INTO message_deliveries (
-                message_id, state, revision, attempt_count, max_attempts,
-                next_attempt_at, updated_at
-             ) VALUES (?1, 'queued', 1, 0, ?2, ?3, ?3)",
-            params![message_id.to_string(), i64::from(input.max_attempts), now],
-        )?;
-        insert_message_command(
-            &transaction,
-            "message.send",
-            &input.idempotency_key,
-            &input.request_id,
-            message_id,
-            &now,
-        )?;
-        let message = required_message(&transaction, message_id)?;
-        let event_sequence = employee::insert_event(
-            &transaction,
-            "message.queued",
-            &json!({"message": &message}),
-            &now,
-        )?;
-        let result = MessageMutationResult {
-            message,
-            event_sequence: Some(event_sequence),
-        };
         transaction.commit()?;
         Ok(result)
     }
@@ -177,274 +115,50 @@ impl Store {
         &self,
         input: &ClaimMessageInput,
     ) -> Result<MessageMutationResult, StoreError> {
-        validate_message_command_key(&input.idempotency_key)?;
         let mut connection = self.lock()?;
         let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        if let Some(message) =
-            message_for_command(&transaction, "message.claim", &input.idempotency_key)?
-        {
-            return replay_result(transaction, message);
-        }
-        let current = required_message(&transaction, input.message_id)?;
-        require_message_revision(&current, input.expected_revision)?;
-        require_message_state(&current, &[MessageDeliveryState::Queued], "queued")?;
-        let now = Utc::now().to_rfc3339();
-        begin_attempt(
-            &transaction,
-            &current,
-            "message.claim",
-            &input.idempotency_key,
-            &input.request_id,
-            &now,
-        )
-        .and_then(|result| commit_result(transaction, result))
+        let result = claim_message_tx(&transaction, input)?;
+        commit_result(transaction, result)
     }
 
     pub fn acknowledge_message(
         &self,
         input: &AcknowledgeMessageInput,
     ) -> Result<MessageMutationResult, StoreError> {
-        validate_message_command_key(&input.idempotency_key)?;
-        validate_acknowledgement(&input.acknowledgement_key, &input.evidence)?;
         let mut connection = self.lock()?;
         let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        if let Some(message) =
-            message_for_command(&transaction, "message.acknowledge", &input.idempotency_key)?
-        {
-            return replay_result(transaction, message);
-        }
-        let current = required_message(&transaction, input.message_id)?;
-        require_message_revision(&current, input.expected_revision)?;
-        require_message_state(&current, &[MessageDeliveryState::Delivering], "delivering")?;
-        require_active_attempt(&current, input.attempt_id)?;
-        let now = Utc::now().to_rfc3339();
-        transaction.execute(
-            "UPDATE message_delivery_attempts SET
-                state = 'acknowledged', finished_at = ?2, acknowledgement_key = ?3,
-                acknowledgement_evidence_json = ?4
-             WHERE id = ?1",
-            params![
-                input.attempt_id.to_string(),
-                now,
-                input.acknowledgement_key,
-                serde_json::to_string(&input.evidence)?,
-            ],
-        )?;
-        transaction.execute(
-            "UPDATE message_deliveries SET
-                state = 'acknowledged', revision = revision + 1, next_attempt_at = NULL,
-                acknowledged_at = ?2, terminal_at = ?2, updated_at = ?2
-             WHERE message_id = ?1",
-            params![input.message_id.to_string(), now],
-        )?;
-        transition_result(
-            &transaction,
-            input.message_id,
-            "message.acknowledge",
-            &input.idempotency_key,
-            &input.request_id,
-            "message.acknowledged",
-            &now,
-        )
-        .and_then(|result| commit_result(transaction, result))
+        let result = acknowledge_message_tx(&transaction, input)?;
+        commit_result(transaction, result)
     }
 
     pub fn fail_message(
         &self,
         input: &FailMessageInput,
     ) -> Result<MessageMutationResult, StoreError> {
-        validate_message_command_key(&input.idempotency_key)?;
-        validate_message_failure(&input.failure_code, &input.failure_message)?;
         let mut connection = self.lock()?;
         let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        if let Some(message) =
-            message_for_command(&transaction, "message.fail", &input.idempotency_key)?
-        {
-            return replay_result(transaction, message);
-        }
-        let current = required_message(&transaction, input.message_id)?;
-        require_message_revision(&current, input.expected_revision)?;
-        require_message_state(&current, &[MessageDeliveryState::Delivering], "delivering")?;
-        require_active_attempt(&current, input.attempt_id)?;
-        let now = Utc::now();
-        let terminal =
-            !input.retryable || current.delivery.attempt_count >= current.delivery.max_attempts;
-        let next_attempt_at = if terminal {
-            None
-        } else {
-            Some(
-                (now + Duration::seconds(
-                    retry_delay_seconds(current.delivery.attempt_count)
-                        .expect("remaining retry budget has a fixed delay"),
-                ))
-                .to_rfc3339(),
-            )
-        };
-        let now = now.to_rfc3339();
-        let state = if terminal {
-            MessageDeliveryState::TerminalFailed
-        } else {
-            MessageDeliveryState::RetryableFailed
-        };
-        let state_name = serialized_name(state)?;
-        transaction.execute(
-            "UPDATE message_delivery_attempts SET
-                state = ?2, finished_at = ?3, failure_code = ?4, failure_message = ?5
-             WHERE id = ?1",
-            params![
-                input.attempt_id.to_string(),
-                state_name,
-                now,
-                input.failure_code,
-                input.failure_message,
-            ],
-        )?;
-        transaction.execute(
-            "UPDATE message_deliveries SET
-                state = ?2, revision = revision + 1, next_attempt_at = ?3,
-                last_failure_code = ?4, last_failure_message = ?5,
-                terminal_at = ?6, updated_at = ?7
-             WHERE message_id = ?1",
-            params![
-                input.message_id.to_string(),
-                state_name,
-                next_attempt_at,
-                input.failure_code,
-                input.failure_message,
-                terminal.then_some(now.clone()),
-                now,
-            ],
-        )?;
-        if terminal {
-            insert_dead_letter(
-                &transaction,
-                input.message_id,
-                input.attempt_id,
-                &input.failure_code,
-                &input.failure_message,
-                &now,
-            )?;
-        }
-        let event_type = if terminal {
-            "message.terminal-failed"
-        } else {
-            "message.retryable-failed"
-        };
-        transition_result(
-            &transaction,
-            input.message_id,
-            "message.fail",
-            &input.idempotency_key,
-            &input.request_id,
-            event_type,
-            &now,
-        )
-        .and_then(|result| commit_result(transaction, result))
+        let result = fail_message_tx(&transaction, input)?;
+        commit_result(transaction, result)
     }
 
     pub fn retry_message(
         &self,
         input: &RetryMessageInput,
     ) -> Result<MessageMutationResult, StoreError> {
-        validate_message_command_key(&input.idempotency_key)?;
         let mut connection = self.lock()?;
         let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        if let Some(message) =
-            message_for_command(&transaction, "message.retry", &input.idempotency_key)?
-        {
-            return replay_result(transaction, message);
-        }
-        let current = required_message(&transaction, input.message_id)?;
-        require_message_revision(&current, input.expected_revision)?;
-        require_message_state(
-            &current,
-            &[MessageDeliveryState::RetryableFailed],
-            "retryable-failed",
-        )?;
-        let next_attempt_at = current.delivery.next_attempt_at.as_deref().ok_or_else(|| {
-            StoreError::InvalidRecord {
-                field: "message_deliveries.next_attempt_at",
-                message: "retryable message has no retry timestamp".to_owned(),
-            }
-        })?;
-        if parse_timestamp(next_attempt_at)? > Utc::now() {
-            return Err(StoreError::MessageRetryNotDue {
-                message_id: current.envelope.id,
-                next_attempt_at: next_attempt_at.to_owned(),
-            });
-        }
-        let now = Utc::now().to_rfc3339();
-        begin_attempt(
-            &transaction,
-            &current,
-            "message.retry",
-            &input.idempotency_key,
-            &input.request_id,
-            &now,
-        )
-        .and_then(|result| commit_result(transaction, result))
+        let result = retry_message_tx(&transaction, input)?;
+        commit_result(transaction, result)
     }
 
     pub fn cancel_message(
         &self,
         input: &CancelMessageInput,
     ) -> Result<MessageMutationResult, StoreError> {
-        validate_message_command_key(&input.idempotency_key)?;
         let mut connection = self.lock()?;
         let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        if let Some(message) =
-            message_for_command(&transaction, "message.cancel", &input.idempotency_key)?
-        {
-            return replay_result(transaction, message);
-        }
-        let current = required_message(&transaction, input.message_id)?;
-        require_message_revision(&current, input.expected_revision)?;
-        require_message_state(
-            &current,
-            &[
-                MessageDeliveryState::Queued,
-                MessageDeliveryState::Delivering,
-                MessageDeliveryState::RetryableFailed,
-            ],
-            "queued, delivering, or retryable-failed",
-        )?;
-        let now = Utc::now().to_rfc3339();
-        if current.delivery.state == MessageDeliveryState::Delivering {
-            let attempt = current
-                .attempts
-                .last()
-                .filter(|attempt| {
-                    attempt.state == MessageDeliveryState::Delivering
-                        && attempt.finished_at.is_none()
-                })
-                .ok_or(StoreError::InvalidRecord {
-                    field: "message_delivery_attempts",
-                    message: "delivering message has no active attempt".to_owned(),
-                })?;
-            transaction.execute(
-                "UPDATE message_delivery_attempts
-                 SET state = 'cancelled', finished_at = ?2
-                 WHERE id = ?1",
-                params![attempt.id.to_string(), now],
-            )?;
-        }
-        transaction.execute(
-            "UPDATE message_deliveries SET
-                state = 'cancelled', revision = revision + 1, next_attempt_at = NULL,
-                terminal_at = ?2, updated_at = ?2
-             WHERE message_id = ?1",
-            params![input.message_id.to_string(), now],
-        )?;
-        transition_result(
-            &transaction,
-            input.message_id,
-            "message.cancel",
-            &input.idempotency_key,
-            &input.request_id,
-            "message.cancelled",
-            &now,
-        )
-        .and_then(|result| commit_result(transaction, result))
+        let result = cancel_message_tx(&transaction, input)?;
+        commit_result(transaction, result)
     }
 
     pub fn reconcile_messages(&self) -> Result<MessageReconcileResult, StoreError> {
@@ -639,17 +353,6 @@ fn transition_result(
     Ok(MessageMutationResult {
         message,
         event_sequence: Some(event_sequence),
-    })
-}
-
-fn replay_result(
-    transaction: Transaction<'_>,
-    message: MessageRecord,
-) -> Result<MessageMutationResult, StoreError> {
-    transaction.commit()?;
-    Ok(MessageMutationResult {
-        message,
-        event_sequence: None,
     })
 }
 
@@ -850,7 +553,7 @@ fn message_for_command(
         .transpose()
 }
 
-fn required_message(
+pub(crate) fn required_message(
     connection: &Connection,
     message_id: Uuid,
 ) -> Result<MessageRecord, StoreError> {
@@ -876,7 +579,7 @@ fn query_message_raw(
 fn message_select() -> &'static str {
     "SELECT
         m.sequence, m.id, m.envelope_version, m.idempotency_key, m.correlation_id,
-        m.causation_id, m.sender_employee_id, m.sender_session_id,
+        m.causation_id, m.sender_kind, m.sender_employee_id, m.sender_session_id,
         m.recipient_employee_id, m.recipient_session_id, m.project_id,
         m.conversation_id, m.task_id, m.kind, m.body_json, m.references_json,
         m.created_at, d.state, d.revision, d.attempt_count, d.max_attempts,
@@ -894,7 +597,8 @@ struct RawMessage {
     idempotency_key: String,
     correlation_id: String,
     causation_id: Option<String>,
-    sender_employee_id: String,
+    sender_kind: String,
+    sender_employee_id: Option<String>,
     sender_session_id: Option<String>,
     recipient_employee_id: String,
     recipient_session_id: Option<String>,
@@ -925,33 +629,35 @@ fn raw_message(row: &rusqlite::Row<'_>) -> rusqlite::Result<RawMessage> {
         idempotency_key: row.get(3)?,
         correlation_id: row.get(4)?,
         causation_id: row.get(5)?,
-        sender_employee_id: row.get(6)?,
-        sender_session_id: row.get(7)?,
-        recipient_employee_id: row.get(8)?,
-        recipient_session_id: row.get(9)?,
-        project_id: row.get(10)?,
-        conversation_id: row.get(11)?,
-        task_id: row.get(12)?,
-        kind: row.get(13)?,
-        body_json: row.get(14)?,
-        references_json: row.get(15)?,
-        created_at: row.get(16)?,
-        state: row.get(17)?,
-        revision: row.get(18)?,
-        attempt_count: row.get(19)?,
-        max_attempts: row.get(20)?,
-        next_attempt_at: row.get(21)?,
-        last_failure_code: row.get(22)?,
-        last_failure_message: row.get(23)?,
-        acknowledged_at: row.get(24)?,
-        terminal_at: row.get(25)?,
-        updated_at: row.get(26)?,
+        sender_kind: row.get(6)?,
+        sender_employee_id: row.get(7)?,
+        sender_session_id: row.get(8)?,
+        recipient_employee_id: row.get(9)?,
+        recipient_session_id: row.get(10)?,
+        project_id: row.get(11)?,
+        conversation_id: row.get(12)?,
+        task_id: row.get(13)?,
+        kind: row.get(14)?,
+        body_json: row.get(15)?,
+        references_json: row.get(16)?,
+        created_at: row.get(17)?,
+        state: row.get(18)?,
+        revision: row.get(19)?,
+        attempt_count: row.get(20)?,
+        max_attempts: row.get(21)?,
+        next_attempt_at: row.get(22)?,
+        last_failure_code: row.get(23)?,
+        last_failure_message: row.get(24)?,
+        acknowledged_at: row.get(25)?,
+        terminal_at: row.get(26)?,
+        updated_at: row.get(27)?,
     })
 }
 
 fn message_from_raw(connection: &Connection, raw: RawMessage) -> Result<MessageRecord, StoreError> {
     let id = parse_uuid(&raw.id, "messages.id")?;
     let delivery = delivery_from_raw(&raw)?;
+    let sender = sender_from_raw(&raw)?;
     let recipient_employee_id =
         parse_uuid(&raw.recipient_employee_id, "messages.recipient_employee_id")?;
     let recipient_session_id = optional_uuid(
@@ -967,13 +673,7 @@ fn message_from_raw(connection: &Connection, raw: RawMessage) -> Result<MessageR
             idempotency_key: raw.idempotency_key,
             correlation_id: parse_uuid(&raw.correlation_id, "messages.correlation_id")?,
             causation_id: optional_uuid(raw.causation_id.as_deref(), "messages.causation_id")?,
-            sender: MessageEndpoint {
-                employee_id: parse_uuid(&raw.sender_employee_id, "messages.sender_employee_id")?,
-                session_id: optional_uuid(
-                    raw.sender_session_id.as_deref(),
-                    "messages.sender_session_id",
-                )?,
-            },
+            sender,
             recipient: MessageEndpoint {
                 employee_id: recipient_employee_id,
                 session_id: recipient_session_id,
@@ -1006,13 +706,7 @@ fn message_summary_from_raw(raw: RawMessage) -> Result<MessageSummary, StoreErro
         id: parse_uuid(&raw.id, "messages.id")?,
         correlation_id: parse_uuid(&raw.correlation_id, "messages.correlation_id")?,
         causation_id: optional_uuid(raw.causation_id.as_deref(), "messages.causation_id")?,
-        sender: MessageEndpoint {
-            employee_id: parse_uuid(&raw.sender_employee_id, "messages.sender_employee_id")?,
-            session_id: optional_uuid(
-                raw.sender_session_id.as_deref(),
-                "messages.sender_session_id",
-            )?,
-        },
+        sender: sender_from_raw(&raw)?,
         recipient: MessageEndpoint {
             employee_id: parse_uuid(&raw.recipient_employee_id, "messages.recipient_employee_id")?,
             session_id: optional_uuid(
@@ -1032,6 +726,423 @@ fn message_summary_from_raw(raw: RawMessage) -> Result<MessageSummary, StoreErro
         created_at: raw.created_at,
         updated_at: raw.updated_at,
     })
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct InsertMessageInput {
+    pub request_id: String,
+    pub command_scope: &'static str,
+    pub idempotency_key: String,
+    pub version: u32,
+    pub sender: MessageSender,
+    pub recipient: MessageEndpoint,
+    pub project_id: Option<Uuid>,
+    pub conversation_id: Option<Uuid>,
+    pub task_id: Option<Uuid>,
+    pub correlation_id: Option<Uuid>,
+    pub causation_id: Option<Uuid>,
+    pub kind: MessageKind,
+    pub body: Value,
+    pub references: Vec<MessageReference>,
+    pub max_attempts: u32,
+}
+
+pub(crate) fn insert_message_tx(
+    transaction: &Transaction<'_>,
+    input: &InsertMessageInput,
+) -> Result<MessageMutationResult, StoreError> {
+    validate_message_command_key(&input.idempotency_key)?;
+    validate_message_content(&input.body, &input.references)?;
+    validate_max_attempts(input.max_attempts)?;
+    validate_envelope_sender(input.version, &input.sender)?;
+    if let Some(message) =
+        message_for_command(transaction, input.command_scope, &input.idempotency_key)?
+    {
+        return Ok(MessageMutationResult {
+            message,
+            event_sequence: None,
+        });
+    }
+
+    if let MessageSender::Employee(sender) = input.sender {
+        require_endpoint(transaction, sender, "sender")?;
+    }
+    require_endpoint(transaction, input.recipient, "recipient")?;
+    if let Some(project_id) = input.project_id {
+        require_project(transaction, project_id)?;
+    }
+    let (sender_kind, sender_employee_id, sender_session_id) = match input.sender {
+        MessageSender::Employee(sender) => (
+            "employee",
+            Some(sender.employee_id.to_string()),
+            sender.session_id.map(|value| value.to_string()),
+        ),
+        MessageSender::User(_) => ("user", None, None),
+    };
+    let message_id = Uuid::new_v4();
+    let correlation_id = resolve_correlation(
+        transaction,
+        message_id,
+        input.correlation_id,
+        input.causation_id,
+    )?;
+    let now = Utc::now().to_rfc3339();
+    transaction.execute(
+        "INSERT INTO messages (
+            id, envelope_version, idempotency_key, correlation_id, causation_id,
+            sender_kind, sender_employee_id, sender_session_id, recipient_employee_id,
+            recipient_session_id, project_id, conversation_id, task_id, kind,
+            body_json, references_json, created_at
+         ) VALUES (
+            ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17
+         )",
+        params![
+            message_id.to_string(),
+            i64::from(input.version),
+            input.idempotency_key,
+            correlation_id.to_string(),
+            input.causation_id.map(|value| value.to_string()),
+            sender_kind,
+            sender_employee_id,
+            sender_session_id,
+            input.recipient.employee_id.to_string(),
+            input.recipient.session_id.map(|value| value.to_string()),
+            input.project_id.map(|value| value.to_string()),
+            input.conversation_id.map(|value| value.to_string()),
+            input.task_id.map(|value| value.to_string()),
+            serialized_name(input.kind)?,
+            serde_json::to_string(&input.body)?,
+            serde_json::to_string(&input.references)?,
+            now,
+        ],
+    )?;
+    transaction.execute(
+        "INSERT INTO message_deliveries (
+            message_id, state, revision, attempt_count, max_attempts,
+            next_attempt_at, updated_at
+         ) VALUES (?1, 'queued', 1, 0, ?2, ?3, ?3)",
+        params![message_id.to_string(), i64::from(input.max_attempts), now],
+    )?;
+    insert_message_command(
+        transaction,
+        input.command_scope,
+        &input.idempotency_key,
+        &input.request_id,
+        message_id,
+        &now,
+    )?;
+    let message = required_message(transaction, message_id)?;
+    let event_sequence = employee::insert_event(
+        transaction,
+        "message.queued",
+        &json!({"message": &message}),
+        &now,
+    )?;
+    Ok(MessageMutationResult {
+        message,
+        event_sequence: Some(event_sequence),
+    })
+}
+
+pub(crate) fn claim_message_tx(
+    transaction: &Transaction<'_>,
+    input: &ClaimMessageInput,
+) -> Result<MessageMutationResult, StoreError> {
+    validate_message_command_key(&input.idempotency_key)?;
+    if let Some(message) =
+        message_for_command(transaction, "message.claim", &input.idempotency_key)?
+    {
+        return Ok(MessageMutationResult {
+            message,
+            event_sequence: None,
+        });
+    }
+    let current = required_message(transaction, input.message_id)?;
+    require_message_revision(&current, input.expected_revision)?;
+    require_message_state(&current, &[MessageDeliveryState::Queued], "queued")?;
+    begin_attempt(
+        transaction,
+        &current,
+        "message.claim",
+        &input.idempotency_key,
+        &input.request_id,
+        &Utc::now().to_rfc3339(),
+    )
+}
+
+pub(crate) fn acknowledge_message_tx(
+    transaction: &Transaction<'_>,
+    input: &AcknowledgeMessageInput,
+) -> Result<MessageMutationResult, StoreError> {
+    validate_message_command_key(&input.idempotency_key)?;
+    validate_acknowledgement(&input.acknowledgement_key, &input.evidence)?;
+    if let Some(message) =
+        message_for_command(transaction, "message.acknowledge", &input.idempotency_key)?
+    {
+        return Ok(MessageMutationResult {
+            message,
+            event_sequence: None,
+        });
+    }
+    let current = required_message(transaction, input.message_id)?;
+    require_message_revision(&current, input.expected_revision)?;
+    require_message_state(&current, &[MessageDeliveryState::Delivering], "delivering")?;
+    require_active_attempt(&current, input.attempt_id)?;
+    let now = Utc::now().to_rfc3339();
+    transaction.execute(
+        "UPDATE message_delivery_attempts SET
+            state = 'acknowledged', finished_at = ?2, acknowledgement_key = ?3,
+            acknowledgement_evidence_json = ?4
+         WHERE id = ?1",
+        params![
+            input.attempt_id.to_string(),
+            now,
+            input.acknowledgement_key,
+            serde_json::to_string(&input.evidence)?,
+        ],
+    )?;
+    transaction.execute(
+        "UPDATE message_deliveries SET
+            state = 'acknowledged', revision = revision + 1, next_attempt_at = NULL,
+            acknowledged_at = ?2, terminal_at = ?2, updated_at = ?2
+         WHERE message_id = ?1",
+        params![input.message_id.to_string(), now],
+    )?;
+    transition_result(
+        transaction,
+        input.message_id,
+        "message.acknowledge",
+        &input.idempotency_key,
+        &input.request_id,
+        "message.acknowledged",
+        &now,
+    )
+}
+
+pub(crate) fn fail_message_tx(
+    transaction: &Transaction<'_>,
+    input: &FailMessageInput,
+) -> Result<MessageMutationResult, StoreError> {
+    validate_message_command_key(&input.idempotency_key)?;
+    validate_message_failure(&input.failure_code, &input.failure_message)?;
+    if let Some(message) = message_for_command(transaction, "message.fail", &input.idempotency_key)?
+    {
+        return Ok(MessageMutationResult {
+            message,
+            event_sequence: None,
+        });
+    }
+    let current = required_message(transaction, input.message_id)?;
+    require_message_revision(&current, input.expected_revision)?;
+    require_message_state(&current, &[MessageDeliveryState::Delivering], "delivering")?;
+    require_active_attempt(&current, input.attempt_id)?;
+    let now_value = Utc::now();
+    let terminal =
+        !input.retryable || current.delivery.attempt_count >= current.delivery.max_attempts;
+    let next_attempt_at = if terminal {
+        None
+    } else {
+        Some(
+            (now_value
+                + Duration::seconds(
+                    retry_delay_seconds(current.delivery.attempt_count)
+                        .expect("remaining retry budget has a fixed delay"),
+                ))
+            .to_rfc3339(),
+        )
+    };
+    let now = now_value.to_rfc3339();
+    let state = if terminal {
+        MessageDeliveryState::TerminalFailed
+    } else {
+        MessageDeliveryState::RetryableFailed
+    };
+    let state_name = serialized_name(state)?;
+    transaction.execute(
+        "UPDATE message_delivery_attempts SET
+            state = ?2, finished_at = ?3, failure_code = ?4, failure_message = ?5
+         WHERE id = ?1",
+        params![
+            input.attempt_id.to_string(),
+            state_name,
+            now,
+            input.failure_code,
+            input.failure_message,
+        ],
+    )?;
+    transaction.execute(
+        "UPDATE message_deliveries SET
+            state = ?2, revision = revision + 1, next_attempt_at = ?3,
+            last_failure_code = ?4, last_failure_message = ?5,
+            terminal_at = ?6, updated_at = ?7
+         WHERE message_id = ?1",
+        params![
+            input.message_id.to_string(),
+            state_name,
+            next_attempt_at,
+            input.failure_code,
+            input.failure_message,
+            terminal.then_some(now.clone()),
+            now,
+        ],
+    )?;
+    if terminal {
+        insert_dead_letter(
+            transaction,
+            input.message_id,
+            input.attempt_id,
+            &input.failure_code,
+            &input.failure_message,
+            &now,
+        )?;
+    }
+    transition_result(
+        transaction,
+        input.message_id,
+        "message.fail",
+        &input.idempotency_key,
+        &input.request_id,
+        if terminal {
+            "message.terminal-failed"
+        } else {
+            "message.retryable-failed"
+        },
+        &now,
+    )
+}
+
+pub(crate) fn retry_message_tx(
+    transaction: &Transaction<'_>,
+    input: &RetryMessageInput,
+) -> Result<MessageMutationResult, StoreError> {
+    validate_message_command_key(&input.idempotency_key)?;
+    if let Some(message) =
+        message_for_command(transaction, "message.retry", &input.idempotency_key)?
+    {
+        return Ok(MessageMutationResult {
+            message,
+            event_sequence: None,
+        });
+    }
+    let current = required_message(transaction, input.message_id)?;
+    require_message_revision(&current, input.expected_revision)?;
+    require_message_state(
+        &current,
+        &[MessageDeliveryState::RetryableFailed],
+        "retryable-failed",
+    )?;
+    let next_attempt_at =
+        current
+            .delivery
+            .next_attempt_at
+            .as_deref()
+            .ok_or_else(|| StoreError::InvalidRecord {
+                field: "message_deliveries.next_attempt_at",
+                message: "retryable message has no retry timestamp".to_owned(),
+            })?;
+    if parse_timestamp(next_attempt_at)? > Utc::now() {
+        return Err(StoreError::MessageRetryNotDue {
+            message_id: current.envelope.id,
+            next_attempt_at: next_attempt_at.to_owned(),
+        });
+    }
+    begin_attempt(
+        transaction,
+        &current,
+        "message.retry",
+        &input.idempotency_key,
+        &input.request_id,
+        &Utc::now().to_rfc3339(),
+    )
+}
+
+pub(crate) fn cancel_message_tx(
+    transaction: &Transaction<'_>,
+    input: &CancelMessageInput,
+) -> Result<MessageMutationResult, StoreError> {
+    validate_message_command_key(&input.idempotency_key)?;
+    if let Some(message) =
+        message_for_command(transaction, "message.cancel", &input.idempotency_key)?
+    {
+        return Ok(MessageMutationResult {
+            message,
+            event_sequence: None,
+        });
+    }
+    let current = required_message(transaction, input.message_id)?;
+    require_message_revision(&current, input.expected_revision)?;
+    require_message_state(
+        &current,
+        &[
+            MessageDeliveryState::Queued,
+            MessageDeliveryState::Delivering,
+            MessageDeliveryState::RetryableFailed,
+        ],
+        "queued, delivering, or retryable-failed",
+    )?;
+    let now = Utc::now().to_rfc3339();
+    if current.delivery.state == MessageDeliveryState::Delivering {
+        let attempt = current
+            .attempts
+            .last()
+            .filter(|attempt| {
+                attempt.state == MessageDeliveryState::Delivering && attempt.finished_at.is_none()
+            })
+            .ok_or(StoreError::InvalidRecord {
+                field: "message_delivery_attempts",
+                message: "delivering message has no active attempt".to_owned(),
+            })?;
+        transaction.execute(
+            "UPDATE message_delivery_attempts
+             SET state = 'cancelled', finished_at = ?2
+             WHERE id = ?1",
+            params![attempt.id.to_string(), now],
+        )?;
+    }
+    transaction.execute(
+        "UPDATE message_deliveries SET
+            state = 'cancelled', revision = revision + 1, next_attempt_at = NULL,
+            terminal_at = ?2, updated_at = ?2
+         WHERE message_id = ?1",
+        params![input.message_id.to_string(), now],
+    )?;
+    transition_result(
+        transaction,
+        input.message_id,
+        "message.cancel",
+        &input.idempotency_key,
+        &input.request_id,
+        "message.cancelled",
+        &now,
+    )
+}
+
+fn sender_from_raw(raw: &RawMessage) -> Result<MessageSender, StoreError> {
+    match raw.sender_kind.as_str() {
+        "employee" => {
+            let employee_id =
+                raw.sender_employee_id
+                    .as_deref()
+                    .ok_or_else(|| StoreError::InvalidRecord {
+                        field: "messages.sender_employee_id",
+                        message: "employee sender is missing its employee id".to_owned(),
+                    })?;
+            Ok(MessageSender::Employee(MessageEndpoint {
+                employee_id: parse_uuid(employee_id, "messages.sender_employee_id")?,
+                session_id: optional_uuid(
+                    raw.sender_session_id.as_deref(),
+                    "messages.sender_session_id",
+                )?,
+            }))
+        }
+        "user" => Ok(MessageSender::User(UserMessageEndpoint {
+            kind: UserMessageKind::User,
+        })),
+        other => Err(StoreError::InvalidRecord {
+            field: "messages.sender_kind",
+            message: format!("unknown message sender kind `{other}`"),
+        }),
+    }
 }
 
 fn delivery_from_raw(raw: &RawMessage) -> Result<MessageDelivery, StoreError> {

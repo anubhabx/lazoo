@@ -1,3 +1,4 @@
+mod conversation;
 mod emergency;
 mod employee;
 mod message;
@@ -18,6 +19,11 @@ use serde_json::Value;
 use thiserror::Error;
 use uuid::Uuid;
 
+pub use conversation::{
+    BeginTurnSubmissionInput, CreateConversationInput, FailTurnInput, FinishTurnCancelInput,
+    MarkTurnUncertainInput, ObserveTurnInput, RecordTurnInput, RequestTurnCancelInput,
+    RetryTurnInput,
+};
 pub use emergency::EmergencyIncident;
 pub use employee::{
     CreateEmployeeInput, DisableEmployeeInput, RefreshProviderObservationsInput,
@@ -158,6 +164,32 @@ pub enum StoreError {
     },
     #[error(transparent)]
     MessageValidation(#[from] lazoo_domain::MessageValidationError),
+    #[error(transparent)]
+    ConversationValidation(#[from] lazoo_domain::ConversationValidationError),
+    #[error("conversation {conversation_id} was not found")]
+    ConversationNotFound { conversation_id: Uuid },
+    #[error("turn {turn_id} was not found")]
+    TurnNotFound { turn_id: Uuid },
+    #[error("turn {turn_id} changed; current revision is {current_revision}")]
+    TurnStale {
+        turn_id: Uuid,
+        current_revision: u64,
+    },
+    #[error("turn {turn_id} is {state}, expected {expected}")]
+    TurnState {
+        turn_id: Uuid,
+        state: String,
+        expected: &'static str,
+    },
+    #[error("turn recipient {turn_recipient} is not conversation lead {lead_employee_id}")]
+    TurnRecipient {
+        turn_recipient: Uuid,
+        lead_employee_id: Uuid,
+    },
+    #[error("turn {turn_id} acceptance has no native turn id or progress evidence")]
+    TurnAcceptanceEvidence { turn_id: Uuid },
+    #[error("turn {turn_id} cancellation was not requested")]
+    TurnCancelNotRequested { turn_id: Uuid },
     #[error("stored {field} is invalid: {message}")]
     InvalidRecord {
         field: &'static str,
