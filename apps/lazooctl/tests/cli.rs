@@ -3,8 +3,8 @@ use std::path::PathBuf;
 use clap::Parser;
 use lazoo_protocol::{CheckoutMode, MessageKind, RpcError};
 use lazooctl::{
-    Cli, Command, EmployeeCommand, MessageCommand, ProjectCommand, RosterCommand, SessionCommand,
-    command_request, exit_code_for_rpc, render_result,
+    Cli, Command, ConversationCommand, EmployeeCommand, MessageCommand, ProjectCommand,
+    RosterCommand, SessionCommand, TurnCommand, command_request, exit_code_for_rpc, render_result,
 };
 use serde_json::json;
 
@@ -12,6 +12,8 @@ const SENDER_ID: &str = "00000000-0000-4000-8000-000000000001";
 const RECIPIENT_ID: &str = "00000000-0000-4000-8000-000000000002";
 const MESSAGE_ID: &str = "00000000-0000-4000-8000-000000000003";
 const ATTEMPT_ID: &str = "00000000-0000-4000-8000-000000000004";
+const CONVERSATION_ID: &str = "00000000-0000-4000-8000-000000000005";
+const TURN_ID: &str = "00000000-0000-4000-8000-000000000006";
 
 #[test]
 fn project_register_defaults_to_isolated() {
@@ -427,4 +429,253 @@ fn employee_cli_maps_mutations_and_roster_refresh() {
         Command::Roster(RosterCommand::Refresh { .. })
     ));
     assert_eq!(command_request(&refresh.command).0, "roster.refresh");
+}
+
+#[test]
+fn conversation_cli_maps_create_list_and_show() {
+    let create = Cli::try_parse_from([
+        "lazooctl",
+        "--json",
+        "conversation",
+        "create",
+        RECIPIENT_ID,
+        "--title",
+        "First task",
+        "--idempotency-key",
+        "create-conversation",
+    ])
+    .unwrap();
+    assert!(create.json);
+    assert!(matches!(
+        create.command,
+        Command::Conversation(ConversationCommand::Create { .. })
+    ));
+    assert_eq!(
+        command_request(&create.command),
+        (
+            "conversation.create",
+            json!({
+                "projectId": null,
+                "leadEmployeeId": RECIPIENT_ID,
+                "title": "First task",
+                "idempotencyKey": "create-conversation"
+            }),
+            false
+        )
+    );
+
+    let list = Cli::try_parse_from([
+        "lazooctl",
+        "conversation",
+        "list",
+        "--after-sequence",
+        "0",
+        "--limit",
+        "100",
+    ])
+    .unwrap();
+    assert_eq!(
+        command_request(&list.command),
+        (
+            "conversation.list",
+            json!({"afterSequence": 0, "limit": 100}),
+            false
+        )
+    );
+
+    let show = Cli::try_parse_from(["lazooctl", "conversation", "show", CONVERSATION_ID]).unwrap();
+    assert_eq!(
+        command_request(&show.command),
+        ("conversation.show", json!({"id": CONVERSATION_ID}), false)
+    );
+
+    let generated =
+        Cli::try_parse_from(["lazooctl", "conversation", "create", RECIPIENT_ID]).unwrap();
+    let generated_key = command_request(&generated.command).1["idempotencyKey"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert!(uuid::Uuid::parse_str(&generated_key).is_ok());
+}
+
+#[test]
+fn turn_cli_maps_user_and_employee_submission() {
+    let user = Cli::try_parse_from([
+        "lazooctl",
+        "turn",
+        "submit",
+        CONVERSATION_ID,
+        "--text",
+        "Reply with exactly READY",
+        "--activate-if-needed",
+        "--idempotency-key",
+        "submit-user-turn",
+    ])
+    .unwrap();
+    assert!(matches!(
+        user.command,
+        Command::Turn(TurnCommand::Submit { .. })
+    ));
+    assert_eq!(
+        command_request(&user.command),
+        (
+            "turn.submit",
+            json!({
+                "conversationId": CONVERSATION_ID,
+                "author": {"kind": "user"},
+                "recipient": null,
+                "text": "Reply with exactly READY",
+                "activateIfNeeded": true,
+                "maxAttempts": 3,
+                "idempotencyKey": "submit-user-turn"
+            }),
+            false
+        )
+    );
+
+    let employee = Cli::try_parse_from([
+        "lazooctl",
+        "turn",
+        "submit",
+        CONVERSATION_ID,
+        "--author-employee",
+        SENDER_ID,
+        "--recipient-employee",
+        RECIPIENT_ID,
+        "--text",
+        "status",
+        "--idempotency-key",
+        "submit-employee-turn",
+    ])
+    .unwrap();
+    assert_eq!(
+        command_request(&employee.command),
+        (
+            "turn.submit",
+            json!({
+                "conversationId": CONVERSATION_ID,
+                "author": {"employeeId": SENDER_ID, "sessionId": null},
+                "recipient": {"employeeId": RECIPIENT_ID, "sessionId": null},
+                "text": "status",
+                "activateIfNeeded": false,
+                "maxAttempts": 3,
+                "idempotencyKey": "submit-employee-turn"
+            }),
+            false
+        )
+    );
+
+    let missing_recipient = Cli::try_parse_from([
+        "lazooctl",
+        "turn",
+        "submit",
+        CONVERSATION_ID,
+        "--author-employee",
+        SENDER_ID,
+        "--text",
+        "status",
+    ]);
+    assert!(missing_recipient.is_err());
+}
+
+#[test]
+fn turn_cli_maps_retry_cancel_list_and_show() {
+    for (arguments, method, expected) in [
+        (
+            vec![
+                "lazooctl",
+                "turn",
+                "retry",
+                TURN_ID,
+                "--expected-revision",
+                "3",
+                "--idempotency-key",
+                "retry-turn",
+            ],
+            "turn.retry",
+            json!({
+                "id": TURN_ID,
+                "expectedRevision": 3,
+                "idempotencyKey": "retry-turn"
+            }),
+        ),
+        (
+            vec![
+                "lazooctl",
+                "turn",
+                "cancel",
+                TURN_ID,
+                "--expected-revision",
+                "2",
+                "--idempotency-key",
+                "cancel-turn",
+            ],
+            "turn.cancel",
+            json!({
+                "id": TURN_ID,
+                "expectedRevision": 2,
+                "idempotencyKey": "cancel-turn"
+            }),
+        ),
+        (
+            vec![
+                "lazooctl",
+                "turn",
+                "list",
+                CONVERSATION_ID,
+                "--after-sequence",
+                "0",
+                "--limit",
+                "100",
+            ],
+            "turn.list",
+            json!({
+                "conversationId": CONVERSATION_ID,
+                "afterSequence": 0,
+                "limit": 100
+            }),
+        ),
+        (
+            vec!["lazooctl", "turn", "show", TURN_ID],
+            "turn.show",
+            json!({"id": TURN_ID}),
+        ),
+    ] {
+        let cli = Cli::try_parse_from(arguments).unwrap();
+        assert_eq!(command_request(&cli.command), (method, expected, false));
+    }
+
+    let generated = Cli::try_parse_from([
+        "lazooctl",
+        "turn",
+        "retry",
+        TURN_ID,
+        "--expected-revision",
+        "3",
+    ])
+    .unwrap();
+    let generated_key = command_request(&generated.command).1["idempotencyKey"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert!(uuid::Uuid::parse_str(&generated_key).is_ok());
+}
+
+#[test]
+fn conversation_and_turn_errors_use_exit_code_twelve() {
+    for code in [
+        "LZ-CONVERSATION-NOT-FOUND",
+        "LZ-CONVERSATION-INVALID",
+        "LZ-TURN-STALE",
+        "LZ-TURN-UNCERTAIN",
+    ] {
+        assert_eq!(
+            exit_code_for_rpc(&RpcError {
+                code: code.to_owned(),
+                message: "failure".to_owned(),
+                data: None,
+            }),
+            12
+        );
+    }
 }

@@ -4,7 +4,7 @@ use clap::{Parser, Subcommand};
 use lazoo_ipc::{IpcError, PipeClient};
 use lazoo_protocol::{
     AuthorityMode, CheckoutMode, EmployeeCheckoutPolicy, JsonRpcRequest, JsonRpcResponse,
-    MessageKind, RpcError,
+    MessageEndpoint, MessageKind, MessageSender, RpcError, UserMessageEndpoint, UserMessageKind,
 };
 use lazoo_runtime::{DataRoot, Installation, RuntimeError};
 use serde_json::{Value, json};
@@ -37,6 +37,10 @@ pub enum Command {
     Session(SessionCommand),
     #[command(subcommand)]
     Message(MessageCommand),
+    #[command(subcommand)]
+    Conversation(ConversationCommand),
+    #[command(subcommand)]
+    Turn(TurnCommand),
     #[command(subcommand)]
     System(SystemCommand),
 }
@@ -273,6 +277,71 @@ pub enum MessageCommand {
     },
 }
 
+#[derive(Debug, Subcommand)]
+pub enum ConversationCommand {
+    Create {
+        lead_employee_id: Uuid,
+        #[arg(long)]
+        project_id: Option<Uuid>,
+        #[arg(long)]
+        title: Option<String>,
+        #[arg(long)]
+        idempotency_key: Option<String>,
+    },
+    List {
+        #[arg(long, default_value_t = 0)]
+        after_sequence: u64,
+        #[arg(long, default_value_t = 100)]
+        limit: u32,
+    },
+    Show {
+        id: Uuid,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+pub enum TurnCommand {
+    Submit {
+        conversation_id: Uuid,
+        #[arg(long, requires = "recipient_employee")]
+        author_employee: Option<Uuid>,
+        #[arg(long)]
+        recipient_employee: Option<Uuid>,
+        #[arg(long)]
+        text: String,
+        #[arg(long)]
+        activate_if_needed: bool,
+        #[arg(long, default_value_t = 3)]
+        max_attempts: u32,
+        #[arg(long)]
+        idempotency_key: Option<String>,
+    },
+    Retry {
+        id: Uuid,
+        #[arg(long)]
+        expected_revision: u64,
+        #[arg(long)]
+        idempotency_key: Option<String>,
+    },
+    Cancel {
+        id: Uuid,
+        #[arg(long)]
+        expected_revision: u64,
+        #[arg(long)]
+        idempotency_key: Option<String>,
+    },
+    List {
+        conversation_id: Uuid,
+        #[arg(long, default_value_t = 0)]
+        after_sequence: u64,
+        #[arg(long, default_value_t = 100)]
+        limit: u32,
+    },
+    Show {
+        id: Uuid,
+    },
+}
+
 #[derive(Debug, Error)]
 pub enum CliError {
     #[error("RPC request failed: {0:?}")]
@@ -380,8 +449,139 @@ pub fn command_request(command: &Command) -> (&'static str, Value, bool) {
         ),
         Command::Session(command) => session_request(command),
         Command::Message(command) => message_request(command),
+        Command::Conversation(command) => conversation_request(command),
+        Command::Turn(command) => turn_request(command),
         Command::System(SystemCommand::Shutdown) => ("system.shutdown", json!({}), false),
     }
+}
+
+fn conversation_request(command: &ConversationCommand) -> (&'static str, Value, bool) {
+    match command {
+        ConversationCommand::Create {
+            lead_employee_id,
+            project_id,
+            title,
+            idempotency_key,
+        } => (
+            "conversation.create",
+            json!({
+                "projectId": project_id,
+                "leadEmployeeId": lead_employee_id,
+                "title": title,
+                "idempotencyKey": generated_key(idempotency_key.as_deref()),
+            }),
+            false,
+        ),
+        ConversationCommand::List {
+            after_sequence,
+            limit,
+        } => (
+            "conversation.list",
+            json!({"afterSequence": after_sequence, "limit": limit}),
+            false,
+        ),
+        ConversationCommand::Show { id } => ("conversation.show", json!({"id": id}), false),
+    }
+}
+
+fn turn_request(command: &TurnCommand) -> (&'static str, Value, bool) {
+    match command {
+        TurnCommand::Submit {
+            conversation_id,
+            author_employee,
+            recipient_employee,
+            text,
+            activate_if_needed,
+            max_attempts,
+            idempotency_key,
+        } => {
+            let author = author_employee.map_or_else(
+                || {
+                    MessageSender::User(UserMessageEndpoint {
+                        kind: UserMessageKind::User,
+                    })
+                },
+                |employee_id| {
+                    MessageSender::Employee(MessageEndpoint {
+                        employee_id,
+                        session_id: None,
+                    })
+                },
+            );
+            let recipient = recipient_employee.map(|employee_id| MessageEndpoint {
+                employee_id,
+                session_id: None,
+            });
+            (
+                "turn.submit",
+                json!({
+                    "conversationId": conversation_id,
+                    "author": author,
+                    "recipient": recipient,
+                    "text": text,
+                    "activateIfNeeded": activate_if_needed,
+                    "maxAttempts": max_attempts,
+                    "idempotencyKey": generated_key(idempotency_key.as_deref()),
+                }),
+                false,
+            )
+        }
+        TurnCommand::Retry {
+            id,
+            expected_revision,
+            idempotency_key,
+        } => turn_revision_request(
+            "turn.retry",
+            *id,
+            *expected_revision,
+            idempotency_key.as_deref(),
+        ),
+        TurnCommand::Cancel {
+            id,
+            expected_revision,
+            idempotency_key,
+        } => turn_revision_request(
+            "turn.cancel",
+            *id,
+            *expected_revision,
+            idempotency_key.as_deref(),
+        ),
+        TurnCommand::List {
+            conversation_id,
+            after_sequence,
+            limit,
+        } => (
+            "turn.list",
+            json!({
+                "conversationId": conversation_id,
+                "afterSequence": after_sequence,
+                "limit": limit
+            }),
+            false,
+        ),
+        TurnCommand::Show { id } => ("turn.show", json!({"id": id}), false),
+    }
+}
+
+fn turn_revision_request(
+    method: &'static str,
+    id: Uuid,
+    expected_revision: u64,
+    idempotency_key: Option<&str>,
+) -> (&'static str, Value, bool) {
+    (
+        method,
+        json!({
+            "id": id,
+            "expectedRevision": expected_revision,
+            "idempotencyKey": generated_key(idempotency_key),
+        }),
+        false,
+    )
+}
+
+fn generated_key(value: Option<&str>) -> String {
+    value.map_or_else(|| Uuid::new_v4().to_string(), str::to_owned)
 }
 
 fn message_request(command: &MessageCommand) -> (&'static str, Value, bool) {
@@ -670,6 +870,7 @@ pub fn exit_code_for_rpc(error: &RpcError) -> i32 {
         code if code.starts_with("LZ-EMPLOYEE-") => 9,
         code if code.starts_with("LZ-SESSION-") => 10,
         code if code.starts_with("LZ-MESSAGE-") => 11,
+        code if code.starts_with("LZ-CONVERSATION-") || code.starts_with("LZ-TURN-") => 12,
         _ => 10,
     }
 }

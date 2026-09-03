@@ -552,7 +552,7 @@ Commit: `feat: deliver durable conversation turns`
 - Consumes: Task 1 RPC params and Task 4 daemon method names/error families.
 - Produces: `conversation create/list/show` and `turn submit/retry/cancel/list/show` CLI mappings with stable JSON and exit code 12.
 
-- [ ] **Step 1: Write failing CLI parser and mapping tests**
+- [x] **Step 1: Write failing CLI parser and mapping tests**
 
 Assert exact method names and camel-case payloads for:
 
@@ -570,7 +570,7 @@ lazooctl turn show <turn-id>
 
 Assert generated idempotency keys are nonempty UUID strings, `--json` preserves the protocol result, and both `LZ-CONVERSATION-*` and `LZ-TURN-*` map to exit code 12.
 
-- [ ] **Step 2: Run CLI tests and verify RED**
+- [x] **Step 2: Run CLI tests and verify RED**
 
 Run:
 
@@ -581,11 +581,11 @@ cargo test -p lazooctl --test cli turn_
 
 Expected: Clap rejects the missing subcommands and mapping types do not exist.
 
-- [ ] **Step 3: Implement CLI commands and request mapping**
+- [x] **Step 3: Implement CLI commands and request mapping**
 
 Add `ConversationCommand` and `TurnCommand` enums. Parse UUIDs through Clap, accept one UTF-8 `--text` value, represent the default author as `UserMessageEndpoint { kind: User }`, require both employee IDs for employee-authored delivery, and generate idempotency UUIDs when omitted. Do not expose raw provider payloads or an arbitrary daemon method.
 
-- [ ] **Step 4: Verify CLI and daemon integration and commit**
+- [x] **Step 4: Verify CLI and daemon integration and commit**
 
 Run:
 
