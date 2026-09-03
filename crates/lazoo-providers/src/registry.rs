@@ -2,7 +2,7 @@ use crate::{
     AdapterFuture, AntigravityAdapter, AntigravitySession, ClaudeAdapter, ClaudeSession,
     CodexAdapter, CodexSession, DiscoveryEnvironment, ExecutableCandidate, GrokAdapter,
     GrokSession, OpenCodeAdapter, OpenCodeSession, ProviderAdapter, ProviderError, ProviderEvent,
-    ProviderKind, ProviderProbe, ProviderSession, SessionRequest, TurnRequest,
+    ProviderKind, ProviderProbe, ProviderSession, SessionRequest, TurnEventObserver, TurnRequest,
 };
 
 #[derive(Clone, Debug)]
@@ -135,6 +135,20 @@ impl ProviderSession for ProviderSessionHandle {
             Self::GrokBuild(session) => session.turn(request),
             Self::Antigravity(session) => session.turn(request),
             Self::ClaudeCode(session) => session.turn(request),
+        }
+    }
+
+    fn turn_observed<'a>(
+        &'a self,
+        request: &'a TurnRequest,
+        observer: &'a dyn TurnEventObserver,
+    ) -> AdapterFuture<'a, Vec<ProviderEvent>> {
+        match self {
+            Self::Codex(session) => session.turn_observed(request, observer),
+            Self::OpenCode(session) => session.turn_observed(request, observer),
+            Self::GrokBuild(session) => session.turn_observed(request, observer),
+            Self::Antigravity(session) => session.turn_observed(request, observer),
+            Self::ClaudeCode(session) => session.turn_observed(request, observer),
         }
     }
 

@@ -350,7 +350,7 @@ Commit: `feat: persist conversations and turn delivery`
 - Consumes: existing `ProviderSession::turn`, `ProviderEvent`, Codex JSON-RPC control, redaction, progress timeout, and `turn/interrupt` support.
 - Produces: `TurnEventObserver`, default `ProviderSession::turn_observed`, and a Codex override that publishes native acceptance before collecting completion.
 
-- [ ] **Step 1: Write failing observer contract tests**
+- [x] **Step 1: Write failing observer contract tests**
 
 Create a collecting observer and assert a provider using the default path receives each existing event in order. Add a rejecting observer and assert its failure stops the observed call with a stable observer error while leaving ordinary `turn` behavior unchanged.
 
@@ -368,29 +368,29 @@ fn turn_observed<'a>(
 ) -> AdapterFuture<'a, Vec<ProviderEvent>>;
 ```
 
-- [ ] **Step 2: Run contract tests and verify RED**
+- [x] **Step 2: Run contract tests and verify RED**
 
 Run: `cargo test -p lazoo-providers --test contract observed_`
 
 Expected: compilation fails because `TurnEventObserver` and `turn_observed` do not exist.
 
-- [ ] **Step 3: Implement the default observed-turn path**
+- [x] **Step 3: Implement the default observed-turn path**
 
 Add `ProviderError::Observer(String)`. The default implementation awaits the existing `turn`, then invokes the observer once for each normalized event in order. Re-export the observer trait. Existing OpenCode, Grok, Antigravity, and Claude implementations require no behavior change.
 
-- [ ] **Step 4: Write failing Codex immediate-acceptance tests**
+- [x] **Step 4: Write failing Codex immediate-acceptance tests**
 
 Drive the existing fake App Server fixture so `turn/start` returns `turn-1` but the `turn/started` notification is delayed. Assert the observer sees exactly one `ProviderEvent::TurnStarted` with `thread-1`/`turn-1` before the first streamed delta, and that the returned vector does not duplicate the delayed native notification.
 
 Add a rejecting observer assertion that the adapter sends best-effort `turn/interrupt` for the same thread/turn and returns `ProviderError::Observer`.
 
-- [ ] **Step 5: Run Codex tests and verify RED**
+- [x] **Step 5: Run Codex tests and verify RED**
 
 Run: `cargo test -p lazoo-providers --test codex observed_`
 
 Expected: the default observer receives no event until completion and the immediate-order assertion fails.
 
-- [ ] **Step 6: Override Codex observed delivery**
+- [x] **Step 6: Override Codex observed delivery**
 
 Split Codex turn handling into acceptance and collection. Immediately after validating `/turn/id` from the `turn/start` response, emit:
 
@@ -405,7 +405,7 @@ ProviderEvent::TurnStarted {
 
 Call the observer for every subsequent normalized event before retaining it. Suppress only the duplicate `turn/started` notification with the same thread/turn pair. On observer error, send best-effort `turn/interrupt`, clear `active_turn`, and return the observer error. Keep progress and total timeouts unchanged.
 
-- [ ] **Step 7: Verify provider suites and commit**
+- [x] **Step 7: Verify provider suites and commit**
 
 Run:
 

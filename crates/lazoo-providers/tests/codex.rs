@@ -1,14 +1,61 @@
 use std::{
     ffi::OsString,
+    fs,
     path::{Path, PathBuf},
+    process::Command,
+    sync::{Mutex, OnceLock},
 };
 
 use lazoo_providers::{
-    CodexAdapter, DiscoveryEnvironment, ProviderAdapter, ProviderCapabilities, ProviderEvent,
-    ProviderKind, ProviderSession, ProviderVerification, SessionRequest, TurnRequest,
-    normalize_codex_message,
+    CodexAdapter, DiscoveryEnvironment, ProviderAdapter, ProviderCapabilities, ProviderError,
+    ProviderEvent, ProviderKind, ProviderSession, ProviderVerification, SessionRequest,
+    TurnEventObserver, TurnRequest, normalize_codex_message,
 };
 use serde_json::json;
+use tempfile::tempdir;
+
+#[derive(Default)]
+struct CollectingObserver {
+    events: Mutex<Vec<ProviderEvent>>,
+}
+
+impl TurnEventObserver for CollectingObserver {
+    fn observe(&self, event: &ProviderEvent) -> Result<(), ProviderError> {
+        self.events.lock().unwrap().push(event.clone());
+        Ok(())
+    }
+}
+
+struct RejectingObserver;
+
+impl TurnEventObserver for RejectingObserver {
+    fn observe(&self, _event: &ProviderEvent) -> Result<(), ProviderError> {
+        Err(ProviderError::Observer(
+            "fixture persistence failure".to_owned(),
+        ))
+    }
+}
+
+fn fake_codex() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/codex/fake-codex.cmd")
+}
+
+fn ensure_session_host() {
+    static READY: OnceLock<()> = OnceLock::new();
+    READY.get_or_init(|| {
+        let workspace = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .and_then(Path::parent)
+            .unwrap()
+            .to_path_buf();
+        let status = Command::new(env!("CARGO"))
+            .current_dir(workspace)
+            .args(["build", "-p", "lazoo-session-host"])
+            .status()
+            .unwrap();
+        assert!(status.success(), "lazoo-session-host fixture build failed");
+    });
+}
 
 #[test]
 fn codex_launches_app_server_over_stdio() {
@@ -118,6 +165,71 @@ fn codex_interrupt_correlates_the_active_turn() {
     assert_eq!(
         CodexAdapter::interrupt_params("thread-1", "turn-1"),
         json!({"threadId": "thread-1", "turnId": "turn-1"}),
+    );
+}
+
+#[tokio::test]
+async fn observed_codex_turn_emits_response_acceptance_before_stream_without_duplicate() {
+    ensure_session_host();
+    let temporary = tempdir().unwrap();
+    let session = CodexAdapter::with_executable(fake_codex())
+        .start(&SessionRequest::new(temporary.path()))
+        .await
+        .unwrap();
+    let collector = CollectingObserver::default();
+
+    let returned = session
+        .turn_observed(&TurnRequest::new("hello"), &collector)
+        .await
+        .unwrap();
+    let captured = collector.events.lock().unwrap().clone();
+
+    assert_eq!(captured, returned);
+    assert!(matches!(
+        captured[0],
+        ProviderEvent::TurnStarted {
+            ref session_id,
+            ref turn_id,
+            raw: None,
+            ..
+        } if session_id == "thread-1" && turn_id.as_deref() == Some("turn-1")
+    ));
+    assert!(matches!(captured[1], ProviderEvent::TextDelta { .. }));
+    assert_eq!(
+        captured
+            .iter()
+            .filter(|event| matches!(event, ProviderEvent::TurnStarted { .. }))
+            .count(),
+        1
+    );
+    session.stop().await.unwrap();
+}
+
+#[tokio::test]
+async fn observed_codex_rejection_interrupts_the_accepted_native_turn() {
+    ensure_session_host();
+    let temporary = tempdir().unwrap();
+    let session = CodexAdapter::with_executable(fake_codex())
+        .start(&SessionRequest::new(temporary.path()))
+        .await
+        .unwrap();
+
+    let error = session
+        .turn_observed(&TurnRequest::new("hello"), &RejectingObserver)
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(error, ProviderError::Observer(message) if message == "fixture persistence failure")
+    );
+    session.stop().await.unwrap();
+
+    let interrupt_text =
+        fs::read_to_string(temporary.path().join("fake-codex-interrupt.json")).unwrap();
+    let interrupt: serde_json::Value =
+        serde_json::from_str(interrupt_text.trim_start_matches('\u{feff}')).unwrap();
+    assert_eq!(
+        interrupt,
+        json!({"threadId": "thread-1", "turnId": "turn-1"})
     );
 }
 

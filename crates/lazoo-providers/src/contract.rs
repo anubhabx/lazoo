@@ -390,10 +390,27 @@ pub enum ProviderEvent {
 
 pub type AdapterFuture<'a, T> = Pin<Box<dyn Future<Output = Result<T, ProviderError>> + Send + 'a>>;
 
+pub trait TurnEventObserver: Send + Sync {
+    fn observe(&self, event: &ProviderEvent) -> Result<(), ProviderError>;
+}
+
 pub trait ProviderSession: Send + Sync {
     fn id(&self) -> String;
     fn native_host_pid(&self) -> Option<u32>;
     fn turn<'a>(&'a self, request: &'a TurnRequest) -> AdapterFuture<'a, Vec<ProviderEvent>>;
+    fn turn_observed<'a>(
+        &'a self,
+        request: &'a TurnRequest,
+        observer: &'a dyn TurnEventObserver,
+    ) -> AdapterFuture<'a, Vec<ProviderEvent>> {
+        Box::pin(async move {
+            let events = self.turn(request).await?;
+            for event in &events {
+                observer.observe(event)?;
+            }
+            Ok(events)
+        })
+    }
     fn cancel(&self) -> AdapterFuture<'_, ()>;
     fn stop(&self) -> AdapterFuture<'_, ()>;
 }
@@ -431,6 +448,8 @@ pub enum ProviderError {
     Timeout { phase: &'static str },
     #[error("provider accepted work but emitted no progress for {millis} ms")]
     Stalled { millis: u64 },
+    #[error("provider turn observer failed: {0}")]
+    Observer(String),
     #[error("provider process exited unexpectedly with code {code:?}")]
     ProcessExited { code: Option<i32> },
     #[error(transparent)]

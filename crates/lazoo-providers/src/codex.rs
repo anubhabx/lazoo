@@ -12,7 +12,7 @@ use crate::{
     ADAPTER_CONTRACT_V1, AdapterFuture, AuthenticationEvidence, AuthenticationState, CommandSpec,
     DiscoveryEnvironment, ExecutableCandidate, ProviderAdapter, ProviderCapabilities,
     ProviderError, ProviderEvent, ProviderKind, ProviderProbe, ProviderSession,
-    ProviderVerification, SessionRequest, TurnRequest, json_rpc::JsonRpcControl,
+    ProviderVerification, SessionRequest, TurnEventObserver, TurnRequest, json_rpc::JsonRpcControl,
     json_rpc::JsonRpcProcess, redact_json,
 };
 
@@ -293,18 +293,66 @@ impl CodexSession {
             })?
             .to_owned();
         self.set_active_turn(Some(turn_id));
-        let outcome = self.collect_turn(&mut process).await;
+        let outcome = self
+            .collect_turn(&mut process, self.initial_turn_events(), None, None)
+            .await;
         self.set_active_turn(None);
         outcome
     }
 
-    async fn collect_turn(
+    async fn run_turn_observed(
         &self,
-        process: &mut JsonRpcProcess,
+        request: &TurnRequest,
+        observer: &dyn TurnEventObserver,
     ) -> Result<Vec<ProviderEvent>, ProviderError> {
-        let started = Instant::now();
-        let mut last_progress = started;
-        let mut events = if self.resumed {
+        let mut process = self.process.lock().await;
+        let result = process
+            .request(
+                "turn/start",
+                turn_start_params(&self.session_id, &self.request, request)?,
+                self.request.startup_timeout(),
+                "Codex turn acceptance",
+            )
+            .await?;
+        let turn_id = result
+            .pointer("/turn/id")
+            .and_then(Value::as_str)
+            .ok_or_else(|| {
+                ProviderError::InvalidEvent("Codex turn response omitted turn.id".to_owned())
+            })?
+            .to_owned();
+        self.set_active_turn(Some(turn_id.clone()));
+
+        let mut events = self.initial_turn_events();
+        let started = ProviderEvent::TurnStarted {
+            provider: ProviderKind::Codex,
+            session_id: self.session_id.clone(),
+            turn_id: Some(turn_id.clone()),
+            raw: None,
+        };
+        let initial_observation = events
+            .iter()
+            .chain(std::iter::once(&started))
+            .try_for_each(|event| observer.observe(event));
+        if let Err(error) = initial_observation {
+            self.interrupt_after_observer_error(&turn_id, &error).await;
+            self.set_active_turn(None);
+            return Err(error);
+        }
+        events.push(started);
+
+        let outcome = self
+            .collect_turn(&mut process, events, Some(observer), Some(&turn_id))
+            .await;
+        if let Err(error @ ProviderError::Observer(_)) = &outcome {
+            self.interrupt_after_observer_error(&turn_id, error).await;
+        }
+        self.set_active_turn(None);
+        outcome
+    }
+
+    fn initial_turn_events(&self) -> Vec<ProviderEvent> {
+        if self.resumed {
             vec![ProviderEvent::SessionStarted {
                 provider: ProviderKind::Codex,
                 session_id: self.session_id.clone(),
@@ -313,7 +361,28 @@ impl CodexSession {
             }]
         } else {
             Vec::new()
-        };
+        }
+    }
+
+    async fn interrupt_after_observer_error(&self, turn_id: &str, _error: &ProviderError) {
+        let _ = self
+            .control
+            .send_uncorrelated_request(
+                "turn/interrupt",
+                CodexAdapter::interrupt_params(&self.session_id, turn_id),
+            )
+            .await;
+    }
+
+    async fn collect_turn(
+        &self,
+        process: &mut JsonRpcProcess,
+        mut events: Vec<ProviderEvent>,
+        observer: Option<&dyn TurnEventObserver>,
+        accepted_turn_id: Option<&str>,
+    ) -> Result<Vec<ProviderEvent>, ProviderError> {
+        let started = Instant::now();
+        let mut last_progress = started;
         let mut output = String::new();
         loop {
             let total_remaining = self
@@ -346,6 +415,9 @@ impl CodexSession {
             };
             if let Some(permission) = handle_server_request(&self.control, &message).await? {
                 last_progress = Instant::now();
+                if let Some(observer) = observer {
+                    observer.observe(&permission)?;
+                }
                 events.push(permission);
                 continue;
             }
@@ -363,6 +435,20 @@ impl CodexSession {
             } = &mut event
             {
                 *final_output = (!output.is_empty()).then_some(output.clone());
+            }
+            let duplicate_started = matches!(
+                &event,
+                ProviderEvent::TurnStarted {
+                    session_id,
+                    turn_id: Some(turn_id),
+                    ..
+                } if accepted_turn_id == Some(turn_id.as_str()) && session_id == &self.session_id
+            );
+            if duplicate_started {
+                continue;
+            }
+            if let Some(observer) = observer {
+                observer.observe(&event)?;
             }
             events.push(event);
             if completed {
@@ -389,6 +475,14 @@ impl ProviderSession for CodexSession {
 
     fn turn<'a>(&'a self, request: &'a TurnRequest) -> AdapterFuture<'a, Vec<ProviderEvent>> {
         Box::pin(async move { self.run_turn(request).await })
+    }
+
+    fn turn_observed<'a>(
+        &'a self,
+        request: &'a TurnRequest,
+        observer: &'a dyn TurnEventObserver,
+    ) -> AdapterFuture<'a, Vec<ProviderEvent>> {
+        Box::pin(async move { self.run_turn_observed(request, observer).await })
     }
 
     fn cancel(&self) -> AdapterFuture<'_, ()> {

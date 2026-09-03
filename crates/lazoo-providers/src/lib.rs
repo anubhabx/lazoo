@@ -19,7 +19,7 @@ pub use contract::{
     ADAPTER_CONTRACT_V1, AdapterFuture, AuthenticationEvidence, AuthenticationState, CommandSpec,
     ExecutableCandidate, ProviderAdapter, ProviderCapabilities, ProviderError, ProviderEvent,
     ProviderKind, ProviderProbe, ProviderSession, ProviderVerification, SessionRequest,
-    TurnRequest,
+    TurnEventObserver, TurnRequest,
 };
 pub use discovery::{DiscoveryEnvironment, DiscoverySource, rank_candidates};
 pub use grok::{GrokAdapter, GrokSession};

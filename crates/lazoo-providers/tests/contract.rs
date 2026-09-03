@@ -1,6 +1,9 @@
+use std::sync::Mutex;
+
 use lazoo_providers::{
-    DiscoverySource, ExecutableCandidate, ProviderCapabilities, ProviderEvent, ProviderKind,
-    ProviderSession, ProviderVerification, rank_candidates, redact_json,
+    DiscoverySource, ExecutableCandidate, ProviderCapabilities, ProviderError, ProviderEvent,
+    ProviderKind, ProviderSession, ProviderVerification, TurnEventObserver, TurnRequest,
+    rank_candidates, redact_json,
 };
 use serde_json::json;
 
@@ -107,4 +110,101 @@ fn normalized_events_use_camel_case_fields() {
     assert_eq!(value["type"], "sessionStarted");
     assert_eq!(value["sessionId"], "thread-1");
     assert!(value.get("session_id").is_none());
+}
+
+struct FixtureSession;
+
+impl ProviderSession for FixtureSession {
+    fn id(&self) -> String {
+        "fixture-session".to_owned()
+    }
+
+    fn native_host_pid(&self) -> Option<u32> {
+        Some(42)
+    }
+
+    fn turn<'a>(
+        &'a self,
+        _request: &'a TurnRequest,
+    ) -> lazoo_providers::AdapterFuture<'a, Vec<ProviderEvent>> {
+        Box::pin(async {
+            Ok(vec![
+                ProviderEvent::TurnStarted {
+                    provider: ProviderKind::Codex,
+                    session_id: "fixture-session".to_owned(),
+                    turn_id: Some("turn-1".to_owned()),
+                    raw: None,
+                },
+                ProviderEvent::TurnCompleted {
+                    provider: ProviderKind::Codex,
+                    session_id: "fixture-session".to_owned(),
+                    turn_id: Some("turn-1".to_owned()),
+                    status: "completed".to_owned(),
+                    output: Some("done".to_owned()),
+                    raw: None,
+                },
+            ])
+        })
+    }
+
+    fn cancel(&self) -> lazoo_providers::AdapterFuture<'_, ()> {
+        Box::pin(async { Ok(()) })
+    }
+
+    fn stop(&self) -> lazoo_providers::AdapterFuture<'_, ()> {
+        Box::pin(async { Ok(()) })
+    }
+}
+
+#[derive(Default)]
+struct CollectingObserver {
+    events: Mutex<Vec<ProviderEvent>>,
+}
+
+impl TurnEventObserver for CollectingObserver {
+    fn observe(&self, event: &ProviderEvent) -> Result<(), ProviderError> {
+        self.events.lock().unwrap().push(event.clone());
+        Ok(())
+    }
+}
+
+struct RejectingObserver;
+
+impl TurnEventObserver for RejectingObserver {
+    fn observe(&self, _event: &ProviderEvent) -> Result<(), ProviderError> {
+        Err(ProviderError::Observer(
+            "persistence rejected event".to_owned(),
+        ))
+    }
+}
+
+#[tokio::test]
+async fn observed_default_path_delivers_normalized_events_in_order() {
+    let session = FixtureSession;
+    let request = TurnRequest::new("hello");
+    let collector = CollectingObserver::default();
+
+    let returned = session.turn_observed(&request, &collector).await.unwrap();
+    let captured = collector.events.lock().unwrap().clone();
+
+    assert_eq!(captured, returned);
+    assert!(matches!(captured[0], ProviderEvent::TurnStarted { .. }));
+    assert!(matches!(captured[1], ProviderEvent::TurnCompleted { .. }));
+}
+
+#[tokio::test]
+async fn observed_default_path_stops_on_observer_error_without_changing_plain_turn() {
+    let session = FixtureSession;
+    let request = TurnRequest::new("hello");
+
+    let error = session
+        .turn_observed(&request, &RejectingObserver)
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(error, ProviderError::Observer(message) if message == "persistence rejected event")
+    );
+
+    let ordinary = session.turn(&request).await.unwrap();
+    assert_eq!(ordinary.len(), 2);
 }
