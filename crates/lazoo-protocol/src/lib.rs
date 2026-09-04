@@ -1,6 +1,7 @@
 mod conversation;
 mod message;
 mod rpc;
+mod task;
 mod types;
 
 pub use conversation::{
@@ -19,6 +20,12 @@ pub use message::{
     RetryMessageParams, SendMessageParams, UserMessageEndpoint, UserMessageKind,
 };
 pub use rpc::{JsonRpcRequest, JsonRpcResponse, RpcError};
+pub use task::{
+    AcceptTaskParams, CancelTaskParams, DelegateTaskParams, ReportTaskParams, ResolveTaskParams,
+    StartTaskParams, TASK_CONTRACT_V1, TaskDetail, TaskEvidence, TaskEvidenceKind, TaskListParams,
+    TaskMutationResult, TaskReconcileResult, TaskRecord, TaskReportKind, TaskResolution, TaskRole,
+    TaskShowParams, TaskState, TaskSummary,
+};
 pub use types::{
     AuthorityMode, CheckoutMode, CreateEmployeeParams, DesktopSnapshot, DisableEmployeeParams,
     EmployeeAvailability, EmployeeCheckoutPolicy, EmployeeMutationResult, EmployeeRecord,

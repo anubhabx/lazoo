@@ -3,6 +3,7 @@ mod employee;
 mod message;
 mod project;
 mod roster;
+mod task;
 
 pub use conversation::{
     ConversationValidationError, MAX_CONVERSATION_COMMAND_KEY_BYTES, MAX_CONVERSATION_TITLE_BYTES,
@@ -24,3 +25,8 @@ pub use project::{
     GitRepositoryInspection, ProjectError, inspect_git_repository, normalize_windows_identity,
 };
 pub use roster::{apply_session_availability, derive_availability};
+pub use task::{
+    MAX_TASK_DEPTH, MAX_TASK_EVIDENCE_BYTES, TaskValidationError, effective_authority,
+    task_transition_allowed, validate_task_depth, validate_task_evidence, validate_task_failure,
+    validate_task_objective, validate_task_references,
+};
