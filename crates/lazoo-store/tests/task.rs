@@ -192,6 +192,8 @@ fn user_turn_creates_one_atomic_root_task_and_replay_is_write_free() {
     assert_eq!(task.assigned_employee_id, lead.id);
     assert_eq!(task.requested_authority, AuthorityMode::Ask);
     assert_eq!(task.effective_authority, AuthorityMode::Ask);
+    assert_eq!(task.active_turn_id, Some(task.id));
+    assert!(task.active_session_id.is_none());
 
     let event_count = store.list_events(0, 100).unwrap().len();
     let pending_outbox = store.status().unwrap().outbox_pending;

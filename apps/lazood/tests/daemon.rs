@@ -879,6 +879,26 @@ async fn task_rpc_workflow_is_durable_idempotent_ordered_and_provider_neutral() 
         .result
         .unwrap();
 
+    let self_delegation = app
+        .handle(request(
+            "task-self-delegation",
+            "task.delegate",
+            json!({
+                "parentTaskId": root_task_id,
+                "actor": lead_endpoint,
+                "assignedEmployeeId": lead.id,
+                "objective": "invalid self delegation",
+                "references": [],
+                "requestedAuthority": "ask",
+                "rosterRevision": store.roster_snapshot().unwrap().revision,
+                "idempotencyKey": "task-self-delegation"
+            }),
+        ))
+        .await
+        .error
+        .unwrap();
+    assert_eq!(self_delegation.code, "LZ-TASK-SELF-DELEGATION");
+
     let delegate_params = json!({
         "parentTaskId": root_task_id,
         "actor": lead_endpoint,
@@ -1578,6 +1598,191 @@ async fn turn_submit_replay_resumes_only_recorded_queued_work_after_session_warm
     assert_eq!(resumed["turn"]["state"], "completed");
     assert_eq!(resumed["message"]["attempts"].as_array().unwrap().len(), 1);
     assert_eq!(backend.turns.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn turn_submit_follow_up_uses_the_existing_root_and_blocks_a_terminal_root_replay() {
+    let (_temporary, _root, store, app, backend, employee_id, conversation_id) = turn_test_app();
+    let root_params = json!({
+        "conversationId": conversation_id,
+        "author": {"kind": "user"},
+        "recipient": null,
+        "text": "root objective",
+        "authorityMode": "ask",
+        "idempotencyKey": "root-before-warm"
+    });
+    let first = app
+        .handle(request(
+            "root-before-warm",
+            "turn.submit",
+            root_params.clone(),
+        ))
+        .await
+        .error
+        .unwrap();
+    assert_eq!(first.code, "LZ-TURN-SESSION-NOT-READY");
+    let root_id = store.list_turns(conversation_id, 0, 100).unwrap()[0].id;
+    assert_eq!(
+        store.get_task(root_id).unwrap().task.active_turn_id,
+        Some(root_id)
+    );
+    let follow_up_params = json!({
+        "conversationId": conversation_id,
+        "author": {"kind": "user"},
+        "recipient": null,
+        "taskId": root_id,
+        "text": "follow-up",
+        "authorityMode": "ask",
+        "idempotencyKey": "root-follow-up"
+    });
+    let reserved = app
+        .handle(request(
+            "root-follow-up-reserved",
+            "turn.submit",
+            follow_up_params.clone(),
+        ))
+        .await
+        .error
+        .unwrap();
+    assert_eq!(reserved.code, "LZ-TURN-TASK-SCOPE");
+    let turns = store.list_turns(conversation_id, 0, 100).unwrap();
+    assert_eq!(turns.len(), 2);
+    assert_eq!(turns[1].task_id, Some(root_id));
+    app.handle(request(
+        "warm-follow-up-session",
+        "session.warm",
+        json!({
+            "employeeId": employee_id,
+            "expectedEmployeeRevision": 1,
+            "idempotencyKey": "warm-follow-up-session"
+        }),
+    ))
+    .await
+    .result
+    .unwrap();
+    backend.turn_events.lock().unwrap().extend([
+        ProviderEvent::TurnStarted {
+            provider: ProviderKind::Codex,
+            session_id: "native-1".to_owned(),
+            turn_id: Some("root-native-turn".to_owned()),
+            raw: None,
+        },
+        ProviderEvent::TurnCompleted {
+            provider: ProviderKind::Codex,
+            session_id: "native-1".to_owned(),
+            turn_id: Some("root-native-turn".to_owned()),
+            status: "completed".to_owned(),
+            output: None,
+            raw: None,
+        },
+    ]);
+
+    let completed = app
+        .handle(request("root-after-warm", "turn.submit", root_params))
+        .await
+        .result
+        .unwrap();
+    assert_eq!(completed["turn"]["id"], root_id.to_string());
+    assert_eq!(completed["turn"]["state"], "completed");
+    assert_eq!(completed["task"]["id"], root_id.to_string());
+    assert_eq!(completed["task"]["state"], "completed");
+
+    let replay = app
+        .handle(request(
+            "root-terminal-follow-up",
+            "turn.submit",
+            follow_up_params,
+        ))
+        .await
+        .error
+        .unwrap();
+    assert_eq!(replay.code, "LZ-TURN-TASK-SCOPE");
+    assert_eq!(backend.turns.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn turn_submit_replay_blocks_an_uncertain_task_before_provider_io() {
+    let (_temporary, _root, store, app, backend, employee_id, conversation_id) = turn_test_app();
+    let root_params = json!({
+        "conversationId": conversation_id,
+        "author": {"kind": "user"},
+        "recipient": null,
+        "text": "uncertain root",
+        "authorityMode": "ask",
+        "idempotencyKey": "uncertain-root-before-warm"
+    });
+    app.handle(request(
+        "uncertain-root-before-warm",
+        "turn.submit",
+        root_params,
+    ))
+    .await;
+    let root_id = store.list_turns(conversation_id, 0, 100).unwrap()[0].id;
+    let follow_up_params = json!({
+        "conversationId": conversation_id,
+        "author": {"kind": "user"},
+        "recipient": null,
+        "taskId": root_id,
+        "text": "follow-up after owner loss",
+        "authorityMode": "ask",
+        "idempotencyKey": "uncertain-root-follow-up"
+    });
+    let reserved = app
+        .handle(request(
+            "uncertain-root-follow-up-reserved",
+            "turn.submit",
+            follow_up_params.clone(),
+        ))
+        .await
+        .error
+        .unwrap();
+    assert_eq!(reserved.code, "LZ-TURN-TASK-SCOPE");
+    store
+        .execute_for_test(&format!(
+            "UPDATE tasks SET state = 'uncertain', revision = revision + 1, \
+             active_turn_id = NULL, active_session_id = NULL WHERE id = '{root_id}'"
+        ))
+        .unwrap();
+    app.handle(request(
+        "warm-uncertain-follow-up-session",
+        "session.warm",
+        json!({
+            "employeeId": employee_id,
+            "expectedEmployeeRevision": 1,
+            "idempotencyKey": "warm-uncertain-follow-up-session"
+        }),
+    ))
+    .await
+    .result
+    .unwrap();
+    backend.turn_events.lock().unwrap().extend([
+        ProviderEvent::TurnStarted {
+            provider: ProviderKind::Codex,
+            session_id: "native-1".to_owned(),
+            turn_id: Some("forbidden-uncertain-turn".to_owned()),
+            raw: None,
+        },
+        ProviderEvent::TurnCompleted {
+            provider: ProviderKind::Codex,
+            session_id: "native-1".to_owned(),
+            turn_id: Some("forbidden-uncertain-turn".to_owned()),
+            status: "completed".to_owned(),
+            output: None,
+            raw: None,
+        },
+    ]);
+
+    let replay = app
+        .handle(request(
+            "uncertain-root-follow-up-replay",
+            "turn.submit",
+            follow_up_params,
+        ))
+        .await
+        .error
+        .unwrap();
+    assert_eq!(replay.code, "LZ-TURN-TASK-SCOPE");
+    assert_eq!(backend.turns.load(Ordering::SeqCst), 0);
 }
 
 #[tokio::test]
@@ -3078,7 +3283,7 @@ fn employee_roster_acceptance_contract_is_backend_only() {
         "roster', 'refresh",
         "LZ-EMPLOYEE-STALE",
         "restartDurability",
-        "schemaVersion 5",
+        "schemaVersion 6",
         "providerSmokeAbsent",
     ] {
         assert!(
@@ -3116,7 +3321,7 @@ fn native_session_acceptance_contract_covers_containment_and_owner_loss() {
         "completeTreeTerminated",
         "nativeHostPid",
         "providerSmokeAbsent",
-        "schemaVersion 5",
+        "schemaVersion 6",
     ] {
         assert!(
             script.contains(required),
@@ -3146,7 +3351,7 @@ fn collaboration_bus_acceptance_contract_is_backend_only() {
         "deadLetterEvidence",
         "restartDurability",
         "auditOutboxEvidence",
-        "schemaVersion 5",
+        "schemaVersion 6",
         "providerSmokeAbsent",
         "desktopCapabilityExpansionAbsent",
     ] {
@@ -3179,7 +3384,7 @@ fn conversation_delivery_acceptance_contract_is_backend_only() {
     let fixture = std::fs::read_to_string(&fixture_path).expect("turn transport fixture");
 
     for required in [
-        "schema5",
+        "schema6",
         "projectlessConversation",
         "projectConversation",
         "userAuthorship",
@@ -3227,4 +3432,59 @@ fn conversation_delivery_acceptance_contract_is_backend_only() {
     assert!(fixture.contains("thread/start"));
     assert!(fixture.contains("thread/resume"));
     assert!(fixture.contains("--version"));
+}
+
+#[test]
+fn task_graph_acceptance_executes_backend_only_contract() {
+    let repository = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let script_path = repository.join("scripts/acceptance/task-delegation-graph.ps1");
+    let temporary = tempdir().unwrap();
+    let output_path = temporary.path().join("task-manifest.json");
+    let status = Command::new("powershell")
+        .args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-File"])
+        .arg(&script_path)
+        .arg("-OutputPath")
+        .arg(&output_path)
+        .status()
+        .expect("task graph acceptance process");
+    assert!(status.success(), "task graph acceptance must pass");
+
+    let manifest: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(&output_path).expect("task graph acceptance manifest"),
+    )
+    .unwrap();
+    assert_eq!(manifest["status"], "PASS");
+    assert_eq!(manifest["schemaVersion"], 6);
+    assert_eq!(manifest["mode"], "deterministic-fixture");
+    for field in [
+        "rootIdentity",
+        "replayNoDuplicate",
+        "followUpJoinedRoot",
+        "askProposalNoMessage",
+        "userAcceptanceCanonicalMessage",
+        "authorityNarrowed",
+        "guardFailures",
+        "nativeEvidenceRequired",
+        "evidenceOrdered",
+        "activeDescendantBlocked",
+        "ownerLossUncertain",
+        "uncertaintyResolutionIdempotent",
+        "restartCorrelations",
+        "providerSmokeAbsent",
+        "externalModelUseAbsent",
+        "worktreeMutationAbsent",
+        "conptyAbsent",
+        "desktopCapabilityExpansionAbsent",
+        "uiChangesAbsent",
+    ] {
+        assert_eq!(manifest["evidence"][field], true, "missing {field}");
+    }
+    assert!(manifest["commands"].as_array().unwrap().len() >= 20);
+    assert!(
+        manifest["commands"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|command| command["exitCode"].as_i64().is_some())
+    );
 }

@@ -233,6 +233,11 @@ fn task_store_error(error: StoreError) -> RpcError {
             Some(json!({"employeeId": employee_id})),
             error.to_string(),
         ),
+        StoreError::TaskSelfDelegation { employee_id } => (
+            "LZ-TASK-SELF-DELEGATION",
+            Some(json!({"employeeId": employee_id})),
+            error.to_string(),
+        ),
         StoreError::TaskEmployeeStale {
             employee_id,
             current_revision,

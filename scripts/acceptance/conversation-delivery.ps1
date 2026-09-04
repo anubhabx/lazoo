@@ -283,9 +283,9 @@ try {
     $daemon = Start-Daemon
     $gates.outerCodexContextIsolated = 'PASS'
     $status = Wait-Status
-    Assert-Equal $status.schemaVersion 5 'schema5'
+    Assert-Equal $status.schemaVersion 6 'schema6'
     Assert-Equal $status.journalMode 'wal' 'SQLite journal mode'
-    $gates.schema5 = 'PASS'
+    $gates.schema6 = 'PASS'
 
     $lead = Invoke-Json @(
         'employee', 'create', 'Rhea', '--provider', $Provider, '--role', 'Lead',
@@ -341,6 +341,17 @@ try {
         $evidence.liveNativeTurnId = [string]$live.turn.nativeTurnId
         $shutdownSessionId = [string]$live.turn.recipient.sessionId
     } else {
+        $employeeRootFailure = Invoke-ExpectedFailure 12 @(
+            'turn', 'submit', $projectConversationId, '--text', 'EMPLOYEE_TASK_ROOT',
+            '--idempotency-key', "employee-root-$script:runId"
+        )
+        Assert-True $employeeRootFailure.Contains('LZ-TURN-SESSION-NOT-READY') 'employee task root queued before warm'
+        $employeeTasks = @(Invoke-Json @(
+            'task', 'list', '--conversation-id', $projectConversationId, '--limit', '100'
+        ))
+        Assert-Equal $employeeTasks.Count 1 'employee task root count'
+        $employeeParentTaskId = [string]$employeeTasks[0].id
+
         $userTurn = Invoke-Json @(
             'turn', 'submit', $projectlessId, '--text', 'COMPLETE_USER', '--activate-if-needed',
             '--idempotency-key', "user-turn-$script:runId"
@@ -356,6 +367,25 @@ try {
         $gates.nativeTurnIdBeforeAcknowledgement = 'PASS'
         $gates.progressDurable = 'PASS'
 
+        $leadSessionId = [string]$userTurn.turn.recipient.sessionId
+        $roster = Invoke-Json @('roster', 'show')
+        $employeeProposal = Invoke-Json @(
+            'task', 'delegate', $employeeParentTaskId,
+            '--actor-employee', $leadId, '--actor-session', $leadSessionId,
+            '--assigned-employee', $authorId, '--objective', 'EMPLOYEE_TASK_CHILD',
+            '--requested-authority', 'ask', '--roster-revision', ([string]$roster.revision),
+            '--idempotency-key', "employee-task-$script:runId"
+        )
+        $employeeTask = Invoke-Json @(
+            'task', 'accept', ([string]$employeeProposal.task.id),
+            '--expected-revision', ([string]$employeeProposal.task.revision),
+            '--idempotency-key', "employee-task-accept-$script:runId"
+        )
+        Invoke-Json @(
+            'session', 'warm', $authorId, '--expected-employee-revision', '1',
+            '--idempotency-key', "author-session-$script:runId"
+        ) | Out-Null
+
         $terminalFailure = Invoke-Json @(
             'turn', 'submit', $projectlessId, '--text', 'FAIL_AFTER_ACCEPTANCE',
             '--idempotency-key', "terminal-failure-$script:runId"
@@ -367,7 +397,8 @@ try {
 
         $employeeTurn = Invoke-Json @(
             'turn', 'submit', $projectConversationId, '--author-employee', $authorId,
-            '--recipient-employee', $leadId, '--text', 'COMPLETE_EMPLOYEE',
+            '--recipient-employee', $authorId, '--task-id', ([string]$employeeTask.task.id),
+            '--text', 'COMPLETE_EMPLOYEE',
             '--idempotency-key', "employee-turn-$script:runId"
         )
         Assert-Equal $employeeTurn.turn.state 'completed' 'employee turn completion'
@@ -521,7 +552,7 @@ try {
         completedAt = [DateTime]::UtcNow.ToString('o')
         durationMs = $stopwatch.ElapsedMilliseconds
         protocolVersion = 1
-        schemaVersion = 5
+        schemaVersion = 6
         isolatedDataRoot = $script:dataRoot
         temporaryDataRetained = $false
         commands = $commandSnapshot

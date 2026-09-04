@@ -3,8 +3,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use lazoo_protocol::{
     CancelTurnParams, ConversationDetail, ConversationListParams, ConversationShowParams,
     CreateConversationParams, EmployeeAvailability, JsonRpcRequest, MessageSender, RetryTurnParams,
-    RpcError, SessionLifecycleState, SubmitTurnParams, TurnListParams, TurnMutationResult,
-    TurnShowParams, TurnState,
+    RpcError, SessionLifecycleState, SubmitTurnParams, TaskState, TurnListParams,
+    TurnMutationResult, TurnShowParams, TurnState,
 };
 use lazoo_providers::{ProviderError, ProviderEvent, ProviderKind, TurnEventObserver, TurnRequest};
 use lazoo_store::{
@@ -186,6 +186,7 @@ impl App {
         if recorded.turn.state != TurnState::Recorded {
             return Ok(to_value(recorded));
         }
+        require_task_delivery_available(&recorded)?;
         self.deliver_recorded_turn(request, recorded, activate_if_needed)
             .await
     }
@@ -640,6 +641,25 @@ impl App {
     }
 }
 
+fn require_task_delivery_available(recorded: &TurnMutationResult) -> Result<(), RpcError> {
+    let Some(task) = &recorded.task else {
+        return Ok(());
+    };
+    let delivery_eligible = matches!(task.state, TaskState::Accepted | TaskState::Running);
+    let another_turn_is_active = task
+        .active_turn_id
+        .is_some_and(|active_turn_id| active_turn_id != recorded.turn.id);
+    if !delivery_eligible || another_turn_is_active {
+        Err(RpcError {
+            code: "LZ-TURN-TASK-SCOPE".to_owned(),
+            message: "the linked task cannot accept this turn".to_owned(),
+            data: Some(json!({"taskId": task.id, "turnId": recorded.turn.id})),
+        })
+    } else {
+        Ok(())
+    }
+}
+
 fn observer_error(error: &StoreError) -> ProviderError {
     ProviderError::Observer(error.to_string())
 }
@@ -872,6 +892,21 @@ fn turn_store_error(error: StoreError) -> RpcError {
         StoreError::TurnAcceptanceEvidence { turn_id } => (
             "LZ-TURN-ACCEPTANCE-EVIDENCE",
             Some(json!({"turnId": turn_id})),
+            error.to_string(),
+        ),
+        StoreError::TaskNotFound { task_id } => (
+            "LZ-TURN-TASK-NOT-FOUND",
+            Some(json!({"taskId": task_id})),
+            error.to_string(),
+        ),
+        StoreError::TurnTaskScope { task_id } => (
+            "LZ-TURN-TASK-SCOPE",
+            Some(json!({"taskId": task_id})),
+            error.to_string(),
+        ),
+        StoreError::TaskTurnLink { task_id, turn_id } => (
+            "LZ-TURN-TASK-SCOPE",
+            Some(json!({"taskId": task_id, "turnId": turn_id})),
             error.to_string(),
         ),
         StoreError::ConversationValidation(_) | StoreError::MessageValidation(_) => {

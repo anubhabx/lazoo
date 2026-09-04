@@ -4,10 +4,11 @@ use lazoo_protocol::{
     TurnState, UserMessageEndpoint, UserMessageKind,
 };
 use lazoo_store::{
-    AcceptTaskInput, BeginSessionInput, BeginTurnSubmissionInput, CreateConversationInput,
-    CreateEmployeeInput, DelegateTaskInput, FailTurnInput, FinishTurnCancelInput,
-    MarkSessionReadyInput, MarkTurnUncertainInput, ObserveTurnInput, RecordTurnInput,
-    RegisterProjectInput, RequestTurnCancelInput, RetryTurnInput, Store, StoreError,
+    AcceptTaskInput, BeginSessionInput, BeginTurnSubmissionInput, CancelTaskInput,
+    CreateConversationInput, CreateEmployeeInput, DelegateTaskInput, FailTurnInput,
+    FinishTurnCancelInput, MarkSessionReadyInput, MarkTurnUncertainInput, ObserveTurnInput,
+    RecordTurnInput, RegisterProjectInput, RequestTurnCancelInput, RetryTurnInput, Store,
+    StoreError,
 };
 use serde_json::json;
 use tempfile::tempdir;
@@ -481,6 +482,17 @@ fn task_parent_completion_waits_for_an_active_child_with_an_exact_linked_turn() 
         store.get_task(child.task.id).unwrap().task.state,
         TaskState::Running
     );
+    let blocked = store
+        .cancel_task(&CancelTaskInput {
+            request_id: "request-tree-root-cancel".to_owned(),
+            idempotency_key: "tree-root-cancel".to_owned(),
+            task_id: root_task.id,
+            expected_revision: parent.task.revision,
+            actor: user(),
+            evidence: json!({"reason": "stop parent"}),
+        })
+        .unwrap_err();
+    assert!(matches!(blocked, StoreError::TaskActiveChildren { .. }));
 }
 
 #[test]

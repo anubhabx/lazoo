@@ -731,10 +731,13 @@ impl Store {
                 require_no_active_descendants(&transaction, current.id)?;
                 (TaskState::Cancelled, TaskEvidenceKind::Cancelled)
             }
-            TaskState::Running => (
-                TaskState::CancelRequested,
-                TaskEvidenceKind::CancelRequested,
-            ),
+            TaskState::Running => {
+                require_no_active_descendants(&transaction, current.id)?;
+                (
+                    TaskState::CancelRequested,
+                    TaskEvidenceKind::CancelRequested,
+                )
+            }
             _ => {
                 return Err(StoreError::TaskState {
                     task_id: current.id,
