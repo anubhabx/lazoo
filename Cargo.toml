@@ -15,6 +15,7 @@ members = [
   "tests/fixtures/crashing-daemon",
   "tests/fixtures/job-containment",
   "tests/fixtures/session-tree",
+  "tests/fixtures/turn-transport",
 ]
 
 [workspace.package]

@@ -1,48 +1,47 @@
-# Next session: durable conversations and provider delivery
+# Next session: post-fix Codex live turn, then task/delegation design
 
 ## Current owner boundary
 
-Backend and communication layers remain this branch's scope. UI implementation is owned separately. Do not change the desktop frontend, Tauri command surface, `desktop.snapshot`, or UI capabilities while continuing this backend sequence.
+Backend and communication layers remain this branch's scope. UI implementation is owned separately. Do not change the desktop frontend, Tauri command surface, `desktop.snapshot`, or UI capabilities while finishing this backend sequence.
 
-The approved desktop information architecture remains documented in `docs/superpowers/specs/2026-08-30-lazoo-desktop-information-architecture-design.md`. Backend contracts must become truthful before a UI consumes them, but this handoff does not prescribe or implement UI behavior.
+The approved desktop information architecture remains in `docs/superpowers/specs/2026-08-30-lazoo-desktop-information-architecture-design.md`. This handoff does not authorize ConPTY, worktree mutation, task execution, policy expansion, managed memory, or other-provider conversation delivery.
 
 ## Current backend state
 
-- The daemon, keeper, CLI, SQLite WAL store, transactional outbox, authenticated named-pipe IPC, project registration, restart recovery, and emergency spool are implemented.
-- Native adapters for Codex, OpenCode, Grok Build, Antigravity, and Claude Code are implemented behind a versioned provider contract.
-- The last recorded model-backed gates passed for Codex, OpenCode, Grok Build, and Antigravity. Claude Code's last model gate was blocked by organization policy; refresh that evidence before claiming current live support.
-- Database schema 4 stores durable employees, provider observations, revisioned roster state, native employee-session history, immutable collaboration envelopes, delivery state, attempts, dead letters, and idempotent command outcomes.
-- `session.warm`, `session.list`, `session.show`, and `session.stop` are available through the daemon and CLI. Warm starts an idle provider-native session without sending a model prompt.
-- Every owned provider tree is placed in a dedicated kill-on-close Windows Job Object before provider launch. Forced daemon loss removes the tree, and the next boot records `LZ-SESSION-OWNER-LOST` without PID adoption.
-- `message.send`, `message.claim`, `message.acknowledge`, `message.fail`, `message.retry`, `message.cancel`, `message.list`, and `message.show` are available through the daemon and CLI. Sends are record-first and ordered; mutations are idempotent and revision-checked.
-- Message delivery states are `queued`, `delivering`, `acknowledged`, `retryable-failed`, `terminal-failed`, and `cancelled`. Retry deadlines are bounded, exhaustion creates durable dead-letter evidence, and uncertain attempts reconcile to `LZ-MESSAGE-OWNER-LOST` on restart.
-- The collaboration-bus acceptance manifest records idempotent send, causal ordering, acknowledgement correlation, early-retry rejection, retry exhaustion, dead-letter evidence, cancellation, restart durability, owner-loss reconciliation, and audit/outbox publication.
-- Message claim currently creates only a durable attempt. It does not activate a recipient, submit bytes to a provider, start a model turn, or claim delivery.
-- ConPTY, conversation/turn persistence, provider turn delivery, task orchestration, worktree automation, policy approvals, resource governance, and managed memory remain unimplemented.
+- Database schema 5 stores durable employees, provider observations, native employee sessions, actor-aware collaboration envelopes, projectless or project-scoped conversations, immutable turns, append-only normalized provider events, delivery attempts, dead letters, command outcomes, audit events, and outbox rows.
+- `conversation.create/list/show` and `turn.submit/retry/cancel/list/show` are available through the daemon and CLI. Conversation/turn failures use CLI exit code 12.
+- User-authored turns may explicitly activate the selected lead with `activateIfNeeded`; employee-authored turns cannot activate dormant recipients. Daemon-managed conversation delivery is enabled only for Codex.
+- Turn submission is record-first. Lazoo acknowledges the canonical message only after it durably records a native turn ID or progress evidence. Definite pre-acceptance failures follow bounded retry policy; accepted or uncertain work is never retried automatically.
+- Native `completed`, `failed`, and `interrupted` outcomes map to `completed`, `terminal-failed`, and `cancelled`. Session-level events after acceptance no longer have to re-prove acceptance.
+- Restart reconciliation leaves recorded queued work eligible for an idempotent replay, marks prior-boot submitting/accepted work uncertain with `LZ-TURN-OWNER-LOST`, and never adopts a prior provider PID or native turn.
+- The deterministic conversation-delivery acceptance uses real release binaries and a disposable Codex App Server protocol fixture. Its current manifest is PASS with 32 commands, `nativeTerminalMapping = PASS`, `outerCodexContextIsolated = PASS`, `cleanProviderTreeStop = PASS`, and `modelInvocationAbsent = PASS`.
+- The full post-fix deterministic matrix is green: 196 workspace tests passed, 0 failed, 11 live-only tests ignored; format, Clippy, all-target check, locked release build, and all five backend acceptance manifests passed.
+
+## Live-gate status
+
+Two explicit quota-consuming Codex checks were attempted before the final persistence fix. Both correctly remained unclaimed and wrote a FAIL live manifest with public error `LZ-TURN-UNCERTAIN`.
+
+The second isolated run created native thread `01a0694d-5ac1-72e2-bc1e-9fbe70862ef0` and turn `01a0694d-60f2-7bd0-a072-6426489fda71`. A read-only App Server `thread/read` showed native status `interrupted`, no items, and no provider error. The failure was traced to `Store::observe_turn`: after the synthetic native-ID event moved the turn to `accepted`, a normal session-level event without a turn ID was incorrectly subjected to the original acceptance-evidence guard. The observer failed and the adapter performed its designed best-effort interrupt. Regression coverage now emits that real-shaped session-level event and passes.
+
+No third model prompt was issued in the same verification pass. Therefore deterministic delivery is verified, but post-fix live completion and exact output are not yet verified.
 
 ## Next-session objective
 
-Implement the next narrow backend vertical slice: a durable conversation/turn ledger connected to one provider-delivery transport. Keep it daemon/CLI-only and stop before task orchestration, UI, or ConPTY.
+1. Re-run exactly one explicit Codex live gate only with fresh user authorization for the quota-consuming prompt:
 
-The slice should establish:
+   ```powershell
+   powershell -NoProfile -ExecutionPolicy Bypass -File scripts\acceptance\conversation-delivery.ps1 -SkipBuild -Provider codex -LivePrompt "Reply with exactly LAZOO_TURN_OK. Do not use tools."
+   ```
 
-1. durable versioned conversations and turns with user/employee authorship, employee/session ownership, projectless or project scope, correlation to collaboration messages, and immutable input content;
-2. record-first turn submission so the conversation turn, message delivery intent, audit event, and outbox row exist before provider I/O;
-3. a provider-neutral active-session operation that submits one turn through the provider's existing machine-oriented transport while preserving native authentication, tools, MCP, plugins, skills, permissions, and session identity;
-4. recipient activation through the existing session lifecycle when policy permits, without conflating session startup with turn delivery;
-5. acknowledgement only after a provider-native turn identifier or observable session-progress event is recorded; successful writes or accepted asynchronous requests alone are not delivery evidence;
-6. idempotent submit/cancel/reconcile behavior with stable errors and durable uncertain-outcome evidence across daemon/provider loss;
-7. deterministic fake-backend acceptance for every state transition plus a separately explicit, quota-consuming live-provider gate before claiming real model delivery;
-8. zero desktop capability expansion and no task/worktree/approval implementation.
+2. Require `conversation-delivery-live-manifest.json` to report PASS, exact `LAZOO_TURN_OK`, a durable native turn ID, acknowledged canonical message, completed turn, and clean provider-tree stop. If it fails, preserve the exact blocker and do not repeat the prompt automatically.
+3. Refresh the verification document and finish branch integration only after that result is recorded truthfully.
+4. Once the live gate is green, write a separate reviewed design and plan for the next proposed backend slice: a durable task/delegation graph with explicit lead/authority boundaries. Do not combine it opportunistically with worktree mutation, ConPTY, approvals, managed memory, resource governance, or UI binding.
 
 ## Guardrails
 
 - Preserve the Windows-first, local-first, single-user boundary.
-- Reuse the canonical collaboration envelope; do not create a second cross-provider message path.
-- Record turns and delivery intent before any provider operation.
-- Delivery is at least once. Provider submission and recipient processing must be idempotent by logical message/turn identity wherever the native protocol permits.
-- Never call a turn delivered merely because stdin accepted bytes, an RPC returned success, or an asynchronous provider session was accepted. Require a provider turn ID or observed progress evidence.
-- Keep UI, `desktop.snapshot`, Tauri permissions, ConPTY, task delegation, worktree mutation, managed memory, and policy expansion outside this slice.
-- Preserve provider-native authentication, tools, plugins, MCP, skills, permissions, terminals, and session semantics.
-- Ask remains the default authority mode. No model may grant user approval or broaden its own authority.
-- Do not hide a model-backed gate inside non-model acceptance; label quota-consuming verification explicitly.
+- Reuse the canonical collaboration envelope and conversation turn; do not create a second provider message path.
+- Keep Codex conversation delivery distinct from earlier provider-smoke evidence and from unverified other-provider delivery.
+- Never call a turn delivered merely because stdin accepted bytes or an RPC returned success.
+- Keep `ask` as the default authority mode. No model may grant user approval or broaden its own authority.
+- Keep model-backed gates explicit, isolated, and visibly quota-consuming.

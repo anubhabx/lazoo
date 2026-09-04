@@ -834,6 +834,142 @@ async fn turn_submit_activation_defaults_false_and_explicit_user_activation_wait
 }
 
 #[tokio::test]
+async fn native_terminal_statuses_close_accepted_turns_without_uncertainty() {
+    for (status, expected_state) in [
+        ("failed", TurnState::TerminalFailed),
+        ("interrupted", TurnState::Cancelled),
+    ] {
+        let (_temporary, _root, store, app, backend, employee_id, conversation_id) =
+            turn_test_app();
+        app.handle(request(
+            &format!("warm-{status}"),
+            "session.warm",
+            json!({
+                "employeeId": employee_id,
+                "expectedEmployeeRevision": 1,
+                "idempotencyKey": format!("warm-{status}")
+            }),
+        ))
+        .await
+        .result
+        .unwrap();
+        backend.turn_events.lock().unwrap().extend([
+            ProviderEvent::TurnStarted {
+                provider: ProviderKind::Codex,
+                session_id: "native-1".to_owned(),
+                turn_id: Some(format!("native-turn-{status}")),
+                raw: None,
+            },
+            ProviderEvent::TurnCompleted {
+                provider: ProviderKind::Codex,
+                session_id: "native-1".to_owned(),
+                turn_id: Some(format!("native-turn-{status}")),
+                status: status.to_owned(),
+                output: None,
+                raw: None,
+            },
+        ]);
+
+        let result = app
+            .handle(request(
+                &format!("turn-{status}"),
+                "turn.submit",
+                json!({
+                    "conversationId": conversation_id,
+                    "author": {"kind": "user"},
+                    "recipient": null,
+                    "text": format!("Native {status}"),
+                    "idempotencyKey": format!("turn-{status}")
+                }),
+            ))
+            .await
+            .result
+            .unwrap();
+
+        assert_eq!(
+            serde_json::from_value::<TurnState>(result["turn"]["state"].clone()).unwrap(),
+            expected_state
+        );
+        let turn_id = result["turn"]["id"].as_str().unwrap().parse().unwrap();
+        let turn = store.get_turn(turn_id).unwrap();
+        assert_eq!(turn.state, expected_state);
+        assert_eq!(
+            store.get_message(turn.message_id).unwrap().delivery.state,
+            MessageDeliveryState::Acknowledged
+        );
+    }
+}
+
+#[tokio::test]
+async fn accepted_turn_allows_session_level_events_without_reproving_acceptance() {
+    let (_temporary, _root, _store, app, backend, employee_id, conversation_id) = turn_test_app();
+    app.handle(request(
+        "warm-session-level-progress",
+        "session.warm",
+        json!({
+            "employeeId": employee_id,
+            "expectedEmployeeRevision": 1,
+            "idempotencyKey": "warm-session-level-progress"
+        }),
+    ))
+    .await
+    .result
+    .unwrap();
+    backend.turn_events.lock().unwrap().extend([
+        ProviderEvent::TurnStarted {
+            provider: ProviderKind::Codex,
+            session_id: "native-1".to_owned(),
+            turn_id: Some("native-turn-with-usage".to_owned()),
+            raw: None,
+        },
+        ProviderEvent::Usage {
+            provider: ProviderKind::Codex,
+            session_id: "native-1".to_owned(),
+            input_tokens: Some(10),
+            output_tokens: Some(2),
+            total_tokens: Some(12),
+            cost_usd: None,
+            raw: None,
+        },
+        ProviderEvent::TurnCompleted {
+            provider: ProviderKind::Codex,
+            session_id: "native-1".to_owned(),
+            turn_id: Some("native-turn-with-usage".to_owned()),
+            status: "completed".to_owned(),
+            output: Some("done".to_owned()),
+            raw: None,
+        },
+    ]);
+
+    let result = app
+        .handle(request(
+            "turn-with-session-level-progress",
+            "turn.submit",
+            json!({
+                "conversationId": conversation_id,
+                "author": {"kind": "user"},
+                "recipient": null,
+                "text": "Accept one session-level event",
+                "idempotencyKey": "turn-with-session-level-progress"
+            }),
+        ))
+        .await
+        .result
+        .unwrap();
+
+    assert_eq!(result["turn"]["state"], "completed");
+    assert_eq!(
+        result["turn"]["events"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|event| event["kind"] == "usage")
+            .count(),
+        1
+    );
+}
+
+#[tokio::test]
 async fn turn_submit_employee_author_cannot_activate_dormant_recipient() {
     let (_temporary, _root, store, app, backend, employee_id, conversation_id) = turn_test_app();
     let error = app
@@ -2427,7 +2563,7 @@ fn employee_roster_acceptance_contract_is_backend_only() {
         "roster', 'refresh",
         "LZ-EMPLOYEE-STALE",
         "restartDurability",
-        "schemaVersion 4",
+        "schemaVersion 5",
         "providerSmokeAbsent",
     ] {
         assert!(
@@ -2465,7 +2601,7 @@ fn native_session_acceptance_contract_covers_containment_and_owner_loss() {
         "completeTreeTerminated",
         "nativeHostPid",
         "providerSmokeAbsent",
-        "schemaVersion 4",
+        "schemaVersion 5",
     ] {
         assert!(
             script.contains(required),
@@ -2495,7 +2631,7 @@ fn collaboration_bus_acceptance_contract_is_backend_only() {
         "deadLetterEvidence",
         "restartDurability",
         "auditOutboxEvidence",
-        "schemaVersion 4",
+        "schemaVersion 5",
         "providerSmokeAbsent",
         "desktopCapabilityExpansionAbsent",
     ] {
@@ -2516,4 +2652,64 @@ fn collaboration_bus_acceptance_contract_is_backend_only() {
             "acceptance script must not contain {forbidden}"
         );
     }
+}
+
+#[test]
+fn conversation_delivery_acceptance_contract_is_backend_only() {
+    let repository = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let script_path = repository.join("scripts/acceptance/conversation-delivery.ps1");
+    let script =
+        std::fs::read_to_string(&script_path).expect("conversation delivery acceptance script");
+    let fixture_path = repository.join("tests/fixtures/turn-transport/src/main.rs");
+    let fixture = std::fs::read_to_string(&fixture_path).expect("turn transport fixture");
+
+    for required in [
+        "schema5",
+        "projectlessConversation",
+        "projectConversation",
+        "userAuthorship",
+        "employeeAuthorship",
+        "recordFirstTurn",
+        "envelopeV2",
+        "activationExplicit",
+        "employeeActivationBlocked",
+        "nativeTurnIdBeforeAcknowledgement",
+        "progressDurable",
+        "nativeTerminalMapping",
+        "retryIdentityPreserved",
+        "cancelEvidenceRequired",
+        "ownerLossUncertain",
+        "transcriptBounded",
+        "auditOutboxEvidence",
+        "modelInvocationAbsent",
+        "CODEX_THREAD_ID",
+        "CODEX_SESSION_ID",
+        "outerCodexContextIsolated",
+        "cleanProviderTreeStop",
+        "desktopCapabilityExpansionAbsent",
+    ] {
+        assert!(
+            script.contains(required),
+            "acceptance script must contain {required}"
+        );
+    }
+    for forbidden in [
+        "provider', 'smoke",
+        "apps\\lazoo-desktop",
+        "conpty",
+        "worktree",
+    ] {
+        assert!(
+            !script.contains(forbidden),
+            "acceptance script must not contain {forbidden}"
+        );
+    }
+    assert!(!script.contains("LAZOO_TURN_OK"));
+    assert!(fixture.contains("turn/start"));
+    assert!(fixture.contains("turn/interrupt"));
+    assert!(fixture.contains("FAIL_AFTER_ACCEPTANCE"));
+    assert!(fixture.contains("thread/tokenUsage/updated"));
+    assert!(fixture.contains("thread/start"));
+    assert!(fixture.contains("thread/resume"));
+    assert!(fixture.contains("--version"));
 }

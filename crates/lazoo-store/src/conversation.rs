@@ -436,7 +436,8 @@ impl Store {
         if target != current.state {
             validate_turn_transition(current.state, target)?;
         }
-        if target == TurnState::Accepted
+        if current.state == TurnState::Submitting
+            && target == TurnState::Accepted
             && input.native_turn_id.as_deref().is_none_or(str::is_empty)
             && input.payload.get("progress").and_then(Value::as_bool) != Some(true)
         {

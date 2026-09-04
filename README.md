@@ -6,17 +6,17 @@ The name is a deliberately silly blend of **lazy** and **zoo**: wake the right e
 
 ## Status
 
-The first Windows control-plane slice, the polished read-only desktop-shell slice, the backend native-provider connector slice, the durable employee-roster slice, native employee-session ownership, and the durable collaboration-bus slice are implemented. Lazoo now provides five native executables:
+The first Windows control-plane slice, the polished read-only desktop-shell slice, the backend native-provider connector slice, the durable employee-roster slice, native employee-session ownership, the durable collaboration bus, and schema-5 conversation/turn delivery are implemented. Lazoo now provides five native executables:
 
 - `lazoo-desktop.exe` opens a dark, command-first Tauri 2 control room for daemon health, projects, recent events, and recovered-incident count.
 - `lazoo-keeper.exe` supervises the daemon with a bounded restart policy and emergency spool.
-- `lazood.exe` owns the SQLite WAL store, revisioned employee roster, native-session lifecycle, collaboration-message ledger, and authenticated named-pipe API.
-- `lazooctl.exe` exposes status, project registration/listing, event listing/following, native-provider diagnostics, employee/roster/session/message control, and planned shutdown.
+- `lazood.exe` owns the SQLite WAL store, revisioned employee roster, native-session lifecycle, collaboration-message and conversation/turn ledgers, and authenticated named-pipe API.
+- `lazooctl.exe` exposes status, project registration/listing, event listing/following, native-provider diagnostics, employee/roster/session/message/conversation/turn control, and planned shutdown.
 - `lazoo-session-host.exe` is the protocol-transparent launch gate that places each native provider tree in its daemon-owned Windows Job Object before provider startup.
 
-The desktop remains deliberately read-only. Backend adapters connect Codex App Server, OpenCode ACP, Grok Build ACP, Antigravity stream JSON, and Claude Code stream JSON without flattening native configuration or authentication. Durable named employees can be created, revised, disabled, inspected, warmed into an idle native session, stopped, and reconciled after daemon loss. The collaboration bus records immutable correlated envelopes before attempts, exposes revision-checked acknowledgement/retry/cancel controls, and preserves dead-letter and owner-loss evidence. It does not yet submit a provider turn. Conversations, task delegation, managed memory, and worktree automation remain later slices. The full product contract lives in [docs/PROJECT-BRIEF.md](docs/PROJECT-BRIEF.md).
+The desktop remains deliberately read-only. Backend adapters connect Codex App Server, OpenCode ACP, Grok Build ACP, Antigravity stream JSON, and Claude Code stream JSON without flattening native configuration or authentication. Durable named employees can be created, revised, disabled, inspected, warmed into an idle native session, stopped, and reconciled after daemon loss. The collaboration bus records immutable correlated envelopes before attempts, exposes revision-checked acknowledgement/retry/cancel controls, and preserves dead-letter and owner-loss evidence. Schema 5 adds projectless or project-scoped conversations and immutable user- or employee-authored turns. `turn.submit` records the turn, canonical message, delivery intent, audit event, and outbox row before provider I/O; daemon-managed delivery is enabled only for Codex and acknowledges the message only after durable native acceptance evidence. Deterministic release acceptance is green. Two explicit live checks exposed and diagnosed an accepted-event persistence bug; that bug is fixed and covered, but a post-fix quota-consuming live completion has not been rerun and is not claimed. Task delegation, managed memory, worktree automation, approvals, ConPTY, and other-provider conversation delivery remain later slices. The full product contract lives in [docs/PROJECT-BRIEF.md](docs/PROJECT-BRIEF.md).
 
-The target desktop information architecture is owner-approved, but UI implementation is owned separately while backend work continues. The current read-only shell remains this branch's technical baseline. Continue from [docs/NEXT-SESSION.md](docs/NEXT-SESSION.md) with durable conversations/turns and provider-delivery transport; no launcher, terminal, worker, Inbox, or Settings contract was added by the collaboration-bus slice.
+The target desktop information architecture is owner-approved, but UI implementation is owned separately while backend work continues. The current read-only shell remains this branch's technical baseline. Continue from [docs/NEXT-SESSION.md](docs/NEXT-SESSION.md) by refreshing the explicit post-fix Codex live gate, then designing the next narrow backend dependency; no launcher, terminal, worker, Inbox, or Settings capability was added by the conversation-delivery slice.
 
 ## Build and run
 
@@ -58,6 +58,9 @@ $messageId = '<message-uuid>'
 & .\target\release\lazooctl.exe message send $employeeId $recipientEmployeeId --kind peer --body '{"text":"status-request"}'
 & .\target\release\lazooctl.exe message list
 & .\target\release\lazooctl.exe message claim $messageId --expected-revision 1
+$conversationId = (& .\target\release\lazooctl.exe --json conversation create $employeeId --title 'First task' | ConvertFrom-Json).conversation.id
+& .\target\release\lazooctl.exe turn submit $conversationId --text 'Describe the repository.' --activate-if-needed
+& .\target\release\lazooctl.exe turn list $conversationId
 & .\target\release\lazooctl.exe system shutdown
 ```
 
@@ -76,6 +79,8 @@ Provider names are `codex`, `opencode`, `grok-build`, `antigravity`, and `claude
 `session warm` is the only session command that launches a provider. It requires the employee configuration revision, records `starting` before launch, and returns only after the provider-native session reports an ID and owned host PID; it does not send a turn. Warm and stop are idempotent. Stop is revision-checked and bounded, while prior-boot active sessions reconcile to `failed` with `LZ-SESSION-OWNER-LOST` instead of adopting a PID. Session failures use CLI exit code 10. Session and roster fields remain absent from `desktop.snapshot`.
 
 `message send` records an immutable version-1 envelope and queued delivery state before any attempt. Claim, acknowledge, fail, retry, and cancel are idempotent and revision-checked; exhausted attempts create durable dead-letter evidence, and prior-boot delivering attempts reconcile with `LZ-MESSAGE-OWNER-LOST`. Message failures use CLI exit code 11. These controls do not activate a provider, send a model turn, or expand `desktop.snapshot`.
+
+`conversation create` and `turn submit/retry/cancel/list/show` use the schema-5 conversation ledger and actor-aware version-2 envelopes. User-authored submission may explicitly activate the selected Codex lead with `--activate-if-needed`; employee-authored turns cannot activate dormant recipients. Native turn IDs or observed progress are required before message acknowledgement, accepted turns are never retried automatically after uncertainty, and provider terminal states remain distinct from canonical delivery truth. Conversation/turn failures use CLI exit code 12. These controls are daemon/CLI-only and do not expand `desktop.snapshot`.
 
 For the frontend development loop, run the app from its Tauri directory with Tauri CLI 2 installed. The Tauri configuration starts Vite on `127.0.0.1:1420` automatically:
 
@@ -100,17 +105,20 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\acceptance\first-sli
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\acceptance\employee-roster.ps1
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\acceptance\native-session-ownership.ps1 -Provider codex
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\acceptance\collaboration-bus.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\acceptance\conversation-delivery.ps1
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\acceptance\desktop-shell.ps1
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\acceptance\provider-adapters.ps1 -Provider codex
 ```
 
 The acceptance script uses a unique temporary data root, builds release binaries, forces a real daemon restart, exhausts the production keeper budget with a crashing fixture, and writes `artifacts\acceptance\first-slice-manifest.json`.
 
-The employee-roster acceptance uses an isolated data root and real release binaries to verify idempotent creation, schema-4 restart durability, stale-revision rejection, non-model refresh, disable semantics, and identity preservation across a second restart. It writes `artifacts\acceptance\employee-roster-manifest.json`.
+The employee-roster acceptance uses an isolated data root and real release binaries to verify idempotent creation, schema-5 restart durability, stale-revision rejection, non-model refresh, disable semantics, and identity preservation across a second restart. It writes `artifacts\acceptance\employee-roster-manifest.json`.
 
 The native-session acceptance runs an independent release containment fixture, warms Codex without a prompt, proves warm/stop idempotency and revision checks, forces daemon loss, verifies complete-tree termination, and checks restart reconciliation to `LZ-SESSION-OWNER-LOST`. It writes `artifacts\acceptance\native-session-ownership-manifest.json`.
 
 The collaboration-bus acceptance uses an isolated data root and real release binaries to verify record-first/idempotent sends, causal ordering, acknowledgement correlation, retry deadlines and exhaustion, dead-letter evidence, cancellation, forced-restart reconciliation to `LZ-MESSAGE-OWNER-LOST`, and audit/outbox publication without invoking a provider model. It writes `artifacts\acceptance\collaboration-bus-manifest.json`.
+
+The conversation-delivery acceptance uses an isolated data root, real release binaries, and a disposable Codex App Server protocol fixture. It verifies schema 5, projectless/project conversations, actor-aware envelopes, record-first order, explicit activation, native acceptance, session-level progress, terminal mapping, bounded transcripts, retry/cancel behavior, owner-loss uncertainty, planned-shutdown provider-tree cleanup, audit/outbox publication, and zero desktop expansion without invoking a model. It writes `artifacts\acceptance\conversation-delivery-manifest.json`. The separate `-LivePrompt` mode is quota-consuming; its most recent pre-fix run is retained as a failed manifest and must not be described as current live completion proof.
 
 The desktop-shell acceptance starts an isolated keeper and daemon, registers a disposable Git repository, opens the real WebView2 window, exercises `Ctrl+K`, arrow/Enter navigation, `Ctrl+Enter` inspector focus, Escape dismissal, and inspector focus return through Windows UI Automation, checks default and minimum-size captures, and writes `artifacts\acceptance\desktop-shell-manifest.json`. A 200% text-scale capture runs only when Windows is configured at 200%; otherwise the manifest records an explicit environment blocker.
 

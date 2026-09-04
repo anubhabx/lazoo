@@ -622,7 +622,7 @@ Commit: `feat: expose conversation turn controls`
 - Consumes: release daemon/CLI binaries, schema 5, fake turn transport, all prior acceptance contracts, and explicit live Codex provider support.
 - Produces: isolated deterministic acceptance manifest, explicit live-gate evidence or exact blocker, synchronized project state, and the next backend handoff.
 
-- [ ] **Step 1: Write the failing acceptance-contract test**
+- [x] **Step 1: Write the failing acceptance-contract test**
 
 Require `conversation-delivery.ps1` to contain markers for:
 
@@ -638,24 +638,27 @@ activationExplicit
 employeeActivationBlocked
 nativeTurnIdBeforeAcknowledgement
 progressDurable
+nativeTerminalMapping
 retryIdentityPreserved
 cancelEvidenceRequired
 ownerLossUncertain
 transcriptBounded
 auditOutboxEvidence
 modelInvocationAbsent
+outerCodexContextIsolated
+cleanProviderTreeStop
 desktopCapabilityExpansionAbsent
 ```
 
 Assert the deterministic script contains no `provider smoke`, no live Codex prompt, no desktop path, no ConPTY command, and no worktree mutation.
 
-- [ ] **Step 2: Run the contract test and verify RED**
+- [x] **Step 2: Run the contract test and verify RED**
 
 Run: `cargo test -p lazood --test daemon conversation_delivery_acceptance_contract_is_backend_only`
 
 Expected: the test fails because the script and fixture are absent.
 
-- [ ] **Step 3: Implement the deterministic fixture and acceptance script**
+- [x] **Step 3: Implement the deterministic fixture and acceptance script**
 
 The fixture is built and staged as a disposable `codex.exe` ahead of the real executable only inside deterministic acceptance. It implements `--version` plus the Codex App Server v2 stdio methods used by Lazoo: initialize/account readiness, `thread/start`, `thread/resume`, `turn/start`, streamed acceptance/progress/completion notifications, `turn/interrupt`, and process exit before or after acceptance. The fixture accepts deterministic native thread/turn IDs from its isolated environment and never connects to a model or network service.
 
@@ -670,7 +673,7 @@ The PowerShell script must:
 - write the manifest even on failure; and
 - stop only PIDs it created and remove only its validated temporary root.
 
-- [ ] **Step 4: Run focused deterministic acceptance**
+- [x] **Step 4: Run focused deterministic acceptance**
 
 Run:
 
@@ -682,7 +685,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\acceptance\conversat
 
 Expected: the contract test passes and `conversation-delivery-manifest.json` reports `PASS` with `modelInvocationAbsent = true`.
 
-- [ ] **Step 5: Run the complete deterministic gate matrix**
+- [x] **Step 5: Run the complete deterministic gate matrix**
 
 Run in this order:
 
@@ -702,7 +705,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\acceptance\conversat
 
 Record exact test counts, ignored live-only counts, command exit codes, manifest durations, and failure text.
 
-- [ ] **Step 6: Run one explicit quota-consuming Codex live gate**
+- [x] **Step 6: Run one explicit quota-consuming Codex live gate**
 
 Only after Step 5 passes, remove the fixture PATH override and run the real installed Codex path once with a minimal prompt that cannot authorize tools or broaden permissions:
 
@@ -712,7 +715,9 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\acceptance\conversat
 
 Expected: native session identity, native turn ID before message acknowledgement, durable completion, exact `LAZOO_TURN_OK` output, and clean provider-tree stop. If authentication, policy, rate limit, or quota blocks the call, preserve the exact blocker and do not label live delivery passed.
 
-- [ ] **Step 7: Verify scope, line endings, and continuity**
+Actual: two pre-fix attempts returned `LZ-TURN-UNCERTAIN`; neither is labeled passed. The first exposed outer Codex task-context inheritance, and the second exposed an overbroad acceptance-evidence guard when a real session-level event followed native acceptance. Both defects are fixed and covered deterministically. A third post-fix model prompt was intentionally not issued in the same verification pass, so current live completion remains pending.
+
+- [x] **Step 7: Verify scope, line endings, and continuity**
 
 Run:
 
@@ -729,7 +734,7 @@ Expected: no desktop diff, no whitespace errors, no unexpected CRLF/LF mismatch,
 
 Update README and project brief to describe only verified behavior. Rewrite `docs/NEXT-SESSION.md` around the next unmet backend dependency; do not claim ConPTY, task orchestration, worktrees, approvals, managed memory, other provider delivery, or product readiness.
 
-- [ ] **Step 8: Write verification evidence and commit closeout**
+- [x] **Step 8: Write verification evidence and commit closeout**
 
 The verification document must list every command, exit code, exact test count, acceptance marker, live result or blocker, and explicit exclusion. Confirm every plan checkbox maps to committed behavior before the final commit.
 

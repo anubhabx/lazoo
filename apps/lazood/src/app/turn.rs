@@ -57,8 +57,15 @@ impl TurnEventObserver for AppTurnObserver {
             .map_err(|error| observer_error(&error))?;
         let payload = bounded_event_payload(event);
         let (kind, provider, native_session_id, native_turn_id) = event_identity(event, &payload);
+        let cancellation_evidence = match event {
+            ProviderEvent::Cancelled { .. } => true,
+            ProviderEvent::TurnCompleted { status, .. } => {
+                status == "interrupted" || status == "cancelled"
+            }
+            _ => false,
+        };
         let result = match event {
-            ProviderEvent::Cancelled { .. } if current.cancel_requested_at.is_some() => {
+            _ if cancellation_evidence && current.cancel_requested_at.is_some() => {
                 let (request_id, idempotency_key) = self.command_identity("cancelled");
                 self.app.store.finish_turn_cancel(&FinishTurnCancelInput {
                     request_id,
@@ -77,6 +84,15 @@ impl TurnEventObserver for AppTurnObserver {
                     ProviderEvent::TurnCompleted { status, .. } if status == "completed" => {
                         Some(TurnState::Completed)
                     }
+                    ProviderEvent::TurnCompleted { status, .. } if status == "failed" => {
+                        Some(TurnState::TerminalFailed)
+                    }
+                    ProviderEvent::TurnCompleted { status, .. }
+                        if status == "interrupted" || status == "cancelled" =>
+                    {
+                        Some(TurnState::Cancelled)
+                    }
+                    ProviderEvent::Cancelled { .. } => Some(TurnState::Cancelled),
                     _ => None,
                 };
                 let (request_id, idempotency_key) = self.command_identity("event");
@@ -236,10 +252,11 @@ impl App {
                     turn.id,
                 )
             })?;
-        if !matches!(
-            roster_entry.availability,
-            EmployeeAvailability::Dormant | EmployeeAvailability::Idle
-        ) {
+        let (route_availability, _) = lazoo_domain::derive_availability(
+            employee.enabled,
+            roster_entry.provider_observation.as_ref(),
+        );
+        if route_availability != EmployeeAvailability::Dormant {
             return Err(turn_failure(
                 "LZ-TURN-EMPLOYEE-NOT-READY",
                 "the recipient employee is not route ready",
