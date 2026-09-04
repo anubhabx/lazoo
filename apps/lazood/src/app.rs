@@ -1,3 +1,4 @@
+mod task;
 mod turn;
 
 use std::{
@@ -247,6 +248,14 @@ impl App {
             "turn.cancel" => self.cancel_turn(&request).await,
             "turn.list" => self.turn_list(request.params),
             "turn.show" => self.turn_show(request.params),
+            "task.delegate" => self.delegate_task(&request),
+            "task.accept" => self.accept_task(&request),
+            "task.start" => self.start_task(&request),
+            "task.report" => self.report_task(&request),
+            "task.cancel" => self.cancel_task(&request),
+            "task.resolve" => self.resolve_task(&request),
+            "task.list" => self.task_list(&request.params),
+            "task.show" => self.task_show(&request.params),
             "message.send" => self.send_message(&request),
             "message.claim" => self.claim_message(&request),
             "message.acknowledge" => self.acknowledge_message(&request),
@@ -1418,6 +1427,16 @@ fn message_store_error_parts(error: &lazoo_store::StoreError) -> MessageErrorPar
         lazoo_store::StoreError::MessageNotFound { message_id } => (
             "LZ-MESSAGE-NOT-FOUND",
             Some(json!({"messageId": message_id})),
+            error.to_string(),
+        ),
+        lazoo_store::StoreError::MessageTaskNotFound { task_id } => (
+            "LZ-MESSAGE-TASK-NOT-FOUND",
+            Some(json!({"taskId": task_id})),
+            error.to_string(),
+        ),
+        lazoo_store::StoreError::MessageTaskScope { task_id } => (
+            "LZ-MESSAGE-TASK-SCOPE",
+            Some(json!({"taskId": task_id})),
             error.to_string(),
         ),
         lazoo_store::StoreError::MessageEmployeeNotFound { role, employee_id } => (

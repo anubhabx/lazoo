@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use uuid::Uuid;
 
-use crate::{MessageEndpoint, MessageRecord, MessageSender, TaskRecord};
+use crate::{AuthorityMode, MessageEndpoint, MessageRecord, MessageSender, TaskRecord};
 
 pub const CONVERSATION_CONTRACT_V1: u32 = 1;
 
@@ -178,12 +178,19 @@ pub struct SubmitTurnParams {
     pub conversation_id: Uuid,
     pub author: MessageSender,
     pub recipient: Option<MessageEndpoint>,
+    pub task_id: Option<Uuid>,
+    #[serde(default = "default_authority_mode")]
+    pub authority_mode: AuthorityMode,
     pub text: String,
     #[serde(default)]
     pub activate_if_needed: bool,
     #[serde(default = "default_turn_max_attempts")]
     pub max_attempts: u32,
     pub idempotency_key: String,
+}
+
+const fn default_authority_mode() -> AuthorityMode {
+    AuthorityMode::Ask
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]

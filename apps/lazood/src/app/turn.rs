@@ -1,10 +1,10 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use lazoo_protocol::{
-    AuthorityMode, CancelTurnParams, ConversationDetail, ConversationListParams,
-    ConversationShowParams, CreateConversationParams, EmployeeAvailability, JsonRpcRequest,
-    MessageSender, RetryTurnParams, RpcError, SessionLifecycleState, SubmitTurnParams,
-    TurnListParams, TurnMutationResult, TurnShowParams, TurnState,
+    CancelTurnParams, ConversationDetail, ConversationListParams, ConversationShowParams,
+    CreateConversationParams, EmployeeAvailability, JsonRpcRequest, MessageSender, RetryTurnParams,
+    RpcError, SessionLifecycleState, SubmitTurnParams, TurnListParams, TurnMutationResult,
+    TurnShowParams, TurnState,
 };
 use lazoo_providers::{ProviderError, ProviderEvent, ProviderKind, TurnEventObserver, TurnRequest};
 use lazoo_store::{
@@ -175,8 +175,8 @@ impl App {
                 conversation_id: params.conversation_id,
                 author: params.author,
                 recipient: params.recipient,
-                task_id: None,
-                authority_mode: AuthorityMode::Ask,
+                task_id: params.task_id,
+                authority_mode: params.authority_mode,
                 text: params.text,
                 activate_if_needed: params.activate_if_needed,
                 max_attempts: params.max_attempts,

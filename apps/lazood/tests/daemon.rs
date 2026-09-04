@@ -737,6 +737,404 @@ async fn task_authority_narrows_the_permission_mode_for_the_provider_turn() {
 }
 
 #[tokio::test]
+async fn task_rpc_reads_are_available_without_changing_the_desktop_contract() {
+    let (_temporary, app) = test_app();
+    let mut before = app
+        .handle(request(
+            "desktop-before-tasks",
+            "desktop.snapshot",
+            json!({}),
+        ))
+        .await
+        .result
+        .unwrap();
+
+    let listed = app
+        .handle(request(
+            "task-list-empty",
+            "task.list",
+            json!({
+                "afterSequence": 0,
+                "limit": 100,
+                "rootTaskId": null,
+                "parentTaskId": null,
+                "conversationId": null,
+                "projectId": null,
+                "assignedEmployeeId": null,
+                "state": null
+            }),
+        ))
+        .await
+        .result
+        .unwrap();
+    assert_eq!(listed, json!([]));
+
+    let mut after = app
+        .handle(request(
+            "desktop-after-tasks",
+            "desktop.snapshot",
+            json!({}),
+        ))
+        .await
+        .result
+        .unwrap();
+    before.as_object_mut().unwrap().remove("capturedAt");
+    after.as_object_mut().unwrap().remove("capturedAt");
+    before["status"]
+        .as_object_mut()
+        .unwrap()
+        .remove("uptimeMillis");
+    after["status"]
+        .as_object_mut()
+        .unwrap()
+        .remove("uptimeMillis");
+    assert_eq!(after, before);
+}
+
+#[tokio::test]
+#[allow(clippy::too_many_lines)] // Keep all eight RPCs and their shared durable identities together.
+async fn task_rpc_workflow_is_durable_idempotent_ordered_and_provider_neutral() {
+    use lazoo_protocol::{MessageEndpoint, MessageSender, UserMessageEndpoint, UserMessageKind};
+    use lazoo_store::{BeginTurnSubmissionInput, ObserveTurnInput, RecordTurnInput};
+
+    let temporary = tempdir().unwrap();
+    let root = DataRoot::from_path(temporary.path().join("data"));
+    root.ensure().unwrap();
+    let store = Store::open_path(root.state_db()).unwrap();
+    let lead = configured_employee_named(&store, "Rhea", "task-rhea");
+    let worker = configured_employee_named(&store, "Mira", "task-mira");
+    let conversation = store
+        .create_conversation(&CreateConversationInput {
+            request_id: "task-conversation-request".to_owned(),
+            idempotency_key: "task-conversation".to_owned(),
+            project_id: None,
+            lead_employee_id: lead.id,
+            title: None,
+        })
+        .unwrap()
+        .conversation;
+    let backend = FakeSessionBackend::default();
+    let app = App::new_with_session_backend(
+        store.clone(),
+        root,
+        DiscoveryEnvironment::empty(),
+        Arc::new(backend.clone()),
+    )
+    .unwrap();
+    for employee in [&lead, &worker] {
+        app.handle(request(
+            &format!("warm-task-{}", employee.id),
+            "session.warm",
+            json!({
+                "employeeId": employee.id,
+                "expectedEmployeeRevision": employee.configuration_revision,
+                "idempotencyKey": format!("warm-task-{}", employee.id)
+            }),
+        ))
+        .await
+        .result
+        .unwrap();
+    }
+    let sessions = store.list_sessions().unwrap();
+    let lead_session = sessions
+        .iter()
+        .find(|item| item.employee_id == lead.id)
+        .unwrap();
+    let worker_session = sessions
+        .iter()
+        .find(|item| item.employee_id == worker.id)
+        .unwrap();
+    let lead_endpoint = MessageEndpoint {
+        employee_id: lead.id,
+        session_id: Some(lead_session.id),
+    };
+    let worker_endpoint = MessageEndpoint {
+        employee_id: worker.id,
+        session_id: Some(worker_session.id),
+    };
+    let root_turn = store
+        .record_turn(&RecordTurnInput {
+            request_id: "task-root-request".to_owned(),
+            idempotency_key: "task-root".to_owned(),
+            conversation_id: conversation.id,
+            author: MessageSender::User(UserMessageEndpoint {
+                kind: UserMessageKind::User,
+            }),
+            recipient: Some(lead_endpoint),
+            task_id: None,
+            authority_mode: AuthorityMode::Ask,
+            text: "root objective".to_owned(),
+            activate_if_needed: false,
+            max_attempts: 3,
+        })
+        .unwrap();
+    let root_task_id = root_turn.task.as_ref().unwrap().id;
+    let desktop_before = app
+        .handle(request(
+            "task-desktop-before",
+            "desktop.snapshot",
+            json!({}),
+        ))
+        .await
+        .result
+        .unwrap();
+
+    let delegate_params = json!({
+        "parentTaskId": root_task_id,
+        "actor": lead_endpoint,
+        "assignedEmployeeId": worker.id,
+        "objective": "child objective",
+        "references": [],
+        "requestedAuthority": "ask",
+        "rosterRevision": store.roster_snapshot().unwrap().revision,
+        "idempotencyKey": "task-child"
+    });
+    let proposed = app
+        .handle(request(
+            "task-delegate",
+            "task.delegate",
+            delegate_params.clone(),
+        ))
+        .await
+        .result
+        .unwrap();
+    assert_eq!(proposed["task"]["state"], "proposed");
+    assert_eq!(proposed["delegationMessage"], json!(null));
+    let child_id = proposed["task"]["id"].as_str().unwrap();
+    let replay = app
+        .handle(request(
+            "task-delegate-replay",
+            "task.delegate",
+            delegate_params,
+        ))
+        .await
+        .result
+        .unwrap();
+    assert_eq!(replay["task"]["id"], child_id);
+    assert_eq!(replay["eventSequence"], json!(null));
+
+    let starts_before_claim = backend.starts.load(Ordering::SeqCst);
+    let missing_message = app
+        .handle(request(
+            "claim-proposed-task-message",
+            "message.claim",
+            json!({"id": child_id, "expectedRevision": 1, "idempotencyKey": "claim-proposed"}),
+        ))
+        .await
+        .error
+        .unwrap();
+    assert_eq!(missing_message.code, "LZ-MESSAGE-NOT-FOUND");
+    assert_eq!(backend.starts.load(Ordering::SeqCst), starts_before_claim);
+    assert_eq!(backend.turns.load(Ordering::SeqCst), 0);
+
+    let accepted = app
+        .handle(request(
+            "task-accept",
+            "task.accept",
+            json!({"id": child_id, "expectedRevision": 1, "idempotencyKey": "accept-child"}),
+        ))
+        .await
+        .result
+        .unwrap();
+    assert_eq!(accepted["task"]["state"], "accepted");
+    assert_eq!(
+        accepted["delegationMessage"]["envelope"]["taskId"],
+        child_id
+    );
+
+    let child_uuid = uuid::Uuid::parse_str(child_id).unwrap();
+    let child_turn = store
+        .record_turn(&RecordTurnInput {
+            request_id: "child-turn-request".to_owned(),
+            idempotency_key: "child-turn".to_owned(),
+            conversation_id: conversation.id,
+            author: MessageSender::Employee(lead_endpoint),
+            recipient: Some(worker_endpoint),
+            task_id: Some(child_uuid),
+            authority_mode: AuthorityMode::Ask,
+            text: "perform child".to_owned(),
+            activate_if_needed: false,
+            max_attempts: 3,
+        })
+        .unwrap();
+    let child_submitting = store
+        .begin_turn_submission(&BeginTurnSubmissionInput {
+            request_id: "child-begin-request".to_owned(),
+            idempotency_key: "child-begin".to_owned(),
+            turn_id: child_turn.turn.id,
+            expected_revision: child_turn.turn.revision,
+            owner_boot_id: worker_session.owner_boot_id.unwrap(),
+            recipient_session_id: worker_session.id,
+        })
+        .unwrap();
+    store
+        .observe_turn(&ObserveTurnInput {
+            request_id: "child-started-request".to_owned(),
+            idempotency_key: "child-started".to_owned(),
+            turn_id: child_turn.turn.id,
+            expected_revision: child_submitting.turn.revision,
+            kind: "turn-started".to_owned(),
+            provider: "codex".to_owned(),
+            native_session_id: Some("native-2".to_owned()),
+            native_turn_id: Some("native-child".to_owned()),
+            payload: json!({"progress": true}),
+            transition: Some(TurnState::Accepted),
+        })
+        .unwrap();
+    let started = app
+        .handle(request(
+            "task-start",
+            "task.start",
+            json!({
+                "id": child_id,
+                "expectedRevision": 2,
+                "actor": worker_endpoint,
+                "turnId": child_turn.turn.id,
+                "evidence": {"nativeTurnId": "native-child"},
+                "idempotencyKey": "start-child"
+            }),
+        ))
+        .await
+        .result
+        .unwrap();
+    assert_eq!(started["task"]["state"], "running");
+    let progress = app
+        .handle(request(
+            "task-report",
+            "task.report",
+            json!({
+                "id": child_id,
+                "expectedRevision": 3,
+                "actor": worker_endpoint,
+                "kind": "progress",
+                "evidence": {"completed": 1, "total": 2},
+                "failureCode": null,
+                "failureMessage": null,
+                "idempotencyKey": "report-child"
+            }),
+        ))
+        .await
+        .result
+        .unwrap();
+    assert_eq!(progress["task"]["revision"], 4);
+    let cancelled = app
+        .handle(request(
+            "task-cancel",
+            "task.cancel",
+            json!({
+                "id": child_id,
+                "expectedRevision": 4,
+                "actor": {"kind": "user"},
+                "evidence": {"reason": "stop"},
+                "idempotencyKey": "cancel-child"
+            }),
+        ))
+        .await
+        .result
+        .unwrap();
+    assert_eq!(cancelled["task"]["state"], "cancel-requested");
+
+    let uncertain_turn = store
+        .record_turn(&RecordTurnInput {
+            request_id: "uncertain-root-request".to_owned(),
+            idempotency_key: "uncertain-root".to_owned(),
+            conversation_id: conversation.id,
+            author: MessageSender::User(UserMessageEndpoint {
+                kind: UserMessageKind::User,
+            }),
+            recipient: Some(lead_endpoint),
+            task_id: None,
+            authority_mode: AuthorityMode::Ask,
+            text: "uncertain objective".to_owned(),
+            activate_if_needed: false,
+            max_attempts: 3,
+        })
+        .unwrap();
+    store
+        .execute_for_test(&format!(
+            "UPDATE tasks SET state = 'uncertain', revision = 2 WHERE id = '{}'",
+            uncertain_turn.turn.id
+        ))
+        .unwrap();
+    let resolved = app
+        .handle(request(
+            "task-resolve",
+            "task.resolve",
+            json!({
+                "id": uncertain_turn.turn.id,
+                "expectedRevision": 2,
+                "resolution": "completed",
+                "evidence": {"verified": true},
+                "failureCode": null,
+                "failureMessage": null,
+                "idempotencyKey": "resolve-uncertain"
+            }),
+        ))
+        .await
+        .result
+        .unwrap();
+    assert_eq!(resolved["task"]["state"], "completed");
+
+    let listed = app
+        .handle(request(
+            "task-list",
+            "task.list",
+            json!({"conversationId": conversation.id, "limit": 100}),
+        ))
+        .await
+        .result
+        .unwrap();
+    assert_eq!(listed.as_array().unwrap().len(), 3);
+    assert_eq!(listed[0]["id"], root_task_id.to_string());
+    let shown = app
+        .handle(request("task-show", "task.show", json!({"id": child_id})))
+        .await
+        .result
+        .unwrap();
+    assert_eq!(shown["task"]["id"], child_id);
+    assert!(shown["evidence"].as_array().unwrap().len() >= 4);
+
+    let missing = app
+        .handle(request(
+            "task-missing",
+            "task.show",
+            json!({"id": uuid::Uuid::new_v4()}),
+        ))
+        .await
+        .error
+        .unwrap();
+    assert_eq!(missing.code, "LZ-TASK-NOT-FOUND");
+    assert!(missing.data.unwrap().get("taskId").is_some());
+    assert!(
+        store
+            .list_events(0, 1000)
+            .unwrap()
+            .iter()
+            .any(|event| event.event_type == "task.progressed")
+    );
+
+    let mut desktop_after = app
+        .handle(request("task-desktop-after", "desktop.snapshot", json!({})))
+        .await
+        .result
+        .unwrap();
+    let mut desktop_before = desktop_before;
+    desktop_before.as_object_mut().unwrap().remove("capturedAt");
+    desktop_after.as_object_mut().unwrap().remove("capturedAt");
+    desktop_before["status"]
+        .as_object_mut()
+        .unwrap()
+        .remove("uptimeMillis");
+    desktop_after["status"]
+        .as_object_mut()
+        .unwrap()
+        .remove("uptimeMillis");
+    assert!(desktop_before.get("tasks").is_none());
+    assert!(desktop_after.get("tasks").is_none());
+    assert_eq!(desktop_before["projects"], desktop_after["projects"]);
+}
+
+#[tokio::test]
 async fn turn_submit_without_observed_evidence_never_acknowledges_message() {
     let (_temporary, _root, store, app, backend, employee_id, conversation_id) = turn_test_app();
     app.handle(request(

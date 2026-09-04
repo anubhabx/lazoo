@@ -14,6 +14,9 @@ const MESSAGE_ID: &str = "00000000-0000-4000-8000-000000000003";
 const ATTEMPT_ID: &str = "00000000-0000-4000-8000-000000000004";
 const CONVERSATION_ID: &str = "00000000-0000-4000-8000-000000000005";
 const TURN_ID: &str = "00000000-0000-4000-8000-000000000006";
+const TASK_ID: &str = "00000000-0000-4000-8000-000000000007";
+const ROOT_TASK_ID: &str = "00000000-0000-4000-8000-000000000008";
+const SESSION_ID: &str = "00000000-0000-4000-8000-000000000009";
 
 #[test]
 fn project_register_defaults_to_isolated() {
@@ -524,6 +527,8 @@ fn turn_cli_maps_user_and_employee_submission() {
                 "conversationId": CONVERSATION_ID,
                 "author": {"kind": "user"},
                 "recipient": null,
+                "taskId": null,
+                "authorityMode": "ask",
                 "text": "Reply with exactly READY",
                 "activateIfNeeded": true,
                 "maxAttempts": 3,
@@ -556,6 +561,8 @@ fn turn_cli_maps_user_and_employee_submission() {
                 "conversationId": CONVERSATION_ID,
                 "author": {"employeeId": SENDER_ID, "sessionId": null},
                 "recipient": {"employeeId": RECIPIENT_ID, "sessionId": null},
+                "taskId": null,
+                "authorityMode": "ask",
                 "text": "status",
                 "activateIfNeeded": false,
                 "maxAttempts": 3,
@@ -676,6 +683,226 @@ fn conversation_and_turn_errors_use_exit_code_twelve() {
                 data: None,
             }),
             12
+        );
+    }
+}
+
+#[test]
+#[allow(clippy::too_many_lines)]
+fn task_cli_maps_the_complete_workflow_and_turn_authority() {
+    let cases = [
+        (
+            vec![
+                "lazooctl",
+                "task",
+                "delegate",
+                ROOT_TASK_ID,
+                "--actor-employee",
+                SENDER_ID,
+                "--actor-session",
+                SESSION_ID,
+                "--assigned-employee",
+                RECIPIENT_ID,
+                "--objective",
+                "inspect parser",
+                "--references",
+                "[]",
+                "--requested-authority",
+                "self-decision",
+                "--roster-revision",
+                "7",
+                "--idempotency-key",
+                "delegate-task",
+            ],
+            "task.delegate",
+            json!({
+                "parentTaskId": ROOT_TASK_ID,
+                "actor": {"employeeId": SENDER_ID, "sessionId": SESSION_ID},
+                "assignedEmployeeId": RECIPIENT_ID,
+                "objective": "inspect parser",
+                "references": [],
+                "requestedAuthority": "self-decision",
+                "rosterRevision": 7,
+                "idempotencyKey": "delegate-task"
+            }),
+        ),
+        (
+            vec![
+                "lazooctl",
+                "task",
+                "accept",
+                TASK_ID,
+                "--expected-revision",
+                "1",
+                "--idempotency-key",
+                "accept-task",
+            ],
+            "task.accept",
+            json!({"id": TASK_ID, "expectedRevision": 1, "idempotencyKey": "accept-task"}),
+        ),
+        (
+            vec![
+                "lazooctl",
+                "task",
+                "start",
+                TASK_ID,
+                "--expected-revision",
+                "2",
+                "--actor-employee",
+                RECIPIENT_ID,
+                "--actor-session",
+                SESSION_ID,
+                "--turn-id",
+                TURN_ID,
+                "--evidence",
+                "{\"native\":true}",
+                "--idempotency-key",
+                "start-task",
+            ],
+            "task.start",
+            json!({"id": TASK_ID, "expectedRevision": 2, "actor": {"employeeId": RECIPIENT_ID, "sessionId": SESSION_ID}, "turnId": TURN_ID, "evidence": {"native": true}, "idempotencyKey": "start-task"}),
+        ),
+        (
+            vec![
+                "lazooctl",
+                "task",
+                "report",
+                TASK_ID,
+                "--expected-revision",
+                "3",
+                "--actor-employee",
+                RECIPIENT_ID,
+                "--actor-session",
+                SESSION_ID,
+                "--kind",
+                "failed",
+                "--evidence",
+                "{\"exitCode\":1}",
+                "--failure-code",
+                "worker-failed",
+                "--failure-message",
+                "worker failed",
+                "--idempotency-key",
+                "report-task",
+            ],
+            "task.report",
+            json!({"id": TASK_ID, "expectedRevision": 3, "actor": {"employeeId": RECIPIENT_ID, "sessionId": SESSION_ID}, "kind": "failed", "evidence": {"exitCode": 1}, "failureCode": "worker-failed", "failureMessage": "worker failed", "idempotencyKey": "report-task"}),
+        ),
+        (
+            vec![
+                "lazooctl",
+                "task",
+                "cancel",
+                TASK_ID,
+                "--expected-revision",
+                "3",
+                "--evidence",
+                "{\"reason\":\"stop\"}",
+                "--idempotency-key",
+                "cancel-task",
+            ],
+            "task.cancel",
+            json!({"id": TASK_ID, "expectedRevision": 3, "actor": {"kind": "user"}, "evidence": {"reason": "stop"}, "idempotencyKey": "cancel-task"}),
+        ),
+        (
+            vec![
+                "lazooctl",
+                "task",
+                "resolve",
+                TASK_ID,
+                "--expected-revision",
+                "4",
+                "--resolution",
+                "completed",
+                "--evidence",
+                "{\"verified\":true}",
+                "--idempotency-key",
+                "resolve-task",
+            ],
+            "task.resolve",
+            json!({"id": TASK_ID, "expectedRevision": 4, "resolution": "completed", "evidence": {"verified": true}, "failureCode": null, "failureMessage": null, "idempotencyKey": "resolve-task"}),
+        ),
+        (
+            vec![
+                "lazooctl",
+                "task",
+                "list",
+                "--after-sequence",
+                "5",
+                "--limit",
+                "20",
+                "--root-task-id",
+                ROOT_TASK_ID,
+                "--conversation-id",
+                CONVERSATION_ID,
+                "--assigned-employee-id",
+                RECIPIENT_ID,
+                "--state",
+                "running",
+            ],
+            "task.list",
+            json!({"afterSequence": 5, "limit": 20, "rootTaskId": ROOT_TASK_ID, "parentTaskId": null, "conversationId": CONVERSATION_ID, "projectId": null, "assignedEmployeeId": RECIPIENT_ID, "state": "running"}),
+        ),
+        (
+            vec!["lazooctl", "task", "show", TASK_ID],
+            "task.show",
+            json!({"id": TASK_ID}),
+        ),
+    ];
+    for (arguments, method, expected) in cases {
+        let cli = Cli::try_parse_from(arguments).unwrap();
+        assert!(matches!(cli.command, Command::Task(_)));
+        assert_eq!(command_request(&cli.command), (method, expected, false));
+    }
+
+    let turn = Cli::try_parse_from([
+        "lazooctl",
+        "turn",
+        "submit",
+        CONVERSATION_ID,
+        "--task-id",
+        TASK_ID,
+        "--authority-mode",
+        "self-decision",
+        "--text",
+        "continue",
+    ])
+    .unwrap();
+    let params = command_request(&turn.command).1;
+    assert_eq!(params["taskId"], TASK_ID);
+    assert_eq!(params["authorityMode"], "self-decision");
+
+    let default_turn = Cli::try_parse_from([
+        "lazooctl",
+        "turn",
+        "submit",
+        CONVERSATION_ID,
+        "--text",
+        "begin",
+    ])
+    .unwrap();
+    assert_eq!(
+        command_request(&default_turn.command).1["authorityMode"],
+        "ask"
+    );
+}
+
+#[test]
+fn task_errors_use_exit_code_thirteen() {
+    for code in [
+        "LZ-TASK-NOT-FOUND",
+        "LZ-TASK-STALE",
+        "LZ-TASK-STATE",
+        "LZ-TASK-AUTHORITY-UNSUPPORTED",
+        "LZ-TASK-INVALID",
+    ] {
+        assert_eq!(
+            exit_code_for_rpc(&RpcError {
+                code: code.to_owned(),
+                message: "failure".to_owned(),
+                data: None,
+            }),
+            13
         );
     }
 }

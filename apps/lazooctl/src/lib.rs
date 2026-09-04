@@ -4,7 +4,8 @@ use clap::{Parser, Subcommand};
 use lazoo_ipc::{IpcError, PipeClient};
 use lazoo_protocol::{
     AuthorityMode, CheckoutMode, EmployeeCheckoutPolicy, JsonRpcRequest, JsonRpcResponse,
-    MessageEndpoint, MessageKind, MessageSender, RpcError, UserMessageEndpoint, UserMessageKind,
+    MessageEndpoint, MessageKind, MessageSender, RpcError, TaskReportKind, TaskResolution,
+    TaskState, UserMessageEndpoint, UserMessageKind,
 };
 use lazoo_runtime::{DataRoot, Installation, RuntimeError};
 use serde_json::{Value, json};
@@ -41,6 +42,8 @@ pub enum Command {
     Conversation(ConversationCommand),
     #[command(subcommand)]
     Turn(TurnCommand),
+    #[command(subcommand)]
+    Task(TaskCommand),
     #[command(subcommand)]
     System(SystemCommand),
 }
@@ -308,6 +311,10 @@ pub enum TurnCommand {
         #[arg(long)]
         recipient_employee: Option<Uuid>,
         #[arg(long)]
+        task_id: Option<Uuid>,
+        #[arg(long, default_value = "ask", value_parser = parse_authority_mode)]
+        authority_mode: AuthorityMode,
+        #[arg(long)]
         text: String,
         #[arg(long)]
         activate_if_needed: bool,
@@ -336,6 +343,119 @@ pub enum TurnCommand {
         after_sequence: u64,
         #[arg(long, default_value_t = 100)]
         limit: u32,
+    },
+    Show {
+        id: Uuid,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+pub enum TaskCommand {
+    Delegate {
+        parent_task_id: Uuid,
+        #[arg(long)]
+        actor_employee: Uuid,
+        #[arg(long)]
+        actor_session: Uuid,
+        #[arg(long)]
+        assigned_employee: Uuid,
+        #[arg(long)]
+        objective: String,
+        #[arg(long, default_value = "[]", value_parser = parse_json_array)]
+        references: Value,
+        #[arg(long, value_parser = parse_authority_mode)]
+        requested_authority: Option<AuthorityMode>,
+        #[arg(long)]
+        roster_revision: u64,
+        #[arg(long)]
+        idempotency_key: Option<String>,
+    },
+    Accept {
+        id: Uuid,
+        #[arg(long)]
+        expected_revision: u64,
+        #[arg(long)]
+        idempotency_key: Option<String>,
+    },
+    Start {
+        id: Uuid,
+        #[arg(long)]
+        expected_revision: u64,
+        #[arg(long)]
+        actor_employee: Uuid,
+        #[arg(long)]
+        actor_session: Uuid,
+        #[arg(long)]
+        turn_id: Uuid,
+        #[arg(long, default_value = "{}", value_parser = parse_json_value)]
+        evidence: Value,
+        #[arg(long)]
+        idempotency_key: Option<String>,
+    },
+    Report {
+        id: Uuid,
+        #[arg(long)]
+        expected_revision: u64,
+        #[arg(long)]
+        actor_employee: Uuid,
+        #[arg(long)]
+        actor_session: Uuid,
+        #[arg(long, value_parser = parse_task_report_kind)]
+        kind: TaskReportKind,
+        #[arg(long, default_value = "{}", value_parser = parse_json_value)]
+        evidence: Value,
+        #[arg(long)]
+        failure_code: Option<String>,
+        #[arg(long)]
+        failure_message: Option<String>,
+        #[arg(long)]
+        idempotency_key: Option<String>,
+    },
+    Cancel {
+        id: Uuid,
+        #[arg(long)]
+        expected_revision: u64,
+        #[arg(long, requires = "actor_session")]
+        actor_employee: Option<Uuid>,
+        #[arg(long, requires = "actor_employee")]
+        actor_session: Option<Uuid>,
+        #[arg(long, default_value = "{}", value_parser = parse_json_value)]
+        evidence: Value,
+        #[arg(long)]
+        idempotency_key: Option<String>,
+    },
+    Resolve {
+        id: Uuid,
+        #[arg(long)]
+        expected_revision: u64,
+        #[arg(long, value_parser = parse_task_resolution)]
+        resolution: TaskResolution,
+        #[arg(long, default_value = "{}", value_parser = parse_json_value)]
+        evidence: Value,
+        #[arg(long)]
+        failure_code: Option<String>,
+        #[arg(long)]
+        failure_message: Option<String>,
+        #[arg(long)]
+        idempotency_key: Option<String>,
+    },
+    List {
+        #[arg(long, default_value_t = 0)]
+        after_sequence: u64,
+        #[arg(long, default_value_t = 100)]
+        limit: u32,
+        #[arg(long)]
+        root_task_id: Option<Uuid>,
+        #[arg(long)]
+        parent_task_id: Option<Uuid>,
+        #[arg(long)]
+        conversation_id: Option<Uuid>,
+        #[arg(long)]
+        project_id: Option<Uuid>,
+        #[arg(long)]
+        assigned_employee_id: Option<Uuid>,
+        #[arg(long, value_parser = parse_task_state)]
+        state: Option<TaskState>,
     },
     Show {
         id: Uuid,
@@ -451,6 +571,7 @@ pub fn command_request(command: &Command) -> (&'static str, Value, bool) {
         Command::Message(command) => message_request(command),
         Command::Conversation(command) => conversation_request(command),
         Command::Turn(command) => turn_request(command),
+        Command::Task(command) => task_request(command),
         Command::System(SystemCommand::Shutdown) => ("system.shutdown", json!({}), false),
     }
 }
@@ -490,6 +611,8 @@ fn turn_request(command: &TurnCommand) -> (&'static str, Value, bool) {
             conversation_id,
             author_employee,
             recipient_employee,
+            task_id,
+            authority_mode,
             text,
             activate_if_needed,
             max_attempts,
@@ -518,6 +641,8 @@ fn turn_request(command: &TurnCommand) -> (&'static str, Value, bool) {
                     "conversationId": conversation_id,
                     "author": author,
                     "recipient": recipient,
+                    "taskId": task_id,
+                    "authorityMode": authority_mode,
                     "text": text,
                     "activateIfNeeded": activate_if_needed,
                     "maxAttempts": max_attempts,
@@ -561,6 +686,185 @@ fn turn_request(command: &TurnCommand) -> (&'static str, Value, bool) {
         ),
         TurnCommand::Show { id } => ("turn.show", json!({"id": id}), false),
     }
+}
+
+#[allow(clippy::too_many_lines)] // Keep the eight literal RPC mappings in one auditable function.
+fn task_request(command: &TaskCommand) -> (&'static str, Value, bool) {
+    match command {
+        TaskCommand::Delegate {
+            parent_task_id,
+            actor_employee,
+            actor_session,
+            assigned_employee,
+            objective,
+            references,
+            requested_authority,
+            roster_revision,
+            idempotency_key,
+        } => (
+            "task.delegate",
+            json!({
+                "parentTaskId": parent_task_id,
+                "actor": {"employeeId": actor_employee, "sessionId": actor_session},
+                "assignedEmployeeId": assigned_employee,
+                "objective": objective,
+                "references": references,
+                "requestedAuthority": requested_authority,
+                "rosterRevision": roster_revision,
+                "idempotencyKey": generated_key(idempotency_key.as_deref()),
+            }),
+            false,
+        ),
+        TaskCommand::Accept {
+            id,
+            expected_revision,
+            idempotency_key,
+        } => task_revision_request(
+            "task.accept",
+            *id,
+            *expected_revision,
+            idempotency_key.as_deref(),
+        ),
+        TaskCommand::Start {
+            id,
+            expected_revision,
+            actor_employee,
+            actor_session,
+            turn_id,
+            evidence,
+            idempotency_key,
+        } => (
+            "task.start",
+            json!({
+                "id": id,
+                "expectedRevision": expected_revision,
+                "actor": {"employeeId": actor_employee, "sessionId": actor_session},
+                "turnId": turn_id,
+                "evidence": evidence,
+                "idempotencyKey": generated_key(idempotency_key.as_deref()),
+            }),
+            false,
+        ),
+        TaskCommand::Report {
+            id,
+            expected_revision,
+            actor_employee,
+            actor_session,
+            kind,
+            evidence,
+            failure_code,
+            failure_message,
+            idempotency_key,
+        } => (
+            "task.report",
+            json!({
+                "id": id,
+                "expectedRevision": expected_revision,
+                "actor": {"employeeId": actor_employee, "sessionId": actor_session},
+                "kind": kind,
+                "evidence": evidence,
+                "failureCode": failure_code,
+                "failureMessage": failure_message,
+                "idempotencyKey": generated_key(idempotency_key.as_deref()),
+            }),
+            false,
+        ),
+        TaskCommand::Cancel {
+            id,
+            expected_revision,
+            actor_employee,
+            actor_session,
+            evidence,
+            idempotency_key,
+        } => {
+            let actor = actor_employee.map_or_else(
+                || {
+                    MessageSender::User(UserMessageEndpoint {
+                        kind: UserMessageKind::User,
+                    })
+                },
+                |employee_id| {
+                    MessageSender::Employee(MessageEndpoint {
+                        employee_id,
+                        session_id: *actor_session,
+                    })
+                },
+            );
+            (
+                "task.cancel",
+                json!({
+                    "id": id,
+                    "expectedRevision": expected_revision,
+                    "actor": actor,
+                    "evidence": evidence,
+                    "idempotencyKey": generated_key(idempotency_key.as_deref()),
+                }),
+                false,
+            )
+        }
+        TaskCommand::Resolve {
+            id,
+            expected_revision,
+            resolution,
+            evidence,
+            failure_code,
+            failure_message,
+            idempotency_key,
+        } => (
+            "task.resolve",
+            json!({
+                "id": id,
+                "expectedRevision": expected_revision,
+                "resolution": resolution,
+                "evidence": evidence,
+                "failureCode": failure_code,
+                "failureMessage": failure_message,
+                "idempotencyKey": generated_key(idempotency_key.as_deref()),
+            }),
+            false,
+        ),
+        TaskCommand::List {
+            after_sequence,
+            limit,
+            root_task_id,
+            parent_task_id,
+            conversation_id,
+            project_id,
+            assigned_employee_id,
+            state,
+        } => (
+            "task.list",
+            json!({
+                "afterSequence": after_sequence,
+                "limit": limit,
+                "rootTaskId": root_task_id,
+                "parentTaskId": parent_task_id,
+                "conversationId": conversation_id,
+                "projectId": project_id,
+                "assignedEmployeeId": assigned_employee_id,
+                "state": state,
+            }),
+            false,
+        ),
+        TaskCommand::Show { id } => ("task.show", json!({"id": id}), false),
+    }
+}
+
+fn task_revision_request(
+    method: &'static str,
+    id: Uuid,
+    expected_revision: u64,
+    idempotency_key: Option<&str>,
+) -> (&'static str, Value, bool) {
+    (
+        method,
+        json!({
+            "id": id,
+            "expectedRevision": expected_revision,
+            "idempotencyKey": generated_key(idempotency_key),
+        }),
+        false,
+    )
 }
 
 fn turn_revision_request(
@@ -871,6 +1175,7 @@ pub fn exit_code_for_rpc(error: &RpcError) -> i32 {
         code if code.starts_with("LZ-SESSION-") => 10,
         code if code.starts_with("LZ-MESSAGE-") => 11,
         code if code.starts_with("LZ-CONVERSATION-") || code.starts_with("LZ-TURN-") => 12,
+        code if code.starts_with("LZ-TASK-") => 13,
         _ => 10,
     }
 }
@@ -926,6 +1231,38 @@ fn parse_authority_mode(value: &str) -> Result<AuthorityMode, String> {
         "self-decision" => Ok(AuthorityMode::SelfDecision),
         "full-autonomy" => Ok(AuthorityMode::FullAutonomy),
         _ => Err("expected ask, self-decision, or full-autonomy".to_owned()),
+    }
+}
+
+fn parse_task_state(value: &str) -> Result<TaskState, String> {
+    match value {
+        "proposed" => Ok(TaskState::Proposed),
+        "accepted" => Ok(TaskState::Accepted),
+        "running" => Ok(TaskState::Running),
+        "cancel-requested" => Ok(TaskState::CancelRequested),
+        "completed" => Ok(TaskState::Completed),
+        "failed" => Ok(TaskState::Failed),
+        "cancelled" => Ok(TaskState::Cancelled),
+        "uncertain" => Ok(TaskState::Uncertain),
+        _ => Err("expected proposed, accepted, running, cancel-requested, completed, failed, cancelled, or uncertain".to_owned()),
+    }
+}
+
+fn parse_task_report_kind(value: &str) -> Result<TaskReportKind, String> {
+    match value {
+        "progress" => Ok(TaskReportKind::Progress),
+        "completed" => Ok(TaskReportKind::Completed),
+        "failed" => Ok(TaskReportKind::Failed),
+        _ => Err("expected progress, completed, or failed".to_owned()),
+    }
+}
+
+fn parse_task_resolution(value: &str) -> Result<TaskResolution, String> {
+    match value {
+        "completed" => Ok(TaskResolution::Completed),
+        "failed" => Ok(TaskResolution::Failed),
+        "cancelled" => Ok(TaskResolution::Cancelled),
+        _ => Err("expected completed, failed, or cancelled".to_owned()),
     }
 }
 

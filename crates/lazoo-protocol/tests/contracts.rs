@@ -234,8 +234,25 @@ fn turn_contracts_are_strict_versioned_and_kebab_case() {
         })
     );
     assert_eq!(submit.recipient, None);
+    assert_eq!(submit.task_id, None);
+    assert_eq!(submit.authority_mode, lazoo_protocol::AuthorityMode::Ask);
     assert!(!submit.activate_if_needed);
     assert_eq!(submit.max_attempts, 3);
+    let task_id = Uuid::new_v4();
+    let task_submit: SubmitTurnParams = serde_json::from_value(json!({
+        "conversationId": conversation_id,
+        "author": {"kind": "user"},
+        "taskId": task_id,
+        "authorityMode": "self-decision",
+        "text": "continue",
+        "idempotencyKey": "turn-task"
+    }))
+    .unwrap();
+    assert_eq!(task_submit.task_id, Some(task_id));
+    assert_eq!(
+        task_submit.authority_mode,
+        lazoo_protocol::AuthorityMode::SelfDecision
+    );
 
     let retry: RetryTurnParams = serde_json::from_value(json!({
         "id": Uuid::new_v4(),
