@@ -25,6 +25,8 @@ The second isolated run created native thread `01a0694d-5ac1-72e2-bc1e-9fbe70862
 
 No third model prompt was issued in the same verification pass. Therefore deterministic delivery is verified, but post-fix live completion and exact output are not yet verified.
 
+A fresh non-model preflight on 2026-09-04 found the currently selected desktop Codex executable at version 0.153.1. `codex login status` exited 0 with ChatGPT login active; the ignored live App Server handshake test passed with `verification = configured`, `protocol = app-server/v2`, and native authentication `ready`; and the ignored live session-start test passed creation-time containment plus a clean stop without starting a model turn. These checks prove current readiness around the remaining gate, not model-backed conversation completion.
+
 ## Next-session objective
 
 1. Re-run exactly one explicit Codex live gate only with fresh user authorization for the quota-consuming prompt:

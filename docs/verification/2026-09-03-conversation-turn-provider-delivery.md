@@ -72,6 +72,19 @@ The failed manifest is retained as `conversation-delivery-live-manifest.json`; i
 
 The empty interrupted turn matched the acceptance-observer failure described above: Lazoo interrupted native work after a normal session-level event failed the overbroad acceptance-evidence guard. That root cause is fixed and covered. No third quota-consuming prompt was issued in this verification pass, so exact `LAZOO_TURN_OK` output after the fix remains unverified.
 
+## Current non-model Codex readiness
+
+A 2026-09-04 preflight refreshed only the non-model surroundings of the pending gate:
+
+| Command | Exit | Evidence |
+|---|---:|---|
+| selected `codex.exe --version` | 0 | Desktop executable `codex-cli 0.153.1` |
+| selected `codex.exe login status` | 0 | `Logged in using ChatGPT` |
+| `cargo test -p lazoo-providers --test codex live_codex_app_server_handshake -- --ignored --exact --nocapture` | 0 | 1 passed; App Server v2 configured; native authentication ready; no account data exposed |
+| `cargo test -p lazoo-providers --test codex live_codex_session_start_reports_contained_host -- --ignored --exact --nocapture` | 0 | 1 passed; native host present and cleanly stopped; no model turn |
+
+Both live tests ran with the outer `CODEX_THREAD_ID` and `CODEX_SESSION_ID` removed from their subprocess environment. They show that the current 0.153.1 executable can authenticate, handshake, and create/stop the contained native session. They do not prove a model response or close the post-fix conversation-delivery gate.
+
 ## Scope and exclusions
 
 - No file under `apps/lazoo-desktop` changed.
