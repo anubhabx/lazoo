@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use uuid::Uuid;
 
-use crate::{MessageEndpoint, MessageRecord, MessageSender};
+use crate::{MessageEndpoint, MessageRecord, MessageSender, TaskRecord};
 
 pub const CONVERSATION_CONTRACT_V1: u32 = 1;
 
@@ -66,6 +66,7 @@ pub struct ConversationTurnRecord {
     pub version: u32,
     pub id: Uuid,
     pub conversation_id: Uuid,
+    pub task_id: Option<Uuid>,
     pub author: MessageSender,
     pub recipient: MessageEndpoint,
     pub recipient_employee_configuration_revision: u64,
@@ -98,6 +99,7 @@ pub struct ConversationTurnSummary {
     pub sequence: u64,
     pub id: Uuid,
     pub conversation_id: Uuid,
+    pub task_id: Option<Uuid>,
     pub author: MessageSender,
     pub recipient: MessageEndpoint,
     pub state: TurnState,
@@ -126,6 +128,7 @@ pub struct ConversationMutationResult {
 pub struct TurnMutationResult {
     pub turn: ConversationTurnRecord,
     pub message: MessageRecord,
+    pub task: Option<TaskRecord>,
     pub event_sequence: Option<u64>,
 }
 

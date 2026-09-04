@@ -2486,6 +2486,8 @@ fn app_startup_reconciles_prior_boot_turns_without_adopting_provider_work() {
                 kind: UserMessageKind::User,
             }),
             recipient: None,
+            task_id: None,
+            authority_mode: AuthorityMode::Ask,
             text: "Prior accepted turn".to_owned(),
             activate_if_needed: false,
             max_attempts: 3,

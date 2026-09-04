@@ -14,7 +14,7 @@ use serde::Serialize;
 use serde_json::{Value, json};
 use uuid::Uuid;
 
-use crate::{Store, StoreError, employee, session};
+use crate::{Store, StoreError, employee, session, task};
 
 #[derive(Clone, Debug)]
 pub struct SendMessageInput {
@@ -770,6 +770,18 @@ pub(crate) fn insert_message_tx(
     require_endpoint(transaction, input.recipient, "recipient")?;
     if let Some(project_id) = input.project_id {
         require_project(transaction, project_id)?;
+    }
+    if let Some(task_id) = input.task_id {
+        let linked_task =
+            task::required_task(transaction, task_id).map_err(|error| match error {
+                StoreError::TaskNotFound { .. } => StoreError::MessageTaskNotFound { task_id },
+                other => other,
+            })?;
+        if linked_task.project_id != input.project_id
+            || Some(linked_task.conversation_id) != input.conversation_id
+        {
+            return Err(StoreError::MessageTaskScope { task_id });
+        }
     }
     let (sender_kind, sender_employee_id, sender_session_id) = match input.sender {
         MessageSender::Employee(sender) => (

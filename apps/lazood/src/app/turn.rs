@@ -1,10 +1,10 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use lazoo_protocol::{
-    CancelTurnParams, ConversationDetail, ConversationListParams, ConversationShowParams,
-    CreateConversationParams, EmployeeAvailability, JsonRpcRequest, MessageSender, RetryTurnParams,
-    RpcError, SessionLifecycleState, SubmitTurnParams, TurnListParams, TurnMutationResult,
-    TurnShowParams, TurnState,
+    AuthorityMode, CancelTurnParams, ConversationDetail, ConversationListParams,
+    ConversationShowParams, CreateConversationParams, EmployeeAvailability, JsonRpcRequest,
+    MessageSender, RetryTurnParams, RpcError, SessionLifecycleState, SubmitTurnParams,
+    TurnListParams, TurnMutationResult, TurnShowParams, TurnState,
 };
 use lazoo_providers::{ProviderError, ProviderEvent, ProviderKind, TurnEventObserver, TurnRequest};
 use lazoo_store::{
@@ -175,6 +175,8 @@ impl App {
                 conversation_id: params.conversation_id,
                 author: params.author,
                 recipient: params.recipient,
+                task_id: None,
+                authority_mode: AuthorityMode::Ask,
                 text: params.text,
                 activate_if_needed: params.activate_if_needed,
                 max_attempts: params.max_attempts,
@@ -465,9 +467,19 @@ impl App {
             .store
             .get_message(turn.message_id)
             .map_err(turn_store_error)?;
+        let task = turn
+            .task_id
+            .map(|task_id| {
+                self.store
+                    .get_task(task_id)
+                    .map(|detail| detail.task)
+                    .map_err(turn_store_error)
+            })
+            .transpose()?;
         Ok(to_value(TurnMutationResult {
             turn,
             message,
+            task,
             event_sequence,
         }))
     }

@@ -4,6 +4,7 @@ mod employee;
 mod message;
 mod migration;
 mod session;
+mod task;
 
 use std::{
     path::{Path, PathBuf},
@@ -37,6 +38,7 @@ pub use session::{
     BeginSessionInput, BeginSessionStopInput, FailSessionInput, FinishSessionStopInput,
     MarkSessionReadyInput,
 };
+pub use task::ListTasksInput;
 
 use crate::{emergency::import_pending_incidents, migration::apply_migrations};
 
@@ -117,6 +119,10 @@ pub enum StoreError {
     SessionProviderNotReady { employee_id: Uuid, reason: String },
     #[error("message {message_id} was not found")]
     MessageNotFound { message_id: Uuid },
+    #[error("message task {task_id} was not found")]
+    MessageTaskNotFound { task_id: Uuid },
+    #[error("message task {task_id} does not match the message project/conversation scope")]
+    MessageTaskScope { task_id: Uuid },
     #[error("message {role} employee {employee_id} was not found")]
     MessageEmployeeNotFound {
         role: &'static str,
@@ -170,6 +176,10 @@ pub enum StoreError {
     ConversationNotFound { conversation_id: Uuid },
     #[error("turn {turn_id} was not found")]
     TurnNotFound { turn_id: Uuid },
+    #[error("employee-authored turns must reference an existing task")]
+    TurnTaskRequired,
+    #[error("turn task {task_id} does not match the conversation root assignment")]
+    TurnTaskScope { task_id: Uuid },
     #[error("turn {turn_id} changed; current revision is {current_revision}")]
     TurnStale {
         turn_id: Uuid,
@@ -190,6 +200,12 @@ pub enum StoreError {
     TurnAcceptanceEvidence { turn_id: Uuid },
     #[error("turn {turn_id} cancellation was not requested")]
     TurnCancelNotRequested { turn_id: Uuid },
+    #[error("task {task_id} was not found")]
+    TaskNotFound { task_id: Uuid },
+    #[error("task list limit must be between 1 and 1024")]
+    TaskListLimit,
+    #[error(transparent)]
+    TaskValidation(#[from] lazoo_domain::TaskValidationError),
     #[error("stored {field} is invalid: {message}")]
     InvalidRecord {
         field: &'static str,

@@ -78,6 +78,8 @@ fn record_turn(
             conversation_id,
             author,
             recipient,
+            task_id: None,
+            authority_mode: AuthorityMode::Ask,
             text: text.to_owned(),
             activate_if_needed: false,
             max_attempts: 3,
@@ -220,14 +222,20 @@ fn turn_recording_is_actor_aware_immutable_ordered_and_record_first() {
         employee_id: lead.id,
         session_id: None,
     });
-    let employee_turn = record_turn(
-        &store,
-        "turn-employee",
-        conversation.id,
-        employee_author,
-        None,
-        "follow-up",
-    );
+    let employee_turn = store
+        .record_turn(&RecordTurnInput {
+            request_id: "request-turn-employee".to_owned(),
+            idempotency_key: "turn-employee".to_owned(),
+            conversation_id: conversation.id,
+            author: employee_author,
+            recipient: None,
+            task_id: Some(recorded.turn.id),
+            authority_mode: AuthorityMode::Ask,
+            text: "follow-up".to_owned(),
+            activate_if_needed: false,
+            max_attempts: 3,
+        })
+        .unwrap();
 
     assert_eq!(recorded.turn.state, TurnState::Recorded);
     assert_eq!(
@@ -562,6 +570,8 @@ fn employee_activation_and_stale_turn_mutations_fail_without_partial_writes() {
             conversation_id: conversation.id,
             author: employee_author,
             recipient: None,
+            task_id: None,
+            authority_mode: AuthorityMode::Ask,
             text: "hello".to_owned(),
             activate_if_needed: true,
             max_attempts: 3,
@@ -624,6 +634,8 @@ fn terminal_failure_and_post_acceptance_cancel_preserve_message_delivery_truth()
             conversation_id: conversation.id,
             author: user(),
             recipient: None,
+            task_id: None,
+            authority_mode: AuthorityMode::Ask,
             text: "terminal".to_owned(),
             activate_if_needed: false,
             max_attempts: 1,

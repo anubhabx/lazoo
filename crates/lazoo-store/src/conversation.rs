@@ -1,22 +1,23 @@
 use chrono::Utc;
 use lazoo_domain::{
-    MAX_TURN_TRANSCRIPT_BYTES, derive_availability, validate_activation_request,
-    validate_conversation_command_key, validate_conversation_list_limit,
-    validate_conversation_title, validate_max_attempts, validate_message_failure,
-    validate_turn_event_payload, validate_turn_text, validate_turn_transition,
+    MAX_TURN_TRANSCRIPT_BYTES, derive_availability, effective_authority,
+    validate_activation_request, validate_conversation_command_key,
+    validate_conversation_list_limit, validate_conversation_title, validate_max_attempts,
+    validate_message_failure, validate_task_objective, validate_turn_event_payload,
+    validate_turn_text, validate_turn_transition,
 };
 use lazoo_protocol::{
-    CONVERSATION_CONTRACT_V1, ConversationMutationResult, ConversationRecord, ConversationSummary,
-    ConversationTurnEvent, ConversationTurnRecord, ConversationTurnSummary, EmployeeAvailability,
-    MESSAGE_ENVELOPE_V2, MessageDeliveryState, MessageEndpoint, MessageKind, MessageSender,
-    TurnMutationResult, TurnReconcileResult, TurnState,
+    AuthorityMode, CONVERSATION_CONTRACT_V1, ConversationMutationResult, ConversationRecord,
+    ConversationSummary, ConversationTurnEvent, ConversationTurnRecord, ConversationTurnSummary,
+    EmployeeAvailability, MESSAGE_ENVELOPE_V2, MessageDeliveryState, MessageEndpoint, MessageKind,
+    MessageSender, TaskRole, TaskState, TurnMutationResult, TurnReconcileResult, TurnState,
 };
 use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, params};
 use serde::Serialize;
 use serde_json::{Value, json};
 use uuid::Uuid;
 
-use crate::{Store, StoreError, employee, message, session};
+use crate::{Store, StoreError, employee, message, session, task};
 
 #[derive(Clone, Debug)]
 pub struct CreateConversationInput {
@@ -34,6 +35,8 @@ pub struct RecordTurnInput {
     pub conversation_id: Uuid,
     pub author: MessageSender,
     pub recipient: Option<MessageEndpoint>,
+    pub task_id: Option<Uuid>,
+    pub authority_mode: AuthorityMode,
     pub text: String,
     pub activate_if_needed: bool,
     pub max_attempts: u32,
@@ -238,6 +241,44 @@ impl Store {
         validate_author(&transaction, input.author)?;
         let recipient_employee = require_route_ready_employee(&transaction, recipient.employee_id)?;
         let turn_id = Uuid::new_v4();
+        let now = Utc::now().to_rfc3339();
+        let linked_task = match (input.author, input.task_id) {
+            (MessageSender::User(_), None) => {
+                let objective = validate_task_objective(&input.text)?;
+                let roster_revision: i64 = transaction.query_row(
+                    "SELECT revision FROM roster_state WHERE singleton = 1",
+                    [],
+                    |row| row.get(0),
+                )?;
+                let task = task::insert_root_task_tx(
+                    &transaction,
+                    &task::InsertRootTaskInput {
+                        id: turn_id,
+                        project_id: conversation.project_id,
+                        conversation_id: conversation.id,
+                        assigned_employee_id: recipient.employee_id,
+                        objective,
+                        requested_authority: input.authority_mode,
+                        effective_authority: effective_authority(
+                            input.authority_mode,
+                            input.authority_mode,
+                            recipient_employee.authority_mode,
+                        ),
+                        employee_configuration_revision: recipient_employee.configuration_revision,
+                        roster_revision: unsigned(roster_revision)?,
+                        created_at: now.clone(),
+                    },
+                )?;
+                Some(task)
+            }
+            (MessageSender::Employee(_), None) => return Err(StoreError::TurnTaskRequired),
+            (_, Some(task_id)) => {
+                let task = task::required_task(&transaction, task_id)?;
+                require_turn_task_scope(&task, &conversation, recipient)?;
+                Some(task)
+            }
+        };
+        let task_id = linked_task.as_ref().map(|task| task.id);
         let message_result = message::insert_message_tx(
             &transaction,
             &message::InsertMessageInput {
@@ -249,7 +290,7 @@ impl Store {
                 recipient,
                 project_id: conversation.project_id,
                 conversation_id: Some(conversation.id),
-                task_id: Some(turn_id),
+                task_id,
                 correlation_id: None,
                 causation_id: None,
                 kind: MessageKind::Peer,
@@ -258,22 +299,22 @@ impl Store {
                 max_attempts: input.max_attempts,
             },
         )?;
-        let now = Utc::now().to_rfc3339();
         let (author_kind, author_employee_id, author_session_id) = sender_columns(input.author);
         transaction.execute(
             "INSERT INTO conversation_turns (
-                id, contract_version, conversation_id, author_kind, author_employee_id,
+                id, contract_version, conversation_id, task_id, author_kind, author_employee_id,
                 author_session_id, recipient_employee_id, recipient_session_id,
                 recipient_employee_configuration_revision, text, message_id, correlation_id,
                 state, revision, created_at, updated_at
              ) VALUES (
-                ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12,
-                'recorded', 1, ?13, ?13
+                ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13,
+                'recorded', 1, ?14, ?14
              )",
             params![
                 turn_id.to_string(),
                 i64::from(CONVERSATION_CONTRACT_V1),
                 conversation.id.to_string(),
+                task_id.map(|value| value.to_string()),
                 author_kind,
                 author_employee_id,
                 author_session_id,
@@ -295,6 +336,20 @@ impl Store {
             &now,
         )?;
         let turn = required_turn(&transaction, turn_id)?;
+        if linked_task.as_ref().is_some_and(|task| task.id == turn_id) {
+            task::insert_root_evidence_tx(
+                &transaction,
+                turn_id,
+                message_result.message.envelope.id,
+                &now,
+            )?;
+            employee::insert_event(
+                &transaction,
+                "task.created",
+                &json!({"task": linked_task.as_ref().expect("root task exists")}),
+                &now,
+            )?;
+        }
         let event_sequence = employee::insert_event(
             &transaction,
             "turn.recorded",
@@ -304,6 +359,7 @@ impl Store {
         let result = TurnMutationResult {
             turn,
             message: message_result.message,
+            task: linked_task,
             event_sequence: Some(event_sequence),
         };
         transaction.commit()?;
@@ -320,7 +376,7 @@ impl Store {
         let connection = self.lock()?;
         required_conversation(&connection, conversation_id)?;
         let mut statement = connection.prepare(
-            "SELECT sequence, id, conversation_id, author_kind, author_employee_id,
+            "SELECT sequence, id, conversation_id, task_id, author_kind, author_employee_id,
                     author_session_id, recipient_employee_id, recipient_session_id, state,
                     revision, native_turn_id, created_at, updated_at
              FROM conversation_turns
@@ -941,6 +997,28 @@ fn resolve_recipient(
     Ok(recipient)
 }
 
+fn require_turn_task_scope(
+    task: &lazoo_protocol::TaskRecord,
+    conversation: &ConversationRecord,
+    recipient: MessageEndpoint,
+) -> Result<(), StoreError> {
+    let root = task.id == task.root_task_id
+        && task.parent_task_id.is_none()
+        && task.role == TaskRole::Lead;
+    let same_scope = task.conversation_id == conversation.id
+        && task.project_id == conversation.project_id
+        && task.assigned_employee_id == recipient.employee_id;
+    let nonterminal = !matches!(
+        task.state,
+        TaskState::Completed | TaskState::Failed | TaskState::Cancelled
+    );
+    if root && same_scope && nonterminal {
+        Ok(())
+    } else {
+        Err(StoreError::TurnTaskScope { task_id: task.id })
+    }
+}
+
 fn validate_author(connection: &Connection, author: MessageSender) -> Result<(), StoreError> {
     if let MessageSender::Employee(endpoint) = author {
         validate_endpoint(connection, endpoint, "author")?;
@@ -1183,6 +1261,7 @@ type RawTurn = (
     i64,
     String,
     String,
+    Option<String>,
     String,
     Option<String>,
     Option<String>,
@@ -1214,7 +1293,7 @@ type RawTurn = (
 fn required_turn(connection: &Connection, id: Uuid) -> Result<ConversationTurnRecord, StoreError> {
     let raw = connection
         .query_row(
-            "SELECT sequence, contract_version, id, conversation_id, author_kind,
+            "SELECT sequence, contract_version, id, conversation_id, task_id, author_kind,
                     author_employee_id, author_session_id, recipient_employee_id,
                     recipient_session_id, recipient_employee_configuration_revision, text,
                     message_id, message_attempt_id, correlation_id, state, revision,
@@ -1262,6 +1341,7 @@ fn raw_turn(row: &rusqlite::Row<'_>) -> rusqlite::Result<RawTurn> {
         row.get(27)?,
         row.get(28)?,
         row.get(29)?,
+        row.get(30)?,
     ))
 }
 
@@ -1275,35 +1355,36 @@ fn turn_from_raw(
         version: unsigned32(raw.1)?,
         id,
         conversation_id: parse_uuid(&raw.3, "conversation_turns.conversation_id")?,
-        author: sender_from_columns(&raw.4, raw.5.as_deref(), raw.6.as_deref())?,
+        task_id: optional_uuid(raw.4.as_deref(), "conversation_turns.task_id")?,
+        author: sender_from_columns(&raw.5, raw.6.as_deref(), raw.7.as_deref())?,
         recipient: MessageEndpoint {
-            employee_id: parse_uuid(&raw.7, "conversation_turns.recipient_employee_id")?,
-            session_id: optional_uuid(raw.8.as_deref(), "conversation_turns.recipient_session_id")?,
+            employee_id: parse_uuid(&raw.8, "conversation_turns.recipient_employee_id")?,
+            session_id: optional_uuid(raw.9.as_deref(), "conversation_turns.recipient_session_id")?,
         },
-        recipient_employee_configuration_revision: unsigned(raw.9)?,
-        text: raw.10,
-        message_id: parse_uuid(&raw.11, "conversation_turns.message_id")?,
+        recipient_employee_configuration_revision: unsigned(raw.10)?,
+        text: raw.11,
+        message_id: parse_uuid(&raw.12, "conversation_turns.message_id")?,
         message_attempt_id: optional_uuid(
-            raw.12.as_deref(),
+            raw.13.as_deref(),
             "conversation_turns.message_attempt_id",
         )?,
-        correlation_id: parse_uuid(&raw.13, "conversation_turns.correlation_id")?,
-        state: serde_json::from_value(Value::String(raw.14))?,
-        revision: unsigned(raw.15)?,
-        owner_boot_id: optional_uuid(raw.16.as_deref(), "conversation_turns.owner_boot_id")?,
-        provider: raw.17,
-        native_session_id: raw.18,
-        native_turn_id: raw.19,
-        failure_code: raw.20,
-        failure_message: raw.21,
-        transcript_truncated: raw.22 != 0,
-        created_at: raw.23,
-        updated_at: raw.24,
-        submitted_at: raw.25,
-        accepted_at: raw.26,
-        completed_at: raw.27,
-        cancel_requested_at: raw.28,
-        terminal_at: raw.29,
+        correlation_id: parse_uuid(&raw.14, "conversation_turns.correlation_id")?,
+        state: serde_json::from_value(Value::String(raw.15))?,
+        revision: unsigned(raw.16)?,
+        owner_boot_id: optional_uuid(raw.17.as_deref(), "conversation_turns.owner_boot_id")?,
+        provider: raw.18,
+        native_session_id: raw.19,
+        native_turn_id: raw.20,
+        failure_code: raw.21,
+        failure_message: raw.22,
+        transcript_truncated: raw.23 != 0,
+        created_at: raw.24,
+        updated_at: raw.25,
+        submitted_at: raw.26,
+        accepted_at: raw.27,
+        completed_at: raw.28,
+        cancel_requested_at: raw.29,
+        terminal_at: raw.30,
         events: query_turn_events(connection, id)?,
     })
 }
@@ -1312,6 +1393,7 @@ type RawTurnSummary = (
     i64,
     String,
     String,
+    Option<String>,
     String,
     Option<String>,
     Option<String>,
@@ -1339,6 +1421,7 @@ fn raw_turn_summary(row: &rusqlite::Row<'_>) -> rusqlite::Result<RawTurnSummary>
         row.get(10)?,
         row.get(11)?,
         row.get(12)?,
+        row.get(13)?,
     ))
 }
 
@@ -1347,16 +1430,17 @@ fn turn_summary_from_raw(raw: RawTurnSummary) -> Result<ConversationTurnSummary,
         sequence: unsigned(raw.0)?,
         id: parse_uuid(&raw.1, "conversation_turns.id")?,
         conversation_id: parse_uuid(&raw.2, "conversation_turns.conversation_id")?,
-        author: sender_from_columns(&raw.3, raw.4.as_deref(), raw.5.as_deref())?,
+        task_id: optional_uuid(raw.3.as_deref(), "conversation_turns.task_id")?,
+        author: sender_from_columns(&raw.4, raw.5.as_deref(), raw.6.as_deref())?,
         recipient: MessageEndpoint {
-            employee_id: parse_uuid(&raw.6, "conversation_turns.recipient_employee_id")?,
-            session_id: optional_uuid(raw.7.as_deref(), "conversation_turns.recipient_session_id")?,
+            employee_id: parse_uuid(&raw.7, "conversation_turns.recipient_employee_id")?,
+            session_id: optional_uuid(raw.8.as_deref(), "conversation_turns.recipient_session_id")?,
         },
-        state: serde_json::from_value(Value::String(raw.8))?,
-        revision: unsigned(raw.9)?,
-        native_turn_id: raw.10,
-        created_at: raw.11,
-        updated_at: raw.12,
+        state: serde_json::from_value(Value::String(raw.9))?,
+        revision: unsigned(raw.10)?,
+        native_turn_id: raw.11,
+        created_at: raw.12,
+        updated_at: raw.13,
     })
 }
 
@@ -1536,6 +1620,10 @@ fn effective_turn_result(
     )?;
     let turn = required_turn(transaction, turn_id)?;
     let message = message::required_message(transaction, turn.message_id)?;
+    let task = turn
+        .task_id
+        .map(|task_id| task::required_task(transaction, task_id))
+        .transpose()?;
     let event_sequence = employee::insert_event(
         transaction,
         event_type,
@@ -1545,6 +1633,7 @@ fn effective_turn_result(
     Ok(TurnMutationResult {
         turn,
         message,
+        task,
         event_sequence: Some(event_sequence),
     })
 }
@@ -1555,9 +1644,14 @@ fn turn_result(
     event_sequence: Option<u64>,
 ) -> Result<TurnMutationResult, StoreError> {
     let message = message::required_message(connection, turn.message_id)?;
+    let task = turn
+        .task_id
+        .map(|task_id| task::required_task(connection, task_id))
+        .transpose()?;
     Ok(TurnMutationResult {
         turn,
         message,
+        task,
         event_sequence,
     })
 }

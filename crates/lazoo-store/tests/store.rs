@@ -35,14 +35,14 @@ fn store_enables_wal_foreign_keys_and_schema_version() {
 
     let status = store.status().unwrap();
 
-    assert_eq!(status.schema_version, 5);
+    assert_eq!(status.schema_version, 6);
     assert_eq!(status.journal_mode.to_lowercase(), "wal");
     assert!(status.foreign_keys);
     assert_no_foreign_key_violations(&temporary.path().join("lazoo.db"));
 }
 
 #[test]
-fn version_one_database_upgrades_to_version_five_without_rewriting_version_one() {
+fn version_one_database_upgrades_to_version_six_without_rewriting_version_one() {
     use rusqlite::{Connection, params};
     use sha2::{Digest, Sha256};
 
@@ -75,7 +75,7 @@ fn version_one_database_upgrades_to_version_five_without_rewriting_version_one()
 
     let store = Store::open_path(&database).unwrap();
 
-    assert_eq!(store.status().unwrap().schema_version, 5);
+    assert_eq!(store.status().unwrap().schema_version, 6);
     store
         .execute_for_test(
             "INSERT INTO employees (
@@ -93,7 +93,7 @@ fn version_one_database_upgrades_to_version_five_without_rewriting_version_one()
 }
 
 #[test]
-fn version_two_database_upgrades_to_version_five_with_session_tables() {
+fn version_two_database_upgrades_to_version_six_with_session_tables() {
     use rusqlite::{Connection, params};
     use sha2::{Digest, Sha256};
 
@@ -136,7 +136,7 @@ fn version_two_database_upgrades_to_version_five_with_session_tables() {
 
     let store = Store::open_path(&database).unwrap();
 
-    assert_eq!(store.status().unwrap().schema_version, 5);
+    assert_eq!(store.status().unwrap().schema_version, 6);
     store
         .execute_for_test(
             "INSERT INTO employees (
@@ -163,7 +163,7 @@ fn version_two_database_upgrades_to_version_five_with_session_tables() {
 }
 
 #[test]
-fn version_three_database_upgrades_to_version_five_with_message_tables() {
+fn version_three_database_upgrades_to_version_six_with_message_tables() {
     use rusqlite::{Connection, params};
     use sha2::{Digest, Sha256};
 
@@ -210,7 +210,7 @@ fn version_three_database_upgrades_to_version_five_with_message_tables() {
 
     let store = Store::open_path(&database).unwrap();
 
-    assert_eq!(store.status().unwrap().schema_version, 5);
+    assert_eq!(store.status().unwrap().schema_version, 6);
     store
         .execute_for_test(
             "INSERT INTO employees (
@@ -241,7 +241,7 @@ fn version_three_database_upgrades_to_version_five_with_message_tables() {
 
 #[test]
 #[allow(clippy::too_many_lines)]
-fn version_four_database_upgrades_to_version_five_without_losing_message_history() {
+fn version_four_database_upgrades_to_version_six_without_losing_message_history() {
     use lazoo_protocol::{MessageDeliveryState, MessageSender};
     use rusqlite::{Connection, params};
     use sha2::{Digest, Sha256};
@@ -344,7 +344,7 @@ fn version_four_database_upgrades_to_version_five_without_losing_message_history
     drop(connection);
 
     let store = Store::open_path(&database).unwrap();
-    assert_eq!(store.status().unwrap().schema_version, 5);
+    assert_eq!(store.status().unwrap().schema_version, 6);
 
     let message = store.get_message(message_id).unwrap();
     assert_eq!(message.envelope.version, 1);
@@ -363,6 +363,224 @@ fn version_four_database_upgrades_to_version_five_without_losing_message_history
         message.attempts[0].acknowledgement_key.as_deref(),
         Some("native-turn-1")
     );
+    assert_no_foreign_key_violations(&database);
+}
+
+#[test]
+#[allow(clippy::too_many_lines)]
+fn version_five_turns_backfill_conservative_task_identity_and_state() {
+    use rusqlite::{Connection, params};
+    use sha2::{Digest, Sha256};
+    use uuid::Uuid;
+
+    let temporary = tempdir().unwrap();
+    let database = temporary.path().join("lazoo.db");
+    let connection = Connection::open(&database).unwrap();
+    connection
+        .execute_batch(
+            "PRAGMA foreign_keys = ON;
+             CREATE TABLE schema_migrations (
+                version INTEGER PRIMARY KEY,
+                checksum TEXT NOT NULL,
+                applied_at TEXT NOT NULL
+             );",
+        )
+        .unwrap();
+    for (version, migration) in [
+        (
+            1,
+            include_str!("../../../migrations/0001_control_plane.sql"),
+        ),
+        (
+            2,
+            include_str!("../../../migrations/0002_employee_roster.sql"),
+        ),
+        (
+            3,
+            include_str!("../../../migrations/0003_employee_sessions.sql"),
+        ),
+        (
+            4,
+            include_str!("../../../migrations/0004_collaboration_bus.sql"),
+        ),
+        (
+            5,
+            include_str!("../../../migrations/0005_conversations.sql"),
+        ),
+    ] {
+        connection.execute_batch(migration).unwrap();
+        let mut checksum = String::with_capacity(64);
+        for byte in Sha256::digest(migration.as_bytes()) {
+            write!(&mut checksum, "{byte:02x}").unwrap();
+        }
+        connection
+            .execute(
+                "INSERT INTO schema_migrations (version, checksum, applied_at)
+                 VALUES (?1, ?2, '2026-09-04T00:00:00Z')",
+                params![version, checksum],
+            )
+            .unwrap();
+    }
+
+    let employee_id = Uuid::from_u128(1);
+    let conversation_id = Uuid::from_u128(2);
+    connection
+        .execute(
+            "INSERT INTO employees (
+                id, name, provider, role, instructions, native_settings_json,
+                authority_mode, checkout_policy, enabled, configuration_revision,
+                created_at, updated_at
+             ) VALUES (?1, 'Rhea', 'codex', 'Lead', '', '{}', 'full-autonomy',
+                'isolated', 1, 7, ?2, ?2)",
+            params![employee_id.to_string(), "2026-09-04T00:00:00Z"],
+        )
+        .unwrap();
+    connection
+        .execute(
+            "INSERT INTO conversations (
+                id, contract_version, lead_employee_id,
+                lead_employee_configuration_revision, revision, created_at, updated_at
+             ) VALUES (?1, 1, ?2, 7, 1, ?3, ?3)",
+            params![
+                conversation_id.to_string(),
+                employee_id.to_string(),
+                "2026-09-04T00:00:00Z"
+            ],
+        )
+        .unwrap();
+
+    let mappings = [
+        ("recorded", "accepted"),
+        ("submitting", "running"),
+        ("accepted", "running"),
+        ("completed", "completed"),
+        ("retryable-failed", "accepted"),
+        ("terminal-failed", "failed"),
+        ("cancelled", "cancelled"),
+        ("uncertain", "uncertain"),
+    ];
+    let mut user_turn_ids = Vec::new();
+    for (index, (turn_state, _)) in mappings.iter().enumerate() {
+        for (author_offset, author_kind) in ["user", "employee"].iter().enumerate() {
+            let ordinal = u128::try_from(index * 2 + author_offset + 10).unwrap();
+            let turn_id = Uuid::from_u128(ordinal);
+            let message_id = Uuid::from_u128(ordinal + 100);
+            if *author_kind == "user" {
+                user_turn_ids.push(turn_id);
+            }
+            connection
+                .execute(
+                    "INSERT INTO messages (
+                        id, envelope_version, idempotency_key, correlation_id, sender_kind,
+                        sender_employee_id, recipient_employee_id, conversation_id, task_id,
+                        kind, body_json, references_json, created_at
+                     ) VALUES (?1, 2, ?2, ?1, ?3, ?4, ?5, ?6, ?7, 'peer', '{}', '[]', ?8)",
+                    params![
+                        message_id.to_string(),
+                        format!("legacy-message-{ordinal}"),
+                        author_kind,
+                        (*author_kind == "employee").then(|| employee_id.to_string()),
+                        employee_id.to_string(),
+                        conversation_id.to_string(),
+                        turn_id.to_string(),
+                        "2026-09-04T00:00:00Z",
+                    ],
+                )
+                .unwrap();
+            connection
+                .execute(
+                    "INSERT INTO conversation_turns (
+                        id, contract_version, conversation_id, author_kind, author_employee_id,
+                        recipient_employee_id, recipient_employee_configuration_revision, text,
+                        message_id, correlation_id, state, revision, created_at, updated_at
+                     ) VALUES (?1, 1, ?2, ?3, ?4, ?5, 7, ?6, ?7, ?7, ?8, 1, ?9, ?9)",
+                    params![
+                        turn_id.to_string(),
+                        conversation_id.to_string(),
+                        author_kind,
+                        (*author_kind == "employee").then(|| employee_id.to_string()),
+                        employee_id.to_string(),
+                        format!("legacy {author_kind} {turn_state}"),
+                        message_id.to_string(),
+                        turn_state,
+                        "2026-09-04T00:00:00Z",
+                    ],
+                )
+                .unwrap();
+        }
+    }
+    connection
+        .execute(
+            "INSERT INTO turn_commands (scope, idempotency_key, request_id, turn_id, created_at)
+             VALUES ('turn.record', 'legacy-command', 'legacy-request', ?1, ?2)",
+            params![user_turn_ids[0].to_string(), "2026-09-04T00:00:00Z"],
+        )
+        .unwrap();
+    connection
+        .execute(
+            "INSERT INTO audit_events (id, event_type, payload_json, created_at)
+             VALUES (?1, 'legacy.event', '{}', ?2)",
+            params![Uuid::from_u128(500).to_string(), "2026-09-04T00:00:00Z"],
+        )
+        .unwrap();
+    drop(connection);
+
+    let store = Store::open_path(&database).unwrap();
+    assert_eq!(store.status().unwrap().schema_version, 6);
+    drop(store);
+
+    let connection = Connection::open(&database).unwrap();
+    let task_count: i64 = connection
+        .query_row("SELECT COUNT(*) FROM tasks", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(task_count, 8);
+    for (turn_state, task_state) in mappings {
+        let count: i64 = connection
+            .query_row(
+                "SELECT COUNT(*)
+                 FROM conversation_turns turn
+                 JOIN tasks task ON task.id = turn.task_id
+                 JOIN messages message ON message.id = turn.message_id
+                 WHERE turn.author_kind = 'user' AND turn.state = ?1
+                   AND task.id = turn.id AND task.root_task_id = turn.id
+                   AND task.state = ?2
+                   AND task.requested_authority = 'ask'
+                   AND task.effective_authority = 'ask'
+                   AND message.task_id = turn.id",
+                params![turn_state, task_state],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 1, "missing user backfill for {turn_state}");
+    }
+    let employee_links: i64 = connection
+        .query_row(
+            "SELECT COUNT(*)
+             FROM conversation_turns turn
+             JOIN messages message ON message.id = turn.message_id
+             WHERE turn.author_kind = 'employee'
+               AND (turn.task_id IS NOT NULL OR message.task_id IS NOT NULL)",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(employee_links, 0);
+    let command_count: i64 = connection
+        .query_row(
+            "SELECT COUNT(*) FROM turn_commands WHERE idempotency_key = 'legacy-command'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(command_count, 1);
+    let event_count: i64 = connection
+        .query_row(
+            "SELECT COUNT(*) FROM audit_events WHERE event_type = 'legacy.event'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(event_count, 1);
     assert_no_foreign_key_violations(&database);
 }
 
