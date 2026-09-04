@@ -715,7 +715,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\acceptance\conversat
 
 Expected: native session identity, native turn ID before message acknowledgement, durable completion, exact `LAZOO_TURN_OK` output, and clean provider-tree stop. If authentication, policy, rate limit, or quota blocks the call, preserve the exact blocker and do not label live delivery passed.
 
-Actual: two pre-fix attempts returned `LZ-TURN-UNCERTAIN`; neither is labeled passed. The first exposed outer Codex task-context inheritance, and the second exposed an overbroad acceptance-evidence guard when a real session-level event followed native acceptance. Both defects are fixed and covered deterministically. A third post-fix model prompt was intentionally not issued in the same verification pass, so current live completion remains pending.
+Actual: two pre-fix attempts returned `LZ-TURN-UNCERTAIN`; neither is labeled passed. The first exposed outer Codex task-context inheritance, and the second exposed an overbroad acceptance-evidence guard when a real session-level event followed native acceptance. Both defects were fixed and covered deterministically. After fresh user authorization, one post-fix attempt passed in 27,064 ms with exact `LAZOO_TURN_OK`, native turn `01a06bf9-d960-76e0-9dc5-24696592e886`, acknowledged canonical delivery, completed local turn, and clean provider-tree shutdown.
 
 - [x] **Step 7: Verify scope, line endings, and continuity**
 

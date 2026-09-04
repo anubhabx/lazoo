@@ -1,49 +1,59 @@
 ﻿{
     "manifestVersion":  1,
-    "status":  "FAIL",
+    "status":  "PASS",
     "mode":  "live-provider",
-    "startedAt":  "2026-09-03T22:04:26.9722326Z",
-    "completedAt":  "2026-09-03T22:04:34.1068789Z",
-    "durationMs":  7063,
+    "startedAt":  "2026-09-04T10:32:04.0338148Z",
+    "completedAt":  "2026-09-04T10:32:31.1296752Z",
+    "durationMs":  27064,
     "protocolVersion":  1,
     "schemaVersion":  5,
-    "isolatedDataRoot":  "C:\\Users\\anubhab\\AppData\\Local\\Temp\\lazoo-conversation-delivery-54dfdf61e5a64c3fac55e002be98aa33\\data",
+    "isolatedDataRoot":  "C:\\Users\\anubhab\\AppData\\Local\\Temp\\lazoo-conversation-delivery-627da11383c14bbf9aa12aceb9b42ce5\\data",
     "temporaryDataRetained":  false,
     "commands":  [
                      {
                          "command":  "lazooctl --json status",
                          "exitCode":  0,
-                         "durationMs":  88
+                         "durationMs":  85
                      },
                      {
-                         "command":  "lazooctl --json employee create Rhea --provider codex --role Lead --idempotency-key lead-54dfdf61e5a64c3fac55e002be98aa33",
+                         "command":  "lazooctl --json employee create Rhea --provider codex --role Lead --idempotency-key lead-627da11383c14bbf9aa12aceb9b42ce5",
                          "exitCode":  0,
-                         "durationMs":  2506
+                         "durationMs":  2249
                      },
                      {
-                         "command":  "lazooctl --json employee create Ivo --provider codex --role Reviewer --idempotency-key author-54dfdf61e5a64c3fac55e002be98aa33",
+                         "command":  "lazooctl --json employee create Ivo --provider codex --role Reviewer --idempotency-key author-627da11383c14bbf9aa12aceb9b42ce5",
                          "exitCode":  0,
-                         "durationMs":  2204
+                         "durationMs":  2231
                      },
                      {
-                         "command":  "lazooctl --json conversation create 15160c2c-ccb8-4e92-8de4-2b5185a00f55 --title Projectless fixture --idempotency-key projectless-54dfdf61e5a64c3fac55e002be98aa33",
+                         "command":  "lazooctl --json conversation create 95663f05-35df-412c-8a4d-2b0c7aeff06d --title Projectless fixture --idempotency-key projectless-627da11383c14bbf9aa12aceb9b42ce5",
                          "exitCode":  0,
-                         "durationMs":  24
+                         "durationMs":  28
                      },
                      {
-                         "command":  "lazooctl --json project register C:\\Users\\anubhab\\AppData\\Local\\Temp\\lazoo-conversation-delivery-54dfdf61e5a64c3fac55e002be98aa33\\repository --name Fixture repository --idempotency-key project-54dfdf61e5a64c3fac55e002be98aa33",
+                         "command":  "lazooctl --json project register C:\\Users\\anubhab\\AppData\\Local\\Temp\\lazoo-conversation-delivery-627da11383c14bbf9aa12aceb9b42ce5\\repository --name Fixture repository --idempotency-key project-627da11383c14bbf9aa12aceb9b42ce5",
                          "exitCode":  0,
-                         "durationMs":  83
+                         "durationMs":  100
                      },
                      {
-                         "command":  "lazooctl --json conversation create 15160c2c-ccb8-4e92-8de4-2b5185a00f55 --project-id 1d3a2b2e-4cfe-4646-8447-9e21931b0a55 --title Project fixture --idempotency-key project-conversation-54dfdf61e5a64c3fac55e002be98aa33",
+                         "command":  "lazooctl --json conversation create 95663f05-35df-412c-8a4d-2b0c7aeff06d --project-id fa7845bf-97ad-4eb3-8c0d-0edbc1460de6 --title Project fixture --idempotency-key project-conversation-627da11383c14bbf9aa12aceb9b42ce5",
                          "exitCode":  0,
-                         "durationMs":  22
+                         "durationMs":  28
                      },
                      {
-                         "command":  "lazooctl --json turn submit a4b096e8-e8c4-4902-9a29-f2279a32bb30 --text Reply with exactly LAZOO_TURN_OK. Do not use tools. --activate-if-needed --idempotency-key live-turn-54dfdf61e5a64c3fac55e002be98aa33",
-                         "exitCode":  12,
-                         "durationMs":  1901
+                         "command":  "lazooctl --json turn submit ebaa6edf-3dca-4e1b-8647-55daee62886f --text Reply with exactly LAZOO_TURN_OK. Do not use tools. --activate-if-needed --idempotency-key live-turn-627da11383c14bbf9aa12aceb9b42ce5",
+                         "exitCode":  0,
+                         "durationMs":  17693
+                     },
+                     {
+                         "command":  "lazooctl --json session show 6e09c023-5ed2-4e31-b051-984caedab8fb",
+                         "exitCode":  0,
+                         "durationMs":  25
+                     },
+                     {
+                         "command":  "lazooctl --json system shutdown",
+                         "exitCode":  0,
+                         "durationMs":  28
                      }
                  ],
     "gates":  {
@@ -52,9 +62,14 @@
                   "schema5":  "PASS",
                   "projectlessConversation":  "PASS",
                   "projectConversation":  "PASS",
-                  "failure":  "lazooctl turn submit a4b096e8-e8c4-4902-9a29-f2279a32bb30 --text Reply with exactly LAZOO_TURN_OK. Do not use tools. --activate-if-needed --idempotency-key live-turn-54dfdf61e5a64c3fac55e002be98aa33 exited 12 with: RPC request failed: RpcError { code: \"LZ-TURN-UNCERTAIN\", message: \"provider delivery outcome is uncertain\", data: Some(Object {\"turnId\": String(\"acbf2f2b-8941-48bb-9b80-549ea560d914\")}) }"
+                  "nativeTurnIdBeforeAcknowledgement":  "PASS",
+                  "progressDurable":  "PASS",
+                  "modelInvocationAbsent":  "NOT_APPLICABLE_LIVE",
+                  "desktopCapabilityExpansionAbsent":  "PASS",
+                  "cleanProviderTreeStop":  "PASS"
               },
     "evidence":  {
-
+                     "liveOutput":  "LAZOO_TURN_OK",
+                     "liveNativeTurnId":  "01a06bf9-d960-76e0-9dc5-24696592e886"
                  }
 }

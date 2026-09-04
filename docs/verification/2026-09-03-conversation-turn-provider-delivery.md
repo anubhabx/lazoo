@@ -4,7 +4,7 @@
 
 **Scope:** Backend and communication layers only: schema-5 conversations, record-first turns, actor-aware collaboration envelopes, Codex App Server delivery, retry/cancel/recovery behavior, CLI controls, and isolated acceptance evidence.
 
-**Verdict:** Deterministic release acceptance passes. Two pre-fix live Codex attempts failed and were not claimed. Their root cause is fixed and covered by real-shaped deterministic events, but post-fix live completion has not been rerun.
+**Verdict:** PASS. Deterministic release acceptance and the separately authorized post-fix live Codex gate both pass. Two earlier failures were not claimed; the defects they exposed are fixed and covered by real-shaped deterministic events.
 
 ## Delivered behavior
 
@@ -68,9 +68,24 @@ Attempt 2 ran with that isolation, ended in 7,063 ms, and still returned CLI exi
 RpcError { code: "LZ-TURN-UNCERTAIN", message: "provider delivery outcome is uncertain", data: Some(Object {"turnId": String("acbf2f2b-8941-48bb-9b80-549ea560d914")}) }
 ```
 
-The failed manifest is retained as `conversation-delivery-live-manifest.json`; it is not PASS evidence. A read-only App Server `thread/read` of native thread `01a0694d-5ac1-72e2-bc1e-9fbe70862ef0` showed turn `01a0694d-60f2-7bd0-a072-6426489fda71` as `interrupted`, with no items and no provider error. The persisted thread used the actually selected Codex executable, CLI 0.153.0. Its generated App Server schema confirmed `completed`, `interrupted`, `failed`, and `inProgress` as the current native turn statuses.
+The failed manifest from attempt 2 was committed at `b3aacff`; the current generated manifest now contains the post-fix PASS. A read-only App Server `thread/read` of native thread `01a0694d-5ac1-72e2-bc1e-9fbe70862ef0` showed turn `01a0694d-60f2-7bd0-a072-6426489fda71` as `interrupted`, with no items and no provider error. The persisted thread used the actually selected Codex executable, CLI 0.153.0. Its generated App Server schema confirmed `completed`, `interrupted`, `failed`, and `inProgress` as the current native turn statuses.
 
-The empty interrupted turn matched the acceptance-observer failure described above: Lazoo interrupted native work after a normal session-level event failed the overbroad acceptance-evidence guard. That root cause is fixed and covered. No third quota-consuming prompt was issued in this verification pass, so exact `LAZOO_TURN_OK` output after the fix remains unverified.
+The empty interrupted turn matched the acceptance-observer failure described above: Lazoo interrupted native work after a normal session-level event failed the overbroad acceptance-evidence guard. That root cause is fixed and covered. No third quota-consuming prompt was issued in that verification pass.
+
+After fresh user authorization, one post-fix attempt ran on Codex 0.153.1 and passed:
+
+| Evidence | Result |
+|---|---|
+| Manifest | `conversation-delivery-live-manifest.json`, PASS |
+| Duration and commands | 27,064 ms; 9 commands; every command exit 0 |
+| Output | Exact `LAZOO_TURN_OK` |
+| Native thread | `01a06bf9-d23a-7390-89ae-36f5d1c957e1` |
+| Native turn | `01a06bf9-d960-76e0-9dc5-24696592e886` |
+| Local session | `6e09c023-5ed2-4e31-b051-984caedab8fb` |
+| Durable delivery | Acceptance script observed completed local turn and acknowledged canonical message after native acceptance |
+| Shutdown | `cleanProviderTreeStop = PASS`; temporary data retained = false |
+
+The native Codex rollout independently records the same turn ID, exact agent message, token usage, and terminal `task_complete`. The full path was the real `lazooctl` command through named-pipe IPC, daemon persistence, managed Codex App Server session, normalized events, and planned shutdown; it was not a direct provider-smoke shortcut.
 
 ## Current non-model Codex readiness
 
@@ -83,7 +98,7 @@ A 2026-09-04 preflight refreshed only the non-model surroundings of the pending 
 | `cargo test -p lazoo-providers --test codex live_codex_app_server_handshake -- --ignored --exact --nocapture` | 0 | 1 passed; App Server v2 configured; native authentication ready; no account data exposed |
 | `cargo test -p lazoo-providers --test codex live_codex_session_start_reports_contained_host -- --ignored --exact --nocapture` | 0 | 1 passed; native host present and cleanly stopped; no model turn |
 
-Both live tests ran with the outer `CODEX_THREAD_ID` and `CODEX_SESSION_ID` removed from their subprocess environment. They show that the current 0.153.1 executable can authenticate, handshake, and create/stop the contained native session. They do not prove a model response or close the post-fix conversation-delivery gate.
+Both live tests ran with the outer `CODEX_THREAD_ID` and `CODEX_SESSION_ID` removed from their subprocess environment. They established that the current 0.153.1 executable could authenticate, handshake, and create/stop the contained native session before the separately authorized model-backed gate above.
 
 ## Scope and exclusions
 
@@ -93,6 +108,6 @@ Both live tests ran with the outer `CODEX_THREAD_ID` and `CODEX_SESSION_ID` remo
 - Other providers retain discovery/probe/smoke/session behavior; conversation delivery is not claimed for them.
 - Deterministic transport proof and live Codex proof are reported separately.
 
-## Remaining gate
+## Completion
 
-With fresh user authorization for the quota-consuming call, rerun exactly one live command above. Require a PASS live manifest, exact `LAZOO_TURN_OK`, durable native session/turn identity, acknowledged canonical message, completed local turn, and clean provider-tree stop. On failure, preserve the exact blocker and do not retry automatically.
+No conversation-delivery gate remains. The slice is ready for local integration after a final clean-tree and full-suite check. Task/delegation orchestration, worktree mutation, ConPTY, approvals, managed memory, resource governance, UI binding, and other-provider conversation delivery remain separate future slices.
