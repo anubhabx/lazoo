@@ -38,7 +38,10 @@ pub use session::{
     BeginSessionInput, BeginSessionStopInput, FailSessionInput, FinishSessionStopInput,
     MarkSessionReadyInput,
 };
-pub use task::ListTasksInput;
+pub use task::{
+    AcceptTaskInput, CancelTaskInput, DelegateTaskInput, ListTasksInput, ReportTaskInput,
+    ResolveTaskInput, StartTaskInput,
+};
 
 use crate::{emergency::import_pending_incidents, migration::apply_migrations};
 
@@ -202,6 +205,48 @@ pub enum StoreError {
     TurnCancelNotRequested { turn_id: Uuid },
     #[error("task {task_id} was not found")]
     TaskNotFound { task_id: Uuid },
+    #[error("task {task_id} changed; current revision is {current_revision}")]
+    TaskStale {
+        task_id: Uuid,
+        current_revision: u64,
+    },
+    #[error("task {task_id} is {state}, expected {expected}")]
+    TaskState {
+        task_id: Uuid,
+        state: String,
+        expected: &'static str,
+    },
+    #[error("task actor employee {employee_id} does not own task {task_id}")]
+    TaskActorMismatch { task_id: Uuid, employee_id: Uuid },
+    #[error("task actor employee {employee_id} must cite its matching session")]
+    TaskActorSession { employee_id: Uuid },
+    #[error("task employee {employee_id} changed; current revision is {current_revision}")]
+    TaskEmployeeStale {
+        employee_id: Uuid,
+        current_revision: u64,
+    },
+    #[error("task roster changed; current revision is {current_revision}")]
+    TaskRosterStale { current_revision: u64 },
+    #[error("task assignee employee {employee_id} is unavailable")]
+    TaskAssigneeUnavailable { employee_id: Uuid },
+    #[error("task cannot be delegated to its current assignee employee {employee_id}")]
+    TaskSelfDelegation { employee_id: Uuid },
+    #[error("task requested authority {requested} exceeds its inherited ceiling")]
+    TaskAuthorityExpansion { requested: String },
+    #[error("task {task_id} has inconsistent ancestry")]
+    TaskAncestryMismatch { task_id: Uuid },
+    #[error("task parent {parent_task_id} is already at maximum delegation depth")]
+    TaskDepthLimit { parent_task_id: Uuid },
+    #[error("task parent {parent_task_id} already has eight nonterminal direct children")]
+    TaskFanoutLimit { parent_task_id: Uuid },
+    #[error("task idempotency key was already used with different input")]
+    TaskIdempotencyConflict,
+    #[error("task {task_id} cannot become terminal while descendants remain nonterminal")]
+    TaskActiveChildren { task_id: Uuid },
+    #[error("task {task_id} turn {turn_id} has no matching native acceptance evidence")]
+    TaskAcceptanceEvidence { task_id: Uuid, turn_id: Uuid },
+    #[error("task failure code and message must be supplied together only for failed outcomes")]
+    TaskFailureDetails,
     #[error("task list limit must be between 1 and 1024")]
     TaskListLimit,
     #[error(transparent)]

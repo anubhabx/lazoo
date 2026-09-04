@@ -747,6 +747,7 @@ pub(crate) struct InsertMessageInput {
     pub max_attempts: u32,
 }
 
+#[allow(clippy::too_many_lines)] // Keep validation and the complete record-first transaction together.
 pub(crate) fn insert_message_tx(
     transaction: &Transaction<'_>,
     input: &InsertMessageInput,

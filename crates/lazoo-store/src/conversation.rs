@@ -223,6 +223,7 @@ impl Store {
         required_conversation(&connection, id)
     }
 
+    #[allow(clippy::too_many_lines)] // Keep the atomic message/turn/root-task write order visible.
     pub fn record_turn(&self, input: &RecordTurnInput) -> Result<TurnMutationResult, StoreError> {
         validate_conversation_command_key(&input.idempotency_key)?;
         let mut connection = self.lock()?;
@@ -1290,7 +1291,10 @@ type RawTurn = (
     Option<String>,
 );
 
-fn required_turn(connection: &Connection, id: Uuid) -> Result<ConversationTurnRecord, StoreError> {
+pub(crate) fn required_turn(
+    connection: &Connection,
+    id: Uuid,
+) -> Result<ConversationTurnRecord, StoreError> {
     let raw = connection
         .query_row(
             "SELECT sequence, contract_version, id, conversation_id, task_id, author_kind,

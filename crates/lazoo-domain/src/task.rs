@@ -76,6 +76,7 @@ pub const fn validate_task_depth(depth: u32) -> Result<(), TaskValidationError> 
     }
 }
 
+#[must_use]
 pub const fn effective_authority(
     parent: AuthorityMode,
     requested: AuthorityMode,
@@ -97,6 +98,7 @@ pub const fn effective_authority(
     authority_from_rank(minimum)
 }
 
+#[must_use]
 pub const fn task_transition_allowed(from: TaskState, to: TaskState) -> bool {
     matches!(
         (from, to),
