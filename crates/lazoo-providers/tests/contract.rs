@@ -61,6 +61,15 @@ fn capabilities_default_to_false_and_states_are_truthful() {
 }
 
 #[test]
+fn turn_permission_override_is_explicit_and_opt_in() {
+    let ordinary = TurnRequest::new("hello");
+    assert_eq!(ordinary.permission_mode, None);
+
+    let restricted = ordinary.with_permission_mode("ask");
+    assert_eq!(restricted.permission_mode.as_deref(), Some("ask"));
+}
+
+#[test]
 fn discovery_deduplicates_windows_paths_and_keeps_source_priority() {
     let candidates = rank_candidates(vec![
         ExecutableCandidate::new(r"C:\Tools\codex.exe", DiscoverySource::KnownLocation),

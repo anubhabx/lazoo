@@ -206,6 +206,28 @@ async fn observed_codex_turn_emits_response_acceptance_before_stream_without_dup
 }
 
 #[tokio::test]
+async fn codex_turn_permission_override_narrows_the_session_default() {
+    ensure_session_host();
+    let temporary = tempdir().unwrap();
+    let session = CodexAdapter::with_executable(fake_codex())
+        .start(&SessionRequest::new(temporary.path()).with_permission_mode("auto"))
+        .await
+        .unwrap();
+
+    session
+        .turn(&TurnRequest::new("hello").with_permission_mode("ask"))
+        .await
+        .unwrap();
+    session.stop().await.unwrap();
+
+    let request_text =
+        fs::read_to_string(temporary.path().join("fake-codex-turn-start.json")).unwrap();
+    let request: serde_json::Value =
+        serde_json::from_str(request_text.trim_start_matches('\u{feff}')).unwrap();
+    assert_eq!(request["approvalPolicy"], "on-request");
+}
+
+#[tokio::test]
 async fn observed_codex_rejection_interrupts_the_accepted_native_turn() {
     ensure_session_host();
     let temporary = tempdir().unwrap();

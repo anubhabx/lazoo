@@ -828,7 +828,13 @@ fn turn_start_params(
     );
     insert_optional(&mut params, "model", session.model.as_deref());
     insert_optional(&mut params, "effort", session.effort.as_deref());
-    insert_approval_policy(&mut params, session.permission_mode.as_deref())?;
+    insert_approval_policy(
+        &mut params,
+        request
+            .permission_mode
+            .as_deref()
+            .or(session.permission_mode.as_deref()),
+    )?;
     Ok(Value::Object(params))
 }
 
@@ -846,9 +852,9 @@ fn insert_approval_policy(
         return Ok(());
     };
     let policy = match mode {
-        "ask" | "default" | "on-request" => "on-request",
+        "ask" | "default" | "on-request" | "accept-edits" | "acceptEdits" => "on-request",
+        "auto" | "never" => "never",
         "untrusted" => "untrusted",
-        "never" => "never",
         _ => {
             return Err(ProviderError::Protocol(format!(
                 "unsupported Codex permission mode: {mode}"

@@ -1066,3 +1066,125 @@ fn lifecycle_failure_rejects_wrong_actor_session_and_stale_revision() {
         .unwrap_err();
     assert!(matches!(stale, StoreError::TaskStale { .. }));
 }
+
+#[test]
+#[allow(clippy::too_many_lines)] // The restart fixture proves all preserved and reconciled states together.
+fn task_restart_reconciliation_marks_only_inflight_work_uncertain_once() {
+    let temporary = tempdir().unwrap();
+    let database_path = temporary.path().join("lazoo.db");
+    let (running_id, cancel_requested_id, accepted_id, proposed_id) = {
+        let store = Store::open_path(&database_path).unwrap();
+        let lead = store.create_employee(&employee("Rhea")).unwrap().employee;
+        let worker = store.create_employee(&employee("Mira")).unwrap().employee;
+        let (session_id, old_boot_id) = ready_session(&store, "restart-lead", lead.id);
+        let conversation_id = create_conversation(&store, "restart", lead.id);
+
+        let start_root = |key: &str| {
+            let recorded = store
+                .record_turn(&record_input(key, conversation_id, user(), None, key))
+                .unwrap();
+            let submitting = store
+                .begin_turn_submission(&BeginTurnSubmissionInput {
+                    request_id: format!("request-{key}-begin"),
+                    idempotency_key: format!("{key}-begin"),
+                    turn_id: recorded.turn.id,
+                    expected_revision: recorded.turn.revision,
+                    owner_boot_id: old_boot_id,
+                    recipient_session_id: session_id,
+                })
+                .unwrap();
+            store
+                .observe_turn(&ObserveTurnInput {
+                    request_id: format!("request-{key}-start"),
+                    idempotency_key: format!("{key}-start"),
+                    turn_id: recorded.turn.id,
+                    expected_revision: submitting.turn.revision,
+                    kind: "turn-started".to_owned(),
+                    provider: "codex".to_owned(),
+                    native_session_id: Some("native-restart".to_owned()),
+                    native_turn_id: Some(format!("native-{key}")),
+                    payload: json!({"status": "in-progress"}),
+                    transition: Some(TurnState::Accepted),
+                })
+                .unwrap();
+            recorded.turn.id
+        };
+
+        let running_id = start_root("running");
+        let cancel_requested_id = start_root("cancel-requested");
+        let cancel_requested = store.get_task(cancel_requested_id).unwrap().task;
+        store
+            .cancel_task(&CancelTaskInput {
+                request_id: "request-restart-cancel".to_owned(),
+                idempotency_key: "restart-cancel".to_owned(),
+                task_id: cancel_requested.id,
+                expected_revision: cancel_requested.revision,
+                actor: user(),
+                evidence: json!({"reason": "stop"}),
+            })
+            .unwrap();
+
+        let accepted = root_task(&store, "accepted", conversation_id, AuthorityMode::Ask);
+        let proposed = store
+            .delegate_task(&delegate_input(
+                "proposed",
+                accepted.id,
+                MessageEndpoint {
+                    employee_id: lead.id,
+                    session_id: Some(session_id),
+                },
+                worker.id,
+                Some(AuthorityMode::Ask),
+                store.roster_snapshot().unwrap().revision,
+            ))
+            .unwrap()
+            .task;
+        store.publish_pending_outbox().unwrap();
+        (running_id, cancel_requested_id, accepted.id, proposed.id)
+    };
+
+    let store = Store::open_path(&database_path).unwrap();
+    let new_boot_id = Uuid::new_v4();
+    let turns = store.reconcile_turns(new_boot_id).unwrap();
+    assert_eq!(turns.turns.len(), 2);
+    let result = store.reconcile_tasks().unwrap();
+    assert_eq!(result.tasks.len(), 2);
+    assert!(result.event_sequence.is_some());
+    for task_id in [running_id, cancel_requested_id] {
+        let task = store.get_task(task_id).unwrap();
+        assert_eq!(task.task.state, TaskState::Uncertain);
+        assert_eq!(
+            task.task.failure_code.as_deref(),
+            Some("LZ-TASK-OWNER-LOST")
+        );
+        assert!(task.task.active_turn_id.is_none());
+        assert!(task.task.active_session_id.is_none());
+        assert_eq!(
+            task.evidence.last().unwrap().kind,
+            TaskEvidenceKind::Uncertain
+        );
+    }
+    assert_eq!(
+        store.get_task(accepted_id).unwrap().task.state,
+        TaskState::Accepted
+    );
+    assert_eq!(
+        store.get_task(proposed_id).unwrap().task.state,
+        TaskState::Proposed
+    );
+    assert_eq!(
+        store
+            .list_events(0, 1000)
+            .unwrap()
+            .iter()
+            .filter(|event| event.event_type == "tasks.reconciled")
+            .count(),
+        1
+    );
+
+    let event_count = store.list_events(0, 1000).unwrap().len();
+    let replay = store.reconcile_tasks().unwrap();
+    assert!(replay.tasks.is_empty());
+    assert_eq!(replay.event_sequence, None);
+    assert_eq!(store.list_events(0, 1000).unwrap().len(), event_count);
+}

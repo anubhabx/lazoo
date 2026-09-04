@@ -6,8 +6,9 @@ use lazoo_domain::{
 use lazoo_protocol::{
     AuthorityMode, EmployeeAvailability, MESSAGE_ENVELOPE_V1, MessageEndpoint, MessageKind,
     MessageRecord, MessageReference, MessageSender, TASK_CONTRACT_V1, TaskDetail, TaskEvidence,
-    TaskEvidenceKind, TaskMutationResult, TaskRecord, TaskReportKind, TaskResolution, TaskRole,
-    TaskState, TaskSummary, TurnState, UserMessageEndpoint, UserMessageKind,
+    TaskEvidenceKind, TaskMutationResult, TaskReconcileResult, TaskRecord, TaskReportKind,
+    TaskResolution, TaskRole, TaskState, TaskSummary, TurnState, UserMessageEndpoint,
+    UserMessageKind,
 };
 use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, params};
 use serde_json::{Value, json};
@@ -137,6 +138,79 @@ impl Store {
             task,
             children,
             evidence,
+        })
+    }
+
+    pub fn reconcile_tasks(&self) -> Result<TaskReconcileResult, StoreError> {
+        let mut connection = self.lock()?;
+        let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let mut statement = transaction.prepare(
+            "SELECT task.id
+             FROM tasks task
+             JOIN conversation_turns turn ON turn.id = task.active_turn_id
+             WHERE task.state IN ('running', 'cancel-requested')
+               AND turn.state = 'uncertain'
+               AND turn.failure_code = 'LZ-TURN-OWNER-LOST'
+             ORDER BY task.sequence",
+        )?;
+        let ids = statement
+            .query_map([], |row| row.get::<_, String>(0))?
+            .collect::<Result<Vec<_>, _>>()?;
+        drop(statement);
+        if ids.is_empty() {
+            transaction.commit()?;
+            return Ok(TaskReconcileResult {
+                tasks: Vec::new(),
+                event_sequence: None,
+            });
+        }
+
+        let now = Utc::now().to_rfc3339();
+        let mut tasks = Vec::with_capacity(ids.len());
+        for id in ids {
+            let task_id = parse_uuid(&id, "tasks.id")?;
+            let current = required_task(&transaction, task_id)?;
+            let turn_id = current.active_turn_id.ok_or(StoreError::TaskTurnLink {
+                task_id,
+                turn_id: task_id,
+            })?;
+            let actor = MessageSender::Employee(MessageEndpoint {
+                employee_id: current.assigned_employee_id,
+                session_id: current.active_session_id,
+            });
+            transaction.execute(
+                "UPDATE tasks SET state = 'uncertain', revision = revision + 1,
+                        active_turn_id = NULL, active_session_id = NULL,
+                        failure_code = 'LZ-TASK-OWNER-LOST',
+                        failure_message = 'the daemon stopped while this task turn was in flight',
+                        terminal_at = ?2, updated_at = ?2
+                 WHERE id = ?1",
+                params![task_id.to_string(), now],
+            )?;
+            insert_task_evidence_tx(
+                &transaction,
+                task_id,
+                current.revision + 1,
+                TaskEvidenceKind::Uncertain,
+                actor,
+                None,
+                Some(turn_id),
+                current.active_session_id,
+                &json!({"source": "startup-reconciliation", "turnFailureCode": "LZ-TURN-OWNER-LOST"}),
+                &now,
+            )?;
+            tasks.push(required_task(&transaction, task_id)?);
+        }
+        let event_sequence = employee::insert_event(
+            &transaction,
+            "tasks.reconciled",
+            &json!({"tasks": &tasks}),
+            &now,
+        )?;
+        transaction.commit()?;
+        Ok(TaskReconcileResult {
+            tasks,
+            event_sequence: Some(event_sequence),
         })
     }
 
@@ -413,6 +487,7 @@ impl Store {
         })
     }
 
+    #[allow(clippy::too_many_lines)] // Keep projected-start replay and standalone validation atomic.
     pub fn start_task(&self, input: &StartTaskInput) -> Result<TaskMutationResult, StoreError> {
         validate_message_command_key(&input.idempotency_key)?;
         validate_task_evidence(&input.evidence)?;
@@ -428,6 +503,44 @@ impl Store {
             return Ok(result);
         }
         let current = required_task(&transaction, input.task_id)?;
+        if current.state == TaskState::Running
+            && current.active_turn_id == Some(input.turn_id)
+            && current.active_session_id == input.actor.session_id
+            && input.expected_revision.checked_add(1) == Some(current.revision)
+        {
+            require_actor(&transaction, &current, input.actor)?;
+            let turn = crate::conversation::required_turn(&transaction, input.turn_id)?;
+            if turn.state != TurnState::Accepted
+                || turn.task_id != Some(current.id)
+                || turn.conversation_id != current.conversation_id
+                || turn.recipient != input.actor
+                || turn.native_turn_id.is_none()
+            {
+                return Err(StoreError::TaskAcceptanceEvidence {
+                    task_id: current.id,
+                    turn_id: turn.id,
+                });
+            }
+            let now = Utc::now().to_rfc3339();
+            insert_task_command_tx(
+                &transaction,
+                "task.start",
+                &input.idempotency_key,
+                &input.request_id,
+                current.id,
+                &now,
+            )?;
+            let delegation_message = current
+                .delegation_message_id
+                .map(|id| message::required_message(&transaction, id))
+                .transpose()?;
+            transaction.commit()?;
+            return Ok(TaskMutationResult {
+                task: current,
+                delegation_message,
+                event_sequence: None,
+            });
+        }
         require_task_revision(&current, input.expected_revision)?;
         if current.state != TaskState::Accepted {
             return Err(StoreError::TaskState {
@@ -944,6 +1057,170 @@ pub(crate) fn insert_task_evidence_tx(
     Ok(())
 }
 
+#[allow(clippy::too_many_lines)] // The explicit projection table is kept together for auditability.
+pub(crate) fn project_turn_tx(
+    transaction: &Transaction<'_>,
+    turn_id: Uuid,
+    cause: &str,
+    now: &str,
+) -> Result<(), StoreError> {
+    let turn = crate::conversation::required_turn(transaction, turn_id)?;
+    let Some(task_id) = turn.task_id else {
+        return Ok(());
+    };
+    let current = required_task(transaction, task_id)?;
+    require_valid_ancestry(transaction, &current)?;
+    let conversation_project_id = transaction.query_row(
+        "SELECT project_id FROM conversations WHERE id = ?1",
+        [turn.conversation_id.to_string()],
+        |row| row.get::<_, Option<String>>(0),
+    )?;
+    let conversation_project_id = conversation_project_id
+        .as_deref()
+        .map(|value| parse_uuid(value, "conversations.project_id"))
+        .transpose()?;
+    let exact_scope = current.conversation_id == turn.conversation_id
+        && current.project_id == conversation_project_id
+        && current.assigned_employee_id == turn.recipient.employee_id
+        && current
+            .active_turn_id
+            .is_none_or(|active_turn_id| active_turn_id == turn.id)
+        && current
+            .active_session_id
+            .is_none_or(|active_session_id| turn.recipient.session_id == Some(active_session_id));
+    if !exact_scope {
+        return Err(StoreError::TaskTurnLink {
+            task_id: current.id,
+            turn_id: turn.id,
+        });
+    }
+
+    let active_descendants = has_active_descendants(transaction, current.id)?;
+    let projection = match (current.state, turn.state, cause) {
+        (TaskState::Accepted, TurnState::Accepted, _) => Some((
+            TaskState::Running,
+            TaskEvidenceKind::Started,
+            "task.started",
+            false,
+        )),
+        (TaskState::Running | TaskState::CancelRequested, TurnState::Accepted, _)
+            if cause != "turn-cancel-requested" =>
+        {
+            Some((
+                current.state,
+                TaskEvidenceKind::Progress,
+                "task.progressed",
+                false,
+            ))
+        }
+        (TaskState::Running, TurnState::Completed, _) if active_descendants => Some((
+            TaskState::Running,
+            TaskEvidenceKind::Progress,
+            "task.progressed",
+            true,
+        )),
+        (TaskState::Running, TurnState::Completed, _) => Some((
+            TaskState::Completed,
+            TaskEvidenceKind::Completed,
+            "task.completed",
+            true,
+        )),
+        (
+            TaskState::Accepted | TaskState::Running | TaskState::CancelRequested,
+            TurnState::TerminalFailed,
+            _,
+        ) => Some((
+            TaskState::Failed,
+            TaskEvidenceKind::Failed,
+            "task.failed",
+            true,
+        )),
+        (
+            TaskState::Accepted | TaskState::Running | TaskState::CancelRequested,
+            TurnState::Cancelled,
+            _,
+        ) => Some((
+            TaskState::Cancelled,
+            TaskEvidenceKind::Cancelled,
+            "task.cancelled",
+            true,
+        )),
+        (TaskState::Running | TaskState::CancelRequested, TurnState::Uncertain, _) => Some((
+            TaskState::Uncertain,
+            TaskEvidenceKind::Uncertain,
+            "task.uncertain",
+            true,
+        )),
+        (TaskState::Running, _, "turn-cancel-requested") => Some((
+            TaskState::CancelRequested,
+            TaskEvidenceKind::CancelRequested,
+            "task.cancel-requested",
+            false,
+        )),
+        _ => None,
+    };
+    let Some((target, evidence_kind, event_type, clear_active)) = projection else {
+        return Ok(());
+    };
+    let terminal = matches!(
+        target,
+        TaskState::Completed | TaskState::Failed | TaskState::Cancelled | TaskState::Uncertain
+    );
+    let (failure_code, failure_message) = if target == TaskState::Failed {
+        (
+            turn.failure_code
+                .clone()
+                .or_else(|| Some("LZ-TASK-TURN-FAILED".to_owned())),
+            turn.failure_message
+                .clone()
+                .or_else(|| Some("the linked provider turn failed".to_owned())),
+        )
+    } else if target == TaskState::Uncertain {
+        (turn.failure_code.clone(), turn.failure_message.clone())
+    } else {
+        (None, None)
+    };
+    transaction.execute(
+        "UPDATE tasks SET state = ?2, revision = revision + 1,
+                active_turn_id = CASE WHEN ?3 THEN NULL ELSE COALESCE(active_turn_id, ?4) END,
+                active_session_id = CASE WHEN ?3 THEN NULL ELSE COALESCE(active_session_id, ?5) END,
+                failure_code = ?6, failure_message = ?7,
+                terminal_at = CASE WHEN ?8 THEN ?9 ELSE terminal_at END,
+                updated_at = ?9
+         WHERE id = ?1",
+        params![
+            current.id.to_string(),
+            serialized_name(target)?,
+            clear_active,
+            turn.id.to_string(),
+            turn.recipient.session_id.map(|value| value.to_string()),
+            failure_code,
+            failure_message,
+            terminal,
+            now,
+        ],
+    )?;
+    let detail = json!({
+        "turnEventKind": cause,
+        "turnState": serialized_name(turn.state)?,
+    });
+    insert_task_evidence_tx(
+        transaction,
+        current.id,
+        current.revision + 1,
+        evidence_kind,
+        MessageSender::Employee(turn.recipient),
+        Some(turn.message_id),
+        Some(turn.id),
+        turn.recipient.session_id,
+        &detail,
+        now,
+    )?;
+    let task = required_task(transaction, current.id)?;
+    employee::insert_event(transaction, event_type, &json!({"task": &task}), now)?;
+    Ok(())
+}
+
 fn insert_task_command_tx(
     transaction: &Transaction<'_>,
     scope: &str,
@@ -1037,6 +1314,14 @@ fn validate_resolution_failure_fields(
 }
 
 fn require_no_active_descendants(connection: &Connection, task_id: Uuid) -> Result<(), StoreError> {
+    if has_active_descendants(connection, task_id)? {
+        Err(StoreError::TaskActiveChildren { task_id })
+    } else {
+        Ok(())
+    }
+}
+
+fn has_active_descendants(connection: &Connection, task_id: Uuid) -> Result<bool, StoreError> {
     let active: i64 = connection.query_row(
         "WITH RECURSIVE descendants(id, state) AS (
             SELECT id, state FROM tasks WHERE parent_task_id = ?1
@@ -1050,11 +1335,7 @@ fn require_no_active_descendants(connection: &Connection, task_id: Uuid) -> Resu
         [task_id.to_string()],
         |row| row.get(0),
     )?;
-    if active == 0 {
-        Ok(())
-    } else {
-        Err(StoreError::TaskActiveChildren { task_id })
-    }
+    Ok(active != 0)
 }
 
 fn task_for_command(
@@ -1154,7 +1435,10 @@ fn require_route_ready_assignee(
     }
 }
 
-fn require_valid_ancestry(connection: &Connection, task: &TaskRecord) -> Result<(), StoreError> {
+pub(crate) fn require_valid_ancestry(
+    connection: &Connection,
+    task: &TaskRecord,
+) -> Result<(), StoreError> {
     let root = required_task(connection, task.root_task_id)?;
     let valid_root = root.id == root.root_task_id
         && root.parent_task_id.is_none()

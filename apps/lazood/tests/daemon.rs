@@ -63,6 +63,7 @@ struct FakeSessionBackend {
     gate_events: Arc<AtomicBool>,
     event_permits: Arc<Semaphore>,
     turn_events: Arc<Mutex<Vec<ProviderEvent>>>,
+    turn_requests: Arc<Mutex<Vec<TurnRequest>>>,
     turn_failure: Arc<Mutex<Option<String>>>,
     turn_retryable_failure: Arc<AtomicBool>,
     working_directories: Arc<Mutex<Vec<PathBuf>>>,
@@ -78,6 +79,7 @@ impl Default for FakeSessionBackend {
             gate_events: Arc::new(AtomicBool::new(false)),
             event_permits: Arc::new(Semaphore::new(0)),
             turn_events: Arc::new(Mutex::new(Vec::new())),
+            turn_requests: Arc::new(Mutex::new(Vec::new())),
             turn_failure: Arc::new(Mutex::new(None)),
             turn_retryable_failure: Arc::new(AtomicBool::new(false)),
             working_directories: Arc::new(Mutex::new(Vec::new())),
@@ -93,6 +95,7 @@ struct FakeManagedSession {
     gate_events: Arc<AtomicBool>,
     event_permits: Arc<Semaphore>,
     turn_events: Arc<Mutex<Vec<ProviderEvent>>>,
+    turn_requests: Arc<Mutex<Vec<TurnRequest>>>,
     turn_failure: Arc<Mutex<Option<String>>>,
     turn_retryable_failure: Arc<AtomicBool>,
 }
@@ -108,11 +111,12 @@ impl ManagedSession for FakeManagedSession {
 
     fn turn_observed<'a>(
         &'a self,
-        _request: &'a TurnRequest,
+        request: &'a TurnRequest,
         observer: &'a dyn TurnEventObserver,
     ) -> Pin<Box<dyn Future<Output = Result<Vec<ProviderEvent>, ProviderError>> + Send + 'a>> {
         Box::pin(async move {
             self.turns.fetch_add(1, Ordering::SeqCst);
+            self.turn_requests.lock().unwrap().push(request.clone());
             if self.turn_retryable_failure.load(Ordering::SeqCst) {
                 return Err(ProviderError::Timeout { phase: "fake turn" });
             }
@@ -168,6 +172,7 @@ impl SessionBackend for FakeSessionBackend {
                 gate_events: Arc::clone(&self.gate_events),
                 event_permits: Arc::clone(&self.event_permits),
                 turn_events: Arc::clone(&self.turn_events),
+                turn_requests: Arc::clone(&self.turn_requests),
                 turn_failure: Arc::clone(&self.turn_failure),
                 turn_retryable_failure: Arc::clone(&self.turn_retryable_failure),
             }) as Box<dyn ManagedSession>)
@@ -630,6 +635,108 @@ async fn turn_submit_persists_before_provider_acceptance_and_acknowledges_on_evi
 }
 
 #[tokio::test]
+async fn task_authority_narrows_the_permission_mode_for_the_provider_turn() {
+    let temporary = tempdir().unwrap();
+    let root = DataRoot::from_path(temporary.path().join("data"));
+    root.ensure().unwrap();
+    let store = Store::open_path(root.state_db()).unwrap();
+    let employee = store
+        .create_employee(&CreateEmployeeInput {
+            request_id: "create-autonomous-request".to_owned(),
+            idempotency_key: "create-autonomous".to_owned(),
+            name: "Rhea".to_owned(),
+            provider: "codex".to_owned(),
+            role: "Lead".to_owned(),
+            instructions: String::new(),
+            model: Some("test-model".to_owned()),
+            reasoning_effort: Some("low".to_owned()),
+            native_settings: json!({}),
+            authority_mode: AuthorityMode::FullAutonomy,
+            checkout_policy: EmployeeCheckoutPolicy::Isolated,
+            enabled: true,
+            provider_observation: Some(ProviderObservation {
+                provider: "codex".to_owned(),
+                verification: "configured".to_owned(),
+                version: Some("test".to_owned()),
+                protocol: Some("app-server/v2".to_owned()),
+                capabilities: json!({"session": true, "permission": true}),
+                authentication: json!({"native": "ready", "external": "unknown"}),
+                degradation_reason: None,
+                checked_at: "2026-09-04T00:00:00Z".to_owned(),
+            }),
+        })
+        .unwrap()
+        .employee;
+    let conversation = store
+        .create_conversation(&CreateConversationInput {
+            request_id: "create-authority-conversation-request".to_owned(),
+            idempotency_key: "create-authority-conversation".to_owned(),
+            project_id: None,
+            lead_employee_id: employee.id,
+            title: None,
+        })
+        .unwrap()
+        .conversation;
+    let backend = FakeSessionBackend::default();
+    backend.turn_events.lock().unwrap().extend([
+        ProviderEvent::TurnStarted {
+            provider: ProviderKind::Codex,
+            session_id: "native-1".to_owned(),
+            turn_id: Some("authority-turn".to_owned()),
+            raw: None,
+        },
+        ProviderEvent::TurnCompleted {
+            provider: ProviderKind::Codex,
+            session_id: "native-1".to_owned(),
+            turn_id: Some("authority-turn".to_owned()),
+            status: "completed".to_owned(),
+            output: Some("done".to_owned()),
+            raw: None,
+        },
+    ]);
+    let app = App::new_with_session_backend(
+        store,
+        root,
+        DiscoveryEnvironment::empty(),
+        Arc::new(backend.clone()),
+    )
+    .unwrap();
+    app.handle(request(
+        "warm-authority-session",
+        "session.warm",
+        json!({
+            "employeeId": employee.id,
+            "expectedEmployeeRevision": employee.configuration_revision,
+            "idempotencyKey": "warm-authority-session"
+        }),
+    ))
+    .await
+    .result
+    .unwrap();
+
+    app.handle(request(
+        "submit-authority-turn",
+        "turn.submit",
+        json!({
+            "conversationId": conversation.id,
+            "author": {"kind": "user"},
+            "recipient": null,
+            "text": "Stay inside ask authority",
+            "activateIfNeeded": false,
+            "maxAttempts": 3,
+            "idempotencyKey": "submit-authority-turn"
+        }),
+    ))
+    .await
+    .result
+    .unwrap();
+
+    let requests = backend.turn_requests.lock().unwrap();
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].permission_mode.as_deref(), Some("ask"));
+}
+
+#[tokio::test]
 async fn turn_submit_without_observed_evidence_never_acknowledges_message() {
     let (_temporary, _root, store, app, backend, employee_id, conversation_id) = turn_test_app();
     app.handle(request(
@@ -673,7 +780,7 @@ async fn turn_submit_without_observed_evidence_never_acknowledges_message() {
 }
 
 #[tokio::test]
-async fn turn_submit_rejects_non_codex_provider_before_turn_io() {
+async fn task_turn_rejects_a_provider_without_authority_override_support_before_io() {
     let temporary = tempdir().unwrap();
     let root = DataRoot::from_path(temporary.path().join("data"));
     root.ensure().unwrap();
@@ -751,7 +858,7 @@ async fn turn_submit_rejects_non_codex_provider_before_turn_io() {
         .await
         .error
         .unwrap();
-    assert_eq!(error.code, "LZ-TURN-PROVIDER-UNSUPPORTED");
+    assert_eq!(error.code, "LZ-TASK-AUTHORITY-UNSUPPORTED");
     assert_eq!(backend.turns.load(Ordering::SeqCst), 0);
     let turn = store
         .get_turn(store.list_turns(conversation.id, 0, 100).unwrap()[0].id)
@@ -1829,7 +1936,7 @@ async fn status_reports_protocol_store_and_boot_identity() {
     let result = response.result.unwrap();
 
     assert_eq!(result["protocolVersion"], 1);
-    assert_eq!(result["schemaVersion"], 5);
+    assert_eq!(result["schemaVersion"], 6);
     assert_eq!(result["journalMode"], "wal");
     assert!(
         result["bootId"]
@@ -2538,6 +2645,14 @@ fn app_startup_reconciles_prior_boot_turns_without_adopting_provider_work() {
         Some("LZ-TURN-OWNER-LOST")
     );
     assert!(reconciled.owner_boot_id.is_none());
+    let reconciled_task = store.get_task(recorded.turn.id).unwrap().task;
+    assert_eq!(reconciled_task.state, lazoo_protocol::TaskState::Uncertain);
+    assert_eq!(
+        reconciled_task.failure_code.as_deref(),
+        Some("LZ-TASK-OWNER-LOST")
+    );
+    assert!(reconciled_task.active_turn_id.is_none());
+    assert!(reconciled_task.active_session_id.is_none());
     assert_eq!(
         store
             .get_message(reconciled.message_id)

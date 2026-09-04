@@ -10,7 +10,7 @@ use lazoo_protocol::{
     AuthorityMode, CONVERSATION_CONTRACT_V1, ConversationMutationResult, ConversationRecord,
     ConversationSummary, ConversationTurnEvent, ConversationTurnRecord, ConversationTurnSummary,
     EmployeeAvailability, MESSAGE_ENVELOPE_V2, MessageDeliveryState, MessageEndpoint, MessageKind,
-    MessageSender, TaskRole, TaskState, TurnMutationResult, TurnReconcileResult, TurnState,
+    MessageSender, TaskState, TurnMutationResult, TurnReconcileResult, TurnState,
 };
 use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, params};
 use serde::Serialize;
@@ -238,8 +238,21 @@ impl Store {
         validate_activation_request(&input.author, input.activate_if_needed)?;
         validate_max_attempts(input.max_attempts)?;
         let conversation = required_conversation(&transaction, input.conversation_id)?;
-        let recipient = resolve_recipient(&transaction, &conversation, input.recipient)?;
         validate_author(&transaction, input.author)?;
+        let existing_task = input
+            .task_id
+            .map(|task_id| task::required_task(&transaction, task_id))
+            .transpose()?;
+        let expected_recipient_employee_id = existing_task
+            .as_ref()
+            .map_or(conversation.lead_employee_id, |task| {
+                task.assigned_employee_id
+            });
+        let recipient = resolve_recipient(
+            &transaction,
+            expected_recipient_employee_id,
+            input.recipient,
+        )?;
         let recipient_employee = require_route_ready_employee(&transaction, recipient.employee_id)?;
         let turn_id = Uuid::new_v4();
         let now = Utc::now().to_rfc3339();
@@ -274,8 +287,14 @@ impl Store {
             }
             (MessageSender::Employee(_), None) => return Err(StoreError::TurnTaskRequired),
             (_, Some(task_id)) => {
-                let task = task::required_task(&transaction, task_id)?;
-                require_turn_task_scope(&task, &conversation, recipient)?;
+                let task = existing_task.ok_or(StoreError::TaskNotFound { task_id })?;
+                require_turn_task_scope(
+                    &transaction,
+                    &task,
+                    &conversation,
+                    input.author,
+                    recipient,
+                )?;
                 Some(task)
             }
         };
@@ -548,6 +567,7 @@ impl Store {
             appended.truncated,
             &now,
         )?;
+        task::project_turn_tx(&transaction, input.turn_id, &input.kind, &now)?;
         effective_turn_result(
             &transaction,
             "turn.observe",
@@ -620,6 +640,7 @@ impl Store {
                 (target == TurnState::TerminalFailed).then_some(now.clone()),
             ],
         )?;
+        task::project_turn_tx(&transaction, input.turn_id, "turn-failed", &now)?;
         effective_turn_result(
             &transaction,
             "turn.fail",
@@ -749,6 +770,7 @@ impl Store {
                 params![input.turn_id.to_string(), now],
             )?;
         }
+        task::project_turn_tx(&transaction, input.turn_id, "turn-cancel-requested", &now)?;
         effective_turn_result(
             &transaction,
             "turn.request-cancel",
@@ -828,6 +850,7 @@ impl Store {
                 now,
             ],
         )?;
+        task::project_turn_tx(&transaction, input.turn_id, "turn-cancelled", &now)?;
         effective_turn_result(
             &transaction,
             "turn.finish-cancel",
@@ -876,6 +899,7 @@ impl Store {
                 now,
             ],
         )?;
+        task::project_turn_tx(&transaction, input.turn_id, "turn-uncertain", &now)?;
         effective_turn_result(
             &transaction,
             "turn.uncertain",
@@ -978,20 +1002,17 @@ fn require_project(connection: &Connection, project_id: Uuid) -> Result<(), Stor
 
 fn resolve_recipient(
     connection: &Connection,
-    conversation: &ConversationRecord,
+    expected_employee_id: Uuid,
     provided: Option<MessageEndpoint>,
 ) -> Result<MessageEndpoint, StoreError> {
     let recipient = provided.unwrap_or(MessageEndpoint {
-        employee_id: conversation.lead_employee_id,
-        session_id: session::active_session_id_for_employee(
-            connection,
-            conversation.lead_employee_id,
-        )?,
+        employee_id: expected_employee_id,
+        session_id: session::active_session_id_for_employee(connection, expected_employee_id)?,
     });
-    if recipient.employee_id != conversation.lead_employee_id {
+    if recipient.employee_id != expected_employee_id {
         return Err(StoreError::TurnRecipient {
             turn_recipient: recipient.employee_id,
-            lead_employee_id: conversation.lead_employee_id,
+            lead_employee_id: expected_employee_id,
         });
     }
     validate_endpoint(connection, recipient, "recipient")?;
@@ -999,21 +1020,30 @@ fn resolve_recipient(
 }
 
 fn require_turn_task_scope(
+    connection: &Connection,
     task: &lazoo_protocol::TaskRecord,
     conversation: &ConversationRecord,
+    author: MessageSender,
     recipient: MessageEndpoint,
 ) -> Result<(), StoreError> {
-    let root = task.id == task.root_task_id
-        && task.parent_task_id.is_none()
-        && task.role == TaskRole::Lead;
     let same_scope = task.conversation_id == conversation.id
         && task.project_id == conversation.project_id
         && task.assigned_employee_id == recipient.employee_id;
+    let author_matches = match author {
+        MessageSender::User(_) => true,
+        MessageSender::Employee(endpoint) => {
+            endpoint.employee_id == task.assigned_employee_id || author == task.creator
+        }
+    };
     let nonterminal = !matches!(
         task.state,
         TaskState::Completed | TaskState::Failed | TaskState::Cancelled
     );
-    if root && same_scope && nonterminal {
+    if same_scope
+        && author_matches
+        && nonterminal
+        && task::require_valid_ancestry(connection, task).is_ok()
+    {
         Ok(())
     } else {
         Err(StoreError::TurnTaskScope { task_id: task.id })

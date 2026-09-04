@@ -277,6 +277,7 @@ impl SessionRequest {
 pub struct TurnRequest {
     pub correlation_id: Uuid,
     pub prompt: String,
+    pub permission_mode: Option<String>,
 }
 
 impl TurnRequest {
@@ -285,7 +286,14 @@ impl TurnRequest {
         Self {
             correlation_id: Uuid::new_v4(),
             prompt: prompt.into(),
+            permission_mode: None,
         }
+    }
+
+    #[must_use]
+    pub fn with_permission_mode(mut self, mode: impl Into<String>) -> Self {
+        self.permission_mode = Some(mode.into());
+        self
     }
 }
 

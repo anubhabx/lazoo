@@ -1,13 +1,13 @@
 use lazoo_protocol::{
     AuthorityMode, CheckoutMode, EmployeeCheckoutPolicy, MessageDeliveryState, MessageEndpoint,
-    MessageSender, ProviderObservation, SessionLifecycleState, TurnState, UserMessageEndpoint,
-    UserMessageKind,
+    MessageSender, ProviderObservation, SessionLifecycleState, TaskEvidenceKind, TaskState,
+    TurnState, UserMessageEndpoint, UserMessageKind,
 };
 use lazoo_store::{
-    BeginSessionInput, BeginTurnSubmissionInput, CreateConversationInput, CreateEmployeeInput,
-    FailTurnInput, FinishTurnCancelInput, MarkSessionReadyInput, MarkTurnUncertainInput,
-    ObserveTurnInput, RecordTurnInput, RegisterProjectInput, RequestTurnCancelInput,
-    RetryTurnInput, Store, StoreError,
+    AcceptTaskInput, BeginSessionInput, BeginTurnSubmissionInput, CreateConversationInput,
+    CreateEmployeeInput, DelegateTaskInput, FailTurnInput, FinishTurnCancelInput,
+    MarkSessionReadyInput, MarkTurnUncertainInput, ObserveTurnInput, RecordTurnInput,
+    RegisterProjectInput, RequestTurnCancelInput, RetryTurnInput, Store, StoreError,
 };
 use serde_json::json;
 use tempfile::tempdir;
@@ -109,6 +109,378 @@ fn warm_session(store: &Store, employee_id: Uuid, owner_boot_id: Uuid) -> Uuid {
         .unwrap()
         .session
         .id
+}
+
+#[test]
+#[allow(clippy::too_many_lines)] // Preserve the exact projected evidence order in one scenario.
+fn task_turn_evidence_projects_once_and_reaches_terminal_truth_atomically() {
+    let temporary = tempdir().unwrap();
+    let store = Store::open_path(temporary.path().join("lazoo.db")).unwrap();
+    let lead = store
+        .create_employee(&employee("Rhea", true, true))
+        .unwrap()
+        .employee;
+    let owner = Uuid::new_v4();
+    let session_id = warm_session(&store, lead.id, owner);
+    let conversation = create_conversation(&store, "projection", lead.id, None).conversation;
+    let recorded = record_turn(
+        &store,
+        "projected",
+        conversation.id,
+        user(),
+        None,
+        "build it",
+    );
+    let task_id = recorded.task.as_ref().unwrap().id;
+    let submitting = store
+        .begin_turn_submission(&BeginTurnSubmissionInput {
+            request_id: "request-projected-begin".to_owned(),
+            idempotency_key: "projected-begin".to_owned(),
+            turn_id: recorded.turn.id,
+            expected_revision: recorded.turn.revision,
+            owner_boot_id: owner,
+            recipient_session_id: session_id,
+        })
+        .unwrap();
+
+    let accepted = store
+        .observe_turn(&ObserveTurnInput {
+            request_id: "request-projected-start".to_owned(),
+            idempotency_key: "projected-start".to_owned(),
+            turn_id: recorded.turn.id,
+            expected_revision: submitting.turn.revision,
+            kind: "turn-started".to_owned(),
+            provider: "codex".to_owned(),
+            native_session_id: Some("thread-native-1".to_owned()),
+            native_turn_id: Some("native-turn-projected".to_owned()),
+            payload: json!({"status": "in-progress"}),
+            transition: Some(TurnState::Accepted),
+        })
+        .unwrap();
+    let running = store.get_task(task_id).unwrap();
+    assert_eq!(running.task.state, TaskState::Running);
+    assert_eq!(running.task.active_turn_id, Some(recorded.turn.id));
+    assert_eq!(running.task.active_session_id, Some(session_id));
+    assert_eq!(
+        running
+            .evidence
+            .iter()
+            .filter(|item| item.kind == TaskEvidenceKind::Started)
+            .count(),
+        1
+    );
+
+    let progress = store
+        .observe_turn(&ObserveTurnInput {
+            request_id: "request-projected-progress".to_owned(),
+            idempotency_key: "projected-progress".to_owned(),
+            turn_id: recorded.turn.id,
+            expected_revision: accepted.turn.revision,
+            kind: "text-delta".to_owned(),
+            provider: "codex".to_owned(),
+            native_session_id: Some("thread-native-1".to_owned()),
+            native_turn_id: Some("native-turn-projected".to_owned()),
+            payload: json!({"text": "working"}),
+            transition: None,
+        })
+        .unwrap();
+    let progressed = store.get_task(task_id).unwrap();
+    assert_eq!(progressed.task.state, TaskState::Running);
+    assert_eq!(
+        progressed
+            .evidence
+            .iter()
+            .filter(|item| item.kind == TaskEvidenceKind::Started)
+            .count(),
+        1
+    );
+    assert_eq!(
+        progressed.evidence.last().unwrap().kind,
+        TaskEvidenceKind::Progress
+    );
+
+    store
+        .observe_turn(&ObserveTurnInput {
+            request_id: "request-projected-complete".to_owned(),
+            idempotency_key: "projected-complete".to_owned(),
+            turn_id: recorded.turn.id,
+            expected_revision: progress.turn.revision,
+            kind: "turn-completed".to_owned(),
+            provider: "codex".to_owned(),
+            native_session_id: Some("thread-native-1".to_owned()),
+            native_turn_id: Some("native-turn-projected".to_owned()),
+            payload: json!({"status": "completed"}),
+            transition: Some(TurnState::Completed),
+        })
+        .unwrap();
+    let completed = store.get_task(task_id).unwrap();
+    assert_eq!(completed.task.state, TaskState::Completed);
+    assert_eq!(
+        completed.evidence.last().unwrap().kind,
+        TaskEvidenceKind::Completed
+    );
+    assert!(completed.task.active_turn_id.is_none());
+    assert!(completed.task.active_session_id.is_none());
+}
+
+#[test]
+#[allow(clippy::too_many_lines)] // Compare the three terminal projections with one fixture.
+fn task_terminal_turn_outcomes_project_failure_cancellation_and_uncertainty() {
+    let temporary = tempdir().unwrap();
+    let store = Store::open_path(temporary.path().join("lazoo.db")).unwrap();
+    let lead = store
+        .create_employee(&employee("Rhea", true, true))
+        .unwrap()
+        .employee;
+    let owner = Uuid::new_v4();
+    let session_id = warm_session(&store, lead.id, owner);
+    let conversation = create_conversation(&store, "outcomes", lead.id, None).conversation;
+
+    let failed = record_turn(&store, "failed-task", conversation.id, user(), None, "fail");
+    let failed_submitting = store
+        .begin_turn_submission(&BeginTurnSubmissionInput {
+            request_id: "request-failed-begin".to_owned(),
+            idempotency_key: "failed-begin".to_owned(),
+            turn_id: failed.turn.id,
+            expected_revision: failed.turn.revision,
+            owner_boot_id: owner,
+            recipient_session_id: session_id,
+        })
+        .unwrap();
+    store
+        .fail_turn(&FailTurnInput {
+            request_id: "request-failed".to_owned(),
+            idempotency_key: "failed".to_owned(),
+            turn_id: failed.turn.id,
+            expected_revision: failed_submitting.turn.revision,
+            retryable: false,
+            failure_code: "provider-failed".to_owned(),
+            failure_message: "provider rejected the turn".to_owned(),
+        })
+        .unwrap();
+    let failed_task = store.get_task(failed.turn.id).unwrap();
+    assert_eq!(failed_task.task.state, TaskState::Failed);
+    assert_eq!(
+        failed_task.task.failure_code.as_deref(),
+        Some("provider-failed")
+    );
+    assert_eq!(
+        failed_task.evidence.last().unwrap().kind,
+        TaskEvidenceKind::Failed
+    );
+
+    let cancelled = record_turn(
+        &store,
+        "cancelled-task",
+        conversation.id,
+        user(),
+        None,
+        "cancel",
+    );
+    store
+        .request_turn_cancel(&RequestTurnCancelInput {
+            request_id: "request-cancelled".to_owned(),
+            idempotency_key: "cancelled".to_owned(),
+            turn_id: cancelled.turn.id,
+            expected_revision: cancelled.turn.revision,
+        })
+        .unwrap();
+    let cancelled_task = store.get_task(cancelled.turn.id).unwrap();
+    assert_eq!(cancelled_task.task.state, TaskState::Cancelled);
+    assert_eq!(
+        cancelled_task.evidence.last().unwrap().kind,
+        TaskEvidenceKind::Cancelled
+    );
+
+    let uncertain = record_turn(
+        &store,
+        "uncertain-task",
+        conversation.id,
+        user(),
+        None,
+        "uncertain",
+    );
+    let uncertain_submitting = store
+        .begin_turn_submission(&BeginTurnSubmissionInput {
+            request_id: "request-uncertain-begin".to_owned(),
+            idempotency_key: "uncertain-begin".to_owned(),
+            turn_id: uncertain.turn.id,
+            expected_revision: uncertain.turn.revision,
+            owner_boot_id: owner,
+            recipient_session_id: session_id,
+        })
+        .unwrap();
+    let uncertain_accepted = store
+        .observe_turn(&ObserveTurnInput {
+            request_id: "request-uncertain-start".to_owned(),
+            idempotency_key: "uncertain-start".to_owned(),
+            turn_id: uncertain.turn.id,
+            expected_revision: uncertain_submitting.turn.revision,
+            kind: "turn-started".to_owned(),
+            provider: "codex".to_owned(),
+            native_session_id: Some("thread-native-1".to_owned()),
+            native_turn_id: Some("native-turn-uncertain".to_owned()),
+            payload: json!({"status": "in-progress"}),
+            transition: Some(TurnState::Accepted),
+        })
+        .unwrap();
+    store
+        .mark_turn_uncertain(&MarkTurnUncertainInput {
+            request_id: "request-uncertain".to_owned(),
+            idempotency_key: "uncertain".to_owned(),
+            turn_id: uncertain.turn.id,
+            expected_revision: uncertain_accepted.turn.revision,
+            failure_code: "provider-uncertain".to_owned(),
+            failure_message: "provider outcome could not be proven".to_owned(),
+        })
+        .unwrap();
+    let uncertain_task = store.get_task(uncertain.turn.id).unwrap();
+    assert_eq!(uncertain_task.task.state, TaskState::Uncertain);
+    assert_eq!(
+        uncertain_task.evidence.last().unwrap().kind,
+        TaskEvidenceKind::Uncertain
+    );
+}
+
+#[test]
+#[allow(clippy::too_many_lines)] // Keep parent and child native evidence in one transaction story.
+fn task_parent_completion_waits_for_an_active_child_with_an_exact_linked_turn() {
+    let temporary = tempdir().unwrap();
+    let store = Store::open_path(temporary.path().join("lazoo.db")).unwrap();
+    let lead = store
+        .create_employee(&employee("Rhea", true, true))
+        .unwrap()
+        .employee;
+    let worker = store
+        .create_employee(&employee("Mira", true, true))
+        .unwrap()
+        .employee;
+    let owner = Uuid::new_v4();
+    let lead_session = warm_session(&store, lead.id, owner);
+    let worker_session = warm_session(&store, worker.id, owner);
+    let conversation = create_conversation(&store, "tree", lead.id, None).conversation;
+    let root = record_turn(&store, "tree-root", conversation.id, user(), None, "root");
+    let root_task = root.task.as_ref().unwrap();
+    let root_submitting = store
+        .begin_turn_submission(&BeginTurnSubmissionInput {
+            request_id: "request-tree-root-begin".to_owned(),
+            idempotency_key: "tree-root-begin".to_owned(),
+            turn_id: root.turn.id,
+            expected_revision: root.turn.revision,
+            owner_boot_id: owner,
+            recipient_session_id: lead_session,
+        })
+        .unwrap();
+    let root_accepted = store
+        .observe_turn(&ObserveTurnInput {
+            request_id: "request-tree-root-start".to_owned(),
+            idempotency_key: "tree-root-start".to_owned(),
+            turn_id: root.turn.id,
+            expected_revision: root_submitting.turn.revision,
+            kind: "turn-started".to_owned(),
+            provider: "codex".to_owned(),
+            native_session_id: Some("thread-native-1".to_owned()),
+            native_turn_id: Some("native-root".to_owned()),
+            payload: json!({"status": "in-progress"}),
+            transition: Some(TurnState::Accepted),
+        })
+        .unwrap();
+
+    let proposed = store
+        .delegate_task(&DelegateTaskInput {
+            request_id: "request-tree-child".to_owned(),
+            idempotency_key: "tree-child".to_owned(),
+            parent_task_id: root_task.id,
+            actor: MessageEndpoint {
+                employee_id: lead.id,
+                session_id: Some(lead_session),
+            },
+            assigned_employee_id: worker.id,
+            objective: "child".to_owned(),
+            references: Vec::new(),
+            requested_authority: Some(AuthorityMode::Ask),
+            roster_revision: store.roster_snapshot().unwrap().revision,
+        })
+        .unwrap();
+    let child = store
+        .accept_task(&AcceptTaskInput {
+            request_id: "request-tree-child-accept".to_owned(),
+            idempotency_key: "tree-child-accept".to_owned(),
+            task_id: proposed.task.id,
+            expected_revision: proposed.task.revision,
+        })
+        .unwrap();
+    let child_turn = store
+        .record_turn(&RecordTurnInput {
+            request_id: "request-tree-child-turn".to_owned(),
+            idempotency_key: "tree-child-turn".to_owned(),
+            conversation_id: conversation.id,
+            author: MessageSender::Employee(MessageEndpoint {
+                employee_id: lead.id,
+                session_id: Some(lead_session),
+            }),
+            recipient: Some(MessageEndpoint {
+                employee_id: worker.id,
+                session_id: Some(worker_session),
+            }),
+            task_id: Some(child.task.id),
+            authority_mode: AuthorityMode::Ask,
+            text: "perform child".to_owned(),
+            activate_if_needed: false,
+            max_attempts: 3,
+        })
+        .unwrap();
+    let child_submitting = store
+        .begin_turn_submission(&BeginTurnSubmissionInput {
+            request_id: "request-tree-child-begin".to_owned(),
+            idempotency_key: "tree-child-begin".to_owned(),
+            turn_id: child_turn.turn.id,
+            expected_revision: child_turn.turn.revision,
+            owner_boot_id: owner,
+            recipient_session_id: worker_session,
+        })
+        .unwrap();
+    store
+        .observe_turn(&ObserveTurnInput {
+            request_id: "request-tree-child-start".to_owned(),
+            idempotency_key: "tree-child-start".to_owned(),
+            turn_id: child_turn.turn.id,
+            expected_revision: child_submitting.turn.revision,
+            kind: "turn-started".to_owned(),
+            provider: "codex".to_owned(),
+            native_session_id: Some("thread-native-1".to_owned()),
+            native_turn_id: Some("native-child".to_owned()),
+            payload: json!({"status": "in-progress"}),
+            transition: Some(TurnState::Accepted),
+        })
+        .unwrap();
+
+    store
+        .observe_turn(&ObserveTurnInput {
+            request_id: "request-tree-root-complete".to_owned(),
+            idempotency_key: "tree-root-complete".to_owned(),
+            turn_id: root.turn.id,
+            expected_revision: root_accepted.turn.revision,
+            kind: "turn-completed".to_owned(),
+            provider: "codex".to_owned(),
+            native_session_id: Some("thread-native-1".to_owned()),
+            native_turn_id: Some("native-root".to_owned()),
+            payload: json!({"status": "completed"}),
+            transition: Some(TurnState::Completed),
+        })
+        .unwrap();
+    let parent = store.get_task(root_task.id).unwrap();
+    assert_eq!(parent.task.state, TaskState::Running);
+    assert!(parent.task.active_turn_id.is_none());
+    assert!(parent.task.active_session_id.is_none());
+    assert_eq!(
+        parent.evidence.last().unwrap().kind,
+        TaskEvidenceKind::Progress
+    );
+    assert_eq!(
+        store.get_task(child.task.id).unwrap().task.state,
+        TaskState::Running
+    );
 }
 
 #[test]

@@ -187,6 +187,7 @@ impl App {
         store.reconcile_sessions(boot_id)?;
         store.reconcile_messages()?;
         store.reconcile_turns(boot_id)?;
+        store.reconcile_tasks()?;
         for event in store.publish_pending_outbox()? {
             let _ = events.send(event);
         }

@@ -245,6 +245,8 @@ pub enum StoreError {
     TaskActiveChildren { task_id: Uuid },
     #[error("task {task_id} turn {turn_id} has no matching native acceptance evidence")]
     TaskAcceptanceEvidence { task_id: Uuid, turn_id: Uuid },
+    #[error("task {task_id} and turn {turn_id} do not share an exact execution scope")]
+    TaskTurnLink { task_id: Uuid, turn_id: Uuid },
     #[error("task failure code and message must be supplied together only for failed outcomes")]
     TaskFailureDetails,
     #[error("task list limit must be between 1 and 1024")]

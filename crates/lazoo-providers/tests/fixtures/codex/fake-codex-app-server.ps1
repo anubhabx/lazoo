@@ -29,6 +29,8 @@ while ($null -ne ($line = [Console]::In.ReadLine())) {
             Write-Message @{ id = $message.id; result = @{ thread = @{ id = 'thread-1' } } }
         }
         'turn/start' {
+            $message.params | ConvertTo-Json -Depth 20 -Compress |
+                Set-Content -LiteralPath (Join-Path (Get-Location) 'fake-codex-turn-start.json') -Encoding utf8
             Write-Message @{ id = $message.id; result = @{ turn = @{ id = 'turn-1' } } }
             Start-Sleep -Milliseconds 50
             Write-Message @{

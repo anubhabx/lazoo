@@ -271,8 +271,16 @@ impl App {
             .map_err(|_| turn_invalid("the recipient employee has an unknown provider"))?;
         if provider != ProviderKind::Codex {
             return Err(turn_failure(
-                "LZ-TURN-PROVIDER-UNSUPPORTED",
-                "conversation turn delivery currently supports only Codex",
+                if turn.task_id.is_some() {
+                    "LZ-TASK-AUTHORITY-UNSUPPORTED"
+                } else {
+                    "LZ-TURN-PROVIDER-UNSUPPORTED"
+                },
+                if turn.task_id.is_some() {
+                    "the selected provider cannot enforce this task authority ceiling"
+                } else {
+                    "conversation turn delivery currently supports only Codex"
+                },
                 turn.id,
             ));
         }
@@ -356,6 +364,10 @@ impl App {
         session: std::sync::Arc<dyn super::ManagedSession>,
     ) -> Result<Value, RpcError> {
         let turn = &submitting.turn;
+        let permission_mode = submitting
+            .task
+            .as_ref()
+            .map(|task| super::authority_permission_mode(task.effective_authority).to_owned());
         self.live_turns
             .lock()
             .await
@@ -366,6 +378,7 @@ impl App {
                 &TurnRequest {
                     correlation_id: turn.correlation_id,
                     prompt: turn.text.clone(),
+                    permission_mode,
                 },
                 &observer,
             )
