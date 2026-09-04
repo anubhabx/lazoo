@@ -1,4 +1,4 @@
-# Next session: durable task and delegation graph design
+# Next session: owner review of the durable task and delegation graph
 
 ## Current owner boundary
 
@@ -34,19 +34,20 @@ After fresh user authorization, the post-fix gate passed on Codex 0.153.1:
 
 The native Codex rollout independently records the same native turn, exact final output, token usage, and terminal task completion.
 
+## Proposed next slice
+
+The separate proposed design and implementation plan now exist:
+
+- `docs/superpowers/specs/2026-09-04-task-delegation-graph-design.md`
+- `docs/superpowers/plans/2026-09-04-task-delegation-graph.md`
+
+They define user-turn/root-task identity without a second prompt path, immutable parent/child ancestry, lead/worker roles, depth and fan-out bounds, most-restrictive authority inheritance, append-only lifecycle evidence, owner-loss reconciliation, schema-6 migration truth, stable `LZ-TASK-*` errors, CLI-only controls, and deterministic backend acceptance.
+
+The design deliberately does not auto-dispatch accepted child tasks. Accepted task state is not evidence that a provider ran; automatic worker dispatch must wait for a later worktree/project-isolation contract.
+
 ## Next-session objective
 
-Write a separate reviewed design and implementation plan for the next narrow backend slice: a durable task/delegation graph with explicit lead and authority boundaries. Do not implement it until the design is reviewed.
-
-The design must decide:
-
-1. task identity, projectless/project scope, lifecycle states, immutable creation input, revision rules, and restart truth;
-2. how one user-owned task maps to its lead conversation without creating a second prompt or message path;
-3. delegation identity and ancestry, lead/worker roles, bounded depth/fan-out, correlation to canonical messages and turns, and idempotent assignment;
-4. which actions a lead may perform inside user-granted scope and which always require the user; no employee may grant approval, expand authority, or alter its own policy;
-5. durable accept/start/progress/complete/fail/cancel evidence and how owner loss or uncertain provider outcomes affect parent and child task truth;
-6. deterministic acceptance coverage, stable errors, audit/outbox publication, and CLI-only inspection/mutation surfaces; and
-7. explicit exclusions for worktree creation, ConPTY, terminal I/O, approval UI, resource scheduling, managed memory, other-provider delivery, and desktop capability expansion.
+Review the proposed written design with the owner. Do not implement it until the owner explicitly approves it. If approved, execute `docs/superpowers/plans/2026-09-04-task-delegation-graph.md` with inline TDD in the existing `codex/task-delegation-graph` worktree.
 
 ## Guardrails
 
