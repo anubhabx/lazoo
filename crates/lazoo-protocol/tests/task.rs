@@ -1,8 +1,9 @@
 use lazoo_protocol::{
     AcceptTaskParams, AuthorityMode, CancelTaskParams, DelegateTaskParams, MessageEndpoint,
     MessageSender, ReportTaskParams, ResolveTaskParams, StartTaskParams, TASK_CONTRACT_V1,
-    TaskDetail, TaskEvidence, TaskEvidenceKind, TaskListParams, TaskMutationResult, TaskRecord,
-    TaskReportKind, TaskResolution, TaskRole, TaskShowParams, TaskState, TaskSummary,
+    TaskDetail, TaskDispatchRecord, TaskDispatchState, TaskEvidence, TaskEvidenceKind,
+    TaskListParams, TaskMutationResult, TaskRecord, TaskReportKind, TaskResolution, TaskRole,
+    TaskShowParams, TaskState, TaskSummary, TaskWorkspaceKind,
 };
 use serde_json::{Value, json};
 use uuid::Uuid;
@@ -74,6 +75,18 @@ fn task_enums_use_stable_kebab_case_wire_values() {
     assert_eq!(
         serde_json::to_value(TaskResolution::Cancelled).unwrap(),
         json!("cancelled")
+    );
+    assert_eq!(
+        serde_json::to_value(TaskDispatchState::WorkspaceReady).unwrap(),
+        json!("workspace-ready")
+    );
+    assert_eq!(
+        serde_json::to_value(TaskDispatchState::Cancelled).unwrap(),
+        json!("cancelled")
+    );
+    assert_eq!(
+        serde_json::to_value(TaskWorkspaceKind::GitWorktree).unwrap(),
+        json!("git-worktree")
     );
 }
 
@@ -199,6 +212,25 @@ fn task_read_models_preserve_identity_lineage_and_evidence() {
         task: task.clone(),
         children: vec![summary],
         evidence: vec![evidence],
+        dispatch: Some(TaskDispatchRecord {
+            task_id: task.id,
+            message_id: Uuid::from_u128(5),
+            owner_boot_id: Uuid::from_u128(6),
+            project_id: None,
+            project_configuration_revision: None,
+            workspace_kind: Some(TaskWorkspaceKind::Projectless),
+            workspace_path: Some(r"C:\Lazoo\task-workspaces\projectless\1".to_owned()),
+            base_commit: None,
+            branch_name: None,
+            turn_id: Some(Uuid::from_u128(7)),
+            session_id: Some(Uuid::from_u128(8)),
+            state: TaskDispatchState::TurnRecorded,
+            revision: 3,
+            failure_code: None,
+            failure_message: None,
+            created_at: "2026-09-04T10:00:30Z".to_owned(),
+            updated_at: "2026-09-04T10:00:45Z".to_owned(),
+        }),
     };
     let wire = serde_json::to_value(detail).unwrap();
 
@@ -206,6 +238,7 @@ fn task_read_models_preserve_identity_lineage_and_evidence() {
     assert_eq!(wire["task"]["creationTurnId"], json!(task.id));
     assert_eq!(wire["children"][0]["effectiveAuthority"], json!("ask"));
     assert_eq!(wire["evidence"][0]["taskRevision"], json!(2));
+    assert_eq!(wire["dispatch"]["state"], json!("turn-recorded"));
     assert_eq!(
         wire["evidence"][0]["detail"],
         json!({ "gate": "cargo test" })

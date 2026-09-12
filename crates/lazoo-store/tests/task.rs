@@ -1,12 +1,15 @@
 use lazoo_protocol::{
     AuthorityMode, EmployeeCheckoutPolicy, MessageEndpoint, MessageKind, MessageSender,
-    ProviderObservation, SessionLifecycleState, TaskEvidenceKind, TaskReportKind, TaskResolution,
-    TaskState, TurnState, UserMessageEndpoint, UserMessageKind,
+    ProviderObservation, SessionLifecycleState, TaskDispatchState, TaskEvidenceKind,
+    TaskReportKind, TaskResolution, TaskState, TaskWorkspaceKind, TurnState, UserMessageEndpoint,
+    UserMessageKind,
 };
 use lazoo_store::{
     AcceptTaskInput, BeginSessionInput, BeginTurnSubmissionInput, CancelTaskInput,
-    CreateConversationInput, CreateEmployeeInput, DelegateTaskInput, ListTasksInput,
-    MarkSessionReadyInput, ObserveTurnInput, RecordTurnInput, ReportTaskInput, ResolveTaskInput,
+    ClaimTaskDispatchInput, CreateConversationInput, CreateEmployeeInput, DeferTaskDispatchInput,
+    DelegateTaskInput, FailSessionInput, FailTaskDispatchInput, ListTasksInput,
+    MarkSessionReadyInput, MarkTaskDispatchWorkspaceReadyInput, ObserveTurnInput,
+    RecordTaskDispatchTurnInput, RecordTurnInput, ReportTaskInput, ResolveTaskInput,
     SendMessageInput, StartTaskInput, Store, StoreError,
 };
 use serde_json::json;
@@ -15,6 +18,230 @@ use uuid::Uuid;
 
 fn employee(name: &str) -> CreateEmployeeInput {
     employee_with(name, AuthorityMode::Ask, true, true)
+}
+
+#[test]
+#[allow(clippy::too_many_lines)] // This is a sequential durability and replay contract test.
+fn accepted_child_dispatch_claim_is_durable_exclusive_and_idempotent() {
+    let temporary = tempdir().unwrap();
+    let store = Store::open_path(temporary.path().join("lazoo.db")).unwrap();
+    let lead = store
+        .create_employee(&employee_with(
+            "Rhea",
+            AuthorityMode::FullAutonomy,
+            true,
+            true,
+        ))
+        .unwrap()
+        .employee;
+    let worker = store
+        .create_employee(&employee_with(
+            "Mira",
+            AuthorityMode::FullAutonomy,
+            true,
+            true,
+        ))
+        .unwrap()
+        .employee;
+    let conversation_id = create_conversation(&store, "dispatch-conversation", lead.id);
+    let root = root_task(
+        &store,
+        "dispatch-root",
+        conversation_id,
+        AuthorityMode::FullAutonomy,
+    );
+    let lead_session = warm_session(&store, "dispatch-lead", lead.id);
+    let child = store
+        .delegate_task(&delegate_input(
+            "dispatch-child",
+            root.id,
+            MessageEndpoint {
+                employee_id: lead.id,
+                session_id: Some(lead_session),
+            },
+            worker.id,
+            Some(AuthorityMode::SelfDecision),
+            store.roster_snapshot().unwrap().revision,
+        ))
+        .unwrap();
+    let message_id = child.task.delegation_message_id.unwrap();
+    let owner_boot_id = Uuid::new_v4();
+    let input = ClaimTaskDispatchInput {
+        task_id: child.task.id,
+        owner_boot_id,
+    };
+
+    assert_eq!(
+        store.pending_task_dispatches(10).unwrap(),
+        vec![child.task.id]
+    );
+    let claimed = store.claim_task_dispatch(&input).unwrap();
+    assert!(store.pending_task_dispatches(10).unwrap().is_empty());
+    assert_eq!(claimed.task_id, child.task.id);
+    assert_eq!(claimed.message_id, message_id);
+    assert_eq!(claimed.owner_boot_id, owner_boot_id);
+    assert_eq!(claimed.state, TaskDispatchState::Preparing);
+    assert_eq!(claimed.revision, 1);
+    assert!(claimed.workspace_path.is_none());
+    assert!(claimed.turn_id.is_none());
+
+    let event_count = store.list_events(0, 100).unwrap().len();
+    let replay = store.claim_task_dispatch(&input).unwrap();
+    assert_eq!(replay, claimed);
+    assert_eq!(store.list_events(0, 100).unwrap().len(), event_count);
+    assert_eq!(
+        store.get_task(child.task.id).unwrap().dispatch,
+        Some(claimed)
+    );
+
+    let conflict = store
+        .claim_task_dispatch(&ClaimTaskDispatchInput {
+            task_id: child.task.id,
+            owner_boot_id: Uuid::new_v4(),
+        })
+        .unwrap_err();
+    assert!(matches!(conflict, StoreError::TaskDispatchOwned { .. }));
+
+    let ready_input = MarkTaskDispatchWorkspaceReadyInput {
+        task_id: child.task.id,
+        owner_boot_id,
+        expected_revision: 1,
+        workspace_kind: TaskWorkspaceKind::Projectless,
+        workspace_path: r"C:\Lazoo\task-workspaces\projectless\task".to_owned(),
+        base_commit: None,
+        branch_name: None,
+    };
+    let mut ready = store
+        .mark_task_dispatch_workspace_ready(&ready_input)
+        .unwrap();
+    assert_eq!(ready.state, TaskDispatchState::WorkspaceReady);
+    assert_eq!(ready.revision, 2);
+    assert_eq!(ready.workspace_kind, Some(TaskWorkspaceKind::Projectless));
+    assert_eq!(
+        ready.workspace_path,
+        Some(ready_input.workspace_path.clone())
+    );
+
+    let event_count = store.list_events(0, 100).unwrap().len();
+    let ready_replay = store
+        .mark_task_dispatch_workspace_ready(&ready_input)
+        .unwrap();
+    assert_eq!(ready_replay, ready);
+    assert_eq!(store.list_events(0, 100).unwrap().len(), event_count);
+
+    let racing_session = store
+        .begin_session(&BeginSessionInput {
+            request_id: "dispatch-racing-session-request".to_owned(),
+            idempotency_key: "dispatch-racing-session".to_owned(),
+            employee_id: worker.id,
+            expected_employee_revision: worker.configuration_revision,
+            owner_boot_id: Uuid::new_v4(),
+        })
+        .unwrap()
+        .session;
+    assert!(matches!(
+        store.begin_session(&BeginSessionInput {
+            request_id: "dispatch-conflicting-session-request".to_owned(),
+            idempotency_key: "dispatch-conflicting-session".to_owned(),
+            employee_id: worker.id,
+            expected_employee_revision: worker.configuration_revision,
+            owner_boot_id,
+        }),
+        Err(StoreError::SessionConflict { .. })
+    ));
+    store
+        .defer_task_dispatch(&DeferTaskDispatchInput {
+            task_id: child.task.id,
+            owner_boot_id,
+            expected_revision: ready.revision,
+            active_session_id: racing_session.id,
+        })
+        .unwrap();
+    assert!(store.get_task(child.task.id).unwrap().dispatch.is_none());
+    assert!(store.pending_task_dispatches(10).unwrap().is_empty());
+    store
+        .fail_session(&FailSessionInput {
+            session_id: racing_session.id,
+            expected_revision: racing_session.revision,
+            failure_code: "LZ-TEST-SESSION-RELEASED".to_owned(),
+            failure_message: "release the concurrent session for dispatch retry".to_owned(),
+        })
+        .unwrap();
+    assert_eq!(
+        store.pending_task_dispatches(10).unwrap(),
+        vec![child.task.id]
+    );
+    let reclaimed = store.claim_task_dispatch(&input).unwrap();
+    let mut retry_ready_input = ready_input.clone();
+    retry_ready_input.expected_revision = reclaimed.revision;
+    ready = store
+        .mark_task_dispatch_workspace_ready(&retry_ready_input)
+        .unwrap();
+
+    let worker_starting = store
+        .begin_session(&BeginSessionInput {
+            request_id: "dispatch-worker-session-request".to_owned(),
+            idempotency_key: "dispatch-worker-session".to_owned(),
+            employee_id: worker.id,
+            expected_employee_revision: worker.configuration_revision,
+            owner_boot_id,
+        })
+        .unwrap();
+    let worker_session = store
+        .mark_session_ready(&MarkSessionReadyInput {
+            session_id: worker_starting.session.id,
+            expected_revision: worker_starting.session.revision,
+            owner_boot_id,
+            native_session_id: "native-dispatch-worker".to_owned(),
+            native_host_pid: 4243,
+        })
+        .unwrap()
+        .session;
+    let message_count = store.list_messages(0, 100).unwrap().len();
+    let turn_input = RecordTaskDispatchTurnInput {
+        task_id: child.task.id,
+        owner_boot_id,
+        expected_dispatch_revision: ready.revision,
+        session_id: worker_session.id,
+    };
+    let recorded = store.record_task_dispatch_turn(&turn_input).unwrap();
+    assert_eq!(recorded.turn.state, TurnState::Recorded);
+    assert_eq!(recorded.turn.task_id, Some(child.task.id));
+    assert_eq!(recorded.turn.message_id, message_id);
+    assert_eq!(recorded.turn.author, child.task.creator);
+    assert_eq!(recorded.turn.recipient.employee_id, worker.id);
+    assert_eq!(recorded.turn.recipient.session_id, Some(worker_session.id));
+    assert_eq!(recorded.turn.text, child.task.objective);
+    assert_eq!(store.list_messages(0, 100).unwrap().len(), message_count);
+
+    let recorded_replay = store.record_task_dispatch_turn(&turn_input).unwrap();
+    assert_eq!(recorded_replay.turn.id, recorded.turn.id);
+    assert_eq!(recorded_replay.event_sequence, None);
+    let dispatch = store.get_task(child.task.id).unwrap().dispatch.unwrap();
+    assert_eq!(dispatch.state, TaskDispatchState::TurnRecorded);
+    assert_eq!(dispatch.revision, 3);
+    assert_eq!(dispatch.turn_id, Some(recorded.turn.id));
+    assert_eq!(dispatch.session_id, Some(worker_session.id));
+
+    store
+        .begin_turn_submission(&BeginTurnSubmissionInput {
+            request_id: "dispatch-begin-request".to_owned(),
+            idempotency_key: "dispatch-begin".to_owned(),
+            turn_id: recorded.turn.id,
+            expected_revision: recorded.turn.revision,
+            owner_boot_id,
+            recipient_session_id: worker_session.id,
+        })
+        .unwrap();
+    let replacement_boot_id = Uuid::new_v4();
+    store.reconcile_sessions(replacement_boot_id).unwrap();
+    store.reconcile_messages().unwrap();
+    store.reconcile_turns(replacement_boot_id).unwrap();
+    let reconciled = store.reconcile_tasks().unwrap();
+    assert_eq!(reconciled.tasks.len(), 1);
+    let detail = store.get_task(child.task.id).unwrap();
+    assert_eq!(detail.task.state, TaskState::Uncertain);
+    assert_eq!(detail.dispatch.unwrap().state, TaskDispatchState::Uncertain);
 }
 
 fn employee_with(
@@ -47,6 +274,187 @@ fn employee_with(
             checked_at: "2026-09-04T00:00:00Z".to_owned(),
         }),
     }
+}
+
+#[test]
+fn stale_pre_provider_dispatch_terminalizes_the_task_and_canonical_message_on_restart() {
+    let temporary = tempdir().unwrap();
+    let store = Store::open_path(temporary.path().join("lazoo.db")).unwrap();
+    let lead = store
+        .create_employee(&employee_with(
+            "Rhea",
+            AuthorityMode::FullAutonomy,
+            true,
+            true,
+        ))
+        .unwrap()
+        .employee;
+    let worker = store
+        .create_employee(&employee_with(
+            "Mira",
+            AuthorityMode::FullAutonomy,
+            true,
+            true,
+        ))
+        .unwrap()
+        .employee;
+    let conversation_id = create_conversation(&store, "failure-conversation", lead.id);
+    let root = root_task(
+        &store,
+        "failure-root",
+        conversation_id,
+        AuthorityMode::FullAutonomy,
+    );
+    let lead_session = warm_session(&store, "failure-lead", lead.id);
+    let child = store
+        .delegate_task(&delegate_input(
+            "failure-child",
+            root.id,
+            MessageEndpoint {
+                employee_id: lead.id,
+                session_id: Some(lead_session),
+            },
+            worker.id,
+            Some(AuthorityMode::SelfDecision),
+            store.roster_snapshot().unwrap().revision,
+        ))
+        .unwrap();
+    let owner_boot_id = Uuid::new_v4();
+    store
+        .claim_task_dispatch(&ClaimTaskDispatchInput {
+            task_id: child.task.id,
+            owner_boot_id,
+        })
+        .unwrap();
+
+    let replacement_boot_id = Uuid::new_v4();
+    let reconciled = store
+        .reconcile_task_dispatches(replacement_boot_id)
+        .unwrap();
+    assert_eq!(reconciled.tasks.len(), 1);
+
+    let failed = store
+        .fail_task_dispatch(&FailTaskDispatchInput {
+            task_id: child.task.id,
+            owner_boot_id: replacement_boot_id,
+            failure_code: "LZ-TASK-DISPATCH-OWNER-LOST".to_owned(),
+            failure_message: "the daemon stopped before provider acceptance".to_owned(),
+        })
+        .unwrap();
+    assert_eq!(failed.task.state, TaskState::Failed);
+    assert_eq!(
+        failed.task.failure_code.as_deref(),
+        Some("LZ-TASK-DISPATCH-OWNER-LOST")
+    );
+    assert_eq!(failed.dispatch.state, TaskDispatchState::Failed);
+    assert_eq!(
+        failed.message.delivery.state,
+        lazoo_protocol::MessageDeliveryState::TerminalFailed
+    );
+    assert_eq!(failed.message.attempts.len(), 1);
+    assert!(failed.message.dead_letter.is_some());
+    assert_eq!(
+        store
+            .get_task(child.task.id)
+            .unwrap()
+            .evidence
+            .last()
+            .unwrap()
+            .kind,
+        TaskEvidenceKind::Failed
+    );
+
+    let replay = store
+        .fail_task_dispatch(&FailTaskDispatchInput {
+            task_id: child.task.id,
+            owner_boot_id: replacement_boot_id,
+            failure_code: "LZ-TASK-DISPATCH-OWNER-LOST".to_owned(),
+            failure_message: "the daemon stopped before provider acceptance".to_owned(),
+        })
+        .unwrap();
+    assert_eq!(replay.task, failed.task);
+    assert_eq!(replay.dispatch, failed.dispatch);
+    assert_eq!(replay.message, failed.message);
+    assert_eq!(replay.event_sequence, None);
+}
+
+#[test]
+fn cancelling_a_claimed_dispatch_cancels_the_canonical_message_atomically() {
+    let temporary = tempdir().unwrap();
+    let store = Store::open_path(temporary.path().join("lazoo.db")).unwrap();
+    let lead = store
+        .create_employee(&employee_with(
+            "Cancel lead",
+            AuthorityMode::FullAutonomy,
+            true,
+            true,
+        ))
+        .unwrap()
+        .employee;
+    let worker = store
+        .create_employee(&employee_with(
+            "Cancel worker",
+            AuthorityMode::FullAutonomy,
+            true,
+            true,
+        ))
+        .unwrap()
+        .employee;
+    let conversation_id = create_conversation(&store, "cancel-dispatch-conversation", lead.id);
+    let root = root_task(
+        &store,
+        "cancel-dispatch-root",
+        conversation_id,
+        AuthorityMode::FullAutonomy,
+    );
+    let lead_session = warm_session(&store, "cancel-dispatch-lead", lead.id);
+    let child = store
+        .delegate_task(&delegate_input(
+            "cancel-dispatch-child",
+            root.id,
+            MessageEndpoint {
+                employee_id: lead.id,
+                session_id: Some(lead_session),
+            },
+            worker.id,
+            Some(AuthorityMode::SelfDecision),
+            store.roster_snapshot().unwrap().revision,
+        ))
+        .unwrap();
+    store
+        .claim_task_dispatch(&ClaimTaskDispatchInput {
+            task_id: child.task.id,
+            owner_boot_id: Uuid::new_v4(),
+        })
+        .unwrap();
+
+    let cancelled = store
+        .cancel_task(&CancelTaskInput {
+            request_id: "cancel-dispatch-request".to_owned(),
+            idempotency_key: "cancel-dispatch".to_owned(),
+            task_id: child.task.id,
+            expected_revision: child.task.revision,
+            actor: MessageSender::User(UserMessageEndpoint {
+                kind: UserMessageKind::User,
+            }),
+            evidence: json!({"reason": "user requested"}),
+        })
+        .unwrap();
+
+    assert_eq!(cancelled.task.state, TaskState::Cancelled);
+    assert_eq!(
+        cancelled.delegation_message.unwrap().delivery.state,
+        lazoo_protocol::MessageDeliveryState::Cancelled
+    );
+    assert_eq!(
+        store
+            .get_task(child.task.id)
+            .unwrap()
+            .dispatch
+            .unwrap()
+            .state,
+        TaskDispatchState::Cancelled
+    );
 }
 
 fn create_conversation(store: &Store, key: &str, lead_employee_id: Uuid) -> Uuid {

@@ -1,101 +1,101 @@
-﻿{
-    "schemaVersion":  1,
-    "databaseSchemaVersion":  6,
-    "status":  "PASS",
-    "startedAt":  "2026-09-04T19:24:39.7140660Z",
-    "completedAt":  "2026-09-04T19:24:50.2643192Z",
-    "durationMs":  10544,
-    "platform":  "Microsoft Windows NT 10.0.26200.0",
-    "rustcVersion":  "rustc 1.98.0 (88d9e12ae 2026-08-18)",
-    "cargoVersion":  "cargo 1.98.0 (797e8a9bc 2026-08-05)",
-    "repositoryRoot":  "C:\\workspace\\Orchestrator\\.worktrees\\task-delegation-graph",
-    "isolatedDataRoot":  "C:\\Users\\anubhab\\AppData\\Local\\Temp\\lazoo-acceptance-d474252ac12842589cb4762ec7d32513\\data",
-    "temporaryProject":  "C:\\Users\\anubhab\\AppData\\Local\\Temp\\lazoo-acceptance-d474252ac12842589cb4762ec7d32513\\repository",
-    "artifacts":  {
-                      "manifest":  "C:\\workspace\\Orchestrator\\.worktrees\\task-delegation-graph\\artifacts\\acceptance\\first-slice-manifest.json",
-                      "runLogs":  "C:\\Users\\anubhab\\AppData\\Local\\Temp\\lazoo-acceptance-d474252ac12842589cb4762ec7d32513",
-                      "database":  "C:\\Users\\anubhab\\AppData\\Local\\Temp\\lazoo-acceptance-d474252ac12842589cb4762ec7d32513\\data\\state\\lazoo.db"
-                  },
-    "commands":  [
-                     {
-                         "command":  "git init --quiet \u003ctemporary-project\u003e",
-                         "exitCode":  0,
-                         "durationMs":  null
-                     },
-                     {
-                         "command":  "lazooctl --json status",
-                         "exitCode":  0,
-                         "durationMs":  53
-                     },
-                     {
-                         "command":  "lazooctl --json project register C:\\Users\\anubhab\\AppData\\Local\\Temp\\lazoo-acceptance-d474252ac12842589cb4762ec7d32513\\repository --idempotency-key acceptance-d474252ac12842589cb4762ec7d32513",
-                         "exitCode":  0,
-                         "durationMs":  97
-                     },
-                     {
-                         "command":  "lazooctl --json project register C:\\Users\\anubhab\\AppData\\Local\\Temp\\lazoo-acceptance-d474252ac12842589cb4762ec7d32513\\repository --idempotency-key acceptance-d474252ac12842589cb4762ec7d32513",
-                         "exitCode":  0,
-                         "durationMs":  92
-                     },
-                     {
-                         "command":  "lazooctl --json project list",
-                         "exitCode":  0,
-                         "durationMs":  20
-                     },
-                     {
-                         "command":  "lazooctl --json events list --after 0 --limit 100",
-                         "exitCode":  0,
-                         "durationMs":  18
-                     },
-                     {
-                         "command":  "lazooctl --json status",
-                         "exitCode":  0,
-                         "durationMs":  1069
-                     },
-                     {
-                         "command":  "lazooctl --json project list",
-                         "exitCode":  0,
-                         "durationMs":  15
-                     },
-                     {
-                         "command":  "lazooctl --json events list --after 0 --limit 100",
-                         "exitCode":  0,
-                         "durationMs":  15
-                     },
-                     {
-                         "command":  "lazooctl --json system shutdown",
-                         "exitCode":  0,
-                         "durationMs":  17
-                     },
-                     {
-                         "command":  "lazooctl --json status",
-                         "exitCode":  0,
-                         "durationMs":  80
-                     },
-                     {
-                         "command":  "lazooctl --json system shutdown",
-                         "exitCode":  0,
-                         "durationMs":  15
-                     },
-                     {
-                         "command":  "lazooctl --json status",
-                         "exitCode":  0,
-                         "durationMs":  48
-                     },
-                     {
-                         "command":  "lazooctl --json system shutdown",
-                         "exitCode":  0,
-                         "durationMs":  15
-                     }
-                 ],
-    "gates":  {
-                  "releaseBuild":  "SKIPPED_BY_CALLER",
-                  "controlPlaneReady":  "PASS",
-                  "projectMutation":  "PASS",
-                  "restartDurability":  "PASS",
-                  "restartBudgetAndSpool":  "PASS",
-                  "nativeNotificationApi":  "PASS",
-                  "exactlyOnceRecovery":  "PASS",
-                  "pipeAclAndInvalidProof":  "PASS (covered by lazoo-ipc tests)"
-              }
+{
+  "schemaVersion": 1,
+  "databaseSchemaVersion": 6,
+  "status": "PASS",
+  "startedAt": "2026-09-11T22:50:46.5901803Z",
+  "completedAt": "2026-09-11T22:50:57.0261388Z",
+  "durationMs": 10432,
+  "platform": "Microsoft Windows NT 10.0.26200.0",
+  "rustcVersion": "rustc 1.98.0 (88d9e12ae 2026-08-18)",
+  "cargoVersion": "cargo 1.98.0 (797e8a9bc 2026-08-05)",
+  "repositoryRoot": "C:\\workspace\\Orchestrator\\.worktrees\\automatic-task-dispatch",
+  "isolatedDataRoot": "C:\\Users\\anubhab\\AppData\\Local\\Temp\\lazoo-acceptance-2be01e742e66499cbb82b7b9c64cdcf0\\data",
+  "temporaryProject": "C:\\Users\\anubhab\\AppData\\Local\\Temp\\lazoo-acceptance-2be01e742e66499cbb82b7b9c64cdcf0\\repository",
+  "artifacts": {
+    "manifest": "C:\\workspace\\Orchestrator\\.worktrees\\automatic-task-dispatch\\artifacts\\acceptance\\first-slice-manifest.json",
+    "runLogs": "C:\\Users\\anubhab\\AppData\\Local\\Temp\\lazoo-acceptance-2be01e742e66499cbb82b7b9c64cdcf0",
+    "database": "C:\\Users\\anubhab\\AppData\\Local\\Temp\\lazoo-acceptance-2be01e742e66499cbb82b7b9c64cdcf0\\data\\state\\lazoo.db"
+  },
+  "commands": [
+    {
+      "command": "git init --quiet <temporary-project>",
+      "exitCode": 0,
+      "durationMs": null
+    },
+    {
+      "command": "lazooctl --json status",
+      "exitCode": 0,
+      "durationMs": 61
+    },
+    {
+      "command": "lazooctl --json project register C:\\Users\\anubhab\\AppData\\Local\\Temp\\lazoo-acceptance-2be01e742e66499cbb82b7b9c64cdcf0\\repository --idempotency-key acceptance-2be01e742e66499cbb82b7b9c64cdcf0",
+      "exitCode": 0,
+      "durationMs": 87
+    },
+    {
+      "command": "lazooctl --json project register C:\\Users\\anubhab\\AppData\\Local\\Temp\\lazoo-acceptance-2be01e742e66499cbb82b7b9c64cdcf0\\repository --idempotency-key acceptance-2be01e742e66499cbb82b7b9c64cdcf0",
+      "exitCode": 0,
+      "durationMs": 75
+    },
+    {
+      "command": "lazooctl --json project list",
+      "exitCode": 0,
+      "durationMs": 17
+    },
+    {
+      "command": "lazooctl --json events list --after 0 --limit 100",
+      "exitCode": 0,
+      "durationMs": 18
+    },
+    {
+      "command": "lazooctl --json status",
+      "exitCode": 0,
+      "durationMs": 1050
+    },
+    {
+      "command": "lazooctl --json project list",
+      "exitCode": 0,
+      "durationMs": 16
+    },
+    {
+      "command": "lazooctl --json events list --after 0 --limit 100",
+      "exitCode": 0,
+      "durationMs": 15
+    },
+    {
+      "command": "lazooctl --json system shutdown",
+      "exitCode": 0,
+      "durationMs": 18
+    },
+    {
+      "command": "lazooctl --json status",
+      "exitCode": 0,
+      "durationMs": 92
+    },
+    {
+      "command": "lazooctl --json system shutdown",
+      "exitCode": 0,
+      "durationMs": 19
+    },
+    {
+      "command": "lazooctl --json status",
+      "exitCode": 0,
+      "durationMs": 52
+    },
+    {
+      "command": "lazooctl --json system shutdown",
+      "exitCode": 0,
+      "durationMs": 16
+    }
+  ],
+  "gates": {
+    "releaseBuild": "SKIPPED_BY_CALLER",
+    "controlPlaneReady": "PASS",
+    "projectMutation": "PASS",
+    "restartDurability": "PASS",
+    "restartBudgetAndSpool": "PASS",
+    "nativeNotificationApi": "PASS",
+    "exactlyOnceRecovery": "PASS",
+    "pipeAclAndInvalidProof": "PASS (covered by lazoo-ipc tests)"
+  }
 }

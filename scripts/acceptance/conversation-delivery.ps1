@@ -283,9 +283,9 @@ try {
     $daemon = Start-Daemon
     $gates.outerCodexContextIsolated = 'PASS'
     $status = Wait-Status
-    Assert-Equal $status.schemaVersion 6 'schema6'
+    Assert-Equal $status.schemaVersion 7 'schema7'
     Assert-Equal $status.journalMode 'wal' 'SQLite journal mode'
-    $gates.schema6 = 'PASS'
+    $gates.schema7 = 'PASS'
 
     $lead = Invoke-Json @(
         'employee', 'create', 'Rhea', '--provider', $Provider, '--role', 'Lead',
@@ -376,15 +376,15 @@ try {
             '--requested-authority', 'ask', '--roster-revision', ([string]$roster.revision),
             '--idempotency-key', "employee-task-$script:runId"
         )
+        Invoke-Json @(
+            'session', 'warm', $authorId, '--expected-employee-revision', '1',
+            '--idempotency-key', "author-session-$script:runId"
+        ) | Out-Null
         $employeeTask = Invoke-Json @(
             'task', 'accept', ([string]$employeeProposal.task.id),
             '--expected-revision', ([string]$employeeProposal.task.revision),
             '--idempotency-key', "employee-task-accept-$script:runId"
         )
-        Invoke-Json @(
-            'session', 'warm', $authorId, '--expected-employee-revision', '1',
-            '--idempotency-key', "author-session-$script:runId"
-        ) | Out-Null
 
         $terminalFailure = Invoke-Json @(
             'turn', 'submit', $projectlessId, '--text', 'FAIL_AFTER_ACCEPTANCE',
@@ -552,7 +552,7 @@ try {
         completedAt = [DateTime]::UtcNow.ToString('o')
         durationMs = $stopwatch.ElapsedMilliseconds
         protocolVersion = 1
-        schemaVersion = 6
+        schemaVersion = 7
         isolatedDataRoot = $script:dataRoot
         temporaryDataRetained = $false
         commands = $commandSnapshot

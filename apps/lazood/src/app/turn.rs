@@ -1,4 +1,10 @@
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::{
+    future::poll_fn,
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
+};
 
 use lazoo_protocol::{
     CancelTurnParams, ConversationDetail, ConversationListParams, ConversationShowParams,
@@ -16,7 +22,7 @@ use serde_json::{Value, json};
 use tokio::time::{Duration, sleep};
 use uuid::Uuid;
 
-use super::{App, to_value, truncate_utf8};
+use super::{App, LiveTurn, ProviderIoState, to_value, truncate_utf8};
 
 struct AppTurnObserver {
     app: App,
@@ -322,7 +328,7 @@ impl App {
                 .map_err(turn_store_error)?;
             self.publish_events()?;
             let ready = if starting.event_sequence.is_some() {
-                self.start_new_session(target.employee, target.provider, starting)
+                self.start_new_session(target.employee, target.provider, starting, None)
                     .await
                     .map_err(|_| {
                         turn_failure(
@@ -358,32 +364,56 @@ impl App {
         Ok((session_id, session))
     }
 
-    async fn deliver_submitting_turn(
+    pub(super) async fn deliver_submitting_turn(
         &self,
         request_id: &str,
         submitting: TurnMutationResult,
         session: std::sync::Arc<dyn super::ManagedSession>,
+    ) -> Result<Value, RpcError> {
+        let live_turn = Arc::new(LiveTurn::new(session));
+        self.live_turns
+            .lock()
+            .await
+            .insert(submitting.turn.id, live_turn.clone());
+        self.deliver_registered_submitting_turn(request_id, submitting, live_turn)
+            .await
+    }
+
+    pub(super) async fn deliver_registered_submitting_turn(
+        &self,
+        request_id: &str,
+        submitting: TurnMutationResult,
+        live_turn: Arc<LiveTurn>,
     ) -> Result<Value, RpcError> {
         let turn = &submitting.turn;
         let permission_mode = submitting
             .task
             .as_ref()
             .map(|task| super::authority_permission_mode(task.effective_authority).to_owned());
-        self.live_turns
-            .lock()
-            .await
-            .insert(turn.id, session.clone());
+        if let Err(error) = live_turn.session.ready_for_turn().await {
+            self.live_turns.lock().await.remove(&turn.id);
+            return self.fail_provider_delivery(turn.id, request_id, &error);
+        }
+        if !live_turn.begin_provider_poll() {
+            self.live_turns.lock().await.remove(&turn.id);
+            let current = self.store.get_turn(turn.id).map_err(turn_store_error)?;
+            return self.turn_result(current, None);
+        }
         let observer = AppTurnObserver::new(self.clone(), turn.id);
-        let provider_result = session
-            .turn_observed(
-                &TurnRequest {
-                    correlation_id: turn.correlation_id,
-                    prompt: turn.text.clone(),
-                    permission_mode,
-                },
-                &observer,
-            )
-            .await;
+        let turn_request = TurnRequest {
+            correlation_id: turn.correlation_id,
+            prompt: turn.text.clone(),
+            permission_mode,
+        };
+        let mut provider_future = live_turn.session.turn_observed(&turn_request, &observer);
+        let provider_result = poll_fn(|context| {
+            let result = provider_future.as_mut().poll(context);
+            if live_turn.provider_io_state() == ProviderIoState::Polling {
+                live_turn.finish_provider_poll();
+            }
+            result
+        })
+        .await;
         self.live_turns.lock().await.remove(&turn.id);
 
         match provider_result {
@@ -558,7 +588,7 @@ impl App {
         if requested.turn.state == TurnState::Cancelled || requested.event_sequence.is_none() {
             return Ok(to_value(requested));
         }
-        let Some(session) = self.live_turns.lock().await.get(&params.id).cloned() else {
+        let Some(live_turn) = self.live_turns.lock().await.get(&params.id).cloned() else {
             return self.mark_cancel_uncertain(
                 params.id,
                 requested.turn.revision,
@@ -566,7 +596,22 @@ impl App {
                 "the daemon no longer owns the in-flight provider turn",
             );
         };
-        if session.cancel().await.is_err() {
+        loop {
+            match live_turn.provider_io_state() {
+                ProviderIoState::Ready if live_turn.cancel_before_provider_io() => {
+                    return self.finish_cancel_before_provider_io(&requested, &request.id);
+                }
+                ProviderIoState::Ready | ProviderIoState::Polling => {
+                    tokio::task::yield_now().await;
+                }
+                ProviderIoState::Started => break,
+                ProviderIoState::Cancelled => {
+                    let current = self.store.get_turn(params.id).map_err(turn_store_error)?;
+                    return self.turn_result(current, None);
+                }
+            }
+        }
+        if live_turn.session.cancel().await.is_err() {
             return self.mark_cancel_uncertain(
                 params.id,
                 requested.turn.revision,
@@ -577,6 +622,12 @@ impl App {
         for _ in 0..200 {
             let current = self.store.get_turn(params.id).map_err(turn_store_error)?;
             if current.state == TurnState::Cancelled {
+                return self.turn_result(current, None);
+            }
+            if matches!(
+                current.state,
+                TurnState::Completed | TurnState::TerminalFailed
+            ) {
                 return self.turn_result(current, None);
             }
             if current.state == TurnState::Uncertain {
@@ -595,6 +646,35 @@ impl App {
             &request.id,
             "the provider did not emit cancellation evidence before the deadline",
         )
+    }
+
+    fn finish_cancel_before_provider_io(
+        &self,
+        requested: &TurnMutationResult,
+        request_id: &str,
+    ) -> Result<Value, RpcError> {
+        let provider = requested.turn.provider.clone().ok_or_else(|| {
+            turn_failure(
+                "LZ-TURN-PROVIDER-MISSING",
+                "the submitting turn has no provider identity",
+                requested.turn.id,
+            )
+        })?;
+        let cancelled = self
+            .store
+            .finish_turn_cancel(&FinishTurnCancelInput {
+                request_id: format!("{request_id}:before-provider-io"),
+                idempotency_key: format!("turn:{}:cancel-before-provider-io", requested.turn.id),
+                turn_id: requested.turn.id,
+                expected_revision: requested.turn.revision,
+                provider,
+                native_session_id: requested.turn.native_session_id.clone(),
+                native_turn_id: None,
+                payload: json!({"source": "daemon", "beforeProviderIo": true}),
+            })
+            .map_err(turn_store_error)?;
+        self.publish_events()?;
+        Ok(to_value(cancelled))
     }
 
     fn mark_cancel_uncertain(

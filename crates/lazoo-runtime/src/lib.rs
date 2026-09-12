@@ -5,6 +5,7 @@ mod notification;
 mod process_job;
 mod security;
 mod single_instance;
+mod task_worktree;
 
 pub use atomic_file::atomic_write;
 pub use data_root::DataRoot;
@@ -15,6 +16,7 @@ pub use process_job::{
 };
 pub use security::OwnerSecurity;
 pub use single_instance::SingleInstance;
+pub use task_worktree::{PreparedGitTaskWorktree, prepare_git_task_worktree};
 
 use std::{io, path::PathBuf};
 
@@ -42,6 +44,8 @@ pub enum RuntimeError {
     AlreadyRunning { role: String },
     #[error("protected data is empty")]
     EmptyProtectedData,
+    #[error("Git operation failed while {operation}")]
+    Git { operation: &'static str },
 }
 
 pub(crate) fn io_error(path: impl Into<PathBuf>, source: io::Error) -> RuntimeError {

@@ -4,17 +4,18 @@ use lazoo_domain::{
     validate_task_failure, validate_task_objective, validate_task_references,
 };
 use lazoo_protocol::{
-    AuthorityMode, EmployeeAvailability, MESSAGE_ENVELOPE_V1, MessageEndpoint, MessageKind,
-    MessageRecord, MessageReference, MessageSender, TASK_CONTRACT_V1, TaskDetail, TaskEvidence,
-    TaskEvidenceKind, TaskMutationResult, TaskReconcileResult, TaskRecord, TaskReportKind,
-    TaskResolution, TaskRole, TaskState, TaskSummary, TurnState, UserMessageEndpoint,
-    UserMessageKind,
+    AuthorityMode, CONVERSATION_CONTRACT_V1, EmployeeAvailability, MESSAGE_ENVELOPE_V1,
+    MessageDeliveryState, MessageEndpoint, MessageKind, MessageRecord, MessageReference,
+    MessageSender, SessionLifecycleState, TASK_CONTRACT_V1, TaskDetail, TaskDispatchFailureResult,
+    TaskDispatchRecord, TaskEvidence, TaskEvidenceKind, TaskMutationResult, TaskReconcileResult,
+    TaskRecord, TaskReportKind, TaskResolution, TaskRole, TaskState, TaskSummary,
+    TaskWorkspaceKind, TurnMutationResult, TurnState, UserMessageEndpoint, UserMessageKind,
 };
 use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, params};
 use serde_json::{Value, json};
 use uuid::Uuid;
 
-use crate::{Store, StoreError, employee, message, session};
+use crate::{Store, StoreError, conversation, employee, message, session};
 
 #[derive(Clone, Debug)]
 pub struct ListTasksInput {
@@ -26,6 +27,47 @@ pub struct ListTasksInput {
     pub project_id: Option<Uuid>,
     pub assigned_employee_id: Option<Uuid>,
     pub state: Option<TaskState>,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct ClaimTaskDispatchInput {
+    pub task_id: Uuid,
+    pub owner_boot_id: Uuid,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct DeferTaskDispatchInput {
+    pub task_id: Uuid,
+    pub owner_boot_id: Uuid,
+    pub expected_revision: u64,
+    pub active_session_id: Uuid,
+}
+
+#[derive(Clone, Debug)]
+pub struct MarkTaskDispatchWorkspaceReadyInput {
+    pub task_id: Uuid,
+    pub owner_boot_id: Uuid,
+    pub expected_revision: u64,
+    pub workspace_kind: TaskWorkspaceKind,
+    pub workspace_path: String,
+    pub base_commit: Option<String>,
+    pub branch_name: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct RecordTaskDispatchTurnInput {
+    pub task_id: Uuid,
+    pub owner_boot_id: Uuid,
+    pub expected_dispatch_revision: u64,
+    pub session_id: Uuid,
+}
+
+#[derive(Clone, Debug)]
+pub struct FailTaskDispatchInput {
+    pub task_id: Uuid,
+    pub owner_boot_id: Uuid,
+    pub failure_code: String,
+    pub failure_message: String,
 }
 
 #[derive(Clone, Debug)]
@@ -109,6 +151,30 @@ pub(crate) struct InsertRootTaskInput {
 }
 
 impl Store {
+    pub fn pending_task_dispatches(&self, limit: u32) -> Result<Vec<Uuid>, StoreError> {
+        if limit == 0 || limit > 1024 {
+            return Err(StoreError::TaskListLimit);
+        }
+        let connection = self.lock()?;
+        let mut statement = connection.prepare(
+            "SELECT task.id
+             FROM tasks task
+             LEFT JOIN task_dispatches dispatch ON dispatch.task_id = task.id
+             WHERE task.parent_task_id IS NOT NULL
+               AND task.state = 'accepted'
+               AND task.delegation_message_id IS NOT NULL
+               AND dispatch.task_id IS NULL
+               AND NOT EXISTS (
+                   SELECT 1 FROM employee_sessions session
+                   WHERE session.employee_id = task.assigned_employee_id
+                     AND session.state IN ('starting', 'idle', 'stopping')
+               )
+             ORDER BY task.sequence LIMIT ?1",
+        )?;
+        let rows = statement.query_map([i64::from(limit)], |row| row.get::<_, String>(0))?;
+        rows.map(|row| parse_uuid(&row?, "tasks.id")).collect()
+    }
+
     pub fn list_tasks(&self, input: &ListTasksInput) -> Result<Vec<TaskSummary>, StoreError> {
         if input.limit == 0 || input.limit > 1024 {
             return Err(StoreError::TaskListLimit);
@@ -134,10 +200,619 @@ impl Store {
             },
         )?;
         let evidence = query_task_evidence(&connection, task_id)?;
+        let dispatch = query_task_dispatch(&connection, task_id)?;
         Ok(TaskDetail {
             task,
             children,
             evidence,
+            dispatch,
+        })
+    }
+
+    pub fn claim_task_dispatch(
+        &self,
+        input: &ClaimTaskDispatchInput,
+    ) -> Result<TaskDispatchRecord, StoreError> {
+        let mut connection = self.lock()?;
+        let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        if let Some(existing) = query_task_dispatch(&transaction, input.task_id)? {
+            if existing.owner_boot_id == input.owner_boot_id {
+                transaction.commit()?;
+                return Ok(existing);
+            }
+            return Err(StoreError::TaskDispatchOwned {
+                task_id: input.task_id,
+                owner_boot_id: existing.owner_boot_id,
+            });
+        }
+
+        let task = required_task(&transaction, input.task_id)?;
+        if task.parent_task_id.is_none() || task.state != TaskState::Accepted {
+            return Err(StoreError::TaskState {
+                task_id: task.id,
+                state: serialized_name(task.state)?,
+                expected: "accepted delegated task",
+            });
+        }
+        require_valid_ancestry(&transaction, &task)?;
+        let message_id = task
+            .delegation_message_id
+            .ok_or(StoreError::TaskAncestryMismatch { task_id: task.id })?;
+        let delegation_message = message::required_message(&transaction, message_id)?;
+        if delegation_message.envelope.task_id != Some(task.id)
+            || delegation_message.envelope.recipient.employee_id != task.assigned_employee_id
+            || delegation_message.delivery.state != MessageDeliveryState::Queued
+        {
+            return Err(StoreError::TaskAncestryMismatch { task_id: task.id });
+        }
+        let project_configuration_revision = task
+            .project_id
+            .map(|project_id| {
+                transaction
+                    .query_row(
+                        "SELECT configuration_revision FROM projects WHERE id = ?1",
+                        [project_id.to_string()],
+                        |row| row.get::<_, i64>(0),
+                    )
+                    .optional()?
+                    .map(unsigned)
+                    .transpose()?
+                    .ok_or(StoreError::MessageProjectNotFound { project_id })
+            })
+            .transpose()?;
+        let now = Utc::now().to_rfc3339();
+        transaction.execute(
+            "INSERT INTO task_dispatches (
+                task_id, message_id, owner_boot_id, project_id,
+                project_configuration_revision, state, revision, created_at, updated_at
+             ) VALUES (?1, ?2, ?3, ?4, ?5, 'preparing', 1, ?6, ?6)",
+            params![
+                task.id.to_string(),
+                message_id.to_string(),
+                input.owner_boot_id.to_string(),
+                task.project_id.map(|value| value.to_string()),
+                project_configuration_revision.map(to_i64).transpose()?,
+                now,
+            ],
+        )?;
+        let dispatch =
+            query_task_dispatch(&transaction, task.id)?.ok_or(StoreError::InvalidRecord {
+                field: "task_dispatches.task_id",
+                message: "inserted dispatch was not found".to_owned(),
+            })?;
+        employee::insert_event(
+            &transaction,
+            "task.dispatch-preparing",
+            &json!({"task": &task, "dispatch": &dispatch}),
+            &now,
+        )?;
+        transaction.commit()?;
+        Ok(dispatch)
+    }
+
+    pub fn defer_task_dispatch(&self, input: &DeferTaskDispatchInput) -> Result<u64, StoreError> {
+        let mut connection = self.lock()?;
+        let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let dispatch =
+            query_task_dispatch(&transaction, input.task_id)?.ok_or(StoreError::TaskNotFound {
+                task_id: input.task_id,
+            })?;
+        if dispatch.owner_boot_id != input.owner_boot_id {
+            return Err(StoreError::TaskDispatchOwned {
+                task_id: input.task_id,
+                owner_boot_id: dispatch.owner_boot_id,
+            });
+        }
+        if dispatch.revision != input.expected_revision {
+            return Err(StoreError::TaskDispatchStale {
+                task_id: input.task_id,
+                current_revision: dispatch.revision,
+            });
+        }
+        if !matches!(
+            dispatch.state,
+            lazoo_protocol::TaskDispatchState::Preparing
+                | lazoo_protocol::TaskDispatchState::WorkspaceReady
+        ) || dispatch.turn_id.is_some()
+            || dispatch.session_id.is_some()
+        {
+            return Err(StoreError::TaskDispatchWorkspace {
+                task_id: input.task_id,
+            });
+        }
+        let task = required_task(&transaction, input.task_id)?;
+        let message = message::required_message(&transaction, dispatch.message_id)?;
+        if task.state != TaskState::Accepted
+            || message.delivery.state != MessageDeliveryState::Queued
+        {
+            return Err(StoreError::TaskState {
+                task_id: input.task_id,
+                state: serialized_name(task.state)?,
+                expected: "accepted dispatch with queued canonical message",
+            });
+        }
+        let active = session::query_session(&transaction, input.active_session_id)?.ok_or(
+            StoreError::SessionNotFound {
+                session_id: input.active_session_id,
+            },
+        )?;
+        if active.employee_id != task.assigned_employee_id
+            || !matches!(
+                active.state,
+                SessionLifecycleState::Starting
+                    | SessionLifecycleState::Idle
+                    | SessionLifecycleState::Stopping
+            )
+        {
+            return Err(StoreError::TaskActorSession {
+                employee_id: task.assigned_employee_id,
+            });
+        }
+        transaction.execute(
+            "DELETE FROM task_dispatches WHERE task_id = ?1",
+            [input.task_id.to_string()],
+        )?;
+        let now = Utc::now().to_rfc3339();
+        let event_sequence = employee::insert_event(
+            &transaction,
+            "task.dispatch-deferred",
+            &json!({
+                "task": &task,
+                "dispatch": &dispatch,
+                "activeSessionId": input.active_session_id,
+                "reason": "employee-session-active"
+            }),
+            &now,
+        )?;
+        transaction.commit()?;
+        Ok(event_sequence)
+    }
+
+    pub fn mark_task_dispatch_workspace_ready(
+        &self,
+        input: &MarkTaskDispatchWorkspaceReadyInput,
+    ) -> Result<TaskDispatchRecord, StoreError> {
+        let mut connection = self.lock()?;
+        let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let current =
+            query_task_dispatch(&transaction, input.task_id)?.ok_or(StoreError::TaskNotFound {
+                task_id: input.task_id,
+            })?;
+        if current.owner_boot_id != input.owner_boot_id {
+            return Err(StoreError::TaskDispatchOwned {
+                task_id: input.task_id,
+                owner_boot_id: current.owner_boot_id,
+            });
+        }
+        let replay = current.state == lazoo_protocol::TaskDispatchState::WorkspaceReady
+            && input.expected_revision.checked_add(1) == Some(current.revision)
+            && current.workspace_kind == Some(input.workspace_kind)
+            && current.workspace_path.as_deref() == Some(input.workspace_path.as_str())
+            && current.base_commit == input.base_commit
+            && current.branch_name == input.branch_name;
+        if replay {
+            transaction.commit()?;
+            return Ok(current);
+        }
+        if current.revision != input.expected_revision {
+            return Err(StoreError::TaskDispatchStale {
+                task_id: input.task_id,
+                current_revision: current.revision,
+            });
+        }
+        let task = required_task(&transaction, input.task_id)?;
+        let workspace_valid = !input.workspace_path.trim().is_empty()
+            && input.workspace_path.len() <= 32_768
+            && match input.workspace_kind {
+                TaskWorkspaceKind::Projectless => {
+                    task.project_id.is_none()
+                        && input.base_commit.is_none()
+                        && input.branch_name.is_none()
+                }
+                TaskWorkspaceKind::GitWorktree => {
+                    task.project_id.is_some()
+                        && input
+                            .base_commit
+                            .as_deref()
+                            .is_some_and(|value| !value.is_empty() && value.len() <= 128)
+                        && input
+                            .branch_name
+                            .as_deref()
+                            .is_some_and(|value| !value.is_empty() && value.len() <= 256)
+                }
+            };
+        if current.state != lazoo_protocol::TaskDispatchState::Preparing || !workspace_valid {
+            return Err(StoreError::TaskDispatchWorkspace {
+                task_id: input.task_id,
+            });
+        }
+        let now = Utc::now().to_rfc3339();
+        transaction.execute(
+            "UPDATE task_dispatches SET
+                workspace_kind = ?2, workspace_path = ?3, base_commit = ?4,
+                branch_name = ?5, state = 'workspace-ready', revision = revision + 1,
+                updated_at = ?6
+             WHERE task_id = ?1",
+            params![
+                input.task_id.to_string(),
+                serialized_name(input.workspace_kind)?,
+                input.workspace_path,
+                input.base_commit,
+                input.branch_name,
+                now,
+            ],
+        )?;
+        let dispatch =
+            query_task_dispatch(&transaction, input.task_id)?.ok_or(StoreError::TaskNotFound {
+                task_id: input.task_id,
+            })?;
+        employee::insert_event(
+            &transaction,
+            "task.workspace-ready",
+            &json!({"task": &task, "dispatch": &dispatch}),
+            &now,
+        )?;
+        transaction.commit()?;
+        Ok(dispatch)
+    }
+
+    #[allow(clippy::too_many_lines)] // Keep the canonical message and turn linkage atomic.
+    pub fn record_task_dispatch_turn(
+        &self,
+        input: &RecordTaskDispatchTurnInput,
+    ) -> Result<TurnMutationResult, StoreError> {
+        let mut connection = self.lock()?;
+        let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let dispatch =
+            query_task_dispatch(&transaction, input.task_id)?.ok_or(StoreError::TaskNotFound {
+                task_id: input.task_id,
+            })?;
+        if dispatch.owner_boot_id != input.owner_boot_id {
+            return Err(StoreError::TaskDispatchOwned {
+                task_id: input.task_id,
+                owner_boot_id: dispatch.owner_boot_id,
+            });
+        }
+        if dispatch.state == lazoo_protocol::TaskDispatchState::TurnRecorded
+            && input.expected_dispatch_revision.checked_add(1) == Some(dispatch.revision)
+            && dispatch.session_id == Some(input.session_id)
+        {
+            let turn_id = dispatch.turn_id.ok_or(StoreError::InvalidRecord {
+                field: "task_dispatches.turn_id",
+                message: "turn-recorded dispatch is missing its turn id".to_owned(),
+            })?;
+            let turn = crate::conversation::required_turn(&transaction, turn_id)?;
+            let message = message::required_message(&transaction, dispatch.message_id)?;
+            let task = required_task(&transaction, input.task_id)?;
+            transaction.commit()?;
+            return Ok(TurnMutationResult {
+                turn,
+                message,
+                task: Some(task),
+                event_sequence: None,
+            });
+        }
+        if dispatch.revision != input.expected_dispatch_revision {
+            return Err(StoreError::TaskDispatchStale {
+                task_id: input.task_id,
+                current_revision: dispatch.revision,
+            });
+        }
+        if dispatch.state != lazoo_protocol::TaskDispatchState::WorkspaceReady {
+            return Err(StoreError::TaskDispatchWorkspace {
+                task_id: input.task_id,
+            });
+        }
+        let task = required_task(&transaction, input.task_id)?;
+        if task.state != TaskState::Accepted {
+            return Err(StoreError::TaskState {
+                task_id: task.id,
+                state: serialized_name(task.state)?,
+                expected: "accepted",
+            });
+        }
+        let owned_session = session::query_session(&transaction, input.session_id)?.ok_or(
+            StoreError::SessionNotFound {
+                session_id: input.session_id,
+            },
+        )?;
+        if owned_session.employee_id != task.assigned_employee_id
+            || owned_session.employee_configuration_revision != task.employee_configuration_revision
+            || owned_session.state != SessionLifecycleState::Idle
+        {
+            return Err(StoreError::TaskActorSession {
+                employee_id: task.assigned_employee_id,
+            });
+        }
+        if owned_session.owner_boot_id != Some(input.owner_boot_id) {
+            return Err(StoreError::SessionOwnership {
+                session_id: input.session_id,
+            });
+        }
+        let delegation_message = message::required_message(&transaction, dispatch.message_id)?;
+        if delegation_message.delivery.state != MessageDeliveryState::Queued
+            || delegation_message.envelope.task_id != Some(task.id)
+        {
+            return Err(StoreError::TaskAncestryMismatch { task_id: task.id });
+        }
+        let turn_id = Uuid::new_v4();
+        let now = Utc::now().to_rfc3339();
+        let (author_kind, author_employee_id, author_session_id) = actor_columns(task.creator);
+        transaction.execute(
+            "INSERT INTO conversation_turns (
+                id, contract_version, conversation_id, task_id, author_kind,
+                author_employee_id, author_session_id, recipient_employee_id,
+                recipient_session_id, recipient_employee_configuration_revision,
+                text, message_id, correlation_id, state, revision, created_at, updated_at
+             ) VALUES (
+                ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13,
+                'recorded', 1, ?14, ?14
+             )",
+            params![
+                turn_id.to_string(),
+                i64::from(CONVERSATION_CONTRACT_V1),
+                task.conversation_id.to_string(),
+                task.id.to_string(),
+                author_kind,
+                author_employee_id,
+                author_session_id,
+                task.assigned_employee_id.to_string(),
+                input.session_id.to_string(),
+                to_i64(task.employee_configuration_revision)?,
+                task.objective,
+                dispatch.message_id.to_string(),
+                delegation_message.envelope.correlation_id.to_string(),
+                now,
+            ],
+        )?;
+        transaction.execute(
+            "UPDATE task_dispatches SET turn_id = ?2, session_id = ?3,
+                    state = 'turn-recorded', revision = revision + 1, updated_at = ?4
+             WHERE task_id = ?1",
+            params![
+                task.id.to_string(),
+                turn_id.to_string(),
+                input.session_id.to_string(),
+                now,
+            ],
+        )?;
+        let turn = crate::conversation::required_turn(&transaction, turn_id)?;
+        let updated_dispatch = query_task_dispatch(&transaction, task.id)?
+            .ok_or(StoreError::TaskNotFound { task_id: task.id })?;
+        let event_sequence = employee::insert_event(
+            &transaction,
+            "task.dispatch-turn-recorded",
+            &json!({"task": &task, "dispatch": &updated_dispatch, "turn": &turn}),
+            &now,
+        )?;
+        transaction.commit()?;
+        Ok(TurnMutationResult {
+            turn,
+            message: delegation_message,
+            task: Some(task),
+            event_sequence: Some(event_sequence),
+        })
+    }
+
+    #[allow(clippy::too_many_lines)] // Keep dispatch, task, message, and optional turn failure atomic.
+    pub fn fail_task_dispatch(
+        &self,
+        input: &FailTaskDispatchInput,
+    ) -> Result<TaskDispatchFailureResult, StoreError> {
+        validate_task_failure(&input.failure_code, &input.failure_message)?;
+        let mut connection = self.lock()?;
+        let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let current_dispatch =
+            query_task_dispatch(&transaction, input.task_id)?.ok_or(StoreError::TaskNotFound {
+                task_id: input.task_id,
+            })?;
+        if current_dispatch.owner_boot_id != input.owner_boot_id {
+            return Err(StoreError::TaskDispatchOwned {
+                task_id: input.task_id,
+                owner_boot_id: current_dispatch.owner_boot_id,
+            });
+        }
+        let current_task = required_task(&transaction, input.task_id)?;
+        if current_dispatch.state == lazoo_protocol::TaskDispatchState::Failed
+            && current_task.state == TaskState::Failed
+            && current_task.failure_code.as_deref() == Some(input.failure_code.as_str())
+            && current_task.failure_message.as_deref() == Some(input.failure_message.as_str())
+        {
+            let message = message::required_message(&transaction, current_dispatch.message_id)?;
+            transaction.commit()?;
+            return Ok(TaskDispatchFailureResult {
+                task: current_task,
+                dispatch: current_dispatch,
+                message,
+                event_sequence: None,
+            });
+        }
+        if current_task.state != TaskState::Accepted
+            || !matches!(
+                current_dispatch.state,
+                lazoo_protocol::TaskDispatchState::Preparing
+                    | lazoo_protocol::TaskDispatchState::WorkspaceReady
+                    | lazoo_protocol::TaskDispatchState::TurnRecorded
+            )
+        {
+            return Err(StoreError::TaskState {
+                task_id: current_task.id,
+                state: serialized_name(current_task.state)?,
+                expected: "accepted dispatch before provider acceptance",
+            });
+        }
+        let current_message = message::required_message(&transaction, current_dispatch.message_id)?;
+        if current_message.delivery.state != MessageDeliveryState::Queued {
+            return Err(StoreError::TaskState {
+                task_id: current_task.id,
+                state: serialized_name(current_task.state)?,
+                expected: "queued canonical dispatch message",
+            });
+        }
+        let claimed_message = message::claim_message_tx(
+            &transaction,
+            &message::ClaimMessageInput {
+                request_id: format!("task-dispatch:{}:fail-claim", input.task_id),
+                idempotency_key: format!("task-dispatch:{}:fail-claim", input.task_id),
+                message_id: current_dispatch.message_id,
+                expected_revision: current_message.delivery.revision,
+            },
+        )?;
+        let attempt_id = claimed_message
+            .message
+            .attempts
+            .last()
+            .ok_or(StoreError::InvalidRecord {
+                field: "message_delivery_attempts",
+                message: "failed dispatch claim has no delivery attempt".to_owned(),
+            })?
+            .id;
+        let failed_message = message::fail_message_tx(
+            &transaction,
+            &message::FailMessageInput {
+                request_id: format!("task-dispatch:{}:fail", input.task_id),
+                idempotency_key: format!("task-dispatch:{}:fail", input.task_id),
+                message_id: current_dispatch.message_id,
+                expected_revision: claimed_message.message.delivery.revision,
+                attempt_id,
+                retryable: false,
+                failure_code: input.failure_code.clone(),
+                failure_message: input.failure_message.clone(),
+            },
+        )?
+        .message;
+        let now = Utc::now().to_rfc3339();
+        if let Some(turn_id) = current_dispatch.turn_id {
+            transaction.execute(
+                "UPDATE conversation_turns SET state = 'terminal-failed', revision = revision + 1,
+                        failure_code = ?2, failure_message = ?3, terminal_at = ?4, updated_at = ?4
+                 WHERE id = ?1 AND state = 'recorded'",
+                params![
+                    turn_id.to_string(),
+                    input.failure_code,
+                    input.failure_message,
+                    now,
+                ],
+            )?;
+        }
+        transaction.execute(
+            "UPDATE tasks SET state = 'failed', revision = revision + 1,
+                    active_turn_id = NULL, active_session_id = NULL,
+                    failure_code = ?2, failure_message = ?3,
+                    terminal_at = ?4, updated_at = ?4
+             WHERE id = ?1",
+            params![
+                input.task_id.to_string(),
+                input.failure_code,
+                input.failure_message,
+                now,
+            ],
+        )?;
+        transaction.execute(
+            "UPDATE task_dispatches SET state = 'failed', revision = revision + 1,
+                    failure_code = ?2, failure_message = ?3, updated_at = ?4
+             WHERE task_id = ?1",
+            params![
+                input.task_id.to_string(),
+                input.failure_code,
+                input.failure_message,
+                now,
+            ],
+        )?;
+        let actor = MessageSender::Employee(MessageEndpoint {
+            employee_id: current_task.assigned_employee_id,
+            session_id: current_dispatch.session_id,
+        });
+        insert_task_evidence_tx(
+            &transaction,
+            input.task_id,
+            current_task.revision + 1,
+            TaskEvidenceKind::Failed,
+            actor,
+            Some(current_dispatch.message_id),
+            current_dispatch.turn_id,
+            current_dispatch.session_id,
+            &json!({"source": "automatic-dispatch", "failureCode": input.failure_code}),
+            &now,
+        )?;
+        let task = required_task(&transaction, input.task_id)?;
+        let dispatch =
+            query_task_dispatch(&transaction, input.task_id)?.ok_or(StoreError::TaskNotFound {
+                task_id: input.task_id,
+            })?;
+        let event_sequence = employee::insert_event(
+            &transaction,
+            "task.dispatch-failed",
+            &json!({"task": &task, "dispatch": &dispatch, "message": &failed_message}),
+            &now,
+        )?;
+        transaction.commit()?;
+        Ok(TaskDispatchFailureResult {
+            task,
+            dispatch,
+            message: failed_message,
+            event_sequence: Some(event_sequence),
+        })
+    }
+
+    pub fn reconcile_task_dispatches(
+        &self,
+        owner_boot_id: Uuid,
+    ) -> Result<TaskReconcileResult, StoreError> {
+        let task_ids = {
+            let connection = self.lock()?;
+            let mut statement = connection.prepare(
+                "SELECT dispatch.task_id
+                 FROM task_dispatches dispatch
+                 JOIN tasks task ON task.id = dispatch.task_id
+                 JOIN messages message ON message.id = dispatch.message_id
+                 JOIN message_deliveries delivery ON delivery.message_id = message.id
+                 LEFT JOIN conversation_turns turn ON turn.id = dispatch.turn_id
+                 WHERE dispatch.owner_boot_id <> ?1
+                   AND dispatch.state IN ('preparing', 'workspace-ready', 'turn-recorded')
+                   AND task.state = 'accepted'
+                   AND delivery.state = 'queued'
+                   AND (dispatch.turn_id IS NULL OR turn.state = 'recorded')
+                 ORDER BY task.sequence",
+            )?;
+            statement
+                .query_map([owner_boot_id.to_string()], |row| row.get::<_, String>(0))?
+                .collect::<Result<Vec<_>, _>>()?
+        };
+        let mut tasks = Vec::with_capacity(task_ids.len());
+        let mut event_sequence = None;
+        for id in task_ids {
+            let task_id = parse_uuid(&id, "task_dispatches.task_id")?;
+            let now = Utc::now().to_rfc3339();
+            let transferred = {
+                let mut connection = self.lock()?;
+                let transaction =
+                    connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+                let changed = transaction.execute(
+                    "UPDATE task_dispatches SET owner_boot_id = ?2, revision = revision + 1,
+                            updated_at = ?3
+                     WHERE task_id = ?1 AND owner_boot_id <> ?2
+                       AND state IN ('preparing', 'workspace-ready', 'turn-recorded')",
+                    params![task_id.to_string(), owner_boot_id.to_string(), now],
+                )?;
+                transaction.commit()?;
+                changed == 1
+            };
+            if !transferred {
+                continue;
+            }
+            let failed = self.fail_task_dispatch(&FailTaskDispatchInput {
+                task_id,
+                owner_boot_id,
+                failure_code: "LZ-TASK-DISPATCH-OWNER-LOST".to_owned(),
+                failure_message: "the daemon stopped before provider acceptance".to_owned(),
+            })?;
+            event_sequence = failed.event_sequence;
+            tasks.push(failed.task);
+        }
+        Ok(TaskReconcileResult {
+            tasks,
+            event_sequence,
         })
     }
 
@@ -147,8 +822,12 @@ impl Store {
         let mut statement = transaction.prepare(
             "SELECT task.id
              FROM tasks task
-             JOIN conversation_turns turn ON turn.id = task.active_turn_id
-             WHERE task.state IN ('running', 'cancel-requested')
+             LEFT JOIN task_dispatches dispatch ON dispatch.task_id = task.id
+             JOIN conversation_turns turn ON turn.id = COALESCE(task.active_turn_id, dispatch.turn_id)
+             WHERE (
+                    task.state IN ('running', 'cancel-requested') OR
+                    (task.state = 'accepted' AND dispatch.state = 'turn-recorded')
+                   )
                AND turn.state = 'uncertain'
                AND turn.failure_code = 'LZ-TURN-OWNER-LOST'
              ORDER BY task.sequence",
@@ -170,13 +849,26 @@ impl Store {
         for id in ids {
             let task_id = parse_uuid(&id, "tasks.id")?;
             let current = required_task(&transaction, task_id)?;
-            let turn_id = current.active_turn_id.ok_or(StoreError::TaskTurnLink {
-                task_id,
-                turn_id: task_id,
-            })?;
+            let current_dispatch = query_task_dispatch(&transaction, task_id)?;
+            let turn_id = current
+                .active_turn_id
+                .or_else(|| {
+                    current_dispatch
+                        .as_ref()
+                        .and_then(|dispatch| dispatch.turn_id)
+                })
+                .ok_or(StoreError::TaskTurnLink {
+                    task_id,
+                    turn_id: task_id,
+                })?;
+            let session_id = current.active_session_id.or_else(|| {
+                current_dispatch
+                    .as_ref()
+                    .and_then(|dispatch| dispatch.session_id)
+            });
             let actor = MessageSender::Employee(MessageEndpoint {
                 employee_id: current.assigned_employee_id,
-                session_id: current.active_session_id,
+                session_id,
             });
             transaction.execute(
                 "UPDATE tasks SET state = 'uncertain', revision = revision + 1,
@@ -187,15 +879,27 @@ impl Store {
                  WHERE id = ?1",
                 params![task_id.to_string(), now],
             )?;
+            if current_dispatch.is_some() {
+                transaction.execute(
+                    "UPDATE task_dispatches SET state = 'uncertain', revision = revision + 1,
+                            failure_code = 'LZ-TASK-OWNER-LOST',
+                            failure_message = 'the daemon stopped while this task turn was in flight',
+                            updated_at = ?2
+                     WHERE task_id = ?1 AND state = 'turn-recorded'",
+                    params![task_id.to_string(), now],
+                )?;
+            }
             insert_task_evidence_tx(
                 &transaction,
                 task_id,
                 current.revision + 1,
                 TaskEvidenceKind::Uncertain,
                 actor,
-                None,
+                current_dispatch
+                    .as_ref()
+                    .map(|dispatch| dispatch.message_id),
                 Some(turn_id),
-                current.active_session_id,
+                session_id,
                 &json!({"source": "startup-reconciliation", "turnFailureCode": "LZ-TURN-OWNER-LOST"}),
                 &now,
             )?;
@@ -726,28 +1430,12 @@ impl Store {
                 });
             }
         }
-        let (target, evidence_kind) = match current.state {
-            TaskState::Proposed | TaskState::Accepted => {
-                require_no_active_descendants(&transaction, current.id)?;
-                (TaskState::Cancelled, TaskEvidenceKind::Cancelled)
-            }
-            TaskState::Running => {
-                require_no_active_descendants(&transaction, current.id)?;
-                (
-                    TaskState::CancelRequested,
-                    TaskEvidenceKind::CancelRequested,
-                )
-            }
-            _ => {
-                return Err(StoreError::TaskState {
-                    task_id: current.id,
-                    state: serialized_name(current.state)?,
-                    expected: "proposed, accepted, or running",
-                });
-            }
-        };
+        let (target, evidence_kind) = task_cancel_target(&transaction, &current)?;
         let now = Utc::now().to_rfc3339();
         let terminal = target == TaskState::Cancelled;
+        if terminal {
+            cancel_queued_task_delivery_tx(&transaction, &current, &now)?;
+        }
         transaction.execute(
             "UPDATE tasks SET state = ?2, revision = revision + 1,
                     active_turn_id = CASE WHEN ?3 THEN NULL ELSE active_turn_id END,
@@ -1122,7 +1810,7 @@ pub(crate) fn project_turn_tx(
             "task.progressed",
             true,
         )),
-        (TaskState::Running, TurnState::Completed, _) => Some((
+        (TaskState::Running | TaskState::CancelRequested, TurnState::Completed, _) => Some((
             TaskState::Completed,
             TaskEvidenceKind::Completed,
             "task.completed",
@@ -1282,6 +1970,100 @@ fn effective_task_result(
         delegation_message,
         event_sequence: Some(event_sequence),
     })
+}
+
+fn cancel_queued_task_delivery_tx(
+    transaction: &Transaction<'_>,
+    task: &TaskRecord,
+    now: &str,
+) -> Result<(), StoreError> {
+    if let Some(message_id) = task.delegation_message_id {
+        let canonical = message::required_message(transaction, message_id)?;
+        if matches!(
+            canonical.delivery.state,
+            MessageDeliveryState::Queued
+                | MessageDeliveryState::Delivering
+                | MessageDeliveryState::RetryableFailed
+        ) {
+            message::cancel_message_tx(
+                transaction,
+                &message::CancelMessageInput {
+                    request_id: format!("task-cancel:{}:message", task.id),
+                    idempotency_key: format!("task-cancel:{}:message", task.id),
+                    message_id,
+                    expected_revision: canonical.delivery.revision,
+                },
+            )?;
+        }
+    }
+    let Some(dispatch) = query_task_dispatch(transaction, task.id)? else {
+        return Ok(());
+    };
+    if !matches!(
+        dispatch.state,
+        lazoo_protocol::TaskDispatchState::Preparing
+            | lazoo_protocol::TaskDispatchState::WorkspaceReady
+            | lazoo_protocol::TaskDispatchState::TurnRecorded
+    ) {
+        return Ok(());
+    }
+    if let Some(turn_id) = dispatch.turn_id {
+        transaction.execute(
+            "UPDATE conversation_turns SET state = 'cancelled',
+                    revision = revision + 1, terminal_at = ?2, updated_at = ?2
+             WHERE id = ?1 AND state = 'recorded'",
+            params![turn_id.to_string(), now],
+        )?;
+    }
+    transaction.execute(
+        "UPDATE task_dispatches SET state = 'cancelled', revision = revision + 1,
+                updated_at = ?2 WHERE task_id = ?1",
+        params![task.id.to_string(), now],
+    )?;
+    Ok(())
+}
+
+fn task_cancel_target(
+    transaction: &Transaction<'_>,
+    task: &TaskRecord,
+) -> Result<(TaskState, TaskEvidenceKind), StoreError> {
+    let target = match task.state {
+        TaskState::Accepted if automatic_dispatch_turn_is_in_flight(transaction, task.id)? => (
+            TaskState::CancelRequested,
+            TaskEvidenceKind::CancelRequested,
+        ),
+        TaskState::Proposed | TaskState::Accepted => {
+            (TaskState::Cancelled, TaskEvidenceKind::Cancelled)
+        }
+        TaskState::Running => (
+            TaskState::CancelRequested,
+            TaskEvidenceKind::CancelRequested,
+        ),
+        _ => {
+            return Err(StoreError::TaskState {
+                task_id: task.id,
+                state: serialized_name(task.state)?,
+                expected: "proposed, accepted, or running",
+            });
+        }
+    };
+    require_no_active_descendants(transaction, task.id)?;
+    Ok(target)
+}
+
+fn automatic_dispatch_turn_is_in_flight(
+    transaction: &Transaction<'_>,
+    task_id: Uuid,
+) -> Result<bool, StoreError> {
+    let Some(turn_id) =
+        query_task_dispatch(transaction, task_id)?.and_then(|dispatch| dispatch.turn_id)
+    else {
+        return Ok(false);
+    };
+    Ok(matches!(
+        conversation::required_turn(transaction, turn_id)?.state,
+        TurnState::Submitting | TurnState::Accepted
+    ))
 }
 
 fn validate_failure_fields(
@@ -1727,6 +2509,68 @@ fn query_task_evidence(
         ))
     })?;
     rows.map(|row| evidence_from_raw(row?)).collect()
+}
+
+fn query_task_dispatch(
+    connection: &Connection,
+    task_id: Uuid,
+) -> Result<Option<TaskDispatchRecord>, StoreError> {
+    let raw = connection
+        .query_row(
+            "SELECT task_id, message_id, owner_boot_id, project_id,
+                    project_configuration_revision, workspace_kind, workspace_path,
+                    base_commit, branch_name, turn_id, session_id, state, revision,
+                    failure_code, failure_message, created_at, updated_at
+             FROM task_dispatches WHERE task_id = ?1",
+            [task_id.to_string()],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, Option<String>>(3)?,
+                    row.get::<_, Option<i64>>(4)?,
+                    row.get::<_, Option<String>>(5)?,
+                    row.get::<_, Option<String>>(6)?,
+                    row.get::<_, Option<String>>(7)?,
+                    row.get::<_, Option<String>>(8)?,
+                    row.get::<_, Option<String>>(9)?,
+                    row.get::<_, Option<String>>(10)?,
+                    row.get::<_, String>(11)?,
+                    row.get::<_, i64>(12)?,
+                    row.get::<_, Option<String>>(13)?,
+                    row.get::<_, Option<String>>(14)?,
+                    row.get::<_, String>(15)?,
+                    row.get::<_, String>(16)?,
+                ))
+            },
+        )
+        .optional()?;
+    raw.map(|raw| {
+        Ok(TaskDispatchRecord {
+            task_id: parse_uuid(&raw.0, "task_dispatches.task_id")?,
+            message_id: parse_uuid(&raw.1, "task_dispatches.message_id")?,
+            owner_boot_id: parse_uuid(&raw.2, "task_dispatches.owner_boot_id")?,
+            project_id: optional_uuid(raw.3.as_deref(), "task_dispatches.project_id")?,
+            project_configuration_revision: raw.4.map(unsigned).transpose()?,
+            workspace_kind: raw
+                .5
+                .map(|value| serde_json::from_value(Value::String(value)))
+                .transpose()?,
+            workspace_path: raw.6,
+            base_commit: raw.7,
+            branch_name: raw.8,
+            turn_id: optional_uuid(raw.9.as_deref(), "task_dispatches.turn_id")?,
+            session_id: optional_uuid(raw.10.as_deref(), "task_dispatches.session_id")?,
+            state: serde_json::from_value(Value::String(raw.11))?,
+            revision: unsigned(raw.12)?,
+            failure_code: raw.13,
+            failure_message: raw.14,
+            created_at: raw.15,
+            updated_at: raw.16,
+        })
+    })
+    .transpose()
 }
 
 fn required_task_evidence(

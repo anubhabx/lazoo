@@ -35,6 +35,9 @@ impl DataRoot {
             self.state_dir(),
             self.runtime_dir(),
             self.sessions_dir(),
+            self.task_workspaces_dir(),
+            self.projectless_task_workspaces_dir(),
+            self.git_task_workspaces_dir(),
             self.spool_pending(),
             self.spool_reconciled(),
             self.daemon_logs(),
@@ -86,6 +89,44 @@ impl DataRoot {
         std::fs::create_dir_all(&path).map_err(|error| io_error(&path, error))?;
         OwnerSecurity::current()?.apply_to_path(&path)?;
         Ok(path)
+    }
+
+    #[must_use]
+    pub fn task_workspaces_dir(&self) -> PathBuf {
+        self.root.join("task-workspaces")
+    }
+
+    #[must_use]
+    pub fn projectless_task_workspaces_dir(&self) -> PathBuf {
+        self.task_workspaces_dir().join("projectless")
+    }
+
+    #[must_use]
+    pub fn git_task_workspaces_dir(&self) -> PathBuf {
+        self.task_workspaces_dir().join("git")
+    }
+
+    #[must_use]
+    pub fn projectless_task_working_dir(&self, task_id: Uuid) -> PathBuf {
+        self.projectless_task_workspaces_dir()
+            .join(task_id.to_string())
+    }
+
+    pub fn ensure_projectless_task_working_dir(
+        &self,
+        task_id: Uuid,
+    ) -> Result<PathBuf, RuntimeError> {
+        let path = self.projectless_task_working_dir(task_id);
+        std::fs::create_dir_all(&path).map_err(|error| io_error(&path, error))?;
+        OwnerSecurity::current()?.apply_to_path(&path)?;
+        Ok(path)
+    }
+
+    #[must_use]
+    pub fn git_task_working_dir(&self, project_id: Uuid, task_id: Uuid) -> PathBuf {
+        self.git_task_workspaces_dir()
+            .join(project_id.to_string())
+            .join(task_id.to_string())
     }
 
     #[must_use]

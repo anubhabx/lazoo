@@ -7,7 +7,10 @@ use std::{
     future::Future,
     pin::Pin,
     str::FromStr,
-    sync::Arc,
+    sync::{
+        Arc,
+        atomic::{AtomicU8, Ordering},
+    },
     time::Instant,
 };
 
@@ -41,7 +44,7 @@ use lazoo_store::{
 use serde::Serialize;
 use serde_json::{Value, json};
 use tokio::{
-    sync::{Mutex, broadcast, watch},
+    sync::{Mutex, Notify, broadcast, watch},
     time::{Duration, timeout},
 };
 use uuid::Uuid;
@@ -52,6 +55,11 @@ pub type SessionBackendFuture<'a> =
 pub trait ManagedSession: Send + Sync {
     fn id(&self) -> String;
     fn native_host_pid(&self) -> Option<u32>;
+    fn ready_for_turn(
+        &self,
+    ) -> Pin<Box<dyn Future<Output = Result<(), ProviderError>> + Send + '_>> {
+        Box::pin(async { Ok(()) })
+    }
     fn turn_observed<'a>(
         &'a self,
         request: &'a TurnRequest,
@@ -59,6 +67,69 @@ pub trait ManagedSession: Send + Sync {
     ) -> Pin<Box<dyn Future<Output = Result<Vec<ProviderEvent>, ProviderError>> + Send + 'a>>;
     fn cancel(&self) -> Pin<Box<dyn Future<Output = Result<(), ProviderError>> + Send + '_>>;
     fn stop(&self) -> Pin<Box<dyn Future<Output = Result<(), ProviderError>> + Send + '_>>;
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum ProviderIoState {
+    Ready,
+    Polling,
+    Started,
+    Cancelled,
+}
+
+pub(super) struct LiveTurn {
+    pub session: Arc<dyn ManagedSession>,
+    provider_io_state: AtomicU8,
+}
+
+impl LiveTurn {
+    const READY: u8 = 0;
+    const POLLING: u8 = 1;
+    const STARTED: u8 = 2;
+    const CANCELLED: u8 = 3;
+
+    pub fn new(session: Arc<dyn ManagedSession>) -> Self {
+        Self {
+            session,
+            provider_io_state: AtomicU8::new(Self::READY),
+        }
+    }
+
+    pub fn provider_io_state(&self) -> ProviderIoState {
+        match self.provider_io_state.load(Ordering::SeqCst) {
+            Self::READY => ProviderIoState::Ready,
+            Self::POLLING => ProviderIoState::Polling,
+            Self::STARTED => ProviderIoState::Started,
+            _ => ProviderIoState::Cancelled,
+        }
+    }
+
+    pub fn cancel_before_provider_io(&self) -> bool {
+        self.provider_io_state
+            .compare_exchange(
+                Self::READY,
+                Self::CANCELLED,
+                Ordering::SeqCst,
+                Ordering::SeqCst,
+            )
+            .is_ok()
+    }
+
+    pub fn begin_provider_poll(&self) -> bool {
+        self.provider_io_state
+            .compare_exchange(
+                Self::READY,
+                Self::POLLING,
+                Ordering::SeqCst,
+                Ordering::SeqCst,
+            )
+            .is_ok()
+    }
+
+    pub fn finish_provider_poll(&self) {
+        self.provider_io_state
+            .store(Self::STARTED, Ordering::SeqCst);
+    }
 }
 
 pub trait SessionBackend: Send + Sync {
@@ -127,7 +198,8 @@ pub struct App {
     provider_environment: DiscoveryEnvironment,
     session_backend: Arc<dyn SessionBackend>,
     live_sessions: Arc<Mutex<BTreeMap<Uuid, Arc<dyn ManagedSession>>>>,
-    live_turns: Arc<Mutex<BTreeMap<Uuid, Arc<dyn ManagedSession>>>>,
+    live_turns: Arc<Mutex<BTreeMap<Uuid, Arc<LiveTurn>>>>,
+    task_dispatch_notify: Arc<Notify>,
 }
 
 pub struct EventSubscription {
@@ -189,6 +261,7 @@ impl App {
         store.reconcile_messages()?;
         store.reconcile_turns(boot_id)?;
         store.reconcile_tasks()?;
+        store.reconcile_task_dispatches(boot_id)?;
         for event in store.publish_pending_outbox()? {
             let _ = events.send(event);
         }
@@ -204,6 +277,7 @@ impl App {
             session_backend,
             live_sessions: Arc::new(Mutex::new(BTreeMap::new())),
             live_turns: Arc::new(Mutex::new(BTreeMap::new())),
+            task_dispatch_notify: Arc::new(Notify::new()),
         })
     }
 
@@ -252,7 +326,7 @@ impl App {
             "task.accept" => self.accept_task(&request),
             "task.start" => self.start_task(&request),
             "task.report" => self.report_task(&request),
-            "task.cancel" => self.cancel_task(&request),
+            "task.cancel" => self.cancel_task(&request).await,
             "task.resolve" => self.resolve_task(&request),
             "task.list" => self.task_list(&request.params),
             "task.show" => self.task_show(&request.params),
@@ -679,7 +753,7 @@ impl App {
         if starting.event_sequence.is_none() {
             return Ok(to_value(starting));
         }
-        self.start_new_session(employee, provider, starting)
+        self.start_new_session(employee, provider, starting, None)
             .await
             .map(to_value)
     }
@@ -689,9 +763,15 @@ impl App {
         employee: lazoo_protocol::EmployeeRecord,
         provider: ProviderKind,
         starting: lazoo_protocol::SessionMutationResult,
+        working_directory: Option<std::path::PathBuf>,
     ) -> Result<lazoo_protocol::SessionMutationResult, RpcError> {
         let session_id = starting.session.id;
-        let Ok(working_directory) = self.root.ensure_session_working_dir(session_id) else {
+        let working_directory = if let Some(working_directory) = working_directory {
+            Ok(working_directory)
+        } else {
+            self.root.ensure_session_working_dir(session_id)
+        };
+        let Ok(working_directory) = working_directory else {
             self.record_session_failure(
                 session_id,
                 starting.session.revision,
@@ -824,6 +904,7 @@ impl App {
             .map_err(session_store_error)?;
         self.publish_events()?;
         if stopping.event_sequence.is_none() {
+            self.task_dispatch_notify.notify_one();
             return Ok(stopping);
         }
 
@@ -835,6 +916,7 @@ impl App {
                 "LZ-SESSION-HANDLE-MISSING",
                 "the daemon no longer owns a live handle for this session",
             )?;
+            self.task_dispatch_notify.notify_one();
             return Err(session_failure(
                 "LZ-SESSION-HANDLE-MISSING",
                 "the daemon no longer owns a live handle for this session",
@@ -850,6 +932,7 @@ impl App {
                 })
                 .map_err(session_store_error)?;
             self.publish_events()?;
+            self.task_dispatch_notify.notify_one();
             Ok(stopped)
         } else {
             drop(session);
@@ -859,6 +942,7 @@ impl App {
                 "LZ-SESSION-STOP-FAILED",
                 "provider session did not stop cleanly",
             )?;
+            self.task_dispatch_notify.notify_one();
             Err(session_failure(
                 "LZ-SESSION-STOP-FAILED",
                 "provider session did not stop cleanly",

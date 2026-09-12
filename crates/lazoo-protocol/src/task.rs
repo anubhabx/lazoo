@@ -56,6 +56,46 @@ pub enum TaskResolution {
     Cancelled,
 }
 
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum TaskDispatchState {
+    Preparing,
+    WorkspaceReady,
+    TurnRecorded,
+    Failed,
+    Cancelled,
+    Uncertain,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum TaskWorkspaceKind {
+    Projectless,
+    GitWorktree,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct TaskDispatchRecord {
+    pub task_id: Uuid,
+    pub message_id: Uuid,
+    pub owner_boot_id: Uuid,
+    pub project_id: Option<Uuid>,
+    pub project_configuration_revision: Option<u64>,
+    pub workspace_kind: Option<TaskWorkspaceKind>,
+    pub workspace_path: Option<String>,
+    pub base_commit: Option<String>,
+    pub branch_name: Option<String>,
+    pub turn_id: Option<Uuid>,
+    pub session_id: Option<Uuid>,
+    pub state: TaskDispatchState,
+    pub revision: u64,
+    pub failure_code: Option<String>,
+    pub failure_message: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct TaskRecord {
@@ -133,6 +173,7 @@ pub struct TaskDetail {
     pub task: TaskRecord,
     pub children: Vec<TaskSummary>,
     pub evidence: Vec<TaskEvidence>,
+    pub dispatch: Option<TaskDispatchRecord>,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
@@ -140,6 +181,15 @@ pub struct TaskDetail {
 pub struct TaskMutationResult {
     pub task: TaskRecord,
     pub delegation_message: Option<MessageRecord>,
+    pub event_sequence: Option<u64>,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct TaskDispatchFailureResult {
+    pub task: TaskRecord,
+    pub dispatch: TaskDispatchRecord,
+    pub message: MessageRecord,
     pub event_sequence: Option<u64>,
 }
 

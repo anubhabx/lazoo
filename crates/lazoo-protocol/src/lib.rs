@@ -22,9 +22,10 @@ pub use message::{
 pub use rpc::{JsonRpcRequest, JsonRpcResponse, RpcError};
 pub use task::{
     AcceptTaskParams, CancelTaskParams, DelegateTaskParams, ReportTaskParams, ResolveTaskParams,
-    StartTaskParams, TASK_CONTRACT_V1, TaskDetail, TaskEvidence, TaskEvidenceKind, TaskListParams,
-    TaskMutationResult, TaskReconcileResult, TaskRecord, TaskReportKind, TaskResolution, TaskRole,
-    TaskShowParams, TaskState, TaskSummary,
+    StartTaskParams, TASK_CONTRACT_V1, TaskDetail, TaskDispatchFailureResult, TaskDispatchRecord,
+    TaskDispatchState, TaskEvidence, TaskEvidenceKind, TaskListParams, TaskMutationResult,
+    TaskReconcileResult, TaskRecord, TaskReportKind, TaskResolution, TaskRole, TaskShowParams,
+    TaskState, TaskSummary, TaskWorkspaceKind,
 };
 pub use types::{
     AuthorityMode, CheckoutMode, CreateEmployeeParams, DesktopSnapshot, DisableEmployeeParams,

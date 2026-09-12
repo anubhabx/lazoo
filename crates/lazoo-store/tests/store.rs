@@ -35,14 +35,14 @@ fn store_enables_wal_foreign_keys_and_schema_version() {
 
     let status = store.status().unwrap();
 
-    assert_eq!(status.schema_version, 6);
+    assert_eq!(status.schema_version, 7);
     assert_eq!(status.journal_mode.to_lowercase(), "wal");
     assert!(status.foreign_keys);
     assert_no_foreign_key_violations(&temporary.path().join("lazoo.db"));
 }
 
 #[test]
-fn version_one_database_upgrades_to_version_six_without_rewriting_version_one() {
+fn version_one_database_upgrades_to_version_seven_without_rewriting_version_one() {
     use rusqlite::{Connection, params};
     use sha2::{Digest, Sha256};
 
@@ -75,7 +75,7 @@ fn version_one_database_upgrades_to_version_six_without_rewriting_version_one() 
 
     let store = Store::open_path(&database).unwrap();
 
-    assert_eq!(store.status().unwrap().schema_version, 6);
+    assert_eq!(store.status().unwrap().schema_version, 7);
     store
         .execute_for_test(
             "INSERT INTO employees (
@@ -93,7 +93,7 @@ fn version_one_database_upgrades_to_version_six_without_rewriting_version_one() 
 }
 
 #[test]
-fn version_two_database_upgrades_to_version_six_with_session_tables() {
+fn version_two_database_upgrades_to_version_seven_with_session_tables() {
     use rusqlite::{Connection, params};
     use sha2::{Digest, Sha256};
 
@@ -136,7 +136,7 @@ fn version_two_database_upgrades_to_version_six_with_session_tables() {
 
     let store = Store::open_path(&database).unwrap();
 
-    assert_eq!(store.status().unwrap().schema_version, 6);
+    assert_eq!(store.status().unwrap().schema_version, 7);
     store
         .execute_for_test(
             "INSERT INTO employees (
@@ -163,7 +163,7 @@ fn version_two_database_upgrades_to_version_six_with_session_tables() {
 }
 
 #[test]
-fn version_three_database_upgrades_to_version_six_with_message_tables() {
+fn version_three_database_upgrades_to_version_seven_with_message_tables() {
     use rusqlite::{Connection, params};
     use sha2::{Digest, Sha256};
 
@@ -210,7 +210,7 @@ fn version_three_database_upgrades_to_version_six_with_message_tables() {
 
     let store = Store::open_path(&database).unwrap();
 
-    assert_eq!(store.status().unwrap().schema_version, 6);
+    assert_eq!(store.status().unwrap().schema_version, 7);
     store
         .execute_for_test(
             "INSERT INTO employees (
@@ -241,7 +241,7 @@ fn version_three_database_upgrades_to_version_six_with_message_tables() {
 
 #[test]
 #[allow(clippy::too_many_lines)]
-fn version_four_database_upgrades_to_version_six_without_losing_message_history() {
+fn version_four_database_upgrades_to_version_seven_without_losing_message_history() {
     use lazoo_protocol::{MessageDeliveryState, MessageSender};
     use rusqlite::{Connection, params};
     use sha2::{Digest, Sha256};
@@ -344,7 +344,7 @@ fn version_four_database_upgrades_to_version_six_without_losing_message_history(
     drop(connection);
 
     let store = Store::open_path(&database).unwrap();
-    assert_eq!(store.status().unwrap().schema_version, 6);
+    assert_eq!(store.status().unwrap().schema_version, 7);
 
     let message = store.get_message(message_id).unwrap();
     assert_eq!(message.envelope.version, 1);
@@ -526,7 +526,7 @@ fn version_five_turns_backfill_conservative_task_identity_and_state() {
     drop(connection);
 
     let store = Store::open_path(&database).unwrap();
-    assert_eq!(store.status().unwrap().schema_version, 6);
+    assert_eq!(store.status().unwrap().schema_version, 7);
     drop(store);
 
     let connection = Connection::open(&database).unwrap();

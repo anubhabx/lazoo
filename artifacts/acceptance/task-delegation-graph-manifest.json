@@ -1,442 +1,447 @@
 {
-    "schemaVersion":  6,
-    "acceptance":  "task-delegation-graph",
-    "mode":  "deterministic-fixture",
-    "status":  "PASS",
-    "startedAt":  "2026-09-04T19:28:41.1900876Z",
-    "finishedAt":  "2026-09-04T19:28:52.4604290Z",
-    "durationMs":  11255,
-    "gates":  {
-                  "releaseBuild":  "SKIPPED_BY_CALLER",
-                  "schema6":  "PASS",
-                  "taskGraph":  "PASS"
-              },
-    "evidence":  {
-                     "rootIdentity":  true,
-                     "replayNoDuplicate":  true,
-                     "followUpJoinedRoot":  true,
-                     "askProposalNoMessage":  true,
-                     "userAcceptanceCanonicalMessage":  true,
-                     "authorityNarrowed":  true,
-                     "guardFailures":  true,
-                     "nativeEvidenceRequired":  true,
-                     "evidenceOrdered":  true,
-                     "activeDescendantBlocked":  true,
-                     "ownerLossUncertain":  true,
-                     "uncertaintyResolutionIdempotent":  true,
-                     "restartCorrelations":  true,
-                     "providerSmokeAbsent":  true,
-                     "externalModelUseAbsent":  true,
-                     "worktreeMutationAbsent":  true,
-                     "conptyAbsent":  true,
-                     "desktopCapabilityExpansionAbsent":  true,
-                     "uiChangesAbsent":  true
-                 },
-    "commands":  [
-                     {
-                         "command":  "lazooctl --json status",
-                         "exitCode":  0,
-                         "durationMs":  85
-                     },
-                     {
-                         "command":  "lazooctl --json employee create Rhea --provider codex --role Lead --authority-mode full-autonomy --idempotency-key lead-e8e5e9ed77e74f9fbbb973ec33d0cf0b",
-                         "exitCode":  0,
-                         "durationMs":  2125
-                     },
-                     {
-                         "command":  "lazooctl --json employee create Mira --provider codex --role Worker --authority-mode self-decision --idempotency-key worker-e8e5e9ed77e74f9fbbb973ec33d0cf0b",
-                         "exitCode":  0,
-                         "durationMs":  2066
-                     },
-                     {
-                         "command":  "lazooctl --json employee create Ivo --provider codex --role Worker --authority-mode self-decision --idempotency-key stale-worker-e8e5e9ed77e74f9fbbb973ec33d0cf0b",
-                         "exitCode":  0,
-                         "durationMs":  2064
-                     },
-                     {
-                         "command":  "lazooctl --json employee create Nia --provider codex --role Worker --disabled --authority-mode self-decision --idempotency-key disabled-worker-e8e5e9ed77e74f9fbbb973ec33d0cf0b",
-                         "exitCode":  0,
-                         "durationMs":  2072
-                     },
-                     {
-                         "command":  "lazooctl --json conversation create 76348fc3-b1cd-4b95-ab35-85c2bf72b73c --title Task graph acceptance --idempotency-key conversation-e8e5e9ed77e74f9fbbb973ec33d0cf0b",
-                         "exitCode":  0,
-                         "durationMs":  23
-                     },
-                     {
-                         "command":  "lazooctl --json turn submit e4ac57f7-8030-4aef-99c0-03f1346e0e0c --text ROOT_FOLLOWUP --authority-mode full-autonomy --idempotency-key root-ROOT_FOLLOWUP-e8e5e9ed77e74f9fbbb973ec33d0cf0b",
-                         "exitCode":  12,
-                         "durationMs":  24
-                     },
-                     {
-                         "command":  "lazooctl --json turn submit e4ac57f7-8030-4aef-99c0-03f1346e0e0c --text ROOT_ASK_COMPLETE_USER --idempotency-key root-ROOT_ASK_COMPLETE_USER-e8e5e9ed77e74f9fbbb973ec33d0cf0b",
-                         "exitCode":  12,
-                         "durationMs":  24
-                     },
-                     {
-                         "command":  "lazooctl --json turn submit e4ac57f7-8030-4aef-99c0-03f1346e0e0c --text ROOT_AUTHORITY --authority-mode full-autonomy --idempotency-key root-ROOT_AUTHORITY-e8e5e9ed77e74f9fbbb973ec33d0cf0b",
-                         "exitCode":  12,
-                         "durationMs":  24
-                     },
-                     {
-                         "command":  "lazooctl --json turn submit e4ac57f7-8030-4aef-99c0-03f1346e0e0c --text ROOT_GUARDS --authority-mode full-autonomy --idempotency-key root-ROOT_GUARDS-e8e5e9ed77e74f9fbbb973ec33d0cf0b",
-                         "exitCode":  12,
-                         "durationMs":  23
-                     },
-                     {
-                         "command":  "lazooctl --json turn submit e4ac57f7-8030-4aef-99c0-03f1346e0e0c --text ROOT_RESTART_HOLD_FOR_RESTART --authority-mode full-autonomy --idempotency-key root-ROOT_RESTART_HOLD_FOR_RESTART-e8e5e9ed77e74f9fbbb973ec33d0cf0b",
-                         "exitCode":  12,
-                         "durationMs":  24
-                     },
-                     {
-                         "command":  "lazooctl --json task list --conversation-id e4ac57f7-8030-4aef-99c0-03f1346e0e0c --limit 100",
-                         "exitCode":  0,
-                         "durationMs":  23
-                     },
-                     {
-                         "command":  "lazooctl --json task show 32621e07-47f5-4c5e-9ff4-5eb51ea5d39d",
-                         "exitCode":  0,
-                         "durationMs":  18
-                     },
-                     {
-                         "command":  "lazooctl --json turn list e4ac57f7-8030-4aef-99c0-03f1346e0e0c --after-sequence 0 --limit 100",
-                         "exitCode":  0,
-                         "durationMs":  18
-                     },
-                     {
-                         "command":  "lazooctl --json turn submit e4ac57f7-8030-4aef-99c0-03f1346e0e0c --text ROOT_FOLLOWUP --authority-mode full-autonomy --idempotency-key root-ROOT_FOLLOWUP-e8e5e9ed77e74f9fbbb973ec33d0cf0b",
-                         "exitCode":  12,
-                         "durationMs":  16
-                     },
-                     {
-                         "command":  "lazooctl --json task list --conversation-id e4ac57f7-8030-4aef-99c0-03f1346e0e0c --limit 100",
-                         "exitCode":  0,
-                         "durationMs":  16
-                     },
-                     {
-                         "command":  "lazooctl --json task show 32621e07-47f5-4c5e-9ff4-5eb51ea5d39d",
-                         "exitCode":  0,
-                         "durationMs":  16
-                     },
-                     {
-                         "command":  "lazooctl --json session warm 76348fc3-b1cd-4b95-ab35-85c2bf72b73c --expected-employee-revision 1 --idempotency-key lead-warm-e8e5e9ed77e74f9fbbb973ec33d0cf0b",
-                         "exitCode":  0,
-                         "durationMs":  51
-                     },
-                     {
-                         "command":  "lazooctl --json session warm a5d35d1f-62bf-4535-ada0-b2032e10fb2c --expected-employee-revision 1 --idempotency-key worker-warm-e8e5e9ed77e74f9fbbb973ec33d0cf0b",
-                         "exitCode":  0,
-                         "durationMs":  52
-                     },
-                     {
-                         "command":  "lazooctl --json roster show",
-                         "exitCode":  0,
-                         "durationMs":  18
-                     },
-                     {
-                         "command":  "lazooctl --json message list --after-sequence 0 --limit 1024",
-                         "exitCode":  0,
-                         "durationMs":  19
-                     },
-                     {
-                         "command":  "lazooctl --json task delegate 4f2d69f6-b082-49a9-acee-11485ea32e8e --actor-employee 76348fc3-b1cd-4b95-ab35-85c2bf72b73c --actor-session a21cb7fa-ebd8-4282-aa2c-8b4043ff9276 --assigned-employee a5d35d1f-62bf-4535-ada0-b2032e10fb2c --objective ASK_CHILD --requested-authority ask --roster-revision 8 --idempotency-key ask-child-e8e5e9ed77e74f9fbbb973ec33d0cf0b",
-                         "exitCode":  0,
-                         "durationMs":  24
-                     },
-                     {
-                         "command":  "lazooctl --json message list --after-sequence 0 --limit 1024",
-                         "exitCode":  0,
-                         "durationMs":  17
-                     },
-                     {
-                         "command":  "lazooctl --json message claim b4547bce-3da6-4760-a6d3-dfe3373c12b5 --expected-revision 1 --idempotency-key claim-proposal-e8e5e9ed77e74f9fbbb973ec33d0cf0b",
-                         "exitCode":  11,
-                         "durationMs":  17
-                     },
-                     {
-                         "command":  "lazooctl --json task accept b4547bce-3da6-4760-a6d3-dfe3373c12b5 --expected-revision 1 --idempotency-key accept-proposal-e8e5e9ed77e74f9fbbb973ec33d0cf0b",
-                         "exitCode":  0,
-                         "durationMs":  25
-                     },
-                     {
-                         "command":  "lazooctl --json task show b4547bce-3da6-4760-a6d3-dfe3373c12b5",
-                         "exitCode":  0,
-                         "durationMs":  19
-                     },
-                     {
-                         "command":  "lazooctl --json task start b4547bce-3da6-4760-a6d3-dfe3373c12b5 --expected-revision 2 --actor-employee a5d35d1f-62bf-4535-ada0-b2032e10fb2c --actor-session 5929bc8c-36d1-43a4-bdc7-f0ee6a5cdd13 --turn-id 4f2d69f6-b082-49a9-acee-11485ea32e8e --idempotency-key invalid-start-e8e5e9ed77e74f9fbbb973ec33d0cf0b",
-                         "exitCode":  13,
-                         "durationMs":  19
-                     },
-                     {
-                         "command":  "lazooctl --json task show b4547bce-3da6-4760-a6d3-dfe3373c12b5",
-                         "exitCode":  0,
-                         "durationMs":  18
-                     },
-                     {
-                         "command":  "lazooctl --json task show b4547bce-3da6-4760-a6d3-dfe3373c12b5",
-                         "exitCode":  0,
-                         "durationMs":  17
-                     },
-                     {
-                         "command":  "lazooctl --json turn submit e4ac57f7-8030-4aef-99c0-03f1346e0e0c --text ROOT_ASK_COMPLETE_USER --idempotency-key root-ROOT_ASK_COMPLETE_USER-e8e5e9ed77e74f9fbbb973ec33d0cf0b",
-                         "exitCode":  0,
-                         "durationMs":  52
-                     },
-                     {
-                         "command":  "lazooctl --json task list --conversation-id e4ac57f7-8030-4aef-99c0-03f1346e0e0c --limit 100",
-                         "exitCode":  0,
-                         "durationMs":  18
-                     },
-                     {
-                         "command":  "lazooctl --json turn submit e4ac57f7-8030-4aef-99c0-03f1346e0e0c --task-id 4f2d69f6-b082-49a9-acee-11485ea32e8e --authority-mode ask --text COMPLETE_USER --idempotency-key parent-follow-up-e8e5e9ed77e74f9fbbb973ec33d0cf0b",
-                         "exitCode":  0,
-                         "durationMs":  57
-                     },
-                     {
-                         "command":  "lazooctl --json task list --conversation-id e4ac57f7-8030-4aef-99c0-03f1346e0e0c --limit 100",
-                         "exitCode":  0,
-                         "durationMs":  19
-                     },
-                     {
-                         "command":  "lazooctl --json task show 4f2d69f6-b082-49a9-acee-11485ea32e8e",
-                         "exitCode":  0,
-                         "durationMs":  24
-                     },
-                     {
-                         "command":  "lazooctl --json task cancel 4f2d69f6-b082-49a9-acee-11485ea32e8e --expected-revision 9 --idempotency-key blocked-parent-cancel-e8e5e9ed77e74f9fbbb973ec33d0cf0b",
-                         "exitCode":  13,
-                         "durationMs":  19
-                     },
-                     {
-                         "command":  "lazooctl --json task report 4f2d69f6-b082-49a9-acee-11485ea32e8e --expected-revision 9 --actor-employee 76348fc3-b1cd-4b95-ab35-85c2bf72b73c --actor-session a21cb7fa-ebd8-4282-aa2c-8b4043ff9276 --kind completed --idempotency-key blocked-parent-complete-e8e5e9ed77e74f9fbbb973ec33d0cf0b",
-                         "exitCode":  13,
-                         "durationMs":  18
-                     },
-                     {
-                         "command":  "lazooctl --json turn show 8c19b03f-59d7-4ff6-80bd-501b605a64ac",
-                         "exitCode":  0,
-                         "durationMs":  18
-                     },
-                     {
-                         "command":  "lazooctl --json turn cancel 8c19b03f-59d7-4ff6-80bd-501b605a64ac --expected-revision 4 --idempotency-key cancel-active-child-e8e5e9ed77e74f9fbbb973ec33d0cf0b",
-                         "exitCode":  0,
-                         "durationMs":  45
-                     },
-                     {
-                         "command":  "lazooctl --json turn submit e4ac57f7-8030-4aef-99c0-03f1346e0e0c --recipient-employee a5d35d1f-62bf-4535-ada0-b2032e10fb2c --task-id b4547bce-3da6-4760-a6d3-dfe3373c12b5 --authority-mode ask --text HOLD_FOR_RESTART --idempotency-key active-child-turn-e8e5e9ed77e74f9fbbb973ec33d0cf0b",
-                         "exitCode":  0,
-                         "durationMs":  null
-                     },
-                     {
-                         "command":  "lazooctl --json task show b4547bce-3da6-4760-a6d3-dfe3373c12b5",
-                         "exitCode":  0,
-                         "durationMs":  17
-                     },
-                     {
-                         "command":  "lazooctl --json task report 4f2d69f6-b082-49a9-acee-11485ea32e8e --expected-revision 9 --actor-employee 76348fc3-b1cd-4b95-ab35-85c2bf72b73c --actor-session a21cb7fa-ebd8-4282-aa2c-8b4043ff9276 --kind completed --idempotency-key complete-parent-e8e5e9ed77e74f9fbbb973ec33d0cf0b",
-                         "exitCode":  0,
-                         "durationMs":  25
-                     },
-                     {
-                         "command":  "lazooctl --json task delegate 5618471b-2df0-4d03-96ff-77eb9d940a86 --actor-employee 76348fc3-b1cd-4b95-ab35-85c2bf72b73c --actor-session a21cb7fa-ebd8-4282-aa2c-8b4043ff9276 --assigned-employee a5d35d1f-62bf-4535-ada0-b2032e10fb2c --objective DEPTH_1 --requested-authority self-decision --roster-revision 8 --idempotency-key depth-1-e8e5e9ed77e74f9fbbb973ec33d0cf0b",
-                         "exitCode":  0,
-                         "durationMs":  24
-                     },
-                     {
-                         "command":  "lazooctl --json task delegate 9d6b4237-6641-4a04-805d-7cace630bc4c --actor-employee 76348fc3-b1cd-4b95-ab35-85c2bf72b73c --actor-session a21cb7fa-ebd8-4282-aa2c-8b4043ff9276 --assigned-employee a5d35d1f-62bf-4535-ada0-b2032e10fb2c --objective STALE_ROSTER --requested-authority self-decision --roster-revision 7 --idempotency-key stale-roster-e8e5e9ed77e74f9fbbb973ec33d0cf0b",
-                         "exitCode":  13,
-                         "durationMs":  18
-                     },
-                     {
-                         "command":  "lazooctl --json task delegate 9d6b4237-6641-4a04-805d-7cace630bc4c --actor-employee 76348fc3-b1cd-4b95-ab35-85c2bf72b73c --actor-session a21cb7fa-ebd8-4282-aa2c-8b4043ff9276 --assigned-employee 76348fc3-b1cd-4b95-ab35-85c2bf72b73c --objective SELF --requested-authority self-decision --roster-revision 8 --idempotency-key self-e8e5e9ed77e74f9fbbb973ec33d0cf0b",
-                         "exitCode":  13,
-                         "durationMs":  17
-                     },
-                     {
-                         "command":  "lazooctl --json task delegate 9d6b4237-6641-4a04-805d-7cace630bc4c --actor-employee 76348fc3-b1cd-4b95-ab35-85c2bf72b73c --actor-session a21cb7fa-ebd8-4282-aa2c-8b4043ff9276 --assigned-employee dd6205e4-5e90-4c17-8b70-5fb080c64f6a --objective UNAVAILABLE --requested-authority self-decision --roster-revision 8 --idempotency-key unavailable-e8e5e9ed77e74f9fbbb973ec33d0cf0b",
-                         "exitCode":  13,
-                         "durationMs":  18
-                     },
-                     {
-                         "command":  "lazooctl --json task delegate 9d6b4237-6641-4a04-805d-7cace630bc4c --actor-employee 76348fc3-b1cd-4b95-ab35-85c2bf72b73c --actor-session a21cb7fa-ebd8-4282-aa2c-8b4043ff9276 --assigned-employee efc25165-d902-4881-8f67-be8134aef7ab --objective STALE_CONFIGURATION --requested-authority self-decision --roster-revision 8 --idempotency-key stale-config-task-e8e5e9ed77e74f9fbbb973ec33d0cf0b",
-                         "exitCode":  0,
-                         "durationMs":  24
-                     },
-                     {
-                         "command":  "lazooctl --json employee update efc25165-d902-4881-8f67-be8134aef7ab --expected-revision 1 --role Updated worker --idempotency-key update-stale-worker-e8e5e9ed77e74f9fbbb973ec33d0cf0b",
-                         "exitCode":  0,
-                         "durationMs":  24
-                     },
-                     {
-                         "command":  "lazooctl --json session warm efc25165-d902-4881-8f67-be8134aef7ab --expected-employee-revision 2 --idempotency-key warm-stale-worker-e8e5e9ed77e74f9fbbb973ec33d0cf0b",
-                         "exitCode":  0,
-                         "durationMs":  56
-                     },
-                     {
-                         "command":  "lazooctl --json task show d02670fe-9f5f-45de-97d8-6c811b728615",
-                         "exitCode":  0,
-                         "durationMs":  20
-                     },
-                     {
-                         "command":  "lazooctl --json task show d02670fe-9f5f-45de-97d8-6c811b728615",
-                         "exitCode":  0,
-                         "durationMs":  17
-                     },
-                     {
-                         "command":  "lazooctl --json task report d02670fe-9f5f-45de-97d8-6c811b728615 --expected-revision 3 --actor-employee efc25165-d902-4881-8f67-be8134aef7ab --actor-session ea9dc912-7693-4e51-8fac-780dc18d681a --kind progress --idempotency-key stale-config-report-e8e5e9ed77e74f9fbbb973ec33d0cf0b",
-                         "exitCode":  13,
-                         "durationMs":  18
-                     },
-                     {
-                         "command":  "lazooctl --json turn show 0ad3dabb-3d8a-45ec-91b7-f1f8b3ada085",
-                         "exitCode":  0,
-                         "durationMs":  22
-                     },
-                     {
-                         "command":  "lazooctl --json turn cancel 0ad3dabb-3d8a-45ec-91b7-f1f8b3ada085 --expected-revision 4 --idempotency-key cancel-stale-turn-e8e5e9ed77e74f9fbbb973ec33d0cf0b",
-                         "exitCode":  0,
-                         "durationMs":  47
-                     },
-                     {
-                         "command":  "lazooctl --json turn submit e4ac57f7-8030-4aef-99c0-03f1346e0e0c --recipient-employee efc25165-d902-4881-8f67-be8134aef7ab --task-id d02670fe-9f5f-45de-97d8-6c811b728615 --authority-mode self-decision --text HOLD_FOR_RESTART --idempotency-key stale-config-turn-e8e5e9ed77e74f9fbbb973ec33d0cf0b",
-                         "exitCode":  0,
-                         "durationMs":  null
-                     },
-                     {
-                         "command":  "lazooctl --json task show d02670fe-9f5f-45de-97d8-6c811b728615",
-                         "exitCode":  0,
-                         "durationMs":  19
-                     },
-                     {
-                         "command":  "lazooctl --json roster show",
-                         "exitCode":  0,
-                         "durationMs":  18
-                     },
-                     {
-                         "command":  "lazooctl --json task delegate 77526383-9305-4d22-921a-4cfa89960b32 --actor-employee a5d35d1f-62bf-4535-ada0-b2032e10fb2c --actor-session 5929bc8c-36d1-43a4-bdc7-f0ee6a5cdd13 --assigned-employee 76348fc3-b1cd-4b95-ab35-85c2bf72b73c --objective DEPTH_2 --requested-authority self-decision --roster-revision 11 --idempotency-key depth-2-e8e5e9ed77e74f9fbbb973ec33d0cf0b",
-                         "exitCode":  0,
-                         "durationMs":  28
-                     },
-                     {
-                         "command":  "lazooctl --json task delegate 43d2da69-fe90-477e-892a-f3dce9538fbb --actor-employee 76348fc3-b1cd-4b95-ab35-85c2bf72b73c --actor-session a21cb7fa-ebd8-4282-aa2c-8b4043ff9276 --assigned-employee a5d35d1f-62bf-4535-ada0-b2032e10fb2c --objective DEPTH_3 --requested-authority self-decision --roster-revision 11 --idempotency-key depth-3-e8e5e9ed77e74f9fbbb973ec33d0cf0b",
-                         "exitCode":  0,
-                         "durationMs":  28
-                     },
-                     {
-                         "command":  "lazooctl --json task delegate fa2ce146-0e3f-43a9-b3ab-52fa67d26486 --actor-employee a5d35d1f-62bf-4535-ada0-b2032e10fb2c --actor-session 5929bc8c-36d1-43a4-bdc7-f0ee6a5cdd13 --assigned-employee 76348fc3-b1cd-4b95-ab35-85c2bf72b73c --objective DEPTH_4 --requested-authority self-decision --roster-revision 11 --idempotency-key depth-4-e8e5e9ed77e74f9fbbb973ec33d0cf0b",
-                         "exitCode":  0,
-                         "durationMs":  29
-                     },
-                     {
-                         "command":  "lazooctl --json task delegate 787d428a-2911-4928-8e17-11ede4fffbe8 --actor-employee 76348fc3-b1cd-4b95-ab35-85c2bf72b73c --actor-session a21cb7fa-ebd8-4282-aa2c-8b4043ff9276 --assigned-employee a5d35d1f-62bf-4535-ada0-b2032e10fb2c --objective DEPTH_5 --requested-authority self-decision --roster-revision 11 --idempotency-key depth-5-e8e5e9ed77e74f9fbbb973ec33d0cf0b",
-                         "exitCode":  13,
-                         "durationMs":  20
-                     },
-                     {
-                         "command":  "lazooctl --json task delegate 9d6b4237-6641-4a04-805d-7cace630bc4c --actor-employee 76348fc3-b1cd-4b95-ab35-85c2bf72b73c --actor-session a21cb7fa-ebd8-4282-aa2c-8b4043ff9276 --assigned-employee a5d35d1f-62bf-4535-ada0-b2032e10fb2c --objective FANOUT_1 --requested-authority self-decision --roster-revision 11 --idempotency-key fanout-1-e8e5e9ed77e74f9fbbb973ec33d0cf0b",
-                         "exitCode":  0,
-                         "durationMs":  25
-                     },
-                     {
-                         "command":  "lazooctl --json task delegate 9d6b4237-6641-4a04-805d-7cace630bc4c --actor-employee 76348fc3-b1cd-4b95-ab35-85c2bf72b73c --actor-session a21cb7fa-ebd8-4282-aa2c-8b4043ff9276 --assigned-employee a5d35d1f-62bf-4535-ada0-b2032e10fb2c --objective FANOUT_2 --requested-authority self-decision --roster-revision 11 --idempotency-key fanout-2-e8e5e9ed77e74f9fbbb973ec33d0cf0b",
-                         "exitCode":  0,
-                         "durationMs":  25
-                     },
-                     {
-                         "command":  "lazooctl --json task delegate 9d6b4237-6641-4a04-805d-7cace630bc4c --actor-employee 76348fc3-b1cd-4b95-ab35-85c2bf72b73c --actor-session a21cb7fa-ebd8-4282-aa2c-8b4043ff9276 --assigned-employee a5d35d1f-62bf-4535-ada0-b2032e10fb2c --objective FANOUT_3 --requested-authority self-decision --roster-revision 11 --idempotency-key fanout-3-e8e5e9ed77e74f9fbbb973ec33d0cf0b",
-                         "exitCode":  0,
-                         "durationMs":  25
-                     },
-                     {
-                         "command":  "lazooctl --json task delegate 9d6b4237-6641-4a04-805d-7cace630bc4c --actor-employee 76348fc3-b1cd-4b95-ab35-85c2bf72b73c --actor-session a21cb7fa-ebd8-4282-aa2c-8b4043ff9276 --assigned-employee a5d35d1f-62bf-4535-ada0-b2032e10fb2c --objective FANOUT_4 --requested-authority self-decision --roster-revision 11 --idempotency-key fanout-4-e8e5e9ed77e74f9fbbb973ec33d0cf0b",
-                         "exitCode":  0,
-                         "durationMs":  25
-                     },
-                     {
-                         "command":  "lazooctl --json task delegate 9d6b4237-6641-4a04-805d-7cace630bc4c --actor-employee 76348fc3-b1cd-4b95-ab35-85c2bf72b73c --actor-session a21cb7fa-ebd8-4282-aa2c-8b4043ff9276 --assigned-employee a5d35d1f-62bf-4535-ada0-b2032e10fb2c --objective FANOUT_5 --requested-authority self-decision --roster-revision 11 --idempotency-key fanout-5-e8e5e9ed77e74f9fbbb973ec33d0cf0b",
-                         "exitCode":  0,
-                         "durationMs":  24
-                     },
-                     {
-                         "command":  "lazooctl --json task delegate 9d6b4237-6641-4a04-805d-7cace630bc4c --actor-employee 76348fc3-b1cd-4b95-ab35-85c2bf72b73c --actor-session a21cb7fa-ebd8-4282-aa2c-8b4043ff9276 --assigned-employee a5d35d1f-62bf-4535-ada0-b2032e10fb2c --objective FANOUT_6 --requested-authority self-decision --roster-revision 11 --idempotency-key fanout-6-e8e5e9ed77e74f9fbbb973ec33d0cf0b",
-                         "exitCode":  0,
-                         "durationMs":  25
-                     },
-                     {
-                         "command":  "lazooctl --json task delegate 9d6b4237-6641-4a04-805d-7cace630bc4c --actor-employee 76348fc3-b1cd-4b95-ab35-85c2bf72b73c --actor-session a21cb7fa-ebd8-4282-aa2c-8b4043ff9276 --assigned-employee a5d35d1f-62bf-4535-ada0-b2032e10fb2c --objective FANOUT_7 --requested-authority self-decision --roster-revision 11 --idempotency-key fanout-7-e8e5e9ed77e74f9fbbb973ec33d0cf0b",
-                         "exitCode":  0,
-                         "durationMs":  26
-                     },
-                     {
-                         "command":  "lazooctl --json task delegate 9d6b4237-6641-4a04-805d-7cace630bc4c --actor-employee 76348fc3-b1cd-4b95-ab35-85c2bf72b73c --actor-session a21cb7fa-ebd8-4282-aa2c-8b4043ff9276 --assigned-employee a5d35d1f-62bf-4535-ada0-b2032e10fb2c --objective FANOUT_8 --requested-authority self-decision --roster-revision 11 --idempotency-key fanout-8-e8e5e9ed77e74f9fbbb973ec33d0cf0b",
-                         "exitCode":  0,
-                         "durationMs":  25
-                     },
-                     {
-                         "command":  "lazooctl --json task delegate 9d6b4237-6641-4a04-805d-7cace630bc4c --actor-employee 76348fc3-b1cd-4b95-ab35-85c2bf72b73c --actor-session a21cb7fa-ebd8-4282-aa2c-8b4043ff9276 --assigned-employee a5d35d1f-62bf-4535-ada0-b2032e10fb2c --objective FANOUT_9 --requested-authority self-decision --roster-revision 11 --idempotency-key fanout-9-e8e5e9ed77e74f9fbbb973ec33d0cf0b",
-                         "exitCode":  13,
-                         "durationMs":  18
-                     },
-                     {
-                         "command":  "lazooctl --json task show 02f3cb36-08ab-4691-a3e7-dbb945cb5f4b",
-                         "exitCode":  0,
-                         "durationMs":  21
-                     },
-                     {
-                         "command":  "lazooctl --json task show 02f3cb36-08ab-4691-a3e7-dbb945cb5f4b",
-                         "exitCode":  0,
-                         "durationMs":  22
-                     },
-                     {
-                         "command":  "lazooctl --json turn submit e4ac57f7-8030-4aef-99c0-03f1346e0e0c --authority-mode full-autonomy --text ROOT_RESTART_HOLD_FOR_RESTART --idempotency-key root-ROOT_RESTART_HOLD_FOR_RESTART-e8e5e9ed77e74f9fbbb973ec33d0cf0b",
-                         "exitCode":  0,
-                         "durationMs":  null
-                     },
-                     {
-                         "command":  "lazooctl --json status",
-                         "exitCode":  0,
-                         "durationMs":  52
-                     },
-                     {
-                         "command":  "lazooctl --json task show 02f3cb36-08ab-4691-a3e7-dbb945cb5f4b",
-                         "exitCode":  0,
-                         "durationMs":  20
-                     },
-                     {
-                         "command":  "lazooctl --json task resolve 02f3cb36-08ab-4691-a3e7-dbb945cb5f4b --expected-revision 4 --resolution completed --idempotency-key resolve-restart-e8e5e9ed77e74f9fbbb973ec33d0cf0b",
-                         "exitCode":  0,
-                         "durationMs":  23
-                     },
-                     {
-                         "command":  "lazooctl --json task show 02f3cb36-08ab-4691-a3e7-dbb945cb5f4b",
-                         "exitCode":  0,
-                         "durationMs":  16
-                     },
-                     {
-                         "command":  "lazooctl --json task resolve 02f3cb36-08ab-4691-a3e7-dbb945cb5f4b --expected-revision 4 --resolution completed --idempotency-key resolve-restart-e8e5e9ed77e74f9fbbb973ec33d0cf0b",
-                         "exitCode":  0,
-                         "durationMs":  15
-                     },
-                     {
-                         "command":  "lazooctl --json task show 02f3cb36-08ab-4691-a3e7-dbb945cb5f4b",
-                         "exitCode":  0,
-                         "durationMs":  16
-                     },
-                     {
-                         "command":  "lazooctl --json events list --after 0 --limit 1024",
-                         "exitCode":  0,
-                         "durationMs":  25
-                     },
-                     {
-                         "command":  "lazooctl --json status",
-                         "exitCode":  0,
-                         "durationMs":  16
-                     },
-                     {
-                         "command":  "lazooctl --json system shutdown",
-                         "exitCode":  0,
-                         "durationMs":  17
-                     }
-                 ]
+  "schemaVersion": 7,
+  "acceptance": "task-delegation-graph",
+  "mode": "deterministic-fixture",
+  "status": "PASS",
+  "startedAt": "2026-09-12T10:59:30.4864002Z",
+  "finishedAt": "2026-09-12T10:59:41.5693370Z",
+  "durationMs": 11065,
+  "gates": {
+    "releaseBuild": "SKIPPED_BY_CALLER",
+    "schema7": "PASS",
+    "taskGraph": "PASS"
+  },
+  "evidence": {
+    "rootIdentity": true,
+    "replayNoDuplicate": true,
+    "followUpJoinedRoot": true,
+    "askProposalNoMessage": true,
+    "userAcceptanceCanonicalMessage": true,
+    "authorityNarrowed": true,
+    "guardFailures": true,
+    "nativeEvidenceRequired": true,
+    "evidenceOrdered": true,
+    "activeDescendantBlocked": true,
+    "ownerLossUncertain": true,
+    "uncertaintyResolutionIdempotent": true,
+    "restartCorrelations": true,
+    "providerSmokeAbsent": true,
+    "externalModelUseAbsent": true,
+    "worktreeMutationAbsent": true,
+    "conptyAbsent": true,
+    "desktopCapabilityExpansionAbsent": true,
+    "uiChangesAbsent": true
+  },
+  "commands": [
+    {
+      "command": "lazooctl --json status",
+      "exitCode": 0,
+      "durationMs": 81
+    },
+    {
+      "command": "lazooctl --json employee create Rhea --provider codex --role Lead --authority-mode full-autonomy --idempotency-key lead-8dbea602da94481383957e1b4764c02e",
+      "exitCode": 0,
+      "durationMs": 2107
+    },
+    {
+      "command": "lazooctl --json employee create Mira --provider codex --role Worker --authority-mode self-decision --idempotency-key worker-8dbea602da94481383957e1b4764c02e",
+      "exitCode": 0,
+      "durationMs": 2054
+    },
+    {
+      "command": "lazooctl --json employee create Ivo --provider codex --role Worker --authority-mode self-decision --idempotency-key stale-worker-8dbea602da94481383957e1b4764c02e",
+      "exitCode": 0,
+      "durationMs": 2051
+    },
+    {
+      "command": "lazooctl --json employee create Nia --provider codex --role Worker --disabled --authority-mode self-decision --idempotency-key disabled-worker-8dbea602da94481383957e1b4764c02e",
+      "exitCode": 0,
+      "durationMs": 2066
+    },
+    {
+      "command": "lazooctl --json conversation create 3110b5a0-bb89-4e44-817c-0708a486156b --title Task graph acceptance --idempotency-key conversation-8dbea602da94481383957e1b4764c02e",
+      "exitCode": 0,
+      "durationMs": 22
+    },
+    {
+      "command": "lazooctl --json turn submit d1166ae4-3607-4afb-b1ca-25e3a5fcaa75 --text ROOT_FOLLOWUP --authority-mode full-autonomy --idempotency-key root-ROOT_FOLLOWUP-8dbea602da94481383957e1b4764c02e",
+      "exitCode": 12,
+      "durationMs": 23
+    },
+    {
+      "command": "lazooctl --json turn submit d1166ae4-3607-4afb-b1ca-25e3a5fcaa75 --text ROOT_ASK_COMPLETE_USER --idempotency-key root-ROOT_ASK_COMPLETE_USER-8dbea602da94481383957e1b4764c02e",
+      "exitCode": 12,
+      "durationMs": 22
+    },
+    {
+      "command": "lazooctl --json turn submit d1166ae4-3607-4afb-b1ca-25e3a5fcaa75 --text ROOT_AUTHORITY --authority-mode full-autonomy --idempotency-key root-ROOT_AUTHORITY-8dbea602da94481383957e1b4764c02e",
+      "exitCode": 12,
+      "durationMs": 22
+    },
+    {
+      "command": "lazooctl --json turn submit d1166ae4-3607-4afb-b1ca-25e3a5fcaa75 --text ROOT_GUARDS --authority-mode full-autonomy --idempotency-key root-ROOT_GUARDS-8dbea602da94481383957e1b4764c02e",
+      "exitCode": 12,
+      "durationMs": 23
+    },
+    {
+      "command": "lazooctl --json turn submit d1166ae4-3607-4afb-b1ca-25e3a5fcaa75 --text ROOT_RESTART_HOLD_FOR_RESTART --authority-mode full-autonomy --idempotency-key root-ROOT_RESTART_HOLD_FOR_RESTART-8dbea602da94481383957e1b4764c02e",
+      "exitCode": 12,
+      "durationMs": 22
+    },
+    {
+      "command": "lazooctl --json task list --conversation-id d1166ae4-3607-4afb-b1ca-25e3a5fcaa75 --limit 100",
+      "exitCode": 0,
+      "durationMs": 17
+    },
+    {
+      "command": "lazooctl --json task show cc722e6f-a1dc-4474-8ae9-c7e8c3a7da6b",
+      "exitCode": 0,
+      "durationMs": 18
+    },
+    {
+      "command": "lazooctl --json turn list d1166ae4-3607-4afb-b1ca-25e3a5fcaa75 --after-sequence 0 --limit 100",
+      "exitCode": 0,
+      "durationMs": 18
+    },
+    {
+      "command": "lazooctl --json turn submit d1166ae4-3607-4afb-b1ca-25e3a5fcaa75 --text ROOT_FOLLOWUP --authority-mode full-autonomy --idempotency-key root-ROOT_FOLLOWUP-8dbea602da94481383957e1b4764c02e",
+      "exitCode": 12,
+      "durationMs": 15
+    },
+    {
+      "command": "lazooctl --json task list --conversation-id d1166ae4-3607-4afb-b1ca-25e3a5fcaa75 --limit 100",
+      "exitCode": 0,
+      "durationMs": 14
+    },
+    {
+      "command": "lazooctl --json task show cc722e6f-a1dc-4474-8ae9-c7e8c3a7da6b",
+      "exitCode": 0,
+      "durationMs": 14
+    },
+    {
+      "command": "lazooctl --json session warm 3110b5a0-bb89-4e44-817c-0708a486156b --expected-employee-revision 1 --idempotency-key lead-warm-8dbea602da94481383957e1b4764c02e",
+      "exitCode": 0,
+      "durationMs": 48
+    },
+    {
+      "command": "lazooctl --json session warm b151ee86-c868-4040-9579-4ed1cdee5bc5 --expected-employee-revision 1 --idempotency-key worker-warm-8dbea602da94481383957e1b4764c02e",
+      "exitCode": 0,
+      "durationMs": 47
+    },
+    {
+      "command": "lazooctl --json roster show",
+      "exitCode": 0,
+      "durationMs": 17
+    },
+    {
+      "command": "lazooctl --json message list --after-sequence 0 --limit 1024",
+      "exitCode": 0,
+      "durationMs": 16
+    },
+    {
+      "command": "lazooctl --json task delegate c5342669-437c-426e-a4bf-a39744345b2f --actor-employee 3110b5a0-bb89-4e44-817c-0708a486156b --actor-session 1647551d-4130-4eef-babb-0a9f53acda1a --assigned-employee b151ee86-c868-4040-9579-4ed1cdee5bc5 --objective ASK_CHILD --requested-authority ask --roster-revision 8 --idempotency-key ask-child-8dbea602da94481383957e1b4764c02e",
+      "exitCode": 0,
+      "durationMs": 23
+    },
+    {
+      "command": "lazooctl --json message list --after-sequence 0 --limit 1024",
+      "exitCode": 0,
+      "durationMs": 15
+    },
+    {
+      "command": "lazooctl --json message claim e0bcea7d-256f-4cc9-ace7-8f6cb9243929 --expected-revision 1 --idempotency-key claim-proposal-8dbea602da94481383957e1b4764c02e",
+      "exitCode": 11,
+      "durationMs": 17
+    },
+    {
+      "command": "lazooctl --json task accept e0bcea7d-256f-4cc9-ace7-8f6cb9243929 --expected-revision 1 --idempotency-key accept-proposal-8dbea602da94481383957e1b4764c02e",
+      "exitCode": 0,
+      "durationMs": 23
+    },
+    {
+      "command": "lazooctl --json task show e0bcea7d-256f-4cc9-ace7-8f6cb9243929",
+      "exitCode": 0,
+      "durationMs": 18
+    },
+    {
+      "command": "lazooctl --json task start e0bcea7d-256f-4cc9-ace7-8f6cb9243929 --expected-revision 2 --actor-employee b151ee86-c868-4040-9579-4ed1cdee5bc5 --actor-session 71fa76d6-118f-435f-af1e-29318ba89dfa --turn-id c5342669-437c-426e-a4bf-a39744345b2f --idempotency-key invalid-start-8dbea602da94481383957e1b4764c02e",
+      "exitCode": 13,
+      "durationMs": 18
+    },
+    {
+      "command": "lazooctl --json task show e0bcea7d-256f-4cc9-ace7-8f6cb9243929",
+      "exitCode": 0,
+      "durationMs": 15
+    },
+    {
+      "command": "lazooctl --json task show e0bcea7d-256f-4cc9-ace7-8f6cb9243929",
+      "exitCode": 0,
+      "durationMs": 14
+    },
+    {
+      "command": "lazooctl --json turn submit d1166ae4-3607-4afb-b1ca-25e3a5fcaa75 --text ROOT_ASK_COMPLETE_USER --idempotency-key root-ROOT_ASK_COMPLETE_USER-8dbea602da94481383957e1b4764c02e",
+      "exitCode": 0,
+      "durationMs": 45
+    },
+    {
+      "command": "lazooctl --json task list --conversation-id d1166ae4-3607-4afb-b1ca-25e3a5fcaa75 --limit 100",
+      "exitCode": 0,
+      "durationMs": 15
+    },
+    {
+      "command": "lazooctl --json turn submit d1166ae4-3607-4afb-b1ca-25e3a5fcaa75 --task-id c5342669-437c-426e-a4bf-a39744345b2f --authority-mode ask --text COMPLETE_USER --idempotency-key parent-follow-up-8dbea602da94481383957e1b4764c02e",
+      "exitCode": 0,
+      "durationMs": 57
+    },
+    {
+      "command": "lazooctl --json task list --conversation-id d1166ae4-3607-4afb-b1ca-25e3a5fcaa75 --limit 100",
+      "exitCode": 0,
+      "durationMs": 20
+    },
+    {
+      "command": "lazooctl --json task show c5342669-437c-426e-a4bf-a39744345b2f",
+      "exitCode": 0,
+      "durationMs": 20
+    },
+    {
+      "command": "lazooctl --json task cancel c5342669-437c-426e-a4bf-a39744345b2f --expected-revision 9 --idempotency-key blocked-parent-cancel-8dbea602da94481383957e1b4764c02e",
+      "exitCode": 13,
+      "durationMs": 19
+    },
+    {
+      "command": "lazooctl --json task report c5342669-437c-426e-a4bf-a39744345b2f --expected-revision 9 --actor-employee 3110b5a0-bb89-4e44-817c-0708a486156b --actor-session 1647551d-4130-4eef-babb-0a9f53acda1a --kind completed --idempotency-key blocked-parent-complete-8dbea602da94481383957e1b4764c02e",
+      "exitCode": 13,
+      "durationMs": 19
+    },
+    {
+      "command": "lazooctl --json turn show 336de6db-2c0c-4265-91d2-8c9efaee6f7a",
+      "exitCode": 0,
+      "durationMs": 23
+    },
+    {
+      "command": "lazooctl --json turn cancel 336de6db-2c0c-4265-91d2-8c9efaee6f7a --expected-revision 4 --idempotency-key cancel-active-child-8dbea602da94481383957e1b4764c02e",
+      "exitCode": 0,
+      "durationMs": 56
+    },
+    {
+      "command": "lazooctl --json turn submit d1166ae4-3607-4afb-b1ca-25e3a5fcaa75 --recipient-employee b151ee86-c868-4040-9579-4ed1cdee5bc5 --task-id e0bcea7d-256f-4cc9-ace7-8f6cb9243929 --authority-mode ask --text HOLD_FOR_RESTART --idempotency-key active-child-turn-8dbea602da94481383957e1b4764c02e",
+      "exitCode": 0,
+      "durationMs": null
+    },
+    {
+      "command": "lazooctl --json task show e0bcea7d-256f-4cc9-ace7-8f6cb9243929",
+      "exitCode": 0,
+      "durationMs": 20
+    },
+    {
+      "command": "lazooctl --json task report c5342669-437c-426e-a4bf-a39744345b2f --expected-revision 9 --actor-employee 3110b5a0-bb89-4e44-817c-0708a486156b --actor-session 1647551d-4130-4eef-babb-0a9f53acda1a --kind completed --idempotency-key complete-parent-8dbea602da94481383957e1b4764c02e",
+      "exitCode": 0,
+      "durationMs": 24
+    },
+    {
+      "command": "lazooctl --json task delegate 84498398-6c98-4f1c-8db5-b8b011db62de --actor-employee 3110b5a0-bb89-4e44-817c-0708a486156b --actor-session 1647551d-4130-4eef-babb-0a9f53acda1a --assigned-employee b151ee86-c868-4040-9579-4ed1cdee5bc5 --objective DEPTH_1 --requested-authority self-decision --roster-revision 8 --idempotency-key depth-1-8dbea602da94481383957e1b4764c02e",
+      "exitCode": 0,
+      "durationMs": 27
+    },
+    {
+      "command": "lazooctl --json task delegate 50be1f7b-d2c2-41b8-b252-d984df4b3bb3 --actor-employee 3110b5a0-bb89-4e44-817c-0708a486156b --actor-session 1647551d-4130-4eef-babb-0a9f53acda1a --assigned-employee b151ee86-c868-4040-9579-4ed1cdee5bc5 --objective STALE_ROSTER --requested-authority self-decision --roster-revision 7 --idempotency-key stale-roster-8dbea602da94481383957e1b4764c02e",
+      "exitCode": 13,
+      "durationMs": 17
+    },
+    {
+      "command": "lazooctl --json task delegate 50be1f7b-d2c2-41b8-b252-d984df4b3bb3 --actor-employee 3110b5a0-bb89-4e44-817c-0708a486156b --actor-session 1647551d-4130-4eef-babb-0a9f53acda1a --assigned-employee 3110b5a0-bb89-4e44-817c-0708a486156b --objective SELF --requested-authority self-decision --roster-revision 8 --idempotency-key self-8dbea602da94481383957e1b4764c02e",
+      "exitCode": 13,
+      "durationMs": 16
+    },
+    {
+      "command": "lazooctl --json task delegate 50be1f7b-d2c2-41b8-b252-d984df4b3bb3 --actor-employee 3110b5a0-bb89-4e44-817c-0708a486156b --actor-session 1647551d-4130-4eef-babb-0a9f53acda1a --assigned-employee e1fa285a-e7b1-4cae-a5f7-e7ad61aba1a9 --objective UNAVAILABLE --requested-authority self-decision --roster-revision 8 --idempotency-key unavailable-8dbea602da94481383957e1b4764c02e",
+      "exitCode": 13,
+      "durationMs": 17
+    },
+    {
+      "command": "lazooctl --json task delegate 50be1f7b-d2c2-41b8-b252-d984df4b3bb3 --actor-employee 3110b5a0-bb89-4e44-817c-0708a486156b --actor-session 1647551d-4130-4eef-babb-0a9f53acda1a --assigned-employee 22b84be0-6795-4c2b-bfb4-915f6c603f13 --objective STALE_CONFIGURATION --requested-authority ask --roster-revision 8 --idempotency-key stale-config-task-8dbea602da94481383957e1b4764c02e",
+      "exitCode": 0,
+      "durationMs": 23
+    },
+    {
+      "command": "lazooctl --json employee update 22b84be0-6795-4c2b-bfb4-915f6c603f13 --expected-revision 1 --role Updated worker --idempotency-key update-stale-worker-8dbea602da94481383957e1b4764c02e",
+      "exitCode": 0,
+      "durationMs": 22
+    },
+    {
+      "command": "lazooctl --json session warm 22b84be0-6795-4c2b-bfb4-915f6c603f13 --expected-employee-revision 2 --idempotency-key warm-stale-worker-8dbea602da94481383957e1b4764c02e",
+      "exitCode": 0,
+      "durationMs": 48
+    },
+    {
+      "command": "lazooctl --json task accept 1b50e17a-c1fc-4451-8da8-13a3972e69a0 --expected-revision 1 --idempotency-key accept-stale-worker-8dbea602da94481383957e1b4764c02e",
+      "exitCode": 0,
+      "durationMs": 28
+    },
+    {
+      "command": "lazooctl --json task show 1b50e17a-c1fc-4451-8da8-13a3972e69a0",
+      "exitCode": 0,
+      "durationMs": 17
+    },
+    {
+      "command": "lazooctl --json task show 1b50e17a-c1fc-4451-8da8-13a3972e69a0",
+      "exitCode": 0,
+      "durationMs": 15
+    },
+    {
+      "command": "lazooctl --json task report 1b50e17a-c1fc-4451-8da8-13a3972e69a0 --expected-revision 4 --actor-employee 22b84be0-6795-4c2b-bfb4-915f6c603f13 --actor-session 5abd669f-18a1-4b65-aa4c-dea40247ceb4 --kind progress --idempotency-key stale-config-report-8dbea602da94481383957e1b4764c02e",
+      "exitCode": 13,
+      "durationMs": 23
+    },
+    {
+      "command": "lazooctl --json turn show 74ee9e58-c271-4407-8b60-df36a3c7deac",
+      "exitCode": 0,
+      "durationMs": 16
+    },
+    {
+      "command": "lazooctl --json turn cancel 74ee9e58-c271-4407-8b60-df36a3c7deac --expected-revision 4 --idempotency-key cancel-stale-turn-8dbea602da94481383957e1b4764c02e",
+      "exitCode": 0,
+      "durationMs": 38
+    },
+    {
+      "command": "lazooctl --json turn submit d1166ae4-3607-4afb-b1ca-25e3a5fcaa75 --recipient-employee 22b84be0-6795-4c2b-bfb4-915f6c603f13 --task-id 1b50e17a-c1fc-4451-8da8-13a3972e69a0 --authority-mode self-decision --text HOLD_FOR_RESTART --idempotency-key stale-config-turn-8dbea602da94481383957e1b4764c02e",
+      "exitCode": 0,
+      "durationMs": null
+    },
+    {
+      "command": "lazooctl --json task show 1b50e17a-c1fc-4451-8da8-13a3972e69a0",
+      "exitCode": 0,
+      "durationMs": 14
+    },
+    {
+      "command": "lazooctl --json roster show",
+      "exitCode": 0,
+      "durationMs": 21
+    },
+    {
+      "command": "lazooctl --json task delegate e6e5386c-becd-4187-9308-b641616f544e --actor-employee b151ee86-c868-4040-9579-4ed1cdee5bc5 --actor-session 71fa76d6-118f-435f-af1e-29318ba89dfa --assigned-employee 3110b5a0-bb89-4e44-817c-0708a486156b --objective DEPTH_2 --requested-authority self-decision --roster-revision 11 --idempotency-key depth-2-8dbea602da94481383957e1b4764c02e",
+      "exitCode": 0,
+      "durationMs": 21
+    },
+    {
+      "command": "lazooctl --json task delegate bc28acc2-35aa-4c0f-8b79-18ddd6a527c7 --actor-employee 3110b5a0-bb89-4e44-817c-0708a486156b --actor-session 1647551d-4130-4eef-babb-0a9f53acda1a --assigned-employee b151ee86-c868-4040-9579-4ed1cdee5bc5 --objective DEPTH_3 --requested-authority self-decision --roster-revision 11 --idempotency-key depth-3-8dbea602da94481383957e1b4764c02e",
+      "exitCode": 0,
+      "durationMs": 28
+    },
+    {
+      "command": "lazooctl --json task delegate 1a82f53a-43e8-4c27-82f6-5802fed0900a --actor-employee b151ee86-c868-4040-9579-4ed1cdee5bc5 --actor-session 71fa76d6-118f-435f-af1e-29318ba89dfa --assigned-employee 3110b5a0-bb89-4e44-817c-0708a486156b --objective DEPTH_4 --requested-authority self-decision --roster-revision 11 --idempotency-key depth-4-8dbea602da94481383957e1b4764c02e",
+      "exitCode": 0,
+      "durationMs": 48
+    },
+    {
+      "command": "lazooctl --json task delegate 2f4d50a4-03a7-4080-982f-b3865a37d013 --actor-employee 3110b5a0-bb89-4e44-817c-0708a486156b --actor-session 1647551d-4130-4eef-babb-0a9f53acda1a --assigned-employee b151ee86-c868-4040-9579-4ed1cdee5bc5 --objective DEPTH_5 --requested-authority self-decision --roster-revision 11 --idempotency-key depth-5-8dbea602da94481383957e1b4764c02e",
+      "exitCode": 13,
+      "durationMs": 18
+    },
+    {
+      "command": "lazooctl --json task delegate 50be1f7b-d2c2-41b8-b252-d984df4b3bb3 --actor-employee 3110b5a0-bb89-4e44-817c-0708a486156b --actor-session 1647551d-4130-4eef-babb-0a9f53acda1a --assigned-employee b151ee86-c868-4040-9579-4ed1cdee5bc5 --objective FANOUT_1 --requested-authority self-decision --roster-revision 11 --idempotency-key fanout-1-8dbea602da94481383957e1b4764c02e",
+      "exitCode": 0,
+      "durationMs": 24
+    },
+    {
+      "command": "lazooctl --json task delegate 50be1f7b-d2c2-41b8-b252-d984df4b3bb3 --actor-employee 3110b5a0-bb89-4e44-817c-0708a486156b --actor-session 1647551d-4130-4eef-babb-0a9f53acda1a --assigned-employee b151ee86-c868-4040-9579-4ed1cdee5bc5 --objective FANOUT_2 --requested-authority self-decision --roster-revision 11 --idempotency-key fanout-2-8dbea602da94481383957e1b4764c02e",
+      "exitCode": 0,
+      "durationMs": 23
+    },
+    {
+      "command": "lazooctl --json task delegate 50be1f7b-d2c2-41b8-b252-d984df4b3bb3 --actor-employee 3110b5a0-bb89-4e44-817c-0708a486156b --actor-session 1647551d-4130-4eef-babb-0a9f53acda1a --assigned-employee b151ee86-c868-4040-9579-4ed1cdee5bc5 --objective FANOUT_3 --requested-authority self-decision --roster-revision 11 --idempotency-key fanout-3-8dbea602da94481383957e1b4764c02e",
+      "exitCode": 0,
+      "durationMs": 24
+    },
+    {
+      "command": "lazooctl --json task delegate 50be1f7b-d2c2-41b8-b252-d984df4b3bb3 --actor-employee 3110b5a0-bb89-4e44-817c-0708a486156b --actor-session 1647551d-4130-4eef-babb-0a9f53acda1a --assigned-employee b151ee86-c868-4040-9579-4ed1cdee5bc5 --objective FANOUT_4 --requested-authority self-decision --roster-revision 11 --idempotency-key fanout-4-8dbea602da94481383957e1b4764c02e",
+      "exitCode": 0,
+      "durationMs": 22
+    },
+    {
+      "command": "lazooctl --json task delegate 50be1f7b-d2c2-41b8-b252-d984df4b3bb3 --actor-employee 3110b5a0-bb89-4e44-817c-0708a486156b --actor-session 1647551d-4130-4eef-babb-0a9f53acda1a --assigned-employee b151ee86-c868-4040-9579-4ed1cdee5bc5 --objective FANOUT_5 --requested-authority self-decision --roster-revision 11 --idempotency-key fanout-5-8dbea602da94481383957e1b4764c02e",
+      "exitCode": 0,
+      "durationMs": 23
+    },
+    {
+      "command": "lazooctl --json task delegate 50be1f7b-d2c2-41b8-b252-d984df4b3bb3 --actor-employee 3110b5a0-bb89-4e44-817c-0708a486156b --actor-session 1647551d-4130-4eef-babb-0a9f53acda1a --assigned-employee b151ee86-c868-4040-9579-4ed1cdee5bc5 --objective FANOUT_6 --requested-authority self-decision --roster-revision 11 --idempotency-key fanout-6-8dbea602da94481383957e1b4764c02e",
+      "exitCode": 0,
+      "durationMs": 23
+    },
+    {
+      "command": "lazooctl --json task delegate 50be1f7b-d2c2-41b8-b252-d984df4b3bb3 --actor-employee 3110b5a0-bb89-4e44-817c-0708a486156b --actor-session 1647551d-4130-4eef-babb-0a9f53acda1a --assigned-employee b151ee86-c868-4040-9579-4ed1cdee5bc5 --objective FANOUT_7 --requested-authority self-decision --roster-revision 11 --idempotency-key fanout-7-8dbea602da94481383957e1b4764c02e",
+      "exitCode": 0,
+      "durationMs": 23
+    },
+    {
+      "command": "lazooctl --json task delegate 50be1f7b-d2c2-41b8-b252-d984df4b3bb3 --actor-employee 3110b5a0-bb89-4e44-817c-0708a486156b --actor-session 1647551d-4130-4eef-babb-0a9f53acda1a --assigned-employee b151ee86-c868-4040-9579-4ed1cdee5bc5 --objective FANOUT_8 --requested-authority self-decision --roster-revision 11 --idempotency-key fanout-8-8dbea602da94481383957e1b4764c02e",
+      "exitCode": 0,
+      "durationMs": 26
+    },
+    {
+      "command": "lazooctl --json task delegate 50be1f7b-d2c2-41b8-b252-d984df4b3bb3 --actor-employee 3110b5a0-bb89-4e44-817c-0708a486156b --actor-session 1647551d-4130-4eef-babb-0a9f53acda1a --assigned-employee b151ee86-c868-4040-9579-4ed1cdee5bc5 --objective FANOUT_9 --requested-authority self-decision --roster-revision 11 --idempotency-key fanout-9-8dbea602da94481383957e1b4764c02e",
+      "exitCode": 13,
+      "durationMs": 20
+    },
+    {
+      "command": "lazooctl --json task show c17707e5-a052-48bf-959e-29484ef72286",
+      "exitCode": 0,
+      "durationMs": 18
+    },
+    {
+      "command": "lazooctl --json task show c17707e5-a052-48bf-959e-29484ef72286",
+      "exitCode": 0,
+      "durationMs": 15
+    },
+    {
+      "command": "lazooctl --json turn submit d1166ae4-3607-4afb-b1ca-25e3a5fcaa75 --authority-mode full-autonomy --text ROOT_RESTART_HOLD_FOR_RESTART --idempotency-key root-ROOT_RESTART_HOLD_FOR_RESTART-8dbea602da94481383957e1b4764c02e",
+      "exitCode": 3,
+      "durationMs": null
+    },
+    {
+      "command": "lazooctl --json status",
+      "exitCode": 0,
+      "durationMs": 56
+    },
+    {
+      "command": "lazooctl --json task show c17707e5-a052-48bf-959e-29484ef72286",
+      "exitCode": 0,
+      "durationMs": 14
+    },
+    {
+      "command": "lazooctl --json task resolve c17707e5-a052-48bf-959e-29484ef72286 --expected-revision 4 --resolution completed --idempotency-key resolve-restart-8dbea602da94481383957e1b4764c02e",
+      "exitCode": 0,
+      "durationMs": 22
+    },
+    {
+      "command": "lazooctl --json task show c17707e5-a052-48bf-959e-29484ef72286",
+      "exitCode": 0,
+      "durationMs": 15
+    },
+    {
+      "command": "lazooctl --json task resolve c17707e5-a052-48bf-959e-29484ef72286 --expected-revision 4 --resolution completed --idempotency-key resolve-restart-8dbea602da94481383957e1b4764c02e",
+      "exitCode": 0,
+      "durationMs": 15
+    },
+    {
+      "command": "lazooctl --json task show c17707e5-a052-48bf-959e-29484ef72286",
+      "exitCode": 0,
+      "durationMs": 15
+    },
+    {
+      "command": "lazooctl --json events list --after 0 --limit 1024",
+      "exitCode": 0,
+      "durationMs": 28
+    },
+    {
+      "command": "lazooctl --json status",
+      "exitCode": 0,
+      "durationMs": 15
+    },
+    {
+      "command": "lazooctl --json system shutdown",
+      "exitCode": 0,
+      "durationMs": 18
+    }
+  ]
 }

@@ -292,9 +292,9 @@ try {
 
     $daemon = Start-Daemon
     $status = Wait-Status
-    Assert-Equal $status.schemaVersion 6 'schema 6'
+    Assert-Equal $status.schemaVersion 7 'schema 7'
     Assert-Equal $status.journalMode 'wal' 'SQLite journal mode'
-    $gates.schema6 = 'PASS'
+    $gates.schema7 = 'PASS'
 
     $lead = Invoke-Json @(
         'employee', 'create', 'Rhea', '--provider', 'codex', '--role', 'Lead',
@@ -510,8 +510,9 @@ try {
         '--idempotency-key', "unavailable-$script:runId"
     ) | Out-Null
 
-    $staleTask = Invoke-Delegate ([string]$rootGuards.id) $leadId $leadSessionId $staleWorkerId `
-        'STALE_CONFIGURATION' 'self-decision' $rosterRevision "stale-config-task-$script:runId"
+    $staleProposal = Invoke-Delegate ([string]$rootGuards.id) $leadId $leadSessionId $staleWorkerId `
+        'STALE_CONFIGURATION' 'ask' $rosterRevision "stale-config-task-$script:runId"
+    Assert-Equal $staleProposal.task.state 'proposed' 'stale configuration fixture stays undispatched'
     $updatedStaleWorker = Invoke-Json @(
         'employee', 'update', $staleWorkerId, '--expected-revision', ([string]$staleWorker.employee.configurationRevision),
         '--role', 'Updated worker', '--idempotency-key', "update-stale-worker-$script:runId"
@@ -520,6 +521,11 @@ try {
         'session', 'warm', $staleWorkerId,
         '--expected-employee-revision', ([string]$updatedStaleWorker.employee.configurationRevision),
         '--idempotency-key', "warm-stale-worker-$script:runId"
+    )
+    $staleTask = Invoke-Json @(
+        'task', 'accept', ([string]$staleProposal.task.id),
+        '--expected-revision', ([string]$staleProposal.task.revision),
+        '--idempotency-key', "accept-stale-worker-$script:runId"
     )
     $staleCommand = Start-JsonCommand 'stale-config-turn' @(
         'turn', 'submit', $conversationId, '--recipient-employee', $staleWorkerId,
@@ -679,7 +685,7 @@ try {
         }
     })
     $manifest = [ordered]@{
-        schemaVersion = 6
+        schemaVersion = 7
         acceptance = 'task-delegation-graph'
         mode = 'deterministic-fixture'
         status = $manifestStatus

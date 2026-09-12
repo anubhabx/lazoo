@@ -39,8 +39,9 @@ pub use session::{
     MarkSessionReadyInput,
 };
 pub use task::{
-    AcceptTaskInput, CancelTaskInput, DelegateTaskInput, ListTasksInput, ReportTaskInput,
-    ResolveTaskInput, StartTaskInput,
+    AcceptTaskInput, CancelTaskInput, ClaimTaskDispatchInput, DeferTaskDispatchInput,
+    DelegateTaskInput, FailTaskDispatchInput, ListTasksInput, MarkTaskDispatchWorkspaceReadyInput,
+    RecordTaskDispatchTurnInput, ReportTaskInput, ResolveTaskInput, StartTaskInput,
 };
 
 use crate::{emergency::import_pending_incidents, migration::apply_migrations};
@@ -247,6 +248,15 @@ pub enum StoreError {
     TaskAcceptanceEvidence { task_id: Uuid, turn_id: Uuid },
     #[error("task {task_id} and turn {turn_id} do not share an exact execution scope")]
     TaskTurnLink { task_id: Uuid, turn_id: Uuid },
+    #[error("task {task_id} dispatch is owned by daemon boot {owner_boot_id}")]
+    TaskDispatchOwned { task_id: Uuid, owner_boot_id: Uuid },
+    #[error("task {task_id} dispatch changed; current revision is {current_revision}")]
+    TaskDispatchStale {
+        task_id: Uuid,
+        current_revision: u64,
+    },
+    #[error("task {task_id} dispatch workspace metadata is invalid")]
+    TaskDispatchWorkspace { task_id: Uuid },
     #[error("task failure code and message must be supplied together only for failed outcomes")]
     TaskFailureDetails,
     #[error("task list limit must be between 1 and 1024")]

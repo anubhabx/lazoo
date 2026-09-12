@@ -34,6 +34,16 @@ fn git_init(path: &Path) {
     assert!(status.success());
 }
 
+fn git(path: &Path, args: &[&str]) {
+    let status = Command::new("git")
+        .arg("-C")
+        .arg(path)
+        .args(args)
+        .status()
+        .unwrap();
+    assert!(status.success(), "git command failed: {args:?}");
+}
+
 fn request(id: &str, method: &str, params: serde_json::Value) -> JsonRpcRequest {
     JsonRpcRequest {
         jsonrpc: "2.0".to_owned(),
@@ -60,8 +70,13 @@ struct FakeSessionBackend {
     stops: Arc<AtomicUsize>,
     turns: Arc<AtomicUsize>,
     cancels: Arc<AtomicUsize>,
+    cancel_releases_event: Arc<AtomicBool>,
     gate_events: Arc<AtomicBool>,
     event_permits: Arc<Semaphore>,
+    gate_start: Arc<AtomicBool>,
+    start_permits: Arc<Semaphore>,
+    gate_turn_ready: Arc<AtomicBool>,
+    turn_ready_permits: Arc<Semaphore>,
     turn_events: Arc<Mutex<Vec<ProviderEvent>>>,
     turn_requests: Arc<Mutex<Vec<TurnRequest>>>,
     turn_failure: Arc<Mutex<Option<String>>>,
@@ -76,8 +91,13 @@ impl Default for FakeSessionBackend {
             stops: Arc::new(AtomicUsize::new(0)),
             turns: Arc::new(AtomicUsize::new(0)),
             cancels: Arc::new(AtomicUsize::new(0)),
+            cancel_releases_event: Arc::new(AtomicBool::new(false)),
             gate_events: Arc::new(AtomicBool::new(false)),
             event_permits: Arc::new(Semaphore::new(0)),
+            gate_start: Arc::new(AtomicBool::new(false)),
+            start_permits: Arc::new(Semaphore::new(0)),
+            gate_turn_ready: Arc::new(AtomicBool::new(false)),
+            turn_ready_permits: Arc::new(Semaphore::new(0)),
             turn_events: Arc::new(Mutex::new(Vec::new())),
             turn_requests: Arc::new(Mutex::new(Vec::new())),
             turn_failure: Arc::new(Mutex::new(None)),
@@ -92,8 +112,11 @@ struct FakeManagedSession {
     stops: Arc<AtomicUsize>,
     turns: Arc<AtomicUsize>,
     cancels: Arc<AtomicUsize>,
+    cancel_releases_event: Arc<AtomicBool>,
     gate_events: Arc<AtomicBool>,
     event_permits: Arc<Semaphore>,
+    gate_turn_ready: Arc<AtomicBool>,
+    turn_ready_permits: Arc<Semaphore>,
     turn_events: Arc<Mutex<Vec<ProviderEvent>>>,
     turn_requests: Arc<Mutex<Vec<TurnRequest>>>,
     turn_failure: Arc<Mutex<Option<String>>>,
@@ -107,6 +130,17 @@ impl ManagedSession for FakeManagedSession {
 
     fn native_host_pid(&self) -> Option<u32> {
         Some(4242)
+    }
+
+    fn ready_for_turn(
+        &self,
+    ) -> Pin<Box<dyn Future<Output = Result<(), ProviderError>> + Send + '_>> {
+        Box::pin(async move {
+            if self.gate_turn_ready.load(Ordering::SeqCst) {
+                self.turn_ready_permits.acquire().await.unwrap().forget();
+            }
+            Ok(())
+        })
     }
 
     fn turn_observed<'a>(
@@ -140,6 +174,9 @@ impl ManagedSession for FakeManagedSession {
     fn cancel(&self) -> Pin<Box<dyn Future<Output = Result<(), ProviderError>> + Send + '_>> {
         Box::pin(async move {
             self.cancels.fetch_add(1, Ordering::SeqCst);
+            if self.cancel_releases_event.load(Ordering::SeqCst) {
+                self.event_permits.add_permits(1);
+            }
             Ok(())
         })
     }
@@ -160,6 +197,9 @@ impl SessionBackend for FakeSessionBackend {
     ) -> SessionBackendFuture<'a> {
         Box::pin(async move {
             let number = self.starts.fetch_add(1, Ordering::SeqCst) + 1;
+            if self.gate_start.load(Ordering::SeqCst) {
+                self.start_permits.acquire().await.unwrap().forget();
+            }
             self.working_directories
                 .lock()
                 .unwrap()
@@ -169,8 +209,11 @@ impl SessionBackend for FakeSessionBackend {
                 stops: Arc::clone(&self.stops),
                 turns: Arc::clone(&self.turns),
                 cancels: Arc::clone(&self.cancels),
+                cancel_releases_event: Arc::clone(&self.cancel_releases_event),
                 gate_events: Arc::clone(&self.gate_events),
                 event_permits: Arc::clone(&self.event_permits),
+                gate_turn_ready: Arc::clone(&self.gate_turn_ready),
+                turn_ready_permits: Arc::clone(&self.turn_ready_permits),
                 turn_events: Arc::clone(&self.turn_events),
                 turn_requests: Arc::clone(&self.turn_requests),
                 turn_failure: Arc::clone(&self.turn_failure),
@@ -272,6 +315,886 @@ fn session_test_app() -> (tempfile::TempDir, App, FakeSessionBackend, uuid::Uuid
     )
     .unwrap();
     (temporary, app, backend, employee.id)
+}
+
+#[tokio::test]
+#[allow(clippy::too_many_lines)] // One fixture proves dispatch, retained evidence, wake-up, and session cleanup.
+async fn accepted_projectless_child_dispatches_automatically_through_the_canonical_message() {
+    use lazoo_protocol::{
+        MessageSender, TaskDispatchState, TaskState, UserMessageEndpoint, UserMessageKind,
+    };
+    use lazoo_store::{BeginSessionInput, MarkSessionReadyInput, RecordTurnInput};
+
+    let temporary = tempdir().unwrap();
+    let root = DataRoot::from_path(temporary.path().join("data"));
+    root.ensure().unwrap();
+    let store = Store::open_path(root.state_db()).unwrap();
+    let employee_input = |name: &str, key: &str| CreateEmployeeInput {
+        request_id: format!("{key}-request"),
+        idempotency_key: key.to_owned(),
+        name: name.to_owned(),
+        provider: "codex".to_owned(),
+        role: "Worker".to_owned(),
+        instructions: String::new(),
+        model: Some("test-model".to_owned()),
+        reasoning_effort: Some("low".to_owned()),
+        native_settings: json!({}),
+        authority_mode: AuthorityMode::FullAutonomy,
+        checkout_policy: EmployeeCheckoutPolicy::Isolated,
+        enabled: true,
+        provider_observation: Some(ProviderObservation {
+            provider: "codex".to_owned(),
+            verification: "configured".to_owned(),
+            version: Some("test".to_owned()),
+            protocol: Some("app-server/v2".to_owned()),
+            capabilities: json!({"session": true, "permission": true}),
+            authentication: json!({"native": "ready", "external": "unknown"}),
+            degradation_reason: None,
+            checked_at: "2026-09-12T00:00:00Z".to_owned(),
+        }),
+    };
+    let lead = store
+        .create_employee(&employee_input("Rhea", "dispatch-rhea"))
+        .unwrap()
+        .employee;
+    let worker = store
+        .create_employee(&employee_input("Mira", "dispatch-mira"))
+        .unwrap()
+        .employee;
+    let conversation = store
+        .create_conversation(&CreateConversationInput {
+            request_id: "dispatch-conversation-request".to_owned(),
+            idempotency_key: "dispatch-conversation".to_owned(),
+            project_id: None,
+            lead_employee_id: lead.id,
+            title: None,
+        })
+        .unwrap()
+        .conversation;
+    let root_task = store
+        .record_turn(&RecordTurnInput {
+            request_id: "dispatch-root-request".to_owned(),
+            idempotency_key: "dispatch-root".to_owned(),
+            conversation_id: conversation.id,
+            author: MessageSender::User(UserMessageEndpoint {
+                kind: UserMessageKind::User,
+            }),
+            recipient: None,
+            task_id: None,
+            authority_mode: AuthorityMode::FullAutonomy,
+            text: "Lead objective".to_owned(),
+            activate_if_needed: false,
+            max_attempts: 3,
+        })
+        .unwrap()
+        .task
+        .unwrap();
+    let boot_id = uuid::Uuid::new_v4();
+    let lead_starting = store
+        .begin_session(&BeginSessionInput {
+            request_id: "dispatch-lead-session-request".to_owned(),
+            idempotency_key: "dispatch-lead-session".to_owned(),
+            employee_id: lead.id,
+            expected_employee_revision: lead.configuration_revision,
+            owner_boot_id: boot_id,
+        })
+        .unwrap();
+    let lead_session = store
+        .mark_session_ready(&MarkSessionReadyInput {
+            session_id: lead_starting.session.id,
+            expected_revision: lead_starting.session.revision,
+            owner_boot_id: boot_id,
+            native_session_id: "native-lead".to_owned(),
+            native_host_pid: 4241,
+        })
+        .unwrap()
+        .session;
+    let backend = FakeSessionBackend::default();
+    backend.turn_events.lock().unwrap().extend([
+        ProviderEvent::TurnStarted {
+            provider: ProviderKind::Codex,
+            session_id: "native-2".to_owned(),
+            turn_id: Some("native-dispatched-turn".to_owned()),
+            raw: None,
+        },
+        ProviderEvent::TurnCompleted {
+            provider: ProviderKind::Codex,
+            session_id: "native-2".to_owned(),
+            turn_id: Some("native-dispatched-turn".to_owned()),
+            status: "completed".to_owned(),
+            output: Some("worker result".to_owned()),
+            raw: None,
+        },
+    ]);
+    let app = App::new_with_session_backend(
+        store.clone(),
+        root.clone(),
+        DiscoveryEnvironment::empty(),
+        Arc::new(backend.clone()),
+    )
+    .unwrap();
+    let busy = app
+        .handle(request(
+            "dispatch-worker-busy",
+            "session.warm",
+            json!({
+                "employeeId": worker.id,
+                "expectedEmployeeRevision": worker.configuration_revision,
+                "idempotencyKey": "dispatch-worker-busy"
+            }),
+        ))
+        .await
+        .result
+        .unwrap();
+    let delegated = app
+        .handle(request(
+            "dispatch-child-request",
+            "task.delegate",
+            json!({
+                "parentTaskId": root_task.id,
+                "actor": {
+                    "employeeId": lead.id,
+                    "sessionId": lead_session.id
+                },
+                "assignedEmployeeId": worker.id,
+                "objective": "Implement the parser fix",
+                "references": [],
+                "requestedAuthority": "self-decision",
+                "rosterRevision": store.roster_snapshot().unwrap().revision,
+                "idempotencyKey": "dispatch-child"
+            }),
+        ))
+        .await
+        .result
+        .unwrap();
+    let task_id: uuid::Uuid = delegated["task"]["id"].as_str().unwrap().parse().unwrap();
+    let message_id = delegated["delegationMessage"]["envelope"]["id"]
+        .as_str()
+        .unwrap()
+        .parse()
+        .unwrap();
+    app.dispatch_pending_tasks_once().await.unwrap();
+    assert!(store.get_task(task_id).unwrap().dispatch.is_none());
+    let dispatcher_app = app.clone();
+    let dispatcher = tokio::spawn(async move { dispatcher_app.run_task_dispatcher().await });
+    app.handle(request(
+        "dispatch-worker-release",
+        "session.stop",
+        json!({
+            "id": busy["session"]["id"],
+            "expectedRevision": busy["session"]["revision"],
+            "idempotencyKey": "dispatch-worker-release"
+        }),
+    ))
+    .await
+    .result
+    .unwrap();
+
+    let completed = timeout(Duration::from_secs(5), async {
+        loop {
+            if store.get_task(task_id).unwrap().task.state == TaskState::Completed {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await;
+    assert!(
+        completed.is_ok(),
+        "task detail after wake: {:?}; starts {}; stops {}; turns {}",
+        store.get_task(task_id).unwrap(),
+        backend.starts.load(Ordering::SeqCst),
+        backend.stops.load(Ordering::SeqCst),
+        backend.turns.load(Ordering::SeqCst)
+    );
+
+    let detail = store.get_task(task_id).unwrap();
+    assert_eq!(detail.task.state, TaskState::Completed);
+    let dispatch = detail.dispatch.unwrap();
+    assert_eq!(dispatch.state, TaskDispatchState::TurnRecorded);
+    assert_eq!(
+        dispatch.workspace_path,
+        Some(
+            root.projectless_task_working_dir(task_id)
+                .to_string_lossy()
+                .into_owned()
+        )
+    );
+    assert_eq!(
+        store.get_message(message_id).unwrap().delivery.state,
+        MessageDeliveryState::Acknowledged
+    );
+    assert_eq!(backend.starts.load(Ordering::SeqCst), 2);
+    assert_eq!(backend.turns.load(Ordering::SeqCst), 1);
+    assert_eq!(backend.stops.load(Ordering::SeqCst), 2);
+    assert_eq!(
+        backend.working_directories.lock().unwrap().last(),
+        Some(&root.projectless_task_working_dir(task_id))
+    );
+    dispatcher.abort();
+    let _ = dispatcher.await;
+}
+
+#[tokio::test]
+#[allow(clippy::too_many_lines)] // One fixture exercises independent pre-provider failure and cancellation boundaries.
+async fn automatic_dispatch_configuration_drift_terminalizes_before_provider_io() {
+    use lazoo_protocol::{
+        MessageSender, TaskDispatchState, TaskState, UserMessageEndpoint, UserMessageKind,
+    };
+    use lazoo_store::{
+        BeginSessionInput, MarkSessionReadyInput, RecordTurnInput, UpdateEmployeeInput,
+    };
+
+    let temporary = tempdir().unwrap();
+    let root = DataRoot::from_path(temporary.path().join("data"));
+    root.ensure().unwrap();
+    let store = Store::open_path(root.state_db()).unwrap();
+    let employee_input = |name: &str, key: &str, provider: &str| CreateEmployeeInput {
+        request_id: format!("{key}-request"),
+        idempotency_key: key.to_owned(),
+        name: name.to_owned(),
+        provider: provider.to_owned(),
+        role: "Worker".to_owned(),
+        instructions: String::new(),
+        model: Some("test-model".to_owned()),
+        reasoning_effort: Some("low".to_owned()),
+        native_settings: json!({}),
+        authority_mode: AuthorityMode::FullAutonomy,
+        checkout_policy: EmployeeCheckoutPolicy::Isolated,
+        enabled: true,
+        provider_observation: Some(ProviderObservation {
+            provider: provider.to_owned(),
+            verification: "configured".to_owned(),
+            version: Some("test".to_owned()),
+            protocol: Some("test".to_owned()),
+            capabilities: json!({"session": true}),
+            authentication: json!({"native": "ready"}),
+            degradation_reason: None,
+            checked_at: "2026-09-12T00:00:00Z".to_owned(),
+        }),
+    };
+    let lead = store
+        .create_employee(&employee_input("Rhea", "dispatch-failure-rhea", "codex"))
+        .unwrap()
+        .employee;
+    let worker = store
+        .create_employee(&employee_input("Mira", "dispatch-failure-mira", "codex"))
+        .unwrap()
+        .employee;
+    let healthy_worker = store
+        .create_employee(&employee_input("Noor", "dispatch-failure-healthy", "codex"))
+        .unwrap()
+        .employee;
+    let conversation = store
+        .create_conversation(&CreateConversationInput {
+            request_id: "dispatch-failure-conversation-request".to_owned(),
+            idempotency_key: "dispatch-failure-conversation".to_owned(),
+            project_id: None,
+            lead_employee_id: lead.id,
+            title: None,
+        })
+        .unwrap()
+        .conversation;
+    let root_task = store
+        .record_turn(&RecordTurnInput {
+            request_id: "dispatch-failure-root-request".to_owned(),
+            idempotency_key: "dispatch-failure-root".to_owned(),
+            conversation_id: conversation.id,
+            author: MessageSender::User(UserMessageEndpoint {
+                kind: UserMessageKind::User,
+            }),
+            recipient: None,
+            task_id: None,
+            authority_mode: AuthorityMode::FullAutonomy,
+            text: "Lead objective".to_owned(),
+            activate_if_needed: false,
+            max_attempts: 3,
+        })
+        .unwrap()
+        .task
+        .unwrap();
+    let boot_id = uuid::Uuid::new_v4();
+    let lead_starting = store
+        .begin_session(&BeginSessionInput {
+            request_id: "dispatch-failure-lead-session-request".to_owned(),
+            idempotency_key: "dispatch-failure-lead-session".to_owned(),
+            employee_id: lead.id,
+            expected_employee_revision: lead.configuration_revision,
+            owner_boot_id: boot_id,
+        })
+        .unwrap();
+    let lead_session = store
+        .mark_session_ready(&MarkSessionReadyInput {
+            session_id: lead_starting.session.id,
+            expected_revision: lead_starting.session.revision,
+            owner_boot_id: boot_id,
+            native_session_id: "native-failure-lead".to_owned(),
+            native_host_pid: 4241,
+        })
+        .unwrap()
+        .session;
+    let backend = FakeSessionBackend::default();
+    backend.turn_events.lock().unwrap().extend([
+        ProviderEvent::TurnStarted {
+            provider: ProviderKind::Codex,
+            session_id: "native-1".to_owned(),
+            turn_id: Some("native-healthy-sibling".to_owned()),
+            raw: None,
+        },
+        ProviderEvent::TurnCompleted {
+            provider: ProviderKind::Codex,
+            session_id: "native-1".to_owned(),
+            turn_id: Some("native-healthy-sibling".to_owned()),
+            status: "completed".to_owned(),
+            output: Some("healthy sibling result".to_owned()),
+            raw: None,
+        },
+    ]);
+    let app = App::new_with_session_backend(
+        store.clone(),
+        root,
+        DiscoveryEnvironment::empty(),
+        Arc::new(backend.clone()),
+    )
+    .unwrap();
+    let delegated = app
+        .handle(request(
+            "dispatch-failure-child-request",
+            "task.delegate",
+            json!({
+                "parentTaskId": root_task.id,
+                "actor": {"employeeId": lead.id, "sessionId": lead_session.id},
+                "assignedEmployeeId": worker.id,
+                "objective": "Use the unsupported worker",
+                "references": [],
+                "requestedAuthority": "self-decision",
+                "rosterRevision": store.roster_snapshot().unwrap().revision,
+                "idempotencyKey": "dispatch-failure-child"
+            }),
+        ))
+        .await
+        .result
+        .unwrap();
+    let task_id: uuid::Uuid = delegated["task"]["id"].as_str().unwrap().parse().unwrap();
+    let message_id: uuid::Uuid = delegated["delegationMessage"]["envelope"]["id"]
+        .as_str()
+        .unwrap()
+        .parse()
+        .unwrap();
+    store
+        .update_employee(&UpdateEmployeeInput {
+            request_id: "dispatch-drift-request".to_owned(),
+            idempotency_key: "dispatch-drift".to_owned(),
+            employee_id: worker.id,
+            expected_revision: worker.configuration_revision,
+            name: None,
+            provider: None,
+            role: Some("Updated worker".to_owned()),
+            instructions: None,
+            model: None,
+            reasoning_effort: None,
+            native_settings: None,
+            authority_mode: None,
+            checkout_policy: None,
+            enabled: None,
+            provider_observation: None,
+        })
+        .unwrap();
+    let healthy = app
+        .handle(request(
+            "dispatch-healthy-child-request",
+            "task.delegate",
+            json!({
+                "parentTaskId": root_task.id,
+                "actor": {"employeeId": lead.id, "sessionId": lead_session.id},
+                "assignedEmployeeId": healthy_worker.id,
+                "objective": "Dispatch the healthy sibling",
+                "references": [],
+                "requestedAuthority": "self-decision",
+                "rosterRevision": store.roster_snapshot().unwrap().revision,
+                "idempotencyKey": "dispatch-healthy-child"
+            }),
+        ))
+        .await
+        .result
+        .unwrap();
+    let healthy_task_id: uuid::Uuid = healthy["task"]["id"].as_str().unwrap().parse().unwrap();
+
+    let error = app.dispatch_pending_tasks_once().await.unwrap_err();
+    assert_eq!(error.code, "LZ-TASK-EMPLOYEE-STALE");
+    let detail = store.get_task(task_id).unwrap();
+    assert_eq!(detail.task.state, TaskState::Failed);
+    assert_eq!(
+        detail.task.failure_code.as_deref(),
+        Some(error.code.as_str())
+    );
+    assert_eq!(detail.dispatch.unwrap().state, TaskDispatchState::Failed);
+    assert_eq!(
+        store.get_message(message_id).unwrap().delivery.state,
+        MessageDeliveryState::TerminalFailed
+    );
+    assert_eq!(
+        store.get_task(healthy_task_id).unwrap().task.state,
+        TaskState::Completed
+    );
+    assert_eq!(backend.starts.load(Ordering::SeqCst), 1);
+    assert_eq!(backend.turns.load(Ordering::SeqCst), 1);
+
+    backend.gate_start.store(true, Ordering::SeqCst);
+    let cancelled = app
+        .handle(request(
+            "dispatch-cancel-child-request",
+            "task.delegate",
+            json!({
+                "parentTaskId": root_task.id,
+                "actor": {"employeeId": lead.id, "sessionId": lead_session.id},
+                "assignedEmployeeId": healthy_worker.id,
+                "objective": "Cancel after session launch begins",
+                "references": [],
+                "requestedAuthority": "self-decision",
+                "rosterRevision": store.roster_snapshot().unwrap().revision,
+                "idempotencyKey": "dispatch-cancel-child"
+            }),
+        ))
+        .await
+        .result
+        .unwrap();
+    let cancelled_task_id: uuid::Uuid = cancelled["task"]["id"].as_str().unwrap().parse().unwrap();
+    let cancelled_message_id: uuid::Uuid = cancelled["delegationMessage"]["envelope"]["id"]
+        .as_str()
+        .unwrap()
+        .parse()
+        .unwrap();
+    let dispatch_app = app.clone();
+    let pending = tokio::spawn(async move { dispatch_app.dispatch_pending_tasks_once().await });
+    timeout(Duration::from_secs(2), async {
+        while backend.starts.load(Ordering::SeqCst) != 2 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    app.handle(request(
+        "dispatch-cancel-request",
+        "task.cancel",
+        json!({
+            "id": cancelled_task_id,
+            "expectedRevision": cancelled["task"]["revision"],
+            "actor": {"kind": "user"},
+            "evidence": {"reason": "acceptance race"},
+            "idempotencyKey": "dispatch-cancel"
+        }),
+    ))
+    .await
+    .result
+    .unwrap();
+    backend.start_permits.add_permits(1);
+    assert!(pending.await.unwrap().is_err());
+    let cancelled_detail = store.get_task(cancelled_task_id).unwrap();
+    assert_eq!(cancelled_detail.task.state, TaskState::Cancelled);
+    assert_eq!(
+        cancelled_detail.dispatch.unwrap().state,
+        TaskDispatchState::Cancelled
+    );
+    assert_eq!(
+        store
+            .get_message(cancelled_message_id)
+            .unwrap()
+            .delivery
+            .state,
+        MessageDeliveryState::Cancelled
+    );
+    assert_eq!(backend.stops.load(Ordering::SeqCst), 2);
+
+    backend.gate_start.store(false, Ordering::SeqCst);
+    backend.gate_events.store(true, Ordering::SeqCst);
+    backend.cancel_releases_event.store(true, Ordering::SeqCst);
+    *backend.turn_events.lock().unwrap() = vec![
+        ProviderEvent::TurnStarted {
+            provider: ProviderKind::Codex,
+            session_id: "native-3".to_owned(),
+            turn_id: Some("native-cancel-running".to_owned()),
+            raw: None,
+        },
+        ProviderEvent::Cancelled {
+            provider: ProviderKind::Codex,
+            session_id: "native-3".to_owned(),
+            turn_id: Some("native-cancel-running".to_owned()),
+            raw: None,
+        },
+    ];
+    let running = app
+        .handle(request(
+            "dispatch-running-cancel-child-request",
+            "task.delegate",
+            json!({
+                "parentTaskId": root_task.id,
+                "actor": {"employeeId": lead.id, "sessionId": lead_session.id},
+                "assignedEmployeeId": healthy_worker.id,
+                "objective": "Cancel after native acceptance",
+                "references": [],
+                "requestedAuthority": "self-decision",
+                "rosterRevision": store.roster_snapshot().unwrap().revision,
+                "idempotencyKey": "dispatch-running-cancel-child"
+            }),
+        ))
+        .await
+        .result
+        .unwrap();
+    let running_task_id: uuid::Uuid = running["task"]["id"].as_str().unwrap().parse().unwrap();
+    let dispatch_app = app.clone();
+    let running_dispatch =
+        tokio::spawn(async move { dispatch_app.dispatch_pending_tasks_once().await });
+    backend.event_permits.add_permits(1);
+    timeout(Duration::from_secs(2), async {
+        while store.get_task(running_task_id).unwrap().task.state != TaskState::Running {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    let running_detail = store.get_task(running_task_id).unwrap();
+    let cancelled_running = app
+        .handle(request(
+            "dispatch-running-cancel-request",
+            "task.cancel",
+            json!({
+                "id": running_task_id,
+                "expectedRevision": running_detail.task.revision,
+                "actor": {"kind": "user"},
+                "evidence": {"reason": "stop automatic worker"},
+                "idempotencyKey": "dispatch-running-cancel"
+            }),
+        ))
+        .await
+        .result
+        .unwrap();
+    assert_eq!(cancelled_running["task"]["state"], "cancelled");
+    assert!(running_dispatch.await.unwrap().is_ok());
+    assert_eq!(backend.cancels.load(Ordering::SeqCst), 1);
+    assert_eq!(backend.stops.load(Ordering::SeqCst), 3);
+
+    backend.gate_turn_ready.store(true, Ordering::SeqCst);
+    let submitting = app
+        .handle(request(
+            "dispatch-submitting-cancel-child-request",
+            "task.delegate",
+            json!({
+                "parentTaskId": root_task.id,
+                "actor": {"employeeId": lead.id, "sessionId": lead_session.id},
+                "assignedEmployeeId": healthy_worker.id,
+                "objective": "Cancel during native submission",
+                "references": [],
+                "requestedAuthority": "self-decision",
+                "rosterRevision": store.roster_snapshot().unwrap().revision,
+                "idempotencyKey": "dispatch-submitting-cancel-child"
+            }),
+        ))
+        .await
+        .result
+        .unwrap();
+    let submitting_task_id: uuid::Uuid =
+        submitting["task"]["id"].as_str().unwrap().parse().unwrap();
+    let dispatch_app = app.clone();
+    let submitting_dispatch =
+        tokio::spawn(async move { dispatch_app.dispatch_pending_tasks_once().await });
+    timeout(Duration::from_secs(2), async {
+        loop {
+            let detail = store.get_task(submitting_task_id).unwrap();
+            if let Some(turn_id) = detail.dispatch.and_then(|dispatch| dispatch.turn_id)
+                && store.get_turn(turn_id).unwrap().state == TurnState::Submitting
+            {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    let submitting_detail = store.get_task(submitting_task_id).unwrap();
+    let cancelled_submitting = app
+        .handle(request(
+            "dispatch-submitting-cancel-request",
+            "task.cancel",
+            json!({
+                "id": submitting_task_id,
+                "expectedRevision": submitting_detail.task.revision,
+                "actor": {"kind": "user"},
+                "evidence": {"reason": "stop submitting automatic worker"},
+                "idempotencyKey": "dispatch-submitting-cancel"
+            }),
+        ))
+        .await
+        .result
+        .unwrap();
+    assert_eq!(cancelled_submitting["task"]["state"], "cancelled");
+    assert_eq!(backend.turns.load(Ordering::SeqCst), 2);
+    assert_eq!(backend.cancels.load(Ordering::SeqCst), 1);
+    backend.turn_ready_permits.add_permits(1);
+    assert!(submitting_dispatch.await.unwrap().is_ok());
+    assert_eq!(backend.stops.load(Ordering::SeqCst), 4);
+
+    backend.gate_turn_ready.store(false, Ordering::SeqCst);
+    *backend.turn_events.lock().unwrap() = vec![
+        ProviderEvent::TurnStarted {
+            provider: ProviderKind::Codex,
+            session_id: "native-5".to_owned(),
+            turn_id: Some("native-completion-wins".to_owned()),
+            raw: None,
+        },
+        ProviderEvent::TurnCompleted {
+            provider: ProviderKind::Codex,
+            session_id: "native-5".to_owned(),
+            turn_id: Some("native-completion-wins".to_owned()),
+            status: "completed".to_owned(),
+            output: Some("completion won the race".to_owned()),
+            raw: None,
+        },
+    ];
+    let completing = app
+        .handle(request(
+            "dispatch-completion-race-child-request",
+            "task.delegate",
+            json!({
+                "parentTaskId": root_task.id,
+                "actor": {"employeeId": lead.id, "sessionId": lead_session.id},
+                "assignedEmployeeId": healthy_worker.id,
+                "objective": "Let native completion win its cancellation race",
+                "references": [],
+                "requestedAuthority": "self-decision",
+                "rosterRevision": store.roster_snapshot().unwrap().revision,
+                "idempotencyKey": "dispatch-completion-race-child"
+            }),
+        ))
+        .await
+        .result
+        .unwrap();
+    let completing_task_id: uuid::Uuid =
+        completing["task"]["id"].as_str().unwrap().parse().unwrap();
+    let dispatch_app = app.clone();
+    let completing_dispatch =
+        tokio::spawn(async move { dispatch_app.dispatch_pending_tasks_once().await });
+    backend.event_permits.add_permits(1);
+    timeout(Duration::from_secs(2), async {
+        while store.get_task(completing_task_id).unwrap().task.state != TaskState::Running {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    let completing_detail = store.get_task(completing_task_id).unwrap();
+    let completion_won = app
+        .handle(request(
+            "dispatch-completion-race-cancel-request",
+            "task.cancel",
+            json!({
+                "id": completing_task_id,
+                "expectedRevision": completing_detail.task.revision,
+                "actor": {"kind": "user"},
+                "evidence": {"reason": "completion may already be arriving"},
+                "idempotencyKey": "dispatch-completion-race-cancel"
+            }),
+        ))
+        .await
+        .result
+        .unwrap();
+    assert_eq!(completion_won["task"]["state"], "completed");
+    assert!(completing_dispatch.await.unwrap().is_ok());
+    assert_eq!(backend.turns.load(Ordering::SeqCst), 3);
+    assert_eq!(backend.cancels.load(Ordering::SeqCst), 2);
+    assert_eq!(backend.stops.load(Ordering::SeqCst), 5);
+}
+
+#[tokio::test]
+#[allow(clippy::too_many_lines)] // The Git isolation contract needs repository setup and end-to-end assertions.
+async fn project_task_dispatch_uses_an_isolated_worktree_and_preserves_dirty_user_files() {
+    use lazoo_protocol::{
+        MessageSender, TaskDispatchState, TaskState, TaskWorkspaceKind, UserMessageEndpoint,
+        UserMessageKind,
+    };
+    use lazoo_store::{
+        BeginSessionInput, MarkSessionReadyInput, RecordTurnInput, RegisterProjectInput,
+    };
+
+    let temporary = tempdir().unwrap();
+    let root = DataRoot::from_path(temporary.path().join("data"));
+    root.ensure().unwrap();
+    let repository = temporary.path().join("repository");
+    git_init(&repository);
+    git(
+        &repository,
+        &["config", "user.email", "lazoo@example.invalid"],
+    );
+    git(&repository, &["config", "user.name", "Lazoo Test"]);
+    git(&repository, &["config", "core.autocrlf", "false"]);
+    std::fs::write(repository.join("tracked.txt"), "base\n").unwrap();
+    git(&repository, &["add", "tracked.txt"]);
+    git(&repository, &["commit", "--quiet", "-m", "base"]);
+    std::fs::write(repository.join("tracked.txt"), "dirty user edit\n").unwrap();
+
+    let store = Store::open_path(root.state_db()).unwrap();
+    let project = store
+        .register_project(&RegisterProjectInput {
+            request_id: "dispatch-project-request".to_owned(),
+            idempotency_key: "dispatch-project".to_owned(),
+            repository_identity: "dispatch-project-identity".to_owned(),
+            canonical_path: repository.clone(),
+            display_name: "Dispatch fixture".to_owned(),
+            checkout_mode: CheckoutMode::Isolated,
+        })
+        .unwrap()
+        .project;
+    let employee_input = |name: &str, key: &str| CreateEmployeeInput {
+        request_id: format!("{key}-request"),
+        idempotency_key: key.to_owned(),
+        name: name.to_owned(),
+        provider: "codex".to_owned(),
+        role: "Worker".to_owned(),
+        instructions: String::new(),
+        model: Some("test-model".to_owned()),
+        reasoning_effort: Some("low".to_owned()),
+        native_settings: json!({}),
+        authority_mode: AuthorityMode::FullAutonomy,
+        checkout_policy: EmployeeCheckoutPolicy::Isolated,
+        enabled: true,
+        provider_observation: Some(ProviderObservation {
+            provider: "codex".to_owned(),
+            verification: "configured".to_owned(),
+            version: Some("test".to_owned()),
+            protocol: Some("app-server/v2".to_owned()),
+            capabilities: json!({"session": true, "permission": true}),
+            authentication: json!({"native": "ready"}),
+            degradation_reason: None,
+            checked_at: "2026-09-12T00:00:00Z".to_owned(),
+        }),
+    };
+    let lead = store
+        .create_employee(&employee_input("Rhea", "dispatch-project-rhea"))
+        .unwrap()
+        .employee;
+    let worker = store
+        .create_employee(&employee_input("Mira", "dispatch-project-mira"))
+        .unwrap()
+        .employee;
+    let conversation = store
+        .create_conversation(&CreateConversationInput {
+            request_id: "dispatch-project-conversation-request".to_owned(),
+            idempotency_key: "dispatch-project-conversation".to_owned(),
+            project_id: Some(project.id),
+            lead_employee_id: lead.id,
+            title: None,
+        })
+        .unwrap()
+        .conversation;
+    let root_task = store
+        .record_turn(&RecordTurnInput {
+            request_id: "dispatch-project-root-request".to_owned(),
+            idempotency_key: "dispatch-project-root".to_owned(),
+            conversation_id: conversation.id,
+            author: MessageSender::User(UserMessageEndpoint {
+                kind: UserMessageKind::User,
+            }),
+            recipient: None,
+            task_id: None,
+            authority_mode: AuthorityMode::FullAutonomy,
+            text: "Lead project objective".to_owned(),
+            activate_if_needed: false,
+            max_attempts: 3,
+        })
+        .unwrap()
+        .task
+        .unwrap();
+    let boot_id = uuid::Uuid::new_v4();
+    let lead_starting = store
+        .begin_session(&BeginSessionInput {
+            request_id: "dispatch-project-lead-session-request".to_owned(),
+            idempotency_key: "dispatch-project-lead-session".to_owned(),
+            employee_id: lead.id,
+            expected_employee_revision: lead.configuration_revision,
+            owner_boot_id: boot_id,
+        })
+        .unwrap();
+    let lead_session = store
+        .mark_session_ready(&MarkSessionReadyInput {
+            session_id: lead_starting.session.id,
+            expected_revision: lead_starting.session.revision,
+            owner_boot_id: boot_id,
+            native_session_id: "native-project-lead".to_owned(),
+            native_host_pid: 4241,
+        })
+        .unwrap()
+        .session;
+    let backend = FakeSessionBackend::default();
+    backend.turn_events.lock().unwrap().extend([
+        ProviderEvent::TurnStarted {
+            provider: ProviderKind::Codex,
+            session_id: "native-1".to_owned(),
+            turn_id: Some("native-project-turn".to_owned()),
+            raw: None,
+        },
+        ProviderEvent::TurnCompleted {
+            provider: ProviderKind::Codex,
+            session_id: "native-1".to_owned(),
+            turn_id: Some("native-project-turn".to_owned()),
+            status: "completed".to_owned(),
+            output: Some("project worker result".to_owned()),
+            raw: None,
+        },
+    ]);
+    let app = App::new_with_session_backend(
+        store.clone(),
+        root.clone(),
+        DiscoveryEnvironment::empty(),
+        Arc::new(backend.clone()),
+    )
+    .unwrap();
+    let delegated = app
+        .handle(request(
+            "dispatch-project-child-request",
+            "task.delegate",
+            json!({
+                "parentTaskId": root_task.id,
+                "actor": {"employeeId": lead.id, "sessionId": lead_session.id},
+                "assignedEmployeeId": worker.id,
+                "objective": "Implement in isolation",
+                "references": [],
+                "requestedAuthority": "self-decision",
+                "rosterRevision": store.roster_snapshot().unwrap().revision,
+                "idempotencyKey": "dispatch-project-child"
+            }),
+        ))
+        .await
+        .result
+        .unwrap();
+    let task_id: uuid::Uuid = delegated["task"]["id"].as_str().unwrap().parse().unwrap();
+
+    app.dispatch_pending_tasks_once().await.unwrap();
+
+    let detail = store.get_task(task_id).unwrap();
+    assert_eq!(detail.task.state, TaskState::Completed);
+    let dispatch = detail.dispatch.unwrap();
+    assert_eq!(dispatch.state, TaskDispatchState::TurnRecorded);
+    assert_eq!(
+        dispatch.workspace_kind,
+        Some(TaskWorkspaceKind::GitWorktree)
+    );
+    let task_worktree = root.git_task_working_dir(project.id, task_id);
+    assert_eq!(
+        dispatch.workspace_path.as_deref(),
+        Some(task_worktree.to_string_lossy().as_ref())
+    );
+    assert_eq!(
+        backend.working_directories.lock().unwrap().as_slice(),
+        std::slice::from_ref(&task_worktree)
+    );
+    assert_eq!(
+        std::fs::read_to_string(repository.join("tracked.txt")).unwrap(),
+        "dirty user edit\n"
+    );
+    assert_eq!(
+        std::fs::read_to_string(task_worktree.join("tracked.txt")).unwrap(),
+        "base\n"
+    );
 }
 
 fn turn_test_app() -> (
@@ -2539,7 +3462,7 @@ async fn status_reports_protocol_store_and_boot_identity() {
     let result = response.result.unwrap();
 
     assert_eq!(result["protocolVersion"], 1);
-    assert_eq!(result["schemaVersion"], 6);
+    assert_eq!(result["schemaVersion"], 7);
     assert_eq!(result["journalMode"], "wal");
     assert!(
         result["bootId"]
@@ -3283,7 +4206,7 @@ fn employee_roster_acceptance_contract_is_backend_only() {
         "roster', 'refresh",
         "LZ-EMPLOYEE-STALE",
         "restartDurability",
-        "schemaVersion 6",
+        "schemaVersion 7",
         "providerSmokeAbsent",
     ] {
         assert!(
@@ -3321,7 +4244,7 @@ fn native_session_acceptance_contract_covers_containment_and_owner_loss() {
         "completeTreeTerminated",
         "nativeHostPid",
         "providerSmokeAbsent",
-        "schemaVersion 6",
+        "schemaVersion 7",
     ] {
         assert!(
             script.contains(required),
@@ -3351,7 +4274,7 @@ fn collaboration_bus_acceptance_contract_is_backend_only() {
         "deadLetterEvidence",
         "restartDurability",
         "auditOutboxEvidence",
-        "schemaVersion 6",
+        "schemaVersion 7",
         "providerSmokeAbsent",
         "desktopCapabilityExpansionAbsent",
     ] {
@@ -3384,7 +4307,7 @@ fn conversation_delivery_acceptance_contract_is_backend_only() {
     let fixture = std::fs::read_to_string(&fixture_path).expect("turn transport fixture");
 
     for required in [
-        "schema6",
+        "schema7",
         "projectlessConversation",
         "projectConversation",
         "userAuthorship",
@@ -3435,6 +4358,39 @@ fn conversation_delivery_acceptance_contract_is_backend_only() {
 }
 
 #[test]
+fn automatic_dispatch_acceptance_contract_is_deterministic_and_backend_only() {
+    let repository = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let script =
+        std::fs::read_to_string(repository.join("scripts/acceptance/automatic-task-dispatch.ps1"))
+            .unwrap();
+    for required in [
+        "accepted_projectless_child_dispatches_automatically_through_the_canonical_message",
+        "project_task_dispatch_uses_an_isolated_worktree_and_preserves_dirty_user_files",
+        "automatic_dispatch_configuration_drift_terminalizes_before_provider_io",
+        "stale_pre_provider_dispatch_terminalizes_the_task_and_canonical_message_on_restart",
+        "accepted_child_dispatch_claim_is_durable_exclusive_and_idempotent",
+        "cancelling_a_claimed_dispatch_cancels_the_canonical_message_atomically",
+        "deterministic-fake-transport",
+        "RETAINED_FOR_AUDIT",
+    ] {
+        assert!(
+            script.contains(required),
+            "acceptance script must contain {required}"
+        );
+    }
+    for forbidden in [
+        "provider', 'smoke",
+        "apps\\lazoo-desktop\\src",
+        "LivePrompt",
+    ] {
+        assert!(
+            !script.contains(forbidden),
+            "acceptance script must not contain {forbidden}"
+        );
+    }
+}
+
+#[test]
 fn task_graph_acceptance_executes_backend_only_contract() {
     let repository = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     let script_path = repository.join("scripts/acceptance/task-delegation-graph.ps1");
@@ -3454,7 +4410,7 @@ fn task_graph_acceptance_executes_backend_only_contract() {
     )
     .unwrap();
     assert_eq!(manifest["status"], "PASS");
-    assert_eq!(manifest["schemaVersion"], 6);
+    assert_eq!(manifest["schemaVersion"], 7);
     assert_eq!(manifest["mode"], "deterministic-fixture");
     for field in [
         "rootIdentity",

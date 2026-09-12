@@ -1,8 +1,9 @@
-use std::{fs, sync::Arc, thread};
+use std::{fs, process::Command, sync::Arc, thread};
 
 use base64::Engine;
 use lazoo_runtime::{
     DataRoot, Installation, OwnerSecurity, RuntimeError, SingleInstance, atomic_write,
+    prepare_git_task_worktree,
 };
 use tempfile::tempdir;
 
@@ -37,6 +38,74 @@ fn session_working_directory_is_owner_protected() {
     assert!(sddl.contains(OwnerSecurity::current().unwrap().sid()));
     assert!(!sddl.contains(";;;BU)"));
     assert!(!sddl.contains(";;;AU)"));
+}
+
+#[test]
+fn task_workspaces_are_deterministic_protected_and_isolated_from_dirty_user_state() {
+    let temporary = tempdir().unwrap();
+    let root = DataRoot::from_path(temporary.path().join("data"));
+    root.ensure().unwrap();
+    let project_id = uuid::Uuid::new_v4();
+    let task_id = uuid::Uuid::new_v4();
+
+    let projectless = root.ensure_projectless_task_working_dir(task_id).unwrap();
+    assert_eq!(projectless, root.projectless_task_working_dir(task_id));
+    assert!(projectless.is_dir());
+
+    let repository = temporary.path().join("repository");
+    fs::create_dir_all(&repository).unwrap();
+    git(&repository, &["init"]);
+    git(
+        &repository,
+        &["config", "user.email", "lazoo@example.invalid"],
+    );
+    git(&repository, &["config", "user.name", "Lazoo Test"]);
+    git(&repository, &["config", "core.autocrlf", "false"]);
+    fs::write(repository.join("tracked.txt"), "base\n").unwrap();
+    git(&repository, &["add", "tracked.txt"]);
+    git(&repository, &["commit", "-m", "base"]);
+    fs::write(repository.join("tracked.txt"), "dirty user edit\n").unwrap();
+
+    let destination = root.git_task_working_dir(project_id, task_id);
+    let prepared = prepare_git_task_worktree(&repository, &destination, task_id).unwrap();
+    assert_eq!(prepared.path, destination);
+    assert_eq!(prepared.branch_name, format!("lazoo/task-{task_id}"));
+    assert_eq!(
+        fs::read_to_string(repository.join("tracked.txt")).unwrap(),
+        "dirty user edit\n"
+    );
+    assert_eq!(
+        fs::read_to_string(destination.join("tracked.txt")).unwrap(),
+        "base\n"
+    );
+    assert_eq!(
+        git_output(&destination, &["rev-parse", "HEAD"]),
+        prepared.base_commit
+    );
+
+    let replay = prepare_git_task_worktree(&repository, &destination, task_id).unwrap();
+    assert_eq!(replay, prepared);
+}
+
+fn git(path: &std::path::Path, args: &[&str]) {
+    let status = Command::new("git")
+        .arg("-C")
+        .arg(path)
+        .args(args)
+        .status()
+        .unwrap();
+    assert!(status.success(), "git command failed: {args:?}");
+}
+
+fn git_output(path: &std::path::Path, args: &[&str]) -> String {
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(path)
+        .args(args)
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "git command failed: {args:?}");
+    String::from_utf8(output.stdout).unwrap().trim().to_owned()
 }
 
 #[test]
