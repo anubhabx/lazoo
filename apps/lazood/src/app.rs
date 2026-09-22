@@ -1,3 +1,4 @@
+mod approval;
 mod task;
 mod turn;
 
@@ -200,7 +201,14 @@ pub struct App {
     live_sessions: Arc<Mutex<BTreeMap<Uuid, Arc<dyn ManagedSession>>>>,
     live_turns: Arc<Mutex<BTreeMap<Uuid, Arc<LiveTurn>>>>,
     task_dispatch_notify: Arc<Notify>,
+    approval_notify: Arc<Notify>,
+    approval_timeout: Duration,
 }
+
+/// How long a provider waits for the local user before a pending approval expires and is
+/// declined. Waiting never counts against the provider turn budget.
+// ponytail: one global expiry; make it per-project policy when the approval Inbox contract lands.
+const DEFAULT_APPROVAL_TIMEOUT: Duration = Duration::from_secs(15 * 60);
 
 pub struct EventSubscription {
     pub catch_up: Vec<EventSummary>,
@@ -260,6 +268,7 @@ impl App {
         store.reconcile_sessions(boot_id)?;
         store.reconcile_messages()?;
         store.reconcile_turns(boot_id)?;
+        store.reconcile_approvals(boot_id)?;
         store.reconcile_tasks()?;
         store.reconcile_task_dispatches(boot_id)?;
         for event in store.publish_pending_outbox()? {
@@ -278,7 +287,16 @@ impl App {
             live_sessions: Arc::new(Mutex::new(BTreeMap::new())),
             live_turns: Arc::new(Mutex::new(BTreeMap::new())),
             task_dispatch_notify: Arc::new(Notify::new()),
+            approval_notify: Arc::new(Notify::new()),
+            approval_timeout: DEFAULT_APPROVAL_TIMEOUT,
         })
+    }
+
+    #[doc(hidden)]
+    #[must_use]
+    pub fn with_approval_timeout(mut self, timeout: Duration) -> Self {
+        self.approval_timeout = timeout;
+        self
     }
 
     pub async fn handle(&self, request: JsonRpcRequest) -> JsonRpcResponse {
@@ -330,6 +348,9 @@ impl App {
             "task.resolve" => self.resolve_task(&request),
             "task.list" => self.task_list(&request.params),
             "task.show" => self.task_show(&request.params),
+            "approval.decide" => self.decide_approval(&request),
+            "approval.list" => self.approval_list(&request.params),
+            "approval.show" => self.approval_show(&request.params),
             "message.send" => self.send_message(&request),
             "message.claim" => self.claim_message(&request),
             "message.acknowledge" => self.acknowledge_message(&request),

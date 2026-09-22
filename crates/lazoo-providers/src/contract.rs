@@ -398,8 +398,46 @@ pub enum ProviderEvent {
 
 pub type AdapterFuture<'a, T> = Pin<Box<dyn Future<Output = Result<T, ProviderError>> + Send + 'a>>;
 
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum PermissionKind {
+    CommandExecution,
+    FileChange,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum PermissionDecision {
+    Approve,
+    Decline,
+}
+
+/// A provider-neutral approval request. Adapters normalize their native approval protocol into
+/// this shape; the control plane decides and the adapter answers the provider.
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct PermissionRequest {
+    pub provider: ProviderKind,
+    pub session_id: String,
+    pub turn_id: Option<String>,
+    pub request_id: String,
+    pub kind: PermissionKind,
+    pub action: String,
+    pub scope_expansion: bool,
+    pub detail: Value,
+}
+
 pub trait TurnEventObserver: Send + Sync {
     fn observe(&self, event: &ProviderEvent) -> Result<(), ProviderError>;
+
+    /// Governs one provider approval request. The default keeps the historical fail-closed
+    /// behavior: an observer that does not attach an approval flow declines every request.
+    fn decide_permission<'a>(
+        &'a self,
+        _request: &'a PermissionRequest,
+    ) -> AdapterFuture<'a, PermissionDecision> {
+        Box::pin(async { Ok(PermissionDecision::Decline) })
+    }
 }
 
 pub trait ProviderSession: Send + Sync {

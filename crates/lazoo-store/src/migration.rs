@@ -5,7 +5,7 @@ use sha2::{Digest, Sha256};
 
 use crate::StoreError;
 
-const VERSION: u32 = 7;
+const VERSION: u32 = 8;
 const MIGRATIONS: &[(u32, &str)] = &[
     (
         1,
@@ -32,6 +32,7 @@ const MIGRATIONS: &[(u32, &str)] = &[
         7,
         include_str!("../../../migrations/0007_task_dispatch.sql"),
     ),
+    (8, include_str!("../../../migrations/0008_approvals.sql")),
 ];
 
 pub fn apply_migrations(connection: &mut Connection) -> Result<(), StoreError> {

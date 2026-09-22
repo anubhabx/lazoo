@@ -14,12 +14,14 @@ mod registry;
 pub use acp::{ProgressDeadline, normalize_acp_message};
 pub use antigravity::{AntigravityAdapter, AntigravitySession, normalize_antigravity_message};
 pub use claude::{ClaudeAdapter, ClaudeExternalAuth, ClaudeSession, normalize_claude_message};
-pub use codex::{CodexAdapter, CodexSession, normalize_codex_message};
+pub use codex::{
+    CodexAdapter, CodexSession, normalize_codex_message, normalize_codex_permission_request,
+};
 pub use contract::{
     ADAPTER_CONTRACT_V1, AdapterFuture, AuthenticationEvidence, AuthenticationState, CommandSpec,
-    ExecutableCandidate, ProviderAdapter, ProviderCapabilities, ProviderError, ProviderEvent,
-    ProviderKind, ProviderProbe, ProviderSession, ProviderVerification, SessionRequest,
-    TurnEventObserver, TurnRequest,
+    ExecutableCandidate, PermissionDecision, PermissionKind, PermissionRequest, ProviderAdapter,
+    ProviderCapabilities, ProviderError, ProviderEvent, ProviderKind, ProviderProbe,
+    ProviderSession, ProviderVerification, SessionRequest, TurnEventObserver, TurnRequest,
 };
 pub use discovery::{DiscoveryEnvironment, DiscoverySource, rank_candidates};
 pub use grok::{GrokAdapter, GrokSession};

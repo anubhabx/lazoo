@@ -283,9 +283,9 @@ try {
     $daemon = Start-Daemon
     $gates.outerCodexContextIsolated = 'PASS'
     $status = Wait-Status
-    Assert-Equal $status.schemaVersion 7 'schema7'
+    Assert-Equal $status.schemaVersion 8 'schema8'
     Assert-Equal $status.journalMode 'wal' 'SQLite journal mode'
-    $gates.schema7 = 'PASS'
+    $gates.schema8 = 'PASS'
 
     $lead = Invoke-Json @(
         'employee', 'create', 'Rhea', '--provider', $Provider, '--role', 'Lead',
@@ -552,7 +552,7 @@ try {
         completedAt = [DateTime]::UtcNow.ToString('o')
         durationMs = $stopwatch.ElapsedMilliseconds
         protocolVersion = 1
-        schemaVersion = 7
+        schemaVersion = 8
         isolatedDataRoot = $script:dataRoot
         temporaryDataRetained = $false
         commands = $commandSnapshot

@@ -37,6 +37,27 @@ while ($null -ne ($line = [Console]::In.ReadLine())) {
                 method = 'turn/started'
                 params = @{ threadId = 'thread-1'; turn = @{ id = 'turn-1'; status = 'inProgress' } }
             }
+            $prompt = ''
+            if ($null -ne $message.params.input) {
+                $prompt = [string]$message.params.input[0].text
+            }
+            if ($prompt -like '*REQUEST_APPROVAL*') {
+                Write-Message @{
+                    id = 'approval-1'
+                    method = 'item/commandExecution/requestApproval'
+                    params = @{
+                        threadId = 'thread-1'
+                        turnId = 'turn-1'
+                        itemId = 'item-cmd-1'
+                        command = 'cargo test'
+                        cwd = 'C:\repo'
+                        reason = 'run the test suite'
+                    }
+                }
+                $approvalResponse = [Console]::In.ReadLine()
+                $approvalResponse |
+                    Set-Content -LiteralPath (Join-Path (Get-Location) 'fake-codex-approval-response.json') -Encoding utf8
+            }
             Write-Message @{
                 method = 'item/agentMessage/delta'
                 params = @{ threadId = 'thread-1'; turnId = 'turn-1'; itemId = 'item-1'; delta = 'Hello' }

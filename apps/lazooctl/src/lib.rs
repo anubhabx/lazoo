@@ -3,9 +3,9 @@ use std::path::PathBuf;
 use clap::{Parser, Subcommand};
 use lazoo_ipc::{IpcError, PipeClient};
 use lazoo_protocol::{
-    AuthorityMode, CheckoutMode, EmployeeCheckoutPolicy, JsonRpcRequest, JsonRpcResponse,
-    MessageEndpoint, MessageKind, MessageSender, RpcError, TaskReportKind, TaskResolution,
-    TaskState, UserMessageEndpoint, UserMessageKind,
+    ApprovalDecision, ApprovalState, AuthorityMode, CheckoutMode, EmployeeCheckoutPolicy,
+    JsonRpcRequest, JsonRpcResponse, MessageEndpoint, MessageKind, MessageSender, RpcError,
+    TaskReportKind, TaskResolution, TaskState, UserMessageEndpoint, UserMessageKind,
 };
 use lazoo_runtime::{DataRoot, Installation, RuntimeError};
 use serde_json::{Value, json};
@@ -45,7 +45,46 @@ pub enum Command {
     #[command(subcommand)]
     Task(TaskCommand),
     #[command(subcommand)]
+    Approval(ApprovalCommand),
+    #[command(subcommand)]
     System(SystemCommand),
+}
+
+#[derive(Debug, Subcommand)]
+pub enum ApprovalCommand {
+    List {
+        #[arg(long, default_value_t = 0)]
+        after_sequence: u64,
+        #[arg(long, default_value_t = 100)]
+        limit: u32,
+        #[arg(long, value_parser = parse_approval_state)]
+        state: Option<ApprovalState>,
+        #[arg(long)]
+        turn_id: Option<Uuid>,
+        #[arg(long)]
+        task_id: Option<Uuid>,
+        #[arg(long)]
+        conversation_id: Option<Uuid>,
+        #[arg(long)]
+        employee_id: Option<Uuid>,
+    },
+    Show {
+        id: Uuid,
+    },
+    Approve {
+        id: Uuid,
+        #[arg(long)]
+        expected_revision: u64,
+        #[arg(long)]
+        idempotency_key: Option<String>,
+    },
+    Decline {
+        id: Uuid,
+        #[arg(long)]
+        expected_revision: u64,
+        #[arg(long)]
+        idempotency_key: Option<String>,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -572,8 +611,74 @@ pub fn command_request(command: &Command) -> (&'static str, Value, bool) {
         Command::Conversation(command) => conversation_request(command),
         Command::Turn(command) => turn_request(command),
         Command::Task(command) => task_request(command),
+        Command::Approval(command) => approval_request(command),
         Command::System(SystemCommand::Shutdown) => ("system.shutdown", json!({}), false),
     }
+}
+
+fn approval_request(command: &ApprovalCommand) -> (&'static str, Value, bool) {
+    match command {
+        ApprovalCommand::List {
+            after_sequence,
+            limit,
+            state,
+            turn_id,
+            task_id,
+            conversation_id,
+            employee_id,
+        } => (
+            "approval.list",
+            json!({
+                "afterSequence": after_sequence,
+                "limit": limit,
+                "state": state,
+                "turnId": turn_id,
+                "taskId": task_id,
+                "conversationId": conversation_id,
+                "employeeId": employee_id,
+            }),
+            false,
+        ),
+        ApprovalCommand::Show { id } => ("approval.show", json!({"id": id}), false),
+        ApprovalCommand::Approve {
+            id,
+            expected_revision,
+            idempotency_key,
+        } => approval_decision_request(
+            *id,
+            *expected_revision,
+            ApprovalDecision::Approve,
+            idempotency_key.as_deref(),
+        ),
+        ApprovalCommand::Decline {
+            id,
+            expected_revision,
+            idempotency_key,
+        } => approval_decision_request(
+            *id,
+            *expected_revision,
+            ApprovalDecision::Decline,
+            idempotency_key.as_deref(),
+        ),
+    }
+}
+
+fn approval_decision_request(
+    id: Uuid,
+    expected_revision: u64,
+    decision: ApprovalDecision,
+    idempotency_key: Option<&str>,
+) -> (&'static str, Value, bool) {
+    (
+        "approval.decide",
+        json!({
+            "id": id,
+            "expectedRevision": expected_revision,
+            "decision": decision,
+            "idempotencyKey": generated_key(idempotency_key),
+        }),
+        false,
+    )
 }
 
 fn conversation_request(command: &ConversationCommand) -> (&'static str, Value, bool) {
@@ -1176,7 +1281,19 @@ pub fn exit_code_for_rpc(error: &RpcError) -> i32 {
         code if code.starts_with("LZ-MESSAGE-") => 11,
         code if code.starts_with("LZ-CONVERSATION-") || code.starts_with("LZ-TURN-") => 12,
         code if code.starts_with("LZ-TASK-") => 13,
+        code if code.starts_with("LZ-APPROVAL-") => 14,
         _ => 10,
+    }
+}
+
+fn parse_approval_state(value: &str) -> Result<ApprovalState, String> {
+    match value {
+        "pending" => Ok(ApprovalState::Pending),
+        "approved" => Ok(ApprovalState::Approved),
+        "declined" => Ok(ApprovalState::Declined),
+        "expired" => Ok(ApprovalState::Expired),
+        "cancelled" => Ok(ApprovalState::Cancelled),
+        _ => Err("expected pending, approved, declined, expired, or cancelled".to_owned()),
     }
 }
 

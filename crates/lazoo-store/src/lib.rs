@@ -1,3 +1,4 @@
+mod approval;
 mod conversation;
 mod emergency;
 mod employee;
@@ -20,6 +21,9 @@ use serde_json::Value;
 use thiserror::Error;
 use uuid::Uuid;
 
+pub use approval::{
+    CloseApprovalInput, DecideApprovalInput, ListApprovalsInput, RequestApprovalInput,
+};
 pub use conversation::{
     BeginTurnSubmissionInput, CreateConversationInput, FailTurnInput, FinishTurnCancelInput,
     MarkTurnUncertainInput, ObserveTurnInput, RecordTurnInput, RequestTurnCancelInput,
@@ -263,6 +267,29 @@ pub enum StoreError {
     TaskListLimit,
     #[error(transparent)]
     TaskValidation(#[from] lazoo_domain::TaskValidationError),
+    #[error("approval {approval_id} was not found")]
+    ApprovalNotFound { approval_id: Uuid },
+    #[error("approval {approval_id} changed; current revision is {current_revision}")]
+    ApprovalStale {
+        approval_id: Uuid,
+        current_revision: u64,
+    },
+    #[error("approval {approval_id} is {state}, expected {expected}")]
+    ApprovalState {
+        approval_id: Uuid,
+        state: String,
+        expected: &'static str,
+    },
+    #[error("approval {approval_id} is owned by another daemon boot")]
+    ApprovalOwnership { approval_id: Uuid },
+    #[error("approval turn {turn_id} is not owned by this daemon boot")]
+    ApprovalTurnOwnership { turn_id: Uuid },
+    #[error("approval turn {turn_id} is {state}; approvals require an in-flight turn")]
+    ApprovalTurnState { turn_id: Uuid, state: String },
+    #[error("approval idempotency key was already used with different input")]
+    ApprovalIdempotencyConflict,
+    #[error(transparent)]
+    ApprovalValidation(#[from] lazoo_domain::ApprovalValidationError),
     #[error("stored {field} is invalid: {message}")]
     InvalidRecord {
         field: &'static str,

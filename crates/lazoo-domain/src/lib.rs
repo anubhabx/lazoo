@@ -1,3 +1,4 @@
+mod approval;
 mod conversation;
 mod employee;
 mod message;
@@ -5,6 +6,11 @@ mod project;
 mod roster;
 mod task;
 
+pub use approval::{
+    ApprovalPolicyOutcome, ApprovalValidationError, MAX_APPROVAL_ACTION_BYTES,
+    MAX_APPROVAL_DETAIL_BYTES, approval_fingerprint, approval_policy, validate_approval_action,
+    validate_approval_detail, validate_approval_list_limit,
+};
 pub use conversation::{
     ConversationValidationError, MAX_CONVERSATION_COMMAND_KEY_BYTES, MAX_CONVERSATION_TITLE_BYTES,
     MAX_TURN_EVENT_PAYLOAD_BYTES, MAX_TURN_TEXT_BYTES, MAX_TURN_TRANSCRIPT_BYTES,

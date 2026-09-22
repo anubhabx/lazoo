@@ -7,9 +7,10 @@ use std::{
 };
 
 use lazoo_providers::{
-    CodexAdapter, DiscoveryEnvironment, ProviderAdapter, ProviderCapabilities, ProviderError,
-    ProviderEvent, ProviderKind, ProviderSession, ProviderVerification, SessionRequest,
-    TurnEventObserver, TurnRequest, normalize_codex_message,
+    AdapterFuture, CodexAdapter, DiscoveryEnvironment, PermissionDecision, PermissionKind,
+    PermissionRequest, ProviderAdapter, ProviderCapabilities, ProviderError, ProviderEvent,
+    ProviderKind, ProviderSession, ProviderVerification, SessionRequest, TurnEventObserver,
+    TurnRequest, normalize_codex_message, normalize_codex_permission_request,
 };
 use serde_json::json;
 use tempfile::tempdir;
@@ -352,4 +353,144 @@ async fn live_codex_single_turn_and_resume() {
         .unwrap();
     assert_eq!(resumed.id(), session_id);
     resumed.stop().await.unwrap();
+}
+
+#[derive(Default)]
+struct ApprovingObserver {
+    requests: Mutex<Vec<PermissionRequest>>,
+}
+
+impl TurnEventObserver for ApprovingObserver {
+    fn observe(&self, _event: &ProviderEvent) -> Result<(), ProviderError> {
+        Ok(())
+    }
+
+    fn decide_permission<'a>(
+        &'a self,
+        request: &'a PermissionRequest,
+    ) -> AdapterFuture<'a, PermissionDecision> {
+        Box::pin(async move {
+            self.requests.lock().unwrap().push(request.clone());
+            Ok(PermissionDecision::Approve)
+        })
+    }
+}
+
+#[test]
+fn codex_approval_requests_normalize_into_bounded_provider_neutral_requests() {
+    let command = normalize_codex_permission_request(
+        "item/commandExecution/requestApproval",
+        "7",
+        &json!({
+            "threadId": "thread-1",
+            "turnId": "turn-1",
+            "itemId": "item-9",
+            "command": ["cargo", "test", "--workspace"],
+            "cwd": "C:\\repo",
+            "reason": "run the suite",
+            "apiKey": "sk-secret"
+        }),
+        None,
+    );
+    assert_eq!(command.kind, PermissionKind::CommandExecution);
+    assert_eq!(command.request_id, "7");
+    assert_eq!(command.session_id, "thread-1");
+    assert_eq!(command.turn_id.as_deref(), Some("turn-1"));
+    assert_eq!(command.action, "cargo test --workspace");
+    assert!(!command.scope_expansion);
+    assert_eq!(command.detail["command"], "cargo test --workspace");
+    assert_eq!(command.detail["cwd"], "C:\\repo");
+    assert_eq!(command.detail["reason"], "run the suite");
+    assert!(command.detail.get("apiKey").is_none());
+
+    let widened = normalize_codex_permission_request(
+        "item/fileChange/requestApproval",
+        "8",
+        &json!({"threadId": "thread-1", "itemId": "item-10", "grantRoot": "D:\\elsewhere"}),
+        Some("active-turn".to_owned()),
+    );
+    assert_eq!(widened.kind, PermissionKind::FileChange);
+    assert!(widened.scope_expansion);
+    assert_eq!(widened.turn_id.as_deref(), Some("active-turn"));
+    assert_eq!(widened.action, "apply file changes under D:\\elsewhere");
+
+    let oversized = normalize_codex_permission_request(
+        "item/commandExecution/requestApproval",
+        "9",
+        &json!({"threadId": "thread-1", "command": "x".repeat(10_000)}),
+        None,
+    );
+    assert_eq!(oversized.action.len(), 1024);
+    assert_eq!(oversized.detail["command"].as_str().unwrap().len(), 4096);
+}
+
+#[tokio::test]
+async fn observed_codex_approval_requests_are_answered_with_the_lazoo_decision() {
+    ensure_session_host();
+    let approving_dir = tempdir().unwrap();
+    let session = CodexAdapter::with_executable(fake_codex())
+        .start(&SessionRequest::new(approving_dir.path()))
+        .await
+        .unwrap();
+    let observer = ApprovingObserver::default();
+    let events = session
+        .turn_observed(&TurnRequest::new("please REQUEST_APPROVAL"), &observer)
+        .await
+        .unwrap();
+    session.stop().await.unwrap();
+
+    let response_text = fs::read_to_string(
+        approving_dir
+            .path()
+            .join("fake-codex-approval-response.json"),
+    )
+    .unwrap();
+    let response: serde_json::Value =
+        serde_json::from_str(response_text.trim_start_matches('\u{feff}').trim()).unwrap();
+    assert_eq!(response["id"], "approval-1");
+    assert_eq!(response["result"]["decision"], "accept");
+    let requests = observer.requests.lock().unwrap();
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].request_id, "approval-1");
+    assert_eq!(requests[0].action, "cargo test");
+    assert_eq!(requests[0].turn_id.as_deref(), Some("turn-1"));
+    let permission = events
+        .iter()
+        .find(|event| matches!(event, ProviderEvent::PermissionRequested { .. }))
+        .expect("the approval request is surfaced as a permission event");
+    let ProviderEvent::PermissionRequested { raw: Some(raw), .. } = permission else {
+        panic!("permission event should retain bounded raw evidence");
+    };
+    assert_eq!(raw["lazooDecision"], "accept");
+    assert_eq!(raw["lazooAction"], "cargo test");
+    assert!(matches!(
+        events.last(),
+        Some(ProviderEvent::TurnCompleted { .. })
+    ));
+
+    let declining_dir = tempdir().unwrap();
+    let session = CodexAdapter::with_executable(fake_codex())
+        .start(&SessionRequest::new(declining_dir.path()))
+        .await
+        .unwrap();
+    session
+        .turn_observed(
+            &TurnRequest::new("please REQUEST_APPROVAL"),
+            &CollectingObserver::default(),
+        )
+        .await
+        .unwrap();
+    session.stop().await.unwrap();
+    let response_text = fs::read_to_string(
+        declining_dir
+            .path()
+            .join("fake-codex-approval-response.json"),
+    )
+    .unwrap();
+    let response: serde_json::Value =
+        serde_json::from_str(response_text.trim_start_matches('\u{feff}').trim()).unwrap();
+    assert_eq!(
+        response["result"]["decision"], "decline",
+        "an observer without an approval flow fails closed"
+    );
 }

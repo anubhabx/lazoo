@@ -292,9 +292,9 @@ try {
 
     $daemon = Start-Daemon
     $status = Wait-Status
-    Assert-Equal $status.schemaVersion 7 'schema 7'
+    Assert-Equal $status.schemaVersion 8 'schema 8'
     Assert-Equal $status.journalMode 'wal' 'SQLite journal mode'
-    $gates.schema7 = 'PASS'
+    $gates.schema8 = 'PASS'
 
     $lead = Invoke-Json @(
         'employee', 'create', 'Rhea', '--provider', 'codex', '--role', 'Lead',
@@ -685,7 +685,7 @@ try {
         }
     })
     $manifest = [ordered]@{
-        schemaVersion = 7
+        schemaVersion = 8
         acceptance = 'task-delegation-graph'
         mode = 'deterministic-fixture'
         status = $manifestStatus

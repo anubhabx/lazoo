@@ -1,9 +1,15 @@
+mod approval;
 mod conversation;
 mod message;
 mod rpc;
 mod task;
 mod types;
 
+pub use approval::{
+    APPROVAL_CONTRACT_V1, ApprovalDecider, ApprovalDecision, ApprovalKind, ApprovalListParams,
+    ApprovalMutationResult, ApprovalReconcileResult, ApprovalRecord, ApprovalShowParams,
+    ApprovalState, DecideApprovalParams,
+};
 pub use conversation::{
     CONVERSATION_CONTRACT_V1, CancelTurnParams, ConversationDetail, ConversationListParams,
     ConversationMutationResult, ConversationRecord, ConversationShowParams, ConversationSummary,

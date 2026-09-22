@@ -906,3 +906,108 @@ fn task_errors_use_exit_code_thirteen() {
         );
     }
 }
+
+#[test]
+fn approval_cli_maps_list_show_and_bound_decisions() {
+    const APPROVAL_ID: &str = "00000000-0000-4000-8000-00000000000a";
+    let cases = [
+        (
+            vec![
+                "lazooctl",
+                "approval",
+                "list",
+                "--state",
+                "pending",
+                "--task-id",
+                TASK_ID,
+                "--limit",
+                "5",
+            ],
+            "approval.list",
+            json!({
+                "afterSequence": 0,
+                "limit": 5,
+                "state": "pending",
+                "turnId": null,
+                "taskId": TASK_ID,
+                "conversationId": null,
+                "employeeId": null
+            }),
+        ),
+        (
+            vec!["lazooctl", "approval", "show", APPROVAL_ID],
+            "approval.show",
+            json!({"id": APPROVAL_ID}),
+        ),
+        (
+            vec![
+                "lazooctl",
+                "approval",
+                "approve",
+                APPROVAL_ID,
+                "--expected-revision",
+                "1",
+                "--idempotency-key",
+                "approve-once",
+            ],
+            "approval.decide",
+            json!({
+                "id": APPROVAL_ID,
+                "expectedRevision": 1,
+                "decision": "approve",
+                "idempotencyKey": "approve-once"
+            }),
+        ),
+        (
+            vec![
+                "lazooctl",
+                "approval",
+                "decline",
+                APPROVAL_ID,
+                "--expected-revision",
+                "1",
+                "--idempotency-key",
+                "decline-once",
+            ],
+            "approval.decide",
+            json!({
+                "id": APPROVAL_ID,
+                "expectedRevision": 1,
+                "decision": "decline",
+                "idempotencyKey": "decline-once"
+            }),
+        ),
+    ];
+    for (arguments, method, params) in cases {
+        let cli = Cli::try_parse_from(arguments).unwrap();
+        let (actual_method, actual_params, follows) = command_request(&cli.command);
+        assert_eq!(actual_method, method);
+        assert_eq!(actual_params, params);
+        assert!(!follows);
+    }
+    assert!(Cli::try_parse_from(["lazooctl", "approval", "list", "--state", "granted"]).is_err());
+    assert!(
+        Cli::try_parse_from(["lazooctl", "approval", "approve", APPROVAL_ID]).is_err(),
+        "a decision must cite the approval revision it is bound to"
+    );
+}
+
+#[test]
+fn approval_errors_use_exit_code_fourteen() {
+    for code in [
+        "LZ-APPROVAL-INVALID",
+        "LZ-APPROVAL-NOT-FOUND",
+        "LZ-APPROVAL-STALE",
+        "LZ-APPROVAL-STATE",
+        "LZ-APPROVAL-OWNERSHIP",
+    ] {
+        assert_eq!(
+            exit_code_for_rpc(&RpcError {
+                code: code.to_owned(),
+                message: String::new(),
+                data: None,
+            }),
+            14
+        );
+    }
+}

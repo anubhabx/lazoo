@@ -12,7 +12,10 @@ use lazoo_protocol::{
     RpcError, SessionLifecycleState, SubmitTurnParams, TaskState, TurnListParams,
     TurnMutationResult, TurnShowParams, TurnState,
 };
-use lazoo_providers::{ProviderError, ProviderEvent, ProviderKind, TurnEventObserver, TurnRequest};
+use lazoo_providers::{
+    AdapterFuture, PermissionDecision, PermissionRequest, ProviderError, ProviderEvent,
+    ProviderKind, TurnEventObserver, TurnRequest,
+};
 use lazoo_store::{
     BeginTurnSubmissionInput, CreateConversationInput, FailTurnInput, FinishTurnCancelInput,
     MarkTurnUncertainInput, ObserveTurnInput, RecordTurnInput, RequestTurnCancelInput,
@@ -122,6 +125,18 @@ impl TurnEventObserver for AppTurnObserver {
             .publish_events()
             .map_err(|error| ProviderError::Observer(error.message))?;
         Ok(())
+    }
+
+    fn decide_permission<'a>(
+        &'a self,
+        request: &'a PermissionRequest,
+    ) -> AdapterFuture<'a, PermissionDecision> {
+        Box::pin(async move {
+            self.app
+                .govern_permission(self.turn_id, request)
+                .await
+                .map_err(|error| ProviderError::Observer(error.message))
+        })
     }
 }
 
@@ -585,6 +600,8 @@ impl App {
             })
             .map_err(turn_store_error)?;
         self.publish_events()?;
+        // A pending approval on this turn must observe the cancellation without waiting for expiry.
+        self.approval_notify.notify_waiters();
         if requested.turn.state == TurnState::Cancelled || requested.event_sequence.is_none() {
             return Ok(to_value(requested));
         }

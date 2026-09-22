@@ -10,11 +10,15 @@ use tokio::{process::Command, sync::Mutex, time::timeout};
 
 use crate::{
     ADAPTER_CONTRACT_V1, AdapterFuture, AuthenticationEvidence, AuthenticationState, CommandSpec,
-    DiscoveryEnvironment, ExecutableCandidate, ProviderAdapter, ProviderCapabilities,
-    ProviderError, ProviderEvent, ProviderKind, ProviderProbe, ProviderSession,
-    ProviderVerification, SessionRequest, TurnEventObserver, TurnRequest, json_rpc::JsonRpcControl,
-    json_rpc::JsonRpcProcess, redact_json,
+    DiscoveryEnvironment, ExecutableCandidate, PermissionDecision, PermissionKind,
+    PermissionRequest, ProviderAdapter, ProviderCapabilities, ProviderError, ProviderEvent,
+    ProviderKind, ProviderProbe, ProviderSession, ProviderVerification, SessionRequest,
+    TurnEventObserver, TurnRequest, json_rpc::JsonRpcControl, json_rpc::JsonRpcProcess,
+    json_rpc::response_id, redact_json,
 };
+
+const MAX_PERMISSION_COMMAND_BYTES: usize = 4096;
+const MAX_PERMISSION_ACTION_BYTES: usize = 1024;
 
 const CODEX_PROTOCOL: &str = "app-server/v2";
 const STOP_TIMEOUT: Duration = Duration::from_secs(2);
@@ -381,7 +385,7 @@ impl CodexSession {
         observer: Option<&dyn TurnEventObserver>,
         accepted_turn_id: Option<&str>,
     ) -> Result<Vec<ProviderEvent>, ProviderError> {
-        let started = Instant::now();
+        let mut started = Instant::now();
         let mut last_progress = started;
         let mut output = String::new();
         loop {
@@ -413,7 +417,13 @@ impl CodexSession {
                 }
                 result => result?,
             };
-            if let Some(permission) = handle_server_request(&self.control, &message).await? {
+            let paused_at = Instant::now();
+            if let Some(permission) = self
+                .handle_server_request(&message, observer, accepted_turn_id)
+                .await?
+            {
+                // Waiting for a Lazoo approval decision never counts against the turn budget.
+                started += paused_at.elapsed();
                 last_progress = Instant::now();
                 if let Some(observer) = observer {
                     observer.observe(&permission)?;
@@ -719,50 +729,186 @@ fn normalize_codex_item(
     }))
 }
 
-async fn handle_server_request(
-    control: &JsonRpcControl,
-    message: &Value,
-) -> Result<Option<ProviderEvent>, ProviderError> {
-    let (Some(id), Some(method)) = (
-        message.get("id").cloned(),
-        message.get("method").and_then(Value::as_str),
-    ) else {
-        return Ok(None);
-    };
-    if !method.contains("requestApproval") && method != "item/tool/requestUserInput" {
-        return Ok(None);
-    }
-    let params = message.get("params").cloned().unwrap_or_else(|| json!({}));
-    let thread_id = string_at(&params, "/threadId").unwrap_or_default();
-    let options =
-        params
-            .get("options")
-            .and_then(Value::as_array)
-            .map_or_else(Vec::new, |options| {
-                options
-                    .iter()
-                    .filter_map(|option| {
-                        option
-                            .get("optionId")
-                            .and_then(Value::as_str)
-                            .map(str::to_owned)
-                    })
-                    .collect()
-            });
-    let response = match method {
-        "item/commandExecution/requestApproval" | "item/fileChange/requestApproval" => {
-            Ok(json!({"decision": "decline"}))
+impl CodexSession {
+    /// Answers Codex server-to-client requests. Approval requests are governed by the observer
+    /// (the Lazoo control plane); without an observer they fail closed with `decline`.
+    async fn handle_server_request(
+        &self,
+        message: &Value,
+        observer: Option<&dyn TurnEventObserver>,
+        accepted_turn_id: Option<&str>,
+    ) -> Result<Option<ProviderEvent>, ProviderError> {
+        let (Some(id), Some(method)) = (
+            message.get("id").cloned(),
+            message.get("method").and_then(Value::as_str),
+        ) else {
+            return Ok(None);
+        };
+        if !method.contains("requestApproval") && method != "item/tool/requestUserInput" {
+            return Ok(None);
         }
-        _ => Err((-32_001, "Lazoo approval flow is not attached")),
+        let params = message.get("params").cloned().unwrap_or_else(|| json!({}));
+        let thread_id = string_at(&params, "/threadId").unwrap_or_default();
+        let options =
+            params
+                .get("options")
+                .and_then(Value::as_array)
+                .map_or_else(Vec::new, |options| {
+                    options
+                        .iter()
+                        .filter_map(|option| {
+                            option
+                                .get("optionId")
+                                .and_then(Value::as_str)
+                                .map(str::to_owned)
+                        })
+                        .collect()
+                });
+        let mut raw = redact_json(params.clone());
+        match method {
+            "item/commandExecution/requestApproval" | "item/fileChange/requestApproval" => {
+                let active_turn_id = accepted_turn_id.map(str::to_owned).or_else(|| {
+                    self.active_turn
+                        .read()
+                        .ok()
+                        .and_then(|active| active.clone())
+                });
+                let request = normalize_codex_permission_request(
+                    method,
+                    &response_id(message).unwrap_or_else(|| id.to_string()),
+                    &params,
+                    active_turn_id,
+                );
+                let decision = match observer {
+                    Some(observer) => observer.decide_permission(&request).await,
+                    None => Ok(PermissionDecision::Decline),
+                };
+                let wire = match decision {
+                    Ok(PermissionDecision::Approve) => "accept",
+                    Ok(PermissionDecision::Decline) | Err(_) => "decline",
+                };
+                // Codex is always answered before a decision failure is surfaced, so the native
+                // turn never hangs on an unanswered request.
+                self.control
+                    .respond(id.clone(), Ok(json!({"decision": wire})))
+                    .await?;
+                if let Value::Object(object) = &mut raw {
+                    object.insert("lazooDecision".to_owned(), json!(wire));
+                    object.insert("lazooKind".to_owned(), json!(request.kind));
+                    object.insert("lazooAction".to_owned(), json!(request.action));
+                }
+                decision?;
+            }
+            _ => {
+                self.control
+                    .respond(
+                        id.clone(),
+                        Err((-32_001, "Lazoo approval flow is not attached")),
+                    )
+                    .await?;
+            }
+        }
+        Ok(Some(ProviderEvent::PermissionRequested {
+            provider: ProviderKind::Codex,
+            session_id: thread_id,
+            request_id: Some(id.to_string()),
+            options,
+            raw: Some(raw),
+        }))
+    }
+}
+
+/// Normalizes a Codex `requestApproval` server request into the provider-neutral shape.
+/// Only bounded, redacted evidence is retained; the raw approval payload never reaches the ledger.
+#[must_use]
+pub fn normalize_codex_permission_request(
+    method: &str,
+    request_id: &str,
+    params: &Value,
+    active_turn_id: Option<String>,
+) -> PermissionRequest {
+    let kind = if method == "item/fileChange/requestApproval" {
+        PermissionKind::FileChange
+    } else {
+        PermissionKind::CommandExecution
     };
-    control.respond(id.clone(), response).await?;
-    Ok(Some(ProviderEvent::PermissionRequested {
+    let command = params
+        .get("command")
+        .and_then(|command| match command {
+            Value::String(text) => Some(text.clone()),
+            Value::Array(parts) => Some(
+                parts
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .collect::<Vec<_>>()
+                    .join(" "),
+            ),
+            _ => None,
+        })
+        .or_else(|| string_at(params, "/item/command"))
+        .map(|mut command| {
+            truncate_utf8(&mut command, MAX_PERMISSION_COMMAND_BYTES);
+            command
+        });
+    let grant_root = string_at(params, "/grantRoot");
+    let scope_expansion = grant_root.is_some()
+        || params
+            .get("additionalPermissions")
+            .is_some_and(|value| !value.is_null())
+        || params
+            .get("networkApprovalContext")
+            .is_some_and(|value| !value.is_null());
+    let mut action = match kind {
+        PermissionKind::CommandExecution => command
+            .clone()
+            .filter(|command| !command.trim().is_empty())
+            .unwrap_or_else(|| "run a command".to_owned()),
+        PermissionKind::FileChange => grant_root.as_ref().map_or_else(
+            || "apply file changes in the workspace".to_owned(),
+            |root| format!("apply file changes under {root}"),
+        ),
+    };
+    truncate_utf8(&mut action, MAX_PERMISSION_ACTION_BYTES);
+    let mut detail = Map::new();
+    for key in [
+        "threadId",
+        "turnId",
+        "itemId",
+        "approvalId",
+        "reason",
+        "cwd",
+        "grantRoot",
+        "additionalPermissions",
+        "networkApprovalContext",
+    ] {
+        if let Some(value) = params.get(key).filter(|value| !value.is_null()) {
+            detail.insert(key.to_owned(), value.clone());
+        }
+    }
+    if let Some(command) = command {
+        detail.insert("command".to_owned(), Value::String(command));
+    }
+    PermissionRequest {
         provider: ProviderKind::Codex,
-        session_id: thread_id,
-        request_id: Some(id.to_string()),
-        options,
-        raw: Some(redact_json(params)),
-    }))
+        session_id: string_at(params, "/threadId").unwrap_or_default(),
+        turn_id: string_at(params, "/turnId").or(active_turn_id),
+        request_id: request_id.to_owned(),
+        kind,
+        action,
+        scope_expansion,
+        detail: redact_json(Value::Object(detail)),
+    }
+}
+
+fn truncate_utf8(value: &mut String, maximum: usize) {
+    if value.len() <= maximum {
+        return;
+    }
+    let mut end = maximum;
+    while !value.is_char_boundary(end) {
+        end -= 1;
+    }
+    value.truncate(end);
 }
 
 async fn initialize(process: &mut JsonRpcProcess, wait: Duration) -> Result<Value, ProviderError> {

@@ -6,7 +6,7 @@ The name is a deliberately silly blend of **lazy** and **zoo**: wake the right e
 
 ## Status
 
-The first Windows control-plane slice, polished read-only desktop shell, native-provider adapters, durable employee roster, native-session ownership, collaboration bus, conversation/turn delivery, and schema-7 automatic task dispatch are implemented. Lazoo provides five native executables:
+The first Windows control-plane slice, polished read-only desktop shell, native-provider adapters, durable employee roster, native-session ownership, collaboration bus, conversation/turn delivery, schema-7 automatic task dispatch, and the schema-8 approval gate are implemented. Lazoo provides five native executables:
 
 - `lazoo-desktop.exe` opens a dark, command-first Tauri 2 control room for daemon health, projects, recent events, and recovered-incident count.
 - `lazoo-keeper.exe` supervises the daemon with a bounded restart policy and emergency spool.
@@ -14,7 +14,7 @@ The first Windows control-plane slice, polished read-only desktop shell, native-
 - `lazooctl.exe` exposes status, project registration/listing, event listing/following, native-provider diagnostics, employee/roster/session/message/conversation/turn/task control, and planned shutdown.
 - `lazoo-session-host.exe` is the protocol-transparent launch gate that places each native provider tree in its daemon-owned Windows Job Object before provider startup.
 
-The desktop remains deliberately read-only. Backend adapters connect Codex App Server, OpenCode ACP, Grok Build ACP, Antigravity stream JSON, and Claude Code stream JSON without flattening native configuration or authentication. Schema 7 adds durable dispatch ownership and workspace evidence to the task tree. Accepted Codex child tasks wake automatically when their assigned worker is free, reuse the one canonical delegation message, and start only after native acceptance or durable progress. Projectless tasks use owner-protected private directories; project tasks use deterministic retained Git worktrees and never mutate dirty canonical checkout files. Configuration drift and pre-provider restart fail atomically, possible in-flight restart becomes `uncertain`, and task cancellation interrupts an accepted native turn. The earlier authorized live conversation gate completed with exact `LAZOO_TURN_OK`; the automatic-dispatch acceptance is deterministic and did not invoke a live model. Managed memory, approvals, ConPTY, other-provider task delivery, and UI binding remain later slices. The full product contract lives in [docs/PROJECT-BRIEF.md](docs/PROJECT-BRIEF.md).
+The desktop remains deliberately read-only. Backend adapters connect Codex App Server, OpenCode ACP, Grok Build ACP, Antigravity stream JSON, and Claude Code stream JSON without flattening native configuration or authentication. Schema 7 adds durable dispatch ownership and workspace evidence to the task tree. Accepted Codex child tasks wake automatically when their assigned worker is free, reuse the one canonical delegation message, and start only after native acceptance or durable progress. Projectless tasks use owner-protected private directories; project tasks use deterministic retained Git worktrees and never mutate dirty canonical checkout files. Configuration drift and pre-provider restart fail atomically, possible in-flight restart becomes `uncertain`, and task cancellation interrupts an accepted native turn. Schema 8 adds the durable approval ledger: Codex command-execution and file-change approval requests are recorded first, answered by policy under `self-decision` and `full-autonomy`, and held for the local user under `ask`. Pending approvals expire, cancel with their turn, and fail closed on restart; the provider is always answered `decline` when no approval exists. The earlier authorized live conversation gate completed with exact `LAZOO_TURN_OK`; the automatic-dispatch and approval-gate acceptances are deterministic and did not invoke a live model. Managed memory, ConPTY, session-wide grants, other-provider task delivery and approval bridging, and UI binding remain later slices. The full product contract lives in [docs/PROJECT-BRIEF.md](docs/PROJECT-BRIEF.md).
 
 The target desktop information architecture is owner-approved, but UI implementation is owned separately while backend work continues. The current read-only shell remains this branch's technical baseline. Continue from [docs/NEXT-SESSION.md](docs/NEXT-SESSION.md); no launcher, terminal, worker, Inbox, Settings, or task field was added to the desktop contract.
 
@@ -66,6 +66,11 @@ $workerEmployeeId = '<worker-employee-uuid>'
 & .\target\release\lazooctl.exe task delegate $rootTaskId --actor-employee $employeeId --actor-session $sessionId --assigned-employee $workerEmployeeId --objective 'Review the change.' --requested-authority ask --roster-revision 1
 & .\target\release\lazooctl.exe task list --root-task-id $rootTaskId
 & .\target\release\lazooctl.exe task show $rootTaskId
+$approvalId = '<approval-uuid>'
+& .\target\release\lazooctl.exe approval list --state pending
+& .\target\release\lazooctl.exe approval show $approvalId
+& .\target\release\lazooctl.exe approval approve $approvalId --expected-revision 1
+& .\target\release\lazooctl.exe approval decline $approvalId --expected-revision 1
 & .\target\release\lazooctl.exe system shutdown
 ```
 
@@ -88,6 +93,8 @@ Provider names are `codex`, `opencode`, `grok-build`, `antigravity`, and `claude
 `conversation create` and `turn submit/retry/cancel/list/show` use the schema-7 conversation ledger and actor-aware version-2 envelopes. User-authored submission may explicitly activate the selected Codex lead with `--activate-if-needed`; employee-authored turns cannot activate dormant recipients. Native turn IDs or observed progress are required before message acknowledgement, accepted turns are never retried automatically after uncertainty, and provider terminal states remain distinct from canonical delivery truth. Conversation/turn failures use CLI exit code 12.
 
 `task delegate/accept/start/report/cancel/resolve/list/show` operates on the durable schema-7 task graph. Root task identity is the creating user-turn identity; child depth is capped at four and nonterminal direct fan-out at eight. Authority is the most restrictive of parent, request, and assignee. Accepted non-ask children and user-accepted proposals are claimed once by the daemon, dispatched when their worker is free, and expose dispatch/workspace evidence through `task show`. Native evidence, revision checks, actor/session checks, cancellation, descendant blocking, and owner-loss uncertainty fail closed. Git worktrees are retained for audit; cleanup is intentionally not automatic. Task failures use CLI exit code 13. Task controls are daemon/CLI-only and do not expand `desktop.snapshot`.
+
+`approval list/show/approve/decline` operates on the schema-8 approval ledger. When a daemon-managed Codex turn asks to run a command or change files, Lazoo records the request first and applies the linked task's effective authority: `ask` holds the provider until the local user decides, `self-decision` approves in-scope work by policy and holds scope expansions, and `full-autonomy` approves by policy. A decision is bound to one approval and revision; there is no session-wide grant. Pending approvals expire after fifteen minutes, close when their turn is cancelled, and close with `LZ-APPROVAL-OWNER-LOST` on restart, and every closure answers the provider `decline`. Approval failures use CLI exit code 14. Approval controls are daemon/CLI-only and do not expand `desktop.snapshot`.
 
 For the frontend development loop, run the app from its Tauri directory with Tauri CLI 2 installed. The Tauri configuration starts Vite on `127.0.0.1:1420` automatically:
 
@@ -115,6 +122,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\acceptance\collabora
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\acceptance\conversation-delivery.ps1
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\acceptance\task-delegation-graph.ps1
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\acceptance\automatic-task-dispatch.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\acceptance\approval-gate.ps1
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\acceptance\desktop-shell.ps1
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\acceptance\provider-adapters.ps1 -Provider codex
 ```
@@ -132,6 +140,8 @@ The conversation-delivery acceptance uses an isolated data root, real release bi
 The task-delegation-graph acceptance uses isolated schema-7 state, real release binaries, and the disposable Codex protocol fixture. It exercises root identity/replay/follow-up, ask proposal and user acceptance, authority narrowing, stale/unavailable/self/depth/fan-out guards, native start/progress/outcomes, descendant blocking, restart owner loss, idempotent uncertainty resolution, and audit/outbox correlation. It also proves provider smoke, live model use, worktree mutation, ConPTY, desktop expansion, and UI changes are absent. It writes `artifacts\acceptance\task-delegation-graph-manifest.json`.
 
 The automatic-task-dispatch acceptance uses the in-process fake provider transport and disposable Git repositories. It verifies background wakeup after a busy worker stops, canonical-message reuse, projectless and Git-worktree execution, dirty-checkout preservation, configuration-drift isolation, sibling progress after one failure, cancellation before and after native acceptance, session cleanup, and both restart boundaries. It invokes no provider smoke or external model, retains task worktrees for audit, and writes `artifacts\acceptance\automatic-task-dispatch-manifest.json`.
+
+The approval-gate acceptance uses the in-process fake session backend, the disposable Codex app-server fixture, and the store and CLI test suites. It verifies that `ask` holds the provider until the user decides and forwards `accept`, that decline, expiry, and turn cancellation answer `decline` with matching durable evidence, that `self-decision` approves in-scope work by policy and waits on scope expansion, that decisions are revisioned and idempotent, that prior-boot pending approvals expire with owner-loss evidence, that the Codex adapter answers the native request id, and that CLI mapping and exit code 14 hold. It invokes no provider smoke or external model and writes `artifacts\acceptance\approval-gate-manifest.json`.
 
 The desktop-shell acceptance starts an isolated keeper and daemon, registers a disposable Git repository, opens the real WebView2 window, exercises `Ctrl+K`, arrow/Enter navigation, `Ctrl+Enter` inspector focus, Escape dismissal, and inspector focus return through Windows UI Automation, checks default and minimum-size captures, and writes `artifacts\acceptance\desktop-shell-manifest.json`. A 200% text-scale capture runs only when Windows is configured at 200%; otherwise the manifest records an explicit environment blocker.
 

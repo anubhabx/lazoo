@@ -15,8 +15,8 @@ use lazoo_protocol::{
     MessageDeliveryState, ProviderObservation, TurnState,
 };
 use lazoo_providers::{
-    DiscoveryEnvironment, ProviderError, ProviderEvent, ProviderKind, SessionRequest,
-    TurnEventObserver, TurnRequest,
+    DiscoveryEnvironment, PermissionDecision, PermissionKind, PermissionRequest, ProviderError,
+    ProviderEvent, ProviderKind, SessionRequest, TurnEventObserver, TurnRequest,
 };
 use lazoo_runtime::DataRoot;
 use lazoo_store::{CreateConversationInput, CreateEmployeeInput, Store};
@@ -82,6 +82,8 @@ struct FakeSessionBackend {
     turn_failure: Arc<Mutex<Option<String>>>,
     turn_retryable_failure: Arc<AtomicBool>,
     working_directories: Arc<Mutex<Vec<PathBuf>>>,
+    permission_requests: Arc<Mutex<Vec<PermissionRequest>>>,
+    permission_decisions: Arc<Mutex<Vec<PermissionDecision>>>,
 }
 
 impl Default for FakeSessionBackend {
@@ -103,6 +105,8 @@ impl Default for FakeSessionBackend {
             turn_failure: Arc::new(Mutex::new(None)),
             turn_retryable_failure: Arc::new(AtomicBool::new(false)),
             working_directories: Arc::new(Mutex::new(Vec::new())),
+            permission_requests: Arc::new(Mutex::new(Vec::new())),
+            permission_decisions: Arc::new(Mutex::new(Vec::new())),
         }
     }
 }
@@ -121,6 +125,8 @@ struct FakeManagedSession {
     turn_requests: Arc<Mutex<Vec<TurnRequest>>>,
     turn_failure: Arc<Mutex<Option<String>>>,
     turn_retryable_failure: Arc<AtomicBool>,
+    permission_requests: Arc<Mutex<Vec<PermissionRequest>>>,
+    permission_decisions: Arc<Mutex<Vec<PermissionDecision>>>,
 }
 
 impl ManagedSession for FakeManagedSession {
@@ -157,6 +163,11 @@ impl ManagedSession for FakeManagedSession {
             let failure = self.turn_failure.lock().unwrap().clone();
             if let Some(message) = failure {
                 return Err(ProviderError::Protocol(message));
+            }
+            let permissions = self.permission_requests.lock().unwrap().clone();
+            for permission in permissions {
+                let decision = observer.decide_permission(&permission).await?;
+                self.permission_decisions.lock().unwrap().push(decision);
             }
             let scripted = self.turn_events.lock().unwrap().clone();
             let mut returned = Vec::with_capacity(scripted.len());
@@ -218,6 +229,8 @@ impl SessionBackend for FakeSessionBackend {
                 turn_requests: Arc::clone(&self.turn_requests),
                 turn_failure: Arc::clone(&self.turn_failure),
                 turn_retryable_failure: Arc::clone(&self.turn_retryable_failure),
+                permission_requests: Arc::clone(&self.permission_requests),
+                permission_decisions: Arc::clone(&self.permission_decisions),
             }) as Box<dyn ManagedSession>)
         })
     }
@@ -3462,7 +3475,7 @@ async fn status_reports_protocol_store_and_boot_identity() {
     let result = response.result.unwrap();
 
     assert_eq!(result["protocolVersion"], 1);
-    assert_eq!(result["schemaVersion"], 7);
+    assert_eq!(result["schemaVersion"], 8);
     assert_eq!(result["journalMode"], "wal");
     assert!(
         result["bootId"]
@@ -4206,7 +4219,7 @@ fn employee_roster_acceptance_contract_is_backend_only() {
         "roster', 'refresh",
         "LZ-EMPLOYEE-STALE",
         "restartDurability",
-        "schemaVersion 7",
+        "schemaVersion 8",
         "providerSmokeAbsent",
     ] {
         assert!(
@@ -4244,7 +4257,7 @@ fn native_session_acceptance_contract_covers_containment_and_owner_loss() {
         "completeTreeTerminated",
         "nativeHostPid",
         "providerSmokeAbsent",
-        "schemaVersion 7",
+        "schemaVersion 8",
     ] {
         assert!(
             script.contains(required),
@@ -4274,7 +4287,7 @@ fn collaboration_bus_acceptance_contract_is_backend_only() {
         "deadLetterEvidence",
         "restartDurability",
         "auditOutboxEvidence",
-        "schemaVersion 7",
+        "schemaVersion 8",
         "providerSmokeAbsent",
         "desktopCapabilityExpansionAbsent",
     ] {
@@ -4307,7 +4320,7 @@ fn conversation_delivery_acceptance_contract_is_backend_only() {
     let fixture = std::fs::read_to_string(&fixture_path).expect("turn transport fixture");
 
     for required in [
-        "schema7",
+        "schema8",
         "projectlessConversation",
         "projectConversation",
         "userAuthorship",
@@ -4410,7 +4423,7 @@ fn task_graph_acceptance_executes_backend_only_contract() {
     )
     .unwrap();
     assert_eq!(manifest["status"], "PASS");
-    assert_eq!(manifest["schemaVersion"], 7);
+    assert_eq!(manifest["schemaVersion"], 8);
     assert_eq!(manifest["mode"], "deterministic-fixture");
     for field in [
         "rootIdentity",
@@ -4442,5 +4455,607 @@ fn task_graph_acceptance_executes_backend_only_contract() {
             .unwrap()
             .iter()
             .all(|command| command["exitCode"].as_i64().is_some())
+    );
+}
+
+fn permission_request(
+    kind: PermissionKind,
+    action: &str,
+    scope_expansion: bool,
+) -> PermissionRequest {
+    PermissionRequest {
+        provider: ProviderKind::Codex,
+        session_id: "native-1".to_owned(),
+        turn_id: Some("approval-turn".to_owned()),
+        request_id: format!("request-{action}"),
+        kind,
+        action: action.to_owned(),
+        scope_expansion,
+        detail: json!({"command": action, "cwd": "C:\\repo"}),
+    }
+}
+
+fn completed_turn_events(status: &str) -> Vec<ProviderEvent> {
+    vec![
+        ProviderEvent::TurnStarted {
+            provider: ProviderKind::Codex,
+            session_id: "native-1".to_owned(),
+            turn_id: Some("approval-turn".to_owned()),
+            raw: None,
+        },
+        ProviderEvent::TurnCompleted {
+            provider: ProviderKind::Codex,
+            session_id: "native-1".to_owned(),
+            turn_id: Some("approval-turn".to_owned()),
+            status: status.to_owned(),
+            output: Some("done".to_owned()),
+            raw: None,
+        },
+    ]
+}
+
+struct ApprovalHarness {
+    store: Store,
+    app: App,
+    backend: FakeSessionBackend,
+    conversation_id: uuid::Uuid,
+}
+
+fn approval_harness(
+    authority: AuthorityMode,
+    timeout: Duration,
+    permissions: Vec<PermissionRequest>,
+    completion_status: &str,
+) -> (tempfile::TempDir, ApprovalHarness) {
+    let temporary = tempdir().unwrap();
+    let root = DataRoot::from_path(temporary.path().join("data"));
+    root.ensure().unwrap();
+    let store = Store::open_path(root.state_db()).unwrap();
+    let employee = store
+        .create_employee(&CreateEmployeeInput {
+            request_id: "create-approval-lead-request".to_owned(),
+            idempotency_key: "create-approval-lead".to_owned(),
+            name: "Rhea".to_owned(),
+            provider: "codex".to_owned(),
+            role: "Lead".to_owned(),
+            instructions: String::new(),
+            model: Some("test-model".to_owned()),
+            reasoning_effort: Some("low".to_owned()),
+            native_settings: json!({}),
+            authority_mode: authority,
+            checkout_policy: EmployeeCheckoutPolicy::Isolated,
+            enabled: true,
+            provider_observation: Some(ProviderObservation {
+                provider: "codex".to_owned(),
+                verification: "configured".to_owned(),
+                version: Some("test".to_owned()),
+                protocol: Some("app-server/v2".to_owned()),
+                capabilities: json!({"session": true, "permission": true}),
+                authentication: json!({"native": "ready", "external": "unknown"}),
+                degradation_reason: None,
+                checked_at: "2026-09-22T00:00:00Z".to_owned(),
+            }),
+        })
+        .unwrap()
+        .employee;
+    let conversation = store
+        .create_conversation(&CreateConversationInput {
+            request_id: "create-approval-conversation-request".to_owned(),
+            idempotency_key: "create-approval-conversation".to_owned(),
+            project_id: None,
+            lead_employee_id: employee.id,
+            title: None,
+        })
+        .unwrap()
+        .conversation;
+    let backend = FakeSessionBackend::default();
+    backend
+        .turn_events
+        .lock()
+        .unwrap()
+        .extend(completed_turn_events(completion_status));
+    backend
+        .permission_requests
+        .lock()
+        .unwrap()
+        .extend(permissions);
+    let app = App::new_with_session_backend(
+        store.clone(),
+        root,
+        DiscoveryEnvironment::empty(),
+        Arc::new(backend.clone()),
+    )
+    .unwrap()
+    .with_approval_timeout(timeout);
+    (
+        temporary,
+        ApprovalHarness {
+            store,
+            app,
+            backend,
+            conversation_id: conversation.id,
+        },
+    )
+}
+
+async fn warm_lead(harness: &ApprovalHarness) {
+    let employee = harness.store.list_employees().unwrap().remove(0);
+    harness
+        .app
+        .handle(request(
+            "warm-approval-lead",
+            "session.warm",
+            json!({
+                "employeeId": employee.id,
+                "expectedEmployeeRevision": employee.configuration_revision,
+                "idempotencyKey": "warm-approval-lead"
+            }),
+        ))
+        .await
+        .result
+        .unwrap();
+}
+
+fn submit_governed_turn(
+    harness: &ApprovalHarness,
+    authority: &str,
+) -> tokio::task::JoinHandle<lazoo_protocol::JsonRpcResponse> {
+    let app = harness.app.clone();
+    let conversation_id = harness.conversation_id;
+    let authority = authority.to_owned();
+    tokio::spawn(async move {
+        app.handle(request(
+            "submit-governed-turn",
+            "turn.submit",
+            json!({
+                "conversationId": conversation_id,
+                "author": {"kind": "user"},
+                "recipient": null,
+                "authorityMode": authority,
+                "text": "Run the governed command",
+                "activateIfNeeded": false,
+                "maxAttempts": 3,
+                "idempotencyKey": "submit-governed-turn"
+            }),
+        ))
+        .await
+    })
+}
+
+async fn wait_for_pending_approval(harness: &ApprovalHarness) -> serde_json::Value {
+    timeout(Duration::from_secs(5), async {
+        loop {
+            let listed = harness
+                .app
+                .handle(request(
+                    "list-pending-approvals",
+                    "approval.list",
+                    json!({"state": "pending"}),
+                ))
+                .await
+                .result
+                .unwrap();
+            if let Some(first) = listed.as_array().and_then(|items| items.first()) {
+                return first.clone();
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("a pending approval should be listed while the provider waits")
+}
+
+fn approval_event_types(store: &Store) -> Vec<String> {
+    store
+        .list_events(0, 1000)
+        .unwrap()
+        .into_iter()
+        .map(|event| event.event_type)
+        .filter(|kind| kind.starts_with("approval"))
+        .collect()
+}
+
+#[tokio::test]
+async fn ask_turn_waits_for_the_user_decision_and_forwards_approval_to_the_provider() {
+    let (_temporary, harness) = approval_harness(
+        AuthorityMode::Ask,
+        Duration::from_secs(60),
+        vec![permission_request(
+            PermissionKind::CommandExecution,
+            "cargo test",
+            false,
+        )],
+        "completed",
+    );
+    let snapshot_before = harness
+        .app
+        .handle(request("desktop-before", "desktop.snapshot", json!({})))
+        .await
+        .result
+        .unwrap();
+    warm_lead(&harness).await;
+    let submission = submit_governed_turn(&harness, "ask");
+
+    let pending = wait_for_pending_approval(&harness).await;
+    assert_eq!(pending["state"], "pending");
+    assert_eq!(pending["kind"], "command-execution");
+    assert_eq!(pending["action"], "cargo test");
+    assert_eq!(pending["authority"], "ask");
+    assert_eq!(pending["scopeExpansion"], false);
+    assert!(
+        harness
+            .backend
+            .permission_decisions
+            .lock()
+            .unwrap()
+            .is_empty()
+    );
+    assert!(!submission.is_finished());
+
+    let decided = harness
+        .app
+        .handle(request(
+            "approve-command",
+            "approval.decide",
+            json!({
+                "id": pending["id"],
+                "expectedRevision": pending["revision"],
+                "decision": "approve",
+                "idempotencyKey": "approve-command"
+            }),
+        ))
+        .await
+        .result
+        .unwrap();
+    assert_eq!(decided["approval"]["state"], "approved");
+    assert_eq!(decided["approval"]["decider"], "user");
+    assert_eq!(decided["approval"]["revision"], 2);
+
+    let submitted = timeout(Duration::from_secs(5), submission)
+        .await
+        .unwrap()
+        .unwrap()
+        .result
+        .unwrap();
+    assert_eq!(submitted["turn"]["state"], "completed");
+    assert_eq!(
+        *harness.backend.permission_decisions.lock().unwrap(),
+        vec![PermissionDecision::Approve]
+    );
+    let shown = harness
+        .app
+        .handle(request(
+            "show-approval",
+            "approval.show",
+            json!({"id": pending["id"]}),
+        ))
+        .await
+        .result
+        .unwrap();
+    assert_eq!(shown["state"], "approved");
+    assert_eq!(shown["turnId"], submitted["turn"]["id"]);
+    assert_eq!(shown["taskId"], submitted["turn"]["id"]);
+    assert_eq!(
+        approval_event_types(&harness.store),
+        vec!["approval.requested", "approval.decided"]
+    );
+
+    let replay = harness
+        .app
+        .handle(request(
+            "approve-command-again",
+            "approval.decide",
+            json!({
+                "id": pending["id"],
+                "expectedRevision": pending["revision"],
+                "decision": "decline",
+                "idempotencyKey": "approve-command"
+            }),
+        ))
+        .await
+        .result
+        .unwrap();
+    assert_eq!(replay["approval"]["state"], "approved");
+    assert_eq!(replay["eventSequence"], serde_json::Value::Null);
+    let stale = harness
+        .app
+        .handle(request(
+            "approve-command-stale",
+            "approval.decide",
+            json!({
+                "id": pending["id"],
+                "expectedRevision": 1,
+                "decision": "approve",
+                "idempotencyKey": "approve-command-stale"
+            }),
+        ))
+        .await
+        .error
+        .unwrap();
+    assert_eq!(stale.code, "LZ-APPROVAL-STALE");
+
+    let snapshot_after = harness
+        .app
+        .handle(request("desktop-after", "desktop.snapshot", json!({})))
+        .await
+        .result
+        .unwrap();
+    let snapshot_keys = |value: &serde_json::Value| {
+        value
+            .as_object()
+            .unwrap()
+            .keys()
+            .cloned()
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        snapshot_keys(&snapshot_before),
+        snapshot_keys(&snapshot_after)
+    );
+    assert!(snapshot_after.get("approvals").is_none());
+    assert!(snapshot_after.get("pendingApprovals").is_none());
+}
+
+#[tokio::test]
+async fn declined_and_expired_approvals_fail_closed_at_the_provider() {
+    let (_temporary, declined) = approval_harness(
+        AuthorityMode::Ask,
+        Duration::from_secs(60),
+        vec![permission_request(
+            PermissionKind::FileChange,
+            "apply file changes in the workspace",
+            false,
+        )],
+        "completed",
+    );
+    warm_lead(&declined).await;
+    let submission = submit_governed_turn(&declined, "ask");
+    let pending = wait_for_pending_approval(&declined).await;
+    declined
+        .app
+        .handle(request(
+            "decline-change",
+            "approval.decide",
+            json!({
+                "id": pending["id"],
+                "expectedRevision": pending["revision"],
+                "decision": "decline",
+                "idempotencyKey": "decline-change"
+            }),
+        ))
+        .await
+        .result
+        .unwrap();
+    let submitted = timeout(Duration::from_secs(5), submission)
+        .await
+        .unwrap()
+        .unwrap()
+        .result
+        .unwrap();
+    assert_eq!(submitted["turn"]["state"], "completed");
+    assert_eq!(
+        *declined.backend.permission_decisions.lock().unwrap(),
+        vec![PermissionDecision::Decline]
+    );
+
+    let (_expired_temporary, expired) = approval_harness(
+        AuthorityMode::Ask,
+        Duration::from_secs(1),
+        vec![permission_request(
+            PermissionKind::CommandExecution,
+            "cargo test",
+            false,
+        )],
+        "completed",
+    );
+    warm_lead(&expired).await;
+    let submission = submit_governed_turn(&expired, "ask");
+    let pending = wait_for_pending_approval(&expired).await;
+    let submitted = timeout(Duration::from_secs(10), submission)
+        .await
+        .unwrap()
+        .unwrap()
+        .result
+        .unwrap();
+    assert_eq!(submitted["turn"]["state"], "completed");
+    assert_eq!(
+        *expired.backend.permission_decisions.lock().unwrap(),
+        vec![PermissionDecision::Decline]
+    );
+    let approval_id: uuid::Uuid = pending["id"].as_str().unwrap().parse().unwrap();
+    let closed = expired.store.get_approval(approval_id).unwrap();
+    assert_eq!(closed.state, lazoo_protocol::ApprovalState::Expired);
+    assert_eq!(
+        closed.decider,
+        Some(lazoo_protocol::ApprovalDecider::System)
+    );
+    assert_eq!(closed.failure_code.as_deref(), Some("LZ-APPROVAL-TIMEOUT"));
+    assert_eq!(
+        approval_event_types(&expired.store),
+        vec!["approval.requested", "approval.expired"]
+    );
+    let late = expired
+        .app
+        .handle(request(
+            "approve-late",
+            "approval.decide",
+            json!({
+                "id": pending["id"],
+                "expectedRevision": closed.revision,
+                "decision": "approve",
+                "idempotencyKey": "approve-late"
+            }),
+        ))
+        .await
+        .error
+        .unwrap();
+    assert_eq!(late.code, "LZ-APPROVAL-STATE");
+}
+
+#[tokio::test]
+async fn self_decision_policy_auto_approves_in_scope_and_waits_on_scope_expansion() {
+    let (_temporary, harness) = approval_harness(
+        AuthorityMode::SelfDecision,
+        Duration::from_secs(60),
+        vec![
+            permission_request(
+                PermissionKind::FileChange,
+                "apply file changes in the workspace",
+                false,
+            ),
+            permission_request(
+                PermissionKind::CommandExecution,
+                "apply file changes under C:\\",
+                true,
+            ),
+        ],
+        "completed",
+    );
+    warm_lead(&harness).await;
+    let submission = submit_governed_turn(&harness, "self-decision");
+    let pending = wait_for_pending_approval(&harness).await;
+    assert_eq!(pending["scopeExpansion"], true);
+    assert_eq!(pending["authority"], "self-decision");
+    assert_eq!(
+        *harness.backend.permission_decisions.lock().unwrap(),
+        vec![PermissionDecision::Approve]
+    );
+    harness
+        .app
+        .handle(request(
+            "decline-widening",
+            "approval.decide",
+            json!({
+                "id": pending["id"],
+                "expectedRevision": pending["revision"],
+                "decision": "decline",
+                "idempotencyKey": "decline-widening"
+            }),
+        ))
+        .await
+        .result
+        .unwrap();
+    timeout(Duration::from_secs(5), submission)
+        .await
+        .unwrap()
+        .unwrap()
+        .result
+        .unwrap();
+    assert_eq!(
+        *harness.backend.permission_decisions.lock().unwrap(),
+        vec![PermissionDecision::Approve, PermissionDecision::Decline]
+    );
+    let approvals = harness
+        .app
+        .handle(request("list-all-approvals", "approval.list", json!({})))
+        .await
+        .result
+        .unwrap();
+    let approvals = approvals.as_array().unwrap();
+    assert_eq!(approvals.len(), 2);
+    assert_eq!(approvals[0]["state"], "approved");
+    assert_eq!(approvals[0]["decider"], "policy");
+    assert_eq!(approvals[0]["kind"], "file-change");
+    assert_eq!(approvals[1]["state"], "declined");
+    assert_eq!(approvals[1]["decider"], "user");
+}
+
+#[tokio::test]
+async fn cancelling_a_turn_with_a_pending_approval_declines_the_provider_and_records_cancellation()
+{
+    let (_temporary, harness) = approval_harness(
+        AuthorityMode::Ask,
+        Duration::from_secs(60),
+        vec![permission_request(
+            PermissionKind::CommandExecution,
+            "cargo test",
+            false,
+        )],
+        "interrupted",
+    );
+    warm_lead(&harness).await;
+    let submission = submit_governed_turn(&harness, "ask");
+    let pending = wait_for_pending_approval(&harness).await;
+    let turn_id: uuid::Uuid = pending["turnId"].as_str().unwrap().parse().unwrap();
+    let turn = harness.store.get_turn(turn_id).unwrap();
+    let cancelled = harness
+        .app
+        .handle(request(
+            "cancel-governed-turn",
+            "turn.cancel",
+            json!({
+                "id": turn_id,
+                "expectedRevision": turn.revision,
+                "idempotencyKey": "cancel-governed-turn"
+            }),
+        ))
+        .await
+        .result
+        .unwrap();
+    assert_eq!(cancelled["turn"]["state"], "cancelled");
+    let submitted = timeout(Duration::from_secs(5), submission)
+        .await
+        .unwrap()
+        .unwrap()
+        .result
+        .unwrap();
+    assert_eq!(submitted["turn"]["state"], "cancelled");
+    assert_eq!(
+        *harness.backend.permission_decisions.lock().unwrap(),
+        vec![PermissionDecision::Decline]
+    );
+    let approval_id: uuid::Uuid = pending["id"].as_str().unwrap().parse().unwrap();
+    let closed = harness.store.get_approval(approval_id).unwrap();
+    assert_eq!(closed.state, lazoo_protocol::ApprovalState::Cancelled);
+    assert_eq!(
+        closed.failure_code.as_deref(),
+        Some("LZ-APPROVAL-TURN-CANCELLED")
+    );
+    assert_eq!(
+        approval_event_types(&harness.store),
+        vec!["approval.requested", "approval.cancelled"]
+    );
+}
+
+#[tokio::test]
+async fn pending_approvals_from_a_previous_boot_expire_with_owner_loss_on_restart() {
+    let (_temporary, harness) = approval_harness(
+        AuthorityMode::Ask,
+        Duration::from_secs(60),
+        vec![permission_request(
+            PermissionKind::CommandExecution,
+            "cargo test",
+            false,
+        )],
+        "completed",
+    );
+    warm_lead(&harness).await;
+    let submission = submit_governed_turn(&harness, "ask");
+    let pending = wait_for_pending_approval(&harness).await;
+    submission.abort();
+    let _ = submission.await;
+
+    let restarted = App::new_with_provider_environment(
+        harness.store.clone(),
+        harness.app.data_root().clone(),
+        DiscoveryEnvironment::empty(),
+    )
+    .unwrap();
+    let shown = restarted
+        .handle(request(
+            "show-restarted-approval",
+            "approval.show",
+            json!({"id": pending["id"]}),
+        ))
+        .await
+        .result
+        .unwrap();
+    assert_eq!(shown["state"], "expired");
+    assert_eq!(shown["decider"], "system");
+    assert_eq!(shown["failureCode"], "LZ-APPROVAL-OWNER-LOST");
+    assert!(
+        approval_event_types(&harness.store)
+            .iter()
+            .any(|kind| kind == "approvals.reconciled")
     );
 }
