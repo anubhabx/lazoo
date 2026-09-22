@@ -2,7 +2,7 @@
 
 **Date:** 2026-09-22
 
-**Status:** Implemented on `claude/approval-gate` with deterministic acceptance; owner review of this design and of the branch is requested before merge. The owner's standing instruction for this session was to build the most valuable remaining backend slice, so design and implementation landed together instead of the usual two-step gate.
+**Status:** Implemented on `feat/approval-gate` with deterministic acceptance and merged to `main` on 2026-09-23 at the owner's request. The owner's standing instruction for this session was to build the most valuable remaining backend slice, so design and implementation landed together instead of the usual two-step gate.
 
 **Scope:** Backend-only durable approval ledger, authority policy evaluation, a provider-neutral approval bridge in the adapter contract, the Codex adapter answering native approval requests with Lazoo's decision, daemon RPC, and CLI controls. No desktop or Tauri capability change, no session-wide or prefix grants, no ConPTY, no approval delivery for providers other than Codex, no managed memory, and no live model use.
 

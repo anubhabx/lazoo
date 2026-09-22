@@ -2,7 +2,7 @@
 
 Date completed: 2026-09-22 IST
 
-Branch: `claude/approval-gate`
+Branch: `feat/approval-gate`
 
 Base: `main` at `54d212f` (`feat: dispatch accepted tasks automatically`)
 
@@ -31,7 +31,7 @@ This slice landed design and implementation together under the owner's standing 
 
 ## Fresh verification matrix
 
-All commands were run from `C:\workspace\Orchestrator` on branch `claude/approval-gate` after the final fixes.
+All commands were run from `C:\workspace\Orchestrator` on branch `feat/approval-gate` after the final fixes.
 
 | Command | Exit | Evidence |
 |---|---:|---|
