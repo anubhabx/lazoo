@@ -14,7 +14,7 @@ use lazoo_protocol::{
 };
 use lazoo_providers::{
     AdapterFuture, PermissionDecision, PermissionRequest, ProviderError, ProviderEvent,
-    ProviderKind, TurnEventObserver, TurnRequest,
+    ProviderKind, ToolCall, ToolResult, TurnEventObserver, TurnRequest,
 };
 use lazoo_store::{
     BeginTurnSubmissionInput, CreateConversationInput, FailTurnInput, FinishTurnCancelInput,
@@ -137,6 +137,10 @@ impl TurnEventObserver for AppTurnObserver {
                 .await
                 .map_err(|error| ProviderError::Observer(error.message))
         })
+    }
+
+    fn call_tool<'a>(&'a self, call: &'a ToolCall) -> AdapterFuture<'a, ToolResult> {
+        Box::pin(async move { Ok(self.app.call_collaboration_tool(self.turn_id, call).await) })
     }
 }
 

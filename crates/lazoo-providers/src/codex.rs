@@ -12,13 +12,17 @@ use crate::{
     ADAPTER_CONTRACT_V1, AdapterFuture, AuthenticationEvidence, AuthenticationState, CommandSpec,
     DiscoveryEnvironment, ExecutableCandidate, PermissionDecision, PermissionKind,
     PermissionRequest, ProviderAdapter, ProviderCapabilities, ProviderError, ProviderEvent,
-    ProviderKind, ProviderProbe, ProviderSession, ProviderVerification, SessionRequest,
-    TurnEventObserver, TurnRequest, json_rpc::JsonRpcControl, json_rpc::JsonRpcProcess,
-    json_rpc::response_id, redact_json,
+    ProviderKind, ProviderProbe, ProviderSession, ProviderVerification, SessionRequest, ToolCall,
+    ToolResult, ToolSpec, TurnEventObserver, TurnRequest, json_rpc::JsonRpcControl,
+    json_rpc::JsonRpcProcess, json_rpc::response_id, redact_json,
 };
 
 const MAX_PERMISSION_COMMAND_BYTES: usize = 4096;
 const MAX_PERMISSION_ACTION_BYTES: usize = 1024;
+/// Tool arguments and results are model-facing text; both are bounded before they cross the
+/// control-plane boundary or land in the turn ledger.
+const MAX_TOOL_ARGUMENT_BYTES: usize = 64 * 1024;
+const MAX_TOOL_RESULT_BYTES: usize = 64 * 1024;
 
 const CODEX_PROTOCOL: &str = "app-server/v2";
 const STOP_TIMEOUT: Duration = Duration::from_secs(2);
@@ -146,7 +150,7 @@ impl CodexAdapter {
                 );
             }
         };
-        let handshake = initialize(&mut process, Duration::from_secs(15)).await;
+        let handshake = initialize(&mut process, Duration::from_secs(15), false).await;
         let (initialized, account) = match handshake {
             Ok(initialized) => {
                 let account = process
@@ -199,7 +203,13 @@ impl CodexAdapter {
             .next()
             .ok_or(ProviderError::NotDetected(ProviderKind::Codex))?;
         let mut process = JsonRpcProcess::spawn(&Self::command(&candidate.path, &request.cwd))?;
-        initialize(&mut process, request.startup_timeout()).await?;
+        // Dynamic tools are an experimental app-server field; opt in only when Lazoo declares them.
+        initialize(
+            &mut process,
+            request.startup_timeout(),
+            !request.tools.is_empty(),
+        )
+        .await?;
 
         let (method, params, resumed) = if let Some(session_id) = &request.session_id {
             (
@@ -744,11 +754,20 @@ impl CodexSession {
         ) else {
             return Ok(None);
         };
-        if !method.contains("requestApproval") && method != "item/tool/requestUserInput" {
+        if !method.contains("requestApproval")
+            && method != "item/tool/requestUserInput"
+            && method != "item/tool/call"
+        {
             return Ok(None);
         }
         let params = message.get("params").cloned().unwrap_or_else(|| json!({}));
         let thread_id = string_at(&params, "/threadId").unwrap_or_default();
+        if method == "item/tool/call" {
+            return self
+                .handle_tool_call(id, &params, observer, accepted_turn_id)
+                .await
+                .map(Some);
+        }
         let options =
             params
                 .get("options")
@@ -815,6 +834,99 @@ impl CodexSession {
             options,
             raw: Some(raw),
         }))
+    }
+}
+
+impl CodexSession {
+    /// Answers one `item/tool/call` for a Lazoo-declared dynamic tool. The control plane decides;
+    /// Codex is always answered (fail closed) before an observer failure is surfaced, and the
+    /// bounded call plus outcome is surfaced as a tool event for the turn ledger.
+    async fn handle_tool_call(
+        &self,
+        id: Value,
+        params: &Value,
+        observer: Option<&dyn TurnEventObserver>,
+        accepted_turn_id: Option<&str>,
+    ) -> Result<ProviderEvent, ProviderError> {
+        let active_turn_id = accepted_turn_id.map(str::to_owned).or_else(|| {
+            self.active_turn
+                .read()
+                .ok()
+                .and_then(|active| active.clone())
+        });
+        let call = normalize_codex_tool_call(params, active_turn_id);
+        let oversized = serde_json::to_vec(&call.arguments)
+            .is_ok_and(|bytes| bytes.len() > MAX_TOOL_ARGUMENT_BYTES);
+        let outcome = if oversized {
+            Ok(ToolResult::failure(
+                "LZ-TOOL-ARGUMENTS-TOO-LARGE",
+                "tool arguments exceed the 64 KiB limit",
+            ))
+        } else {
+            match observer {
+                Some(observer) => observer.call_tool(&call).await,
+                None => Ok(ToolResult::failure(
+                    "LZ-TOOL-UNATTACHED",
+                    "Lazoo collaboration tools are not attached to this turn",
+                )),
+            }
+        };
+        let (success, mut text) = match &outcome {
+            Ok(result) => (
+                result.success,
+                serde_json::to_string(&result.content).unwrap_or_default(),
+            ),
+            Err(error) => (
+                false,
+                json!({"error": {"code": "LZ-TOOL-OBSERVER", "message": error.to_string()}})
+                    .to_string(),
+            ),
+        };
+        truncate_utf8(&mut text, MAX_TOOL_RESULT_BYTES);
+        self.control
+            .respond(
+                id,
+                Ok(json!({
+                    "contentItems": [{"type": "inputText", "text": text}],
+                    "success": success
+                })),
+            )
+            .await?;
+        let mut raw = redact_json(json!({
+            "callId": call.call_id,
+            "tool": call.name,
+            "arguments": call.arguments,
+            "success": success,
+            "result": text,
+        }));
+        if let Value::Object(object) = &mut raw
+            && oversized
+        {
+            object.insert("arguments".to_owned(), json!({"truncated": true}));
+        }
+        let event = ProviderEvent::ToolUpdate {
+            provider: ProviderKind::Codex,
+            session_id: call.session_id,
+            turn_id: call.turn_id,
+            tool_name: Some(format!("lazoo:{}", call.name)),
+            status: if success { "completed" } else { "failed" }.to_owned(),
+            raw: Some(raw),
+        };
+        outcome?;
+        Ok(event)
+    }
+}
+
+/// Normalizes a Codex `item/tool/call` server request into the provider-neutral tool call.
+#[must_use]
+pub fn normalize_codex_tool_call(params: &Value, active_turn_id: Option<String>) -> ToolCall {
+    ToolCall {
+        provider: ProviderKind::Codex,
+        session_id: string_at(params, "/threadId").unwrap_or_default(),
+        turn_id: string_at(params, "/turnId").or(active_turn_id),
+        call_id: string_at(params, "/callId").unwrap_or_default(),
+        name: string_at(params, "/tool").unwrap_or_default(),
+        arguments: params.get("arguments").cloned().unwrap_or(Value::Null),
     }
 }
 
@@ -911,7 +1023,11 @@ fn truncate_utf8(value: &mut String, maximum: usize) {
     value.truncate(end);
 }
 
-async fn initialize(process: &mut JsonRpcProcess, wait: Duration) -> Result<Value, ProviderError> {
+async fn initialize(
+    process: &mut JsonRpcProcess,
+    wait: Duration,
+    experimental_api: bool,
+) -> Result<Value, ProviderError> {
     let result = process
         .request(
             "initialize",
@@ -921,7 +1037,7 @@ async fn initialize(process: &mut JsonRpcProcess, wait: Duration) -> Result<Valu
                     "title": "Lazoo",
                     "version": env!("CARGO_PKG_VERSION")
                 },
-                "capabilities": {"experimentalApi": false}
+                "capabilities": {"experimentalApi": experimental_api}
             }),
             wait,
             "Codex initialization",
@@ -939,13 +1055,50 @@ fn thread_start_params(request: &SessionRequest) -> Result<Value, ProviderError>
     );
     insert_optional(&mut params, "model", request.model.as_deref());
     insert_approval_policy(&mut params, request.permission_mode.as_deref())?;
+    if !request.tools.is_empty() {
+        // Codex forwards dynamic tool names to the Responses API, which rejects dots; failing
+        // here names the offending tool instead of a generic session-start failure.
+        if let Some(tool) = request.tools.iter().find(|tool| {
+            tool.name.is_empty()
+                || !tool
+                    .name
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_' || byte == b'-')
+        }) {
+            return Err(ProviderError::Protocol(format!(
+                "Codex dynamic tool name must match ^[a-zA-Z0-9_-]+$: {}",
+                tool.name
+            )));
+        }
+        params.insert(
+            "dynamicTools".to_owned(),
+            Value::Array(request.tools.iter().map(dynamic_tool_spec).collect()),
+        );
+    }
     Ok(Value::Object(params))
+}
+
+fn dynamic_tool_spec(tool: &ToolSpec) -> Value {
+    json!({
+        "type": "function",
+        "name": tool.name,
+        "description": tool.description,
+        "inputSchema": tool.input_schema,
+    })
 }
 
 fn thread_resume_params(
     session_id: &str,
     request: &SessionRequest,
 ) -> Result<Value, ProviderError> {
+    if !request.tools.is_empty() {
+        // Codex 0.153 accepts dynamicTools only on thread/start; a resumed thread would silently
+        // lose the Lazoo tools, so declaring them on resume fails closed instead.
+        return Err(ProviderError::Unsupported {
+            provider: ProviderKind::Codex,
+            capability: "dynamic tools on thread/resume",
+        });
+    }
     let mut params = Map::new();
     params.insert("threadId".to_owned(), Value::String(session_id.to_owned()));
     params.insert(

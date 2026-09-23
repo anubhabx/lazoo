@@ -1,5 +1,6 @@
 mod approval;
 mod task;
+mod tools;
 mod turn;
 
 use std::{
@@ -208,7 +209,7 @@ pub struct App {
 /// How long a provider waits for the local user before a pending approval expires and is
 /// declined. Waiting never counts against the provider turn budget.
 // ponytail: one global expiry; make it per-project policy when the approval Inbox contract lands.
-const DEFAULT_APPROVAL_TIMEOUT: Duration = Duration::from_secs(15 * 60);
+const DEFAULT_APPROVAL_TIMEOUT: Duration = Duration::from_mins(15);
 
 pub struct EventSubscription {
     pub catch_up: Vec<EventSummary>,
@@ -812,6 +813,9 @@ impl App {
         }
         if let Some(effort) = employee.reasoning_effort {
             session_request = session_request.with_effort(effort);
+        }
+        if provider == ProviderKind::Codex {
+            session_request = session_request.with_tools(tools::collaboration_tools());
         }
 
         let Ok(session) = self.session_backend.start(provider, &session_request).await else {

@@ -9,8 +9,9 @@ use std::{
 use lazoo_providers::{
     AdapterFuture, CodexAdapter, DiscoveryEnvironment, PermissionDecision, PermissionKind,
     PermissionRequest, ProviderAdapter, ProviderCapabilities, ProviderError, ProviderEvent,
-    ProviderKind, ProviderSession, ProviderVerification, SessionRequest, TurnEventObserver,
-    TurnRequest, normalize_codex_message, normalize_codex_permission_request,
+    ProviderKind, ProviderSession, ProviderVerification, SessionRequest, ToolCall, ToolResult,
+    ToolSpec, TurnEventObserver, TurnRequest, normalize_codex_message,
+    normalize_codex_permission_request, normalize_codex_tool_call,
 };
 use serde_json::json;
 use tempfile::tempdir;
@@ -449,7 +450,7 @@ async fn observed_codex_approval_requests_are_answered_with_the_lazoo_decision()
         serde_json::from_str(response_text.trim_start_matches('\u{feff}').trim()).unwrap();
     assert_eq!(response["id"], "approval-1");
     assert_eq!(response["result"]["decision"], "accept");
-    let requests = observer.requests.lock().unwrap();
+    let requests = observer.requests.lock().unwrap().clone();
     assert_eq!(requests.len(), 1);
     assert_eq!(requests[0].request_id, "approval-1");
     assert_eq!(requests[0].action, "cargo test");
@@ -492,5 +493,215 @@ async fn observed_codex_approval_requests_are_answered_with_the_lazoo_decision()
     assert_eq!(
         response["result"]["decision"], "decline",
         "an observer without an approval flow fails closed"
+    );
+}
+
+#[derive(Default)]
+struct ToolAnsweringObserver {
+    calls: Mutex<Vec<ToolCall>>,
+}
+
+impl TurnEventObserver for ToolAnsweringObserver {
+    fn observe(&self, _event: &ProviderEvent) -> Result<(), ProviderError> {
+        Ok(())
+    }
+
+    fn call_tool<'a>(&'a self, call: &'a ToolCall) -> AdapterFuture<'a, ToolResult> {
+        Box::pin(async move {
+            self.calls.lock().unwrap().push(call.clone());
+            Ok(ToolResult::success(
+                json!({"taskId": "task-1", "state": "accepted"}),
+            ))
+        })
+    }
+}
+
+fn lazoo_tools() -> Vec<ToolSpec> {
+    vec![ToolSpec {
+        name: "task_delegate".to_owned(),
+        description: "Delegate a scoped task to a named employee.".to_owned(),
+        input_schema: json!({"type": "object", "properties": {"objective": {"type": "string"}}}),
+    }]
+}
+
+fn read_fixture_json(directory: &Path, name: &str) -> serde_json::Value {
+    let text = fs::read_to_string(directory.join(name)).unwrap();
+    serde_json::from_str(text.trim_start_matches('\u{feff}').trim()).unwrap()
+}
+
+#[test]
+fn codex_tool_calls_normalize_with_the_active_turn_fallback() {
+    let call = normalize_codex_tool_call(
+        &json!({
+            "threadId": "thread-1",
+            "callId": "call-7",
+            "tool": "employees_list",
+            "arguments": {}
+        }),
+        Some("active-turn".to_owned()),
+    );
+    assert_eq!(call.provider, ProviderKind::Codex);
+    assert_eq!(call.session_id, "thread-1");
+    assert_eq!(call.turn_id.as_deref(), Some("active-turn"));
+    assert_eq!(call.call_id, "call-7");
+    assert_eq!(call.name, "employees_list");
+    assert_eq!(call.arguments, json!({}));
+    let explicit = normalize_codex_tool_call(
+        &json!({"threadId": "thread-1", "turnId": "turn-9", "callId": "c", "tool": "t"}),
+        None,
+    );
+    assert_eq!(explicit.turn_id.as_deref(), Some("turn-9"));
+    assert_eq!(explicit.arguments, serde_json::Value::Null);
+}
+
+#[tokio::test]
+async fn observed_codex_tool_calls_are_answered_with_the_lazoo_result() {
+    ensure_session_host();
+    let answering_dir = tempdir().unwrap();
+    let session = CodexAdapter::with_executable(fake_codex())
+        .start(&SessionRequest::new(answering_dir.path()).with_tools(lazoo_tools()))
+        .await
+        .unwrap();
+    let observer = ToolAnsweringObserver::default();
+    let events = session
+        .turn_observed(&TurnRequest::new("please CALL_TOOL"), &observer)
+        .await
+        .unwrap();
+    session.stop().await.unwrap();
+
+    let initialize = read_fixture_json(answering_dir.path(), "fake-codex-initialize.json");
+    assert_eq!(initialize["capabilities"]["experimentalApi"], true);
+    let thread_start = read_fixture_json(answering_dir.path(), "fake-codex-thread-start.json");
+    assert_eq!(thread_start["dynamicTools"][0]["type"], "function");
+    assert_eq!(thread_start["dynamicTools"][0]["name"], "task_delegate");
+    assert_eq!(
+        thread_start["dynamicTools"][0]["inputSchema"]["type"],
+        "object"
+    );
+
+    let response = read_fixture_json(answering_dir.path(), "fake-codex-tool-response.json");
+    assert_eq!(response["id"], "tool-1");
+    assert_eq!(response["result"]["success"], true);
+    assert_eq!(response["result"]["contentItems"][0]["type"], "inputText");
+    let content: serde_json::Value = serde_json::from_str(
+        response["result"]["contentItems"][0]["text"]
+            .as_str()
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(content["taskId"], "task-1");
+
+    let calls = observer.calls.lock().unwrap().clone();
+    assert_eq!(calls.len(), 1);
+    assert_eq!(calls[0].call_id, "call-1");
+    assert_eq!(calls[0].name, "task_delegate");
+    assert_eq!(calls[0].turn_id.as_deref(), Some("turn-1"));
+    assert_eq!(calls[0].arguments["objective"], "Fix the parser");
+    let tool_event = events
+        .iter()
+        .find(|event| {
+            matches!(
+                event,
+                ProviderEvent::ToolUpdate { tool_name: Some(name), .. } if name == "lazoo:task_delegate"
+            )
+        })
+        .expect("the tool call is surfaced as a tool event");
+    let ProviderEvent::ToolUpdate {
+        status,
+        raw: Some(raw),
+        ..
+    } = tool_event
+    else {
+        panic!("tool event should retain bounded raw evidence");
+    };
+    assert_eq!(status, "completed");
+    assert_eq!(raw["callId"], "call-1");
+    assert_eq!(raw["arguments"]["objective"], "Fix the parser");
+    assert_eq!(
+        raw["arguments"]["apiKey"], "[REDACTED]",
+        "tool arguments are redacted before they reach the ledger"
+    );
+    assert!(matches!(
+        events.last(),
+        Some(ProviderEvent::TurnCompleted { .. })
+    ));
+
+    let unattached_dir = tempdir().unwrap();
+    let session = CodexAdapter::with_executable(fake_codex())
+        .start(&SessionRequest::new(unattached_dir.path()).with_tools(lazoo_tools()))
+        .await
+        .unwrap();
+    let events = session
+        .turn_observed(
+            &TurnRequest::new("please CALL_TOOL"),
+            &CollectingObserver::default(),
+        )
+        .await
+        .unwrap();
+    session.stop().await.unwrap();
+    let response = read_fixture_json(unattached_dir.path(), "fake-codex-tool-response.json");
+    assert_eq!(
+        response["result"]["success"], false,
+        "an observer without the control plane fails closed"
+    );
+    assert!(
+        response["result"]["contentItems"][0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("LZ-TOOL-UNATTACHED")
+    );
+    assert!(events.iter().any(|event| matches!(
+        event,
+        ProviderEvent::ToolUpdate { status, .. } if status == "failed"
+    )));
+}
+
+#[tokio::test]
+async fn codex_sessions_without_tools_stay_stable_and_resume_with_tools_fails_closed() {
+    ensure_session_host();
+    let temporary = tempdir().unwrap();
+    let session = CodexAdapter::with_executable(fake_codex())
+        .start(&SessionRequest::new(temporary.path()))
+        .await
+        .unwrap();
+    session.stop().await.unwrap();
+    let initialize = read_fixture_json(temporary.path(), "fake-codex-initialize.json");
+    assert_eq!(initialize["capabilities"]["experimentalApi"], false);
+    let thread_start = read_fixture_json(temporary.path(), "fake-codex-thread-start.json");
+    assert!(thread_start.get("dynamicTools").is_none());
+
+    let error = CodexAdapter::with_executable(fake_codex())
+        .start(
+            &SessionRequest::new(temporary.path())
+                .resume("thread-1")
+                .with_tools(lazoo_tools()),
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(
+        error,
+        ProviderError::Unsupported {
+            provider: ProviderKind::Codex,
+            capability: "dynamic tools on thread/resume"
+        }
+    ));
+}
+
+#[tokio::test]
+async fn codex_refuses_dynamic_tool_names_outside_the_responses_api_alphabet() {
+    ensure_session_host();
+    let temporary = tempdir().unwrap();
+    let dotted = vec![ToolSpec {
+        name: "task.delegate".to_owned(),
+        description: "dotted names are rejected by the Codex Responses API".to_owned(),
+        input_schema: json!({"type": "object"}),
+    }];
+    let error = CodexAdapter::with_executable(fake_codex())
+        .start(&SessionRequest::new(temporary.path()).with_tools(dotted))
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(&error, ProviderError::Protocol(message) if message.contains("task.delegate")),
+        "unexpected error: {error}"
     );
 }

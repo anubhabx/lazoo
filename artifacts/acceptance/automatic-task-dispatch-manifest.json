@@ -2,38 +2,38 @@
     "status":  "PASS",
     "schemaVersion":  8,
     "mode":  "deterministic-fake-transport",
-    "startedAt":  "2026-09-22T15:47:37.5201029Z",
-    "durationMs":  5242,
+    "startedAt":  "2026-09-23T17:35:41.4179075Z",
+    "durationMs":  4266,
     "commands":  [
                      {
                          "command":  "cargo test -p lazood --test daemon accepted_projectless_child_dispatches_automatically_through_the_canonical_message --locked -- --exact",
                          "exitCode":  0,
-                         "durationMs":  612
+                         "durationMs":  659
                      },
                      {
                          "command":  "cargo test -p lazood --test daemon project_task_dispatch_uses_an_isolated_worktree_and_preserves_dirty_user_files --locked -- --exact",
                          "exitCode":  0,
-                         "durationMs":  961
+                         "durationMs":  1008
                      },
                      {
                          "command":  "cargo test -p lazood --test daemon automatic_dispatch_configuration_drift_terminalizes_before_provider_io --locked -- --exact",
                          "exitCode":  0,
-                         "durationMs":  922
+                         "durationMs":  901
                      },
                      {
                          "command":  "cargo test -p lazoo-store --test task stale_pre_provider_dispatch_terminalizes_the_task_and_canonical_message_on_restart --locked -- --exact",
                          "exitCode":  0,
-                         "durationMs":  1841
+                         "durationMs":  642
                      },
                      {
                          "command":  "cargo test -p lazoo-store --test task accepted_child_dispatch_claim_is_durable_exclusive_and_idempotent --locked -- --exact",
                          "exitCode":  0,
-                         "durationMs":  435
+                         "durationMs":  482
                      },
                      {
                          "command":  "cargo test -p lazoo-store --test task cancelling_a_claimed_dispatch_cancels_the_canonical_message_atomically --locked -- --exact",
                          "exitCode":  0,
-                         "durationMs":  390
+                         "durationMs":  492
                      },
                      {
                          "command":  "git diff --quiet and git diff --cached --quiet -- apps/lazoo-desktop",

@@ -16,7 +16,8 @@ use lazoo_protocol::{
 };
 use lazoo_providers::{
     DiscoveryEnvironment, PermissionDecision, PermissionKind, PermissionRequest, ProviderError,
-    ProviderEvent, ProviderKind, SessionRequest, TurnEventObserver, TurnRequest,
+    ProviderEvent, ProviderKind, SessionRequest, ToolCall, ToolResult, TurnEventObserver,
+    TurnRequest,
 };
 use lazoo_runtime::DataRoot;
 use lazoo_store::{CreateConversationInput, CreateEmployeeInput, Store};
@@ -84,6 +85,11 @@ struct FakeSessionBackend {
     working_directories: Arc<Mutex<Vec<PathBuf>>>,
     permission_requests: Arc<Mutex<Vec<PermissionRequest>>>,
     permission_decisions: Arc<Mutex<Vec<PermissionDecision>>>,
+    /// Scripted Lazoo tool calls; the first turn that runs drains and issues them after its
+    /// first scripted event, mirroring a model calling tools once the native turn is accepted.
+    tool_calls: Arc<Mutex<Vec<ToolCall>>>,
+    tool_results: Arc<Mutex<Vec<ToolResult>>>,
+    session_tools: Arc<Mutex<Vec<Vec<String>>>>,
 }
 
 impl Default for FakeSessionBackend {
@@ -107,6 +113,9 @@ impl Default for FakeSessionBackend {
             working_directories: Arc::new(Mutex::new(Vec::new())),
             permission_requests: Arc::new(Mutex::new(Vec::new())),
             permission_decisions: Arc::new(Mutex::new(Vec::new())),
+            tool_calls: Arc::new(Mutex::new(Vec::new())),
+            tool_results: Arc::new(Mutex::new(Vec::new())),
+            session_tools: Arc::new(Mutex::new(Vec::new())),
         }
     }
 }
@@ -127,6 +136,8 @@ struct FakeManagedSession {
     turn_retryable_failure: Arc<AtomicBool>,
     permission_requests: Arc<Mutex<Vec<PermissionRequest>>>,
     permission_decisions: Arc<Mutex<Vec<PermissionDecision>>>,
+    tool_calls: Arc<Mutex<Vec<ToolCall>>>,
+    tool_results: Arc<Mutex<Vec<ToolResult>>>,
 }
 
 impl ManagedSession for FakeManagedSession {
@@ -171,12 +182,19 @@ impl ManagedSession for FakeManagedSession {
             }
             let scripted = self.turn_events.lock().unwrap().clone();
             let mut returned = Vec::with_capacity(scripted.len());
-            for event in scripted {
+            for (index, event) in scripted.into_iter().enumerate() {
                 if self.gate_events.load(Ordering::SeqCst) {
                     self.event_permits.acquire().await.unwrap().forget();
                 }
                 observer.observe(&event)?;
                 returned.push(event);
+                if index == 0 {
+                    let calls = std::mem::take(&mut *self.tool_calls.lock().unwrap());
+                    for call in calls {
+                        let result = observer.call_tool(&call).await?;
+                        self.tool_results.lock().unwrap().push(result);
+                    }
+                }
             }
             Ok(returned)
         })
@@ -215,6 +233,10 @@ impl SessionBackend for FakeSessionBackend {
                 .lock()
                 .unwrap()
                 .push(request.cwd.clone());
+            self.session_tools
+                .lock()
+                .unwrap()
+                .push(request.tools.iter().map(|tool| tool.name.clone()).collect());
             Ok(Box::new(FakeManagedSession {
                 id: format!("native-{number}"),
                 stops: Arc::clone(&self.stops),
@@ -231,6 +253,8 @@ impl SessionBackend for FakeSessionBackend {
                 turn_retryable_failure: Arc::clone(&self.turn_retryable_failure),
                 permission_requests: Arc::clone(&self.permission_requests),
                 permission_decisions: Arc::clone(&self.permission_decisions),
+                tool_calls: Arc::clone(&self.tool_calls),
+                tool_results: Arc::clone(&self.tool_results),
             }) as Box<dyn ManagedSession>)
         })
     }
@@ -4656,6 +4680,7 @@ fn approval_event_types(store: &Store) -> Vec<String> {
 }
 
 #[tokio::test]
+#[allow(clippy::too_many_lines)] // One governed turn proves wait, decision, replay, and snapshot boundaries together.
 async fn ask_turn_waits_for_the_user_decision_and_forwards_approval_to_the_provider() {
     let (_temporary, harness) = approval_harness(
         AuthorityMode::Ask,
@@ -5058,4 +5083,524 @@ async fn pending_approvals_from_a_previous_boot_expire_with_owner_loss_on_restar
             .iter()
             .any(|kind| kind == "approvals.reconciled")
     );
+}
+
+struct ToolHarness {
+    store: Store,
+    app: App,
+    backend: FakeSessionBackend,
+    conversation_id: uuid::Uuid,
+    lead: lazoo_protocol::EmployeeRecord,
+    worker: lazoo_protocol::EmployeeRecord,
+}
+
+fn tool_harness(authority: AuthorityMode) -> (tempfile::TempDir, ToolHarness) {
+    let temporary = tempdir().unwrap();
+    let root = DataRoot::from_path(temporary.path().join("data"));
+    root.ensure().unwrap();
+    let store = Store::open_path(root.state_db()).unwrap();
+    let employee_input = |name: &str, role: &str, key: &str| CreateEmployeeInput {
+        request_id: format!("{key}-request"),
+        idempotency_key: key.to_owned(),
+        name: name.to_owned(),
+        provider: "codex".to_owned(),
+        role: role.to_owned(),
+        instructions: String::new(),
+        model: Some("test-model".to_owned()),
+        reasoning_effort: Some("low".to_owned()),
+        native_settings: json!({}),
+        authority_mode: authority,
+        checkout_policy: EmployeeCheckoutPolicy::Isolated,
+        enabled: true,
+        provider_observation: Some(ProviderObservation {
+            provider: "codex".to_owned(),
+            verification: "configured".to_owned(),
+            version: Some("test".to_owned()),
+            protocol: Some("app-server/v2".to_owned()),
+            capabilities: json!({"session": true, "permission": true, "mcp": true}),
+            authentication: json!({"native": "ready", "external": "unknown"}),
+            degradation_reason: None,
+            checked_at: "2026-09-23T00:00:00Z".to_owned(),
+        }),
+    };
+    let lead = store
+        .create_employee(&employee_input("Rhea", "Lead", "tools-rhea"))
+        .unwrap()
+        .employee;
+    let worker = store
+        .create_employee(&employee_input("Mira", "Worker", "tools-mira"))
+        .unwrap()
+        .employee;
+    let conversation = store
+        .create_conversation(&CreateConversationInput {
+            request_id: "tools-conversation-request".to_owned(),
+            idempotency_key: "tools-conversation".to_owned(),
+            project_id: None,
+            lead_employee_id: lead.id,
+            title: None,
+        })
+        .unwrap()
+        .conversation;
+    let backend = FakeSessionBackend::default();
+    backend
+        .turn_events
+        .lock()
+        .unwrap()
+        .extend(completed_turn_events("completed"));
+    let app = App::new_with_session_backend(
+        store.clone(),
+        root,
+        DiscoveryEnvironment::empty(),
+        Arc::new(backend.clone()),
+    )
+    .unwrap();
+    (
+        temporary,
+        ToolHarness {
+            store,
+            app,
+            backend,
+            conversation_id: conversation.id,
+            lead,
+            worker,
+        },
+    )
+}
+
+fn tool_call(call_id: &str, name: &str, arguments: serde_json::Value) -> ToolCall {
+    ToolCall {
+        provider: ProviderKind::Codex,
+        session_id: "native-1".to_owned(),
+        turn_id: Some("approval-turn".to_owned()),
+        call_id: call_id.to_owned(),
+        name: name.to_owned(),
+        arguments,
+    }
+}
+
+async fn warm_tool_lead(harness: &ToolHarness) {
+    harness
+        .app
+        .handle(request(
+            "warm-tool-lead",
+            "session.warm",
+            json!({
+                "employeeId": harness.lead.id,
+                "expectedEmployeeRevision": harness.lead.configuration_revision,
+                "idempotencyKey": "warm-tool-lead"
+            }),
+        ))
+        .await
+        .result
+        .unwrap();
+}
+
+async fn submit_lead_turn(harness: &ToolHarness, authority: &str) -> serde_json::Value {
+    let response = timeout(
+        Duration::from_secs(20),
+        harness.app.handle(request(
+            "submit-tool-turn",
+            "turn.submit",
+            json!({
+                "conversationId": harness.conversation_id,
+                "author": {"kind": "user"},
+                "recipient": null,
+                "authorityMode": authority,
+                "text": "Coordinate the parser fix",
+                "activateIfNeeded": false,
+                "maxAttempts": 3,
+                "idempotencyKey": "submit-tool-turn"
+            }),
+        )),
+    )
+    .await
+    .expect("the lead turn completes once tool calls are answered");
+    response.result.unwrap()
+}
+
+#[tokio::test]
+async fn lead_turn_lists_employees_delegates_and_waits_through_collaboration_tools() {
+    use lazoo_protocol::{MessageSender, TaskState};
+
+    let (_temporary, harness) = tool_harness(AuthorityMode::SelfDecision);
+    warm_tool_lead(&harness).await;
+    // A live lead cites the rosterRevision returned by employees_list; the scripted call cites
+    // the revision after its own session warmed, exactly as that answer would.
+    let roster_revision = harness.store.roster_snapshot().unwrap().revision;
+    harness.backend.tool_calls.lock().unwrap().extend([
+        tool_call("call-1", "employees_list", json!({})),
+        tool_call(
+            "call-2",
+            "task_delegate",
+            json!({
+                "employeeId": harness.worker.id,
+                "objective": "Implement the parser fix",
+                "rosterRevision": roster_revision,
+                "requestedAuthority": "self-decision"
+            }),
+        ),
+        tool_call("call-3", "task_wait", json!({"timeoutSeconds": 10})),
+    ]);
+    let dispatcher_app = harness.app.clone();
+    let dispatcher = tokio::spawn(async move { dispatcher_app.run_task_dispatcher().await });
+
+    let submitted = submit_lead_turn(&harness, "self-decision").await;
+    assert_eq!(submitted["turn"]["state"], "completed");
+    dispatcher.abort();
+    let _ = dispatcher.await;
+
+    let declared = harness.backend.session_tools.lock().unwrap().clone();
+    assert_eq!(
+        declared[0],
+        vec![
+            "employees_list",
+            "task_delegate",
+            "task_wait",
+            "task_report"
+        ],
+        "every daemon-managed Codex session declares the Lazoo tool catalog"
+    );
+    assert_eq!(
+        declared.len(),
+        2,
+        "the worker session declares the same catalog"
+    );
+
+    let results = harness.backend.tool_results.lock().unwrap().clone();
+    assert_eq!(results.len(), 3);
+    assert!(results[0].success, "{:?}", results[0]);
+    assert_eq!(results[0].content["rosterRevision"], roster_revision);
+    let employees = results[0].content["employees"].as_array().unwrap();
+    assert_eq!(employees.len(), 2);
+    let me = employees
+        .iter()
+        .find(|entry| entry["self"] == true)
+        .expect("the caller is marked in the roster");
+    assert_eq!(me["name"], "Rhea");
+    assert_eq!(me["authorityMode"], "self-decision");
+
+    assert!(results[1].success, "{:?}", results[1]);
+    assert_eq!(results[1].content["state"], "accepted");
+    assert_eq!(results[1].content["effectiveAuthority"], "self-decision");
+    let child_id: uuid::Uuid = results[1].content["taskId"]
+        .as_str()
+        .unwrap()
+        .parse()
+        .unwrap();
+
+    assert!(results[2].success, "{:?}", results[2]);
+    assert_eq!(results[2].content["timedOut"], false);
+    let waited = results[2].content["tasks"].as_array().unwrap();
+    assert_eq!(waited.len(), 1);
+    assert_eq!(waited[0]["taskId"], child_id.to_string());
+    assert_eq!(waited[0]["state"], "completed");
+    assert_eq!(
+        waited[0]["assignedEmployeeId"],
+        harness.worker.id.to_string()
+    );
+    assert_eq!(waited[0]["output"], "done");
+
+    let detail = harness.store.get_task(child_id).unwrap();
+    assert_eq!(detail.task.state, TaskState::Completed);
+    let root_task_id: uuid::Uuid = submitted["turn"]["taskId"]
+        .as_str()
+        .unwrap()
+        .parse()
+        .unwrap();
+    assert_eq!(detail.task.parent_task_id, Some(root_task_id));
+    let MessageSender::Employee(creator) = detail.task.creator else {
+        panic!("tool delegation is authored by the lead employee endpoint");
+    };
+    assert_eq!(creator.employee_id, harness.lead.id);
+    assert!(creator.session_id.is_some());
+    assert!(detail.dispatch.is_some());
+    assert_eq!(harness.backend.starts.load(Ordering::SeqCst), 2);
+
+    let root_task = harness.store.get_task(root_task_id).unwrap();
+    assert_eq!(root_task.task.state, TaskState::Completed);
+    assert_eq!(root_task.children.len(), 1);
+    let event_types: Vec<String> = harness
+        .store
+        .list_events(0, 1000)
+        .unwrap()
+        .into_iter()
+        .map(|event| event.event_type)
+        .collect();
+    assert!(event_types.iter().any(|kind| kind == "task.delegated"));
+    assert!(event_types.iter().any(|kind| kind == "task.completed"));
+}
+
+#[tokio::test]
+async fn ask_lead_delegation_through_tools_is_proposed_and_refusals_never_end_the_turn() {
+    use lazoo_protocol::TaskState;
+
+    let (_temporary, harness) = tool_harness(AuthorityMode::Ask);
+    warm_tool_lead(&harness).await;
+    let roster_revision = harness.store.roster_snapshot().unwrap().revision;
+    harness.backend.tool_calls.lock().unwrap().extend([
+        tool_call(
+            "call-1",
+            "task_delegate",
+            json!({
+                "employeeId": harness.worker.id,
+                "objective": "Implement the parser fix",
+                "rosterRevision": roster_revision
+            }),
+        ),
+        tool_call("call-2", "task_wait", json!({"timeoutSeconds": 0})),
+        tool_call("call-3", "memory.search", json!({"query": "parser"})),
+        tool_call(
+            "call-4",
+            "task_delegate",
+            json!({"employeeId": harness.worker.id, "rosterRevision": roster_revision}),
+        ),
+        tool_call(
+            "call-5",
+            "task_delegate",
+            json!({
+                "employeeId": harness.worker.id,
+                "objective": "Widen authority",
+                "rosterRevision": roster_revision,
+                "requestedAuthority": "full-autonomy"
+            }),
+        ),
+        tool_call("", "employees_list", json!({})),
+    ]);
+
+    let submitted = submit_lead_turn(&harness, "ask").await;
+    assert_eq!(
+        submitted["turn"]["state"], "completed",
+        "refused tool calls never end the provider turn"
+    );
+
+    let results = harness.backend.tool_results.lock().unwrap().clone();
+    assert_eq!(results.len(), 6);
+    assert!(results[0].success, "{:?}", results[0]);
+    assert_eq!(results[0].content["state"], "proposed");
+    assert!(
+        results[0].content["note"]
+            .as_str()
+            .unwrap()
+            .contains("local user")
+    );
+    let child_id: uuid::Uuid = results[0].content["taskId"]
+        .as_str()
+        .unwrap()
+        .parse()
+        .unwrap();
+    assert!(results[1].success, "{:?}", results[1]);
+    assert_eq!(results[1].content["timedOut"], true);
+    assert_eq!(results[1].content["tasks"][0]["state"], "proposed");
+    assert!(!results[2].success);
+    assert_eq!(results[2].content["error"]["code"], "LZ-TOOL-UNKNOWN");
+    assert!(!results[3].success);
+    assert_eq!(results[3].content["error"]["code"], "LZ-TOOL-INVALID");
+    assert!(!results[4].success);
+    assert_eq!(
+        results[4].content["error"]["code"],
+        "LZ-TASK-AUTHORITY-EXPANSION"
+    );
+    assert!(!results[5].success);
+    assert_eq!(results[5].content["error"]["code"], "LZ-TOOL-INVALID");
+
+    harness.app.dispatch_pending_tasks_once().await.unwrap();
+    let detail = harness.store.get_task(child_id).unwrap();
+    assert_eq!(detail.task.state, TaskState::Proposed);
+    assert!(
+        detail.dispatch.is_none(),
+        "a proposed task never dispatches without user acceptance"
+    );
+    assert_eq!(harness.backend.starts.load(Ordering::SeqCst), 1);
+    let root_children = harness
+        .store
+        .get_task(detail.task.parent_task_id.unwrap())
+        .unwrap()
+        .children;
+    assert_eq!(root_children.len(), 1, "invalid delegations write nothing");
+}
+
+#[tokio::test]
+#[allow(clippy::too_many_lines)] // One dispatch fixture proves the tool report outranks native completion.
+async fn worker_turn_reports_failure_through_task_report_before_native_completion() {
+    use lazoo_protocol::{
+        MessageSender, TaskEvidenceKind, TaskState, UserMessageEndpoint, UserMessageKind,
+    };
+    use lazoo_store::{BeginSessionInput, MarkSessionReadyInput, RecordTurnInput};
+
+    let (_temporary, harness) = tool_harness(AuthorityMode::FullAutonomy);
+    let root_task = harness
+        .store
+        .record_turn(&RecordTurnInput {
+            request_id: "tools-root-request".to_owned(),
+            idempotency_key: "tools-root".to_owned(),
+            conversation_id: harness.conversation_id,
+            author: MessageSender::User(UserMessageEndpoint {
+                kind: UserMessageKind::User,
+            }),
+            recipient: None,
+            task_id: None,
+            authority_mode: AuthorityMode::FullAutonomy,
+            text: "Lead objective".to_owned(),
+            activate_if_needed: false,
+            max_attempts: 3,
+        })
+        .unwrap()
+        .task
+        .unwrap();
+    let boot_id = uuid::Uuid::new_v4();
+    let lead_starting = harness
+        .store
+        .begin_session(&BeginSessionInput {
+            request_id: "tools-lead-session-request".to_owned(),
+            idempotency_key: "tools-lead-session".to_owned(),
+            employee_id: harness.lead.id,
+            expected_employee_revision: harness.lead.configuration_revision,
+            owner_boot_id: boot_id,
+        })
+        .unwrap();
+    let lead_session = harness
+        .store
+        .mark_session_ready(&MarkSessionReadyInput {
+            session_id: lead_starting.session.id,
+            expected_revision: lead_starting.session.revision,
+            owner_boot_id: boot_id,
+            native_session_id: "native-lead".to_owned(),
+            native_host_pid: 4241,
+        })
+        .unwrap()
+        .session;
+    harness.backend.tool_calls.lock().unwrap().extend([
+        tool_call(
+            "call-1",
+            "task_report",
+            json!({"kind": "progress", "evidence": {"step": "parsing"}}),
+        ),
+        tool_call(
+            "call-2",
+            "task_report",
+            json!({
+                "kind": "failed",
+                "failureCode": "LZ-FIXTURE-BLOCKED",
+                "failureMessage": "the dependency is missing",
+                "evidence": {"missing": "dependency"}
+            }),
+        ),
+    ]);
+    let delegated = harness
+        .app
+        .handle(request(
+            "tools-delegate",
+            "task.delegate",
+            json!({
+                "parentTaskId": root_task.id,
+                "actor": {"employeeId": harness.lead.id, "sessionId": lead_session.id},
+                "assignedEmployeeId": harness.worker.id,
+                "objective": "Implement the parser fix",
+                "references": [],
+                "requestedAuthority": "full-autonomy",
+                "rosterRevision": harness.store.roster_snapshot().unwrap().revision,
+                "idempotencyKey": "tools-delegate"
+            }),
+        ))
+        .await
+        .result
+        .unwrap();
+    let task_id: uuid::Uuid = delegated["task"]["id"].as_str().unwrap().parse().unwrap();
+    let dispatcher_app = harness.app.clone();
+    let dispatcher = tokio::spawn(async move { dispatcher_app.run_task_dispatcher().await });
+    harness.app.dispatch_pending_tasks_once().await.unwrap();
+    let terminal = timeout(Duration::from_secs(10), async {
+        loop {
+            let state = harness.store.get_task(task_id).unwrap().task.state;
+            if matches!(state, TaskState::Completed | TaskState::Failed) {
+                break state;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("the dispatched worker turn reaches a terminal task state");
+    dispatcher.abort();
+    let _ = dispatcher.await;
+
+    assert_eq!(terminal, TaskState::Failed);
+    let results = harness.backend.tool_results.lock().unwrap().clone();
+    assert_eq!(results.len(), 2);
+    assert!(results[0].success, "{:?}", results[0]);
+    assert_eq!(results[0].content["state"], "running");
+    assert!(results[1].success, "{:?}", results[1]);
+    assert_eq!(results[1].content["state"], "failed");
+    let detail = harness.store.get_task(task_id).unwrap();
+    assert_eq!(
+        detail.task.failure_code.as_deref(),
+        Some("LZ-FIXTURE-BLOCKED"),
+        "the explicit report wins over the later native completion"
+    );
+    assert_eq!(
+        detail.task.failure_message.as_deref(),
+        Some("the dependency is missing")
+    );
+    let reported = detail
+        .evidence
+        .iter()
+        .filter(|evidence| {
+            matches!(
+                evidence.kind,
+                TaskEvidenceKind::Progress | TaskEvidenceKind::Failed
+            ) && evidence.session_id == detail.dispatch.as_ref().unwrap().session_id
+        })
+        .count();
+    assert!(
+        reported >= 2,
+        "tool reports carry the worker's dispatch session"
+    );
+    assert_eq!(
+        detail
+            .evidence
+            .iter()
+            .find(|evidence| evidence.kind == TaskEvidenceKind::Failed)
+            .unwrap()
+            .detail["missing"],
+        "dependency"
+    );
+    let dispatch_turn = harness
+        .store
+        .get_turn(detail.dispatch.as_ref().unwrap().turn_id.unwrap())
+        .unwrap();
+    assert_eq!(dispatch_turn.state, TurnState::Completed);
+}
+
+#[test]
+fn collaboration_tools_acceptance_contract_is_deterministic_and_backend_only() {
+    let repository = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let script =
+        std::fs::read_to_string(repository.join("scripts/acceptance/collaboration-tools.ps1"))
+            .unwrap();
+    for required in [
+        "observer_tool_calls_fail_closed_without_an_attached_control_plane",
+        "codex_tool_calls_normalize_with_the_active_turn_fallback",
+        "observed_codex_tool_calls_are_answered_with_the_lazoo_result",
+        "codex_sessions_without_tools_stay_stable_and_resume_with_tools_fails_closed",
+        "lead_turn_lists_employees_delegates_and_waits_through_collaboration_tools",
+        "ask_lead_delegation_through_tools_is_proposed_and_refusals_never_end_the_turn",
+        "worker_turn_reports_failure_through_task_report_before_native_completion",
+        "collaboration-tools-manifest.json",
+        "deterministic-fake-transport",
+        "schemaVersion = 8",
+    ] {
+        assert!(
+            script.contains(required),
+            "acceptance script must contain {required}"
+        );
+    }
+    for forbidden in [
+        "provider', 'smoke",
+        "apps\\lazoo-desktop\\src",
+        "LivePrompt",
+    ] {
+        assert!(
+            !script.contains(forbidden),
+            "acceptance script must not contain {forbidden}"
+        );
+    }
 }

@@ -16,12 +16,14 @@ pub use antigravity::{AntigravityAdapter, AntigravitySession, normalize_antigrav
 pub use claude::{ClaudeAdapter, ClaudeExternalAuth, ClaudeSession, normalize_claude_message};
 pub use codex::{
     CodexAdapter, CodexSession, normalize_codex_message, normalize_codex_permission_request,
+    normalize_codex_tool_call,
 };
 pub use contract::{
     ADAPTER_CONTRACT_V1, AdapterFuture, AuthenticationEvidence, AuthenticationState, CommandSpec,
     ExecutableCandidate, PermissionDecision, PermissionKind, PermissionRequest, ProviderAdapter,
     ProviderCapabilities, ProviderError, ProviderEvent, ProviderKind, ProviderProbe,
-    ProviderSession, ProviderVerification, SessionRequest, TurnEventObserver, TurnRequest,
+    ProviderSession, ProviderVerification, SessionRequest, ToolCall, ToolResult, ToolSpec,
+    TurnEventObserver, TurnRequest,
 };
 pub use discovery::{DiscoveryEnvironment, DiscoverySource, rank_candidates};
 pub use grok::{GrokAdapter, GrokSession};

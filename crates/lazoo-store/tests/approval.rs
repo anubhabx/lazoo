@@ -149,6 +149,7 @@ fn event_types(store: &Store) -> Vec<String> {
 }
 
 #[test]
+#[allow(clippy::too_many_lines)] // One ledger walk keeps the revision and replay assertions in order.
 fn ask_authority_records_a_pending_approval_and_user_decisions_are_revisioned_and_idempotent() {
     let (_temporary, fixture) = approval_fixture(AuthorityMode::Ask);
     let store = &fixture.store;

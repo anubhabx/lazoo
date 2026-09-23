@@ -202,7 +202,17 @@ impl CommandSpec {
     }
 }
 
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+/// One Lazoo-owned tool declared to a provider session. Adapters expose it through the provider's
+/// native tool mechanism; calls come back through `TurnEventObserver::call_tool`.
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct ToolSpec {
+    pub name: String,
+    pub description: String,
+    pub input_schema: Value,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct SessionRequest {
     pub cwd: PathBuf,
@@ -214,6 +224,8 @@ pub struct SessionRequest {
     pub startup_timeout_millis: u64,
     pub progress_timeout_millis: u64,
     pub turn_timeout_millis: u64,
+    #[serde(default)]
+    pub tools: Vec<ToolSpec>,
 }
 
 impl SessionRequest {
@@ -229,7 +241,14 @@ impl SessionRequest {
             startup_timeout_millis: 15_000,
             progress_timeout_millis: 30_000,
             turn_timeout_millis: 300_000,
+            tools: Vec::new(),
         }
+    }
+
+    #[must_use]
+    pub fn with_tools(mut self, tools: Vec<ToolSpec>) -> Self {
+        self.tools = tools;
+        self
     }
 
     #[must_use]
@@ -427,6 +446,46 @@ pub struct PermissionRequest {
     pub detail: Value,
 }
 
+/// One invocation of a declared Lazoo tool by the provider model. Arguments are bounded and
+/// redacted by the adapter before they reach the control plane.
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct ToolCall {
+    pub provider: ProviderKind,
+    pub session_id: String,
+    pub turn_id: Option<String>,
+    pub call_id: String,
+    pub name: String,
+    pub arguments: Value,
+}
+
+/// The control plane's answer to a tool call. `content` is serialized as text for the provider;
+/// `success = false` tells the model the call was refused or failed without ending the turn.
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct ToolResult {
+    pub success: bool,
+    pub content: Value,
+}
+
+impl ToolResult {
+    #[must_use]
+    pub fn success(content: Value) -> Self {
+        Self {
+            success: true,
+            content,
+        }
+    }
+
+    #[must_use]
+    pub fn failure(code: &str, message: impl Into<String>) -> Self {
+        Self {
+            success: false,
+            content: serde_json::json!({"error": {"code": code, "message": message.into()}}),
+        }
+    }
+}
+
 pub trait TurnEventObserver: Send + Sync {
     fn observe(&self, event: &ProviderEvent) -> Result<(), ProviderError>;
 
@@ -437,6 +496,17 @@ pub trait TurnEventObserver: Send + Sync {
         _request: &'a PermissionRequest,
     ) -> AdapterFuture<'a, PermissionDecision> {
         Box::pin(async { Ok(PermissionDecision::Decline) })
+    }
+
+    /// Answers one Lazoo tool call. The default fails closed: an observer that does not attach
+    /// the control plane refuses every call without ending the provider turn.
+    fn call_tool<'a>(&'a self, _call: &'a ToolCall) -> AdapterFuture<'a, ToolResult> {
+        Box::pin(async {
+            Ok(ToolResult::failure(
+                "LZ-TOOL-UNATTACHED",
+                "Lazoo collaboration tools are not attached to this turn",
+            ))
+        })
     }
 }
 

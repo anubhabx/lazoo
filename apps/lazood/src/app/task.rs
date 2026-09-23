@@ -518,7 +518,7 @@ fn task_failure(code: &str, message: &str, task_id: uuid::Uuid) -> RpcError {
 }
 
 #[allow(clippy::needless_pass_by_value, clippy::too_many_lines)]
-fn task_store_error(error: StoreError) -> RpcError {
+pub(super) fn task_store_error(error: StoreError) -> RpcError {
     let (code, data, message) = match &error {
         StoreError::TaskNotFound { task_id } => (
             "LZ-TASK-NOT-FOUND",

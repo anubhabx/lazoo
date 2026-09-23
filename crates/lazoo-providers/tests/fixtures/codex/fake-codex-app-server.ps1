@@ -17,12 +17,16 @@ while ($null -ne ($line = [Console]::In.ReadLine())) {
     $message = $line | ConvertFrom-Json
     switch ($message.method) {
         'initialize' {
+            $message.params | ConvertTo-Json -Depth 20 -Compress |
+                Set-Content -LiteralPath (Join-Path (Get-Location) 'fake-codex-initialize.json') -Encoding utf8
             Write-Message @{ id = $message.id; result = @{ userAgent = 'fake-codex-app-server' } }
         }
         'initialized' {
             continue
         }
         'thread/start' {
+            $message.params | ConvertTo-Json -Depth 20 -Compress |
+                Set-Content -LiteralPath (Join-Path (Get-Location) 'fake-codex-thread-start.json') -Encoding utf8
             Write-Message @{ id = $message.id; result = @{ thread = @{ id = 'thread-1' } } }
         }
         'thread/resume' {
@@ -57,6 +61,26 @@ while ($null -ne ($line = [Console]::In.ReadLine())) {
                 $approvalResponse = [Console]::In.ReadLine()
                 $approvalResponse |
                     Set-Content -LiteralPath (Join-Path (Get-Location) 'fake-codex-approval-response.json') -Encoding utf8
+            }
+            if ($prompt -like '*CALL_TOOL*') {
+                Write-Message @{
+                    id = 'tool-1'
+                    method = 'item/tool/call'
+                    params = @{
+                        threadId = 'thread-1'
+                        turnId = 'turn-1'
+                        callId = 'call-1'
+                        tool = 'task_delegate'
+                        arguments = @{
+                            employeeId = 'employee-1'
+                            objective = 'Fix the parser'
+                            apiKey = 'sk-secret'
+                        }
+                    }
+                }
+                $toolResponse = [Console]::In.ReadLine()
+                $toolResponse |
+                    Set-Content -LiteralPath (Join-Path (Get-Location) 'fake-codex-tool-response.json') -Encoding utf8
             }
             Write-Message @{
                 method = 'item/agentMessage/delta'

@@ -1,3 +1,5 @@
+use std::fmt::Write as _;
+
 use lazoo_protocol::{ApprovalKind, AuthorityMode};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
@@ -85,5 +87,9 @@ pub fn approval_fingerprint(kind: ApprovalKind, action: &str, scope_expansion: b
         ApprovalKind::FileChange => "file-change",
     };
     let digest = Sha256::digest(format!("{kind}\n{action}\n{scope_expansion}").as_bytes());
-    digest.iter().map(|byte| format!("{byte:02x}")).collect()
+    let mut hex = String::with_capacity(digest.len() * 2);
+    for byte in digest {
+        let _ = write!(hex, "{byte:02x}");
+    }
+    hex
 }

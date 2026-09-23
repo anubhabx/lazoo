@@ -2,8 +2,8 @@ use std::sync::Mutex;
 
 use lazoo_providers::{
     DiscoverySource, ExecutableCandidate, ProviderCapabilities, ProviderError, ProviderEvent,
-    ProviderKind, ProviderSession, ProviderVerification, TurnEventObserver, TurnRequest,
-    rank_candidates, redact_json,
+    ProviderKind, ProviderSession, ProviderVerification, ToolCall, ToolResult, TurnEventObserver,
+    TurnRequest, rank_candidates, redact_json,
 };
 use serde_json::json;
 
@@ -216,4 +216,26 @@ async fn observed_default_path_stops_on_observer_error_without_changing_plain_tu
 
     let ordinary = session.turn(&request).await.unwrap();
     assert_eq!(ordinary.len(), 2);
+}
+
+#[tokio::test]
+async fn observer_tool_calls_fail_closed_without_an_attached_control_plane() {
+    let call = ToolCall {
+        provider: ProviderKind::Codex,
+        session_id: "thread-1".to_owned(),
+        turn_id: Some("turn-1".to_owned()),
+        call_id: "call-1".to_owned(),
+        name: "task_delegate".to_owned(),
+        arguments: json!({"objective": "anything"}),
+    };
+    let result = CollectingObserver::default()
+        .call_tool(&call)
+        .await
+        .unwrap();
+    assert!(!result.success);
+    assert_eq!(result.content["error"]["code"], "LZ-TOOL-UNATTACHED");
+    let failure = ToolResult::failure("LZ-TOOL-UNKNOWN", "no such tool");
+    assert!(!failure.success);
+    assert_eq!(failure.content["error"]["message"], "no such tool");
+    assert!(ToolResult::success(json!({"ok": true})).success);
 }
