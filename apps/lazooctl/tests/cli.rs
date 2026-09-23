@@ -1011,3 +1011,108 @@ fn approval_errors_use_exit_code_fourteen() {
         );
     }
 }
+
+#[test]
+fn incident_cli_maps_list_show_acknowledge_and_resolve() {
+    const INCIDENT_ID: &str = "00000000-0000-4000-8000-00000000000b";
+    let cases = [
+        (
+            vec![
+                "lazooctl",
+                "incident",
+                "list",
+                "--state",
+                "open",
+                "--priority",
+                "priority",
+                "--code",
+                "LZ-SESSION-STALLED",
+                "--limit",
+                "5",
+            ],
+            "incident.list",
+            json!({
+                "afterSequence": 0,
+                "limit": 5,
+                "state": "open",
+                "priority": "priority",
+                "code": "LZ-SESSION-STALLED",
+                "employeeId": null,
+                "projectId": null
+            }),
+        ),
+        (
+            vec!["lazooctl", "incident", "show", INCIDENT_ID],
+            "incident.show",
+            json!({"id": INCIDENT_ID}),
+        ),
+        (
+            vec![
+                "lazooctl",
+                "incident",
+                "acknowledge",
+                INCIDENT_ID,
+                "--expected-revision",
+                "2",
+                "--idempotency-key",
+                "ack-once",
+            ],
+            "incident.acknowledge",
+            json!({
+                "id": INCIDENT_ID,
+                "expectedRevision": 2,
+                "idempotencyKey": "ack-once"
+            }),
+        ),
+        (
+            vec![
+                "lazooctl",
+                "incident",
+                "resolve",
+                INCIDENT_ID,
+                "--expected-revision",
+                "3",
+                "--idempotency-key",
+                "resolve-once",
+            ],
+            "incident.resolve",
+            json!({
+                "id": INCIDENT_ID,
+                "expectedRevision": 3,
+                "idempotencyKey": "resolve-once"
+            }),
+        ),
+    ];
+    for (arguments, method, params) in cases {
+        let cli = Cli::try_parse_from(arguments).unwrap();
+        let (actual_method, actual_params, follows) = command_request(&cli.command);
+        assert_eq!(actual_method, method);
+        assert_eq!(actual_params, params);
+        assert!(!follows);
+    }
+    assert!(Cli::try_parse_from(["lazooctl", "incident", "list", "--state", "closed"]).is_err());
+    assert!(
+        Cli::try_parse_from(["lazooctl", "incident", "resolve", INCIDENT_ID]).is_err(),
+        "a resolution must cite the incident revision it is bound to"
+    );
+}
+
+#[test]
+fn incident_errors_use_exit_code_fifteen() {
+    for code in [
+        "LZ-INCIDENT-INVALID",
+        "LZ-INCIDENT-NOT-FOUND",
+        "LZ-INCIDENT-STALE",
+        "LZ-INCIDENT-STATE",
+        "LZ-INCIDENT-IDEMPOTENCY-CONFLICT",
+    ] {
+        assert_eq!(
+            exit_code_for_rpc(&RpcError {
+                code: code.to_owned(),
+                message: String::new(),
+                data: None,
+            }),
+            15
+        );
+    }
+}

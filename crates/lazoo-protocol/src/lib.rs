@@ -1,5 +1,6 @@
 mod approval;
 mod conversation;
+mod incident;
 mod message;
 mod rpc;
 mod task;
@@ -16,6 +17,11 @@ pub use conversation::{
     ConversationTurnEvent, ConversationTurnRecord, ConversationTurnSummary,
     CreateConversationParams, RetryTurnParams, SubmitTurnParams, TurnListParams,
     TurnMutationResult, TurnReconcileResult, TurnShowParams, TurnState,
+};
+pub use incident::{
+    AcknowledgeIncidentParams, INCIDENT_CONTRACT_V1, IncidentListParams, IncidentMutationResult,
+    IncidentPriority, IncidentRecord, IncidentShowParams, IncidentSource, IncidentState,
+    ResolveIncidentParams,
 };
 pub use message::{
     AcknowledgeMessageParams, CancelMessageParams, ClaimMessageParams, FailMessageParams,

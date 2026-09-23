@@ -4,8 +4,9 @@ use clap::{Parser, Subcommand};
 use lazoo_ipc::{IpcError, PipeClient};
 use lazoo_protocol::{
     ApprovalDecision, ApprovalState, AuthorityMode, CheckoutMode, EmployeeCheckoutPolicy,
-    JsonRpcRequest, JsonRpcResponse, MessageEndpoint, MessageKind, MessageSender, RpcError,
-    TaskReportKind, TaskResolution, TaskState, UserMessageEndpoint, UserMessageKind,
+    IncidentPriority, IncidentState, JsonRpcRequest, JsonRpcResponse, MessageEndpoint, MessageKind,
+    MessageSender, RpcError, TaskReportKind, TaskResolution, TaskState, UserMessageEndpoint,
+    UserMessageKind,
 };
 use lazoo_runtime::{DataRoot, Installation, RuntimeError};
 use serde_json::{Value, json};
@@ -47,7 +48,46 @@ pub enum Command {
     #[command(subcommand)]
     Approval(ApprovalCommand),
     #[command(subcommand)]
+    Incident(IncidentCommand),
+    #[command(subcommand)]
     System(SystemCommand),
+}
+
+#[derive(Debug, Subcommand)]
+pub enum IncidentCommand {
+    List {
+        #[arg(long, default_value_t = 0)]
+        after_sequence: u64,
+        #[arg(long, default_value_t = 100)]
+        limit: u32,
+        #[arg(long, value_parser = parse_incident_state)]
+        state: Option<IncidentState>,
+        #[arg(long, value_parser = parse_incident_priority)]
+        priority: Option<IncidentPriority>,
+        #[arg(long)]
+        code: Option<String>,
+        #[arg(long)]
+        employee_id: Option<Uuid>,
+        #[arg(long)]
+        project_id: Option<Uuid>,
+    },
+    Show {
+        id: Uuid,
+    },
+    Acknowledge {
+        id: Uuid,
+        #[arg(long)]
+        expected_revision: u64,
+        #[arg(long)]
+        idempotency_key: Option<String>,
+    },
+    Resolve {
+        id: Uuid,
+        #[arg(long)]
+        expected_revision: u64,
+        #[arg(long)]
+        idempotency_key: Option<String>,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -612,7 +652,61 @@ pub fn command_request(command: &Command) -> (&'static str, Value, bool) {
         Command::Turn(command) => turn_request(command),
         Command::Task(command) => task_request(command),
         Command::Approval(command) => approval_request(command),
+        Command::Incident(command) => incident_request(command),
         Command::System(SystemCommand::Shutdown) => ("system.shutdown", json!({}), false),
+    }
+}
+
+fn incident_request(command: &IncidentCommand) -> (&'static str, Value, bool) {
+    match command {
+        IncidentCommand::List {
+            after_sequence,
+            limit,
+            state,
+            priority,
+            code,
+            employee_id,
+            project_id,
+        } => (
+            "incident.list",
+            json!({
+                "afterSequence": after_sequence,
+                "limit": limit,
+                "state": state,
+                "priority": priority,
+                "code": code,
+                "employeeId": employee_id,
+                "projectId": project_id,
+            }),
+            false,
+        ),
+        IncidentCommand::Show { id } => ("incident.show", json!({"id": id}), false),
+        IncidentCommand::Acknowledge {
+            id,
+            expected_revision,
+            idempotency_key,
+        } => (
+            "incident.acknowledge",
+            json!({
+                "id": id,
+                "expectedRevision": expected_revision,
+                "idempotencyKey": generated_key(idempotency_key.as_deref()),
+            }),
+            false,
+        ),
+        IncidentCommand::Resolve {
+            id,
+            expected_revision,
+            idempotency_key,
+        } => (
+            "incident.resolve",
+            json!({
+                "id": id,
+                "expectedRevision": expected_revision,
+                "idempotencyKey": generated_key(idempotency_key.as_deref()),
+            }),
+            false,
+        ),
     }
 }
 
@@ -1282,7 +1376,25 @@ pub fn exit_code_for_rpc(error: &RpcError) -> i32 {
         code if code.starts_with("LZ-CONVERSATION-") || code.starts_with("LZ-TURN-") => 12,
         code if code.starts_with("LZ-TASK-") => 13,
         code if code.starts_with("LZ-APPROVAL-") => 14,
+        code if code.starts_with("LZ-INCIDENT-") => 15,
         _ => 10,
+    }
+}
+
+fn parse_incident_state(value: &str) -> Result<IncidentState, String> {
+    match value {
+        "open" => Ok(IncidentState::Open),
+        "acknowledged" => Ok(IncidentState::Acknowledged),
+        "resolved" => Ok(IncidentState::Resolved),
+        _ => Err("expected open, acknowledged, or resolved".to_owned()),
+    }
+}
+
+fn parse_incident_priority(value: &str) -> Result<IncidentPriority, String> {
+    match value {
+        "normal" => Ok(IncidentPriority::Normal),
+        "priority" => Ok(IncidentPriority::Priority),
+        _ => Err("expected normal or priority".to_owned()),
     }
 }
 

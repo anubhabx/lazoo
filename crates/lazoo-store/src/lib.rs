@@ -2,6 +2,7 @@ mod approval;
 mod conversation;
 mod emergency;
 mod employee;
+mod incident;
 mod message;
 mod migration;
 mod session;
@@ -34,6 +35,7 @@ pub use employee::{
     CreateEmployeeInput, DisableEmployeeInput, RefreshProviderObservationsInput,
     UpdateEmployeeInput,
 };
+pub use incident::{ListIncidentsInput, RaiseIncidentInput, SettleIncidentInput};
 pub use message::{
     AcknowledgeMessageInput, CancelMessageInput, ClaimMessageInput, FailMessageInput,
     RetryMessageInput, SendMessageInput,
@@ -290,6 +292,23 @@ pub enum StoreError {
     ApprovalIdempotencyConflict,
     #[error(transparent)]
     ApprovalValidation(#[from] lazoo_domain::ApprovalValidationError),
+    #[error("incident {incident_id} was not found")]
+    IncidentNotFound { incident_id: Uuid },
+    #[error("incident {incident_id} changed; current revision is {current_revision}")]
+    IncidentStale {
+        incident_id: Uuid,
+        current_revision: u64,
+    },
+    #[error("incident {incident_id} is {state}, expected {expected}")]
+    IncidentState {
+        incident_id: Uuid,
+        state: String,
+        expected: &'static str,
+    },
+    #[error("incident idempotency key was already used with different input")]
+    IncidentIdempotencyConflict,
+    #[error(transparent)]
+    IncidentValidation(#[from] lazoo_domain::IncidentValidationError),
     #[error("stored {field} is invalid: {message}")]
     InvalidRecord {
         field: &'static str,

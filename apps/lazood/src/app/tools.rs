@@ -7,17 +7,19 @@
 //! the provider turn.
 
 use lazoo_protocol::{
-    AuthorityMode, MessageEndpoint, MessageReference, RpcError, TaskDetail, TaskReportKind,
-    TaskState, TurnState,
+    AuthorityMode, ConversationTurnRecord, IncidentSource, IncidentState, MessageEndpoint,
+    MessageReference, RpcError, TaskDetail, TaskReportKind, TaskState, TurnState,
 };
 use lazoo_providers::{ToolCall, ToolResult, ToolSpec};
-use lazoo_store::{DelegateTaskInput, ListTasksInput, ReportTaskInput};
+use lazoo_store::{
+    DelegateTaskInput, ListIncidentsInput, ListTasksInput, RaiseIncidentInput, ReportTaskInput,
+};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use tokio::time::{Duration, Instant, sleep};
 use uuid::Uuid;
 
-use super::{App, task::task_store_error, truncate_utf8};
+use super::{App, incident::incident_store_error, task::task_store_error, truncate_utf8};
 
 const MAX_WAIT_SECONDS: u64 = 600;
 const DEFAULT_WAIT_SECONDS: u64 = 60;
@@ -104,6 +106,27 @@ pub(super) fn collaboration_tools() -> Vec<ToolSpec> {
                 "additionalProperties": false
             }),
         },
+        ToolSpec {
+            name: "incident_report".to_owned(),
+            description: "Record an operational problem you cannot resolve inside your task,                           with a short title and an explanation. The user sees it as an                           incident; it never changes authority or approves anything."
+                .to_owned(),
+            input_schema: json!({
+                "type": "object",
+                "required": ["title"],
+                "properties": {
+                    "title": {"type": "string"},
+                    "explanation": {"type": "string"},
+                    "detail": {"type": "object"}
+                },
+                "additionalProperties": false
+            }),
+        },
+        ToolSpec {
+            name: "incident_list".to_owned(),
+            description: "List open and acknowledged incidents visible to you: those in your                           project and those about you, with the recommended next action."
+                .to_owned(),
+            input_schema: json!({"type": "object", "properties": {}, "additionalProperties": false}),
+        },
     ]
 }
 
@@ -180,6 +203,8 @@ impl App {
             "task_delegate" => self.tool_task_delegate(turn_id, call, task_id?, actor),
             "task_wait" => self.tool_task_wait(turn_id, call, task_id?).await,
             "task_report" => self.tool_task_report(turn_id, call, task_id?, actor),
+            "incident_report" => self.tool_incident_report(call, &turn, task_id?),
+            "incident_list" => self.tool_incident_list(&turn),
             other => Err(tool_error(
                 "LZ-TOOL-UNKNOWN",
                 format!("unknown Lazoo tool: {other}"),
@@ -435,5 +460,98 @@ fn tool_error(code: &str, message: impl Into<String>) -> RpcError {
         code: code.to_owned(),
         message: message.into(),
         data: None,
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct ReportIncidentArguments {
+    title: String,
+    #[serde(default)]
+    explanation: String,
+    #[serde(default = "empty_object")]
+    detail: Value,
+}
+
+impl App {
+    fn tool_incident_report(
+        &self,
+        call: &ToolCall,
+        turn: &ConversationTurnRecord,
+        task_id: Uuid,
+    ) -> Result<Value, RpcError> {
+        let arguments: ReportIncidentArguments = tool_arguments(call)?;
+        let key = tool_command_key(turn.id, call);
+        let scope = self.turn_scope(turn);
+        let result = self
+            .store
+            .raise_incident(&RaiseIncidentInput {
+                request_id: key.clone(),
+                idempotency_key: key,
+                code: "LZ-EMPLOYEE-REPORTED".to_owned(),
+                source: IncidentSource::Employee,
+                title: Some(arguments.title),
+                explanation: Some(arguments.explanation),
+                project_id: scope.project_id,
+                employee_id: Some(turn.recipient.employee_id),
+                provider: turn.provider.clone(),
+                task_id: Some(task_id),
+                session_id: turn.recipient.session_id,
+                turn_id: Some(turn.id),
+                message_id: None,
+                detail: arguments.detail,
+                occurred_at: None,
+            })
+            .map_err(incident_store_error)?;
+        self.publish_events()?;
+        Ok(json!({
+            "incidentId": result.incident.id,
+            "state": result.incident.state,
+            "priority": result.incident.priority,
+            "occurrences": result.incident.occurrences,
+            "revision": result.incident.revision,
+        }))
+    }
+
+    fn tool_incident_list(&self, turn: &ConversationTurnRecord) -> Result<Value, RpcError> {
+        let project_id = self.turn_scope(turn).project_id;
+        let mut incidents = Vec::new();
+        for state in [IncidentState::Open, IncidentState::Acknowledged] {
+            incidents.extend(
+                self.store
+                    .list_incidents(&ListIncidentsInput {
+                        after_sequence: 0,
+                        limit: 128,
+                        state: Some(state),
+                        ..ListIncidentsInput::default()
+                    })
+                    .map_err(incident_store_error)?,
+            );
+        }
+        incidents.sort_by_key(|incident| incident.sequence);
+        let visible: Vec<Value> = incidents
+            .into_iter()
+            .filter(|incident| {
+                incident.project_id == project_id
+                    || incident.employee_id == Some(turn.recipient.employee_id)
+            })
+            .take(50)
+            .map(|incident| {
+                json!({
+                    "id": incident.id,
+                    "code": incident.code,
+                    "title": incident.title,
+                    "explanation": incident.explanation,
+                    "nextAction": incident.next_action,
+                    "priority": incident.priority,
+                    "state": incident.state,
+                    "occurrences": incident.occurrences,
+                    "employeeId": incident.employee_id,
+                    "taskId": incident.task_id,
+                    "lastOccurredAt": incident.last_occurred_at,
+                })
+            })
+            .collect();
+        Ok(json!({"incidents": visible}))
     }
 }

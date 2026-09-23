@@ -552,7 +552,7 @@ try {
         completedAt = [DateTime]::UtcNow.ToString('o')
         durationMs = $stopwatch.ElapsedMilliseconds
         protocolVersion = 1
-        schemaVersion = 8
+        schemaVersion = 9
         isolatedDataRoot = $script:dataRoot
         temporaryDataRetained = $false
         commands = $commandSnapshot

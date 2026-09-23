@@ -1,0 +1,337 @@
+use std::fs;
+
+use lazoo_protocol::{
+    AuthorityMode, EmployeeCheckoutPolicy, IncidentPriority, IncidentSource, IncidentState,
+};
+use lazoo_runtime::DataRoot;
+use lazoo_store::{
+    CreateEmployeeInput, ListIncidentsInput, RaiseIncidentInput, SettleIncidentInput, Store,
+    StoreError,
+};
+use serde_json::json;
+use tempfile::tempdir;
+use uuid::Uuid;
+
+fn store_with_employee() -> (tempfile::TempDir, Store, Uuid) {
+    let temporary = tempdir().unwrap();
+    let store = Store::open_path(temporary.path().join("lazoo.db")).unwrap();
+    let employee = store
+        .create_employee(&CreateEmployeeInput {
+            request_id: "create-rhea-request".to_owned(),
+            idempotency_key: "create-rhea".to_owned(),
+            name: "Rhea".to_owned(),
+            provider: "codex".to_owned(),
+            role: "Lead".to_owned(),
+            instructions: String::new(),
+            model: None,
+            reasoning_effort: None,
+            native_settings: json!({}),
+            authority_mode: AuthorityMode::Ask,
+            checkout_policy: EmployeeCheckoutPolicy::Isolated,
+            enabled: true,
+            provider_observation: None,
+        })
+        .unwrap()
+        .employee;
+    (temporary, store, employee.id)
+}
+
+fn raise(key: &str, code: &str, employee_id: Option<Uuid>) -> RaiseIncidentInput {
+    RaiseIncidentInput {
+        request_id: format!("request-{key}"),
+        idempotency_key: key.to_owned(),
+        code: code.to_owned(),
+        source: IncidentSource::Daemon,
+        title: None,
+        explanation: None,
+        project_id: None,
+        employee_id,
+        provider: Some("codex".to_owned()),
+        task_id: None,
+        session_id: None,
+        turn_id: None,
+        message_id: None,
+        detail: json!({"failureCode": code, "key": key}),
+        occurred_at: None,
+    }
+}
+
+fn settle(key: &str, incident_id: Uuid, expected_revision: u64) -> SettleIncidentInput {
+    SettleIncidentInput {
+        request_id: format!("request-{key}"),
+        idempotency_key: key.to_owned(),
+        incident_id,
+        expected_revision,
+    }
+}
+
+fn incident_event_types(store: &Store) -> Vec<String> {
+    store
+        .list_events(0, 1000)
+        .unwrap()
+        .into_iter()
+        .map(|event| event.event_type)
+        .filter(|kind| kind.starts_with("incident"))
+        .collect()
+}
+
+#[test]
+#[allow(clippy::too_many_lines)] // One ledger walk keeps fold, escalation, and replay assertions in order.
+fn equivalent_failures_fold_escalate_at_the_threshold_and_replay_without_writes() {
+    let (_temporary, store, employee) = store_with_employee();
+
+    let first = store
+        .raise_incident(&raise("stall-1", "LZ-SESSION-STALLED", Some(employee)))
+        .unwrap();
+    assert_eq!(first.incident.version, 1);
+    assert_eq!(first.incident.state, IncidentState::Open);
+    assert_eq!(first.incident.priority, IncidentPriority::Normal);
+    assert_eq!(first.incident.occurrences, 1);
+    assert_eq!(first.incident.revision, 1);
+    assert_eq!(
+        first.incident.title,
+        "Session accepted work but produced no progress"
+    );
+    assert!(first.incident.next_action.contains("never retries"));
+    assert_eq!(first.incident.employee_id, Some(employee));
+    assert_eq!(first.incident.detail["key"], "stall-1");
+    assert!(first.event_sequence.is_some());
+
+    let replay = store
+        .raise_incident(&raise("stall-1", "LZ-SESSION-STALLED", Some(employee)))
+        .unwrap();
+    assert_eq!(replay.incident, first.incident);
+    assert!(replay.event_sequence.is_none(), "replays are write-free");
+    assert!(matches!(
+        store.raise_incident(&raise("stall-1", "LZ-PROCESS-EXIT", Some(employee))),
+        Err(StoreError::IncidentIdempotencyConflict)
+    ));
+
+    let second = store
+        .raise_incident(&raise("stall-2", "LZ-SESSION-STALLED", Some(employee)))
+        .unwrap();
+    assert_eq!(second.incident.id, first.incident.id);
+    assert_eq!(second.incident.occurrences, 2);
+    assert_eq!(second.incident.window_occurrences, 2);
+    assert_eq!(second.incident.priority, IncidentPriority::Normal);
+    assert_eq!(second.incident.revision, 2);
+    assert_eq!(second.incident.detail["key"], "stall-2");
+
+    let third = store
+        .raise_incident(&raise("stall-3", "LZ-SESSION-STALLED", Some(employee)))
+        .unwrap();
+    assert_eq!(third.incident.id, first.incident.id);
+    assert_eq!(third.incident.occurrences, 3);
+    assert_eq!(
+        third.incident.priority,
+        IncidentPriority::Priority,
+        "three equivalent failures inside five minutes cross the threshold"
+    );
+    assert_eq!(
+        third.incident.first_occurred_at,
+        first.incident.first_occurred_at
+    );
+    assert!(third.incident.last_occurred_at >= second.incident.last_occurred_at);
+
+    let other_scope = store
+        .raise_incident(&raise("stall-other", "LZ-SESSION-STALLED", None))
+        .unwrap();
+    assert_ne!(other_scope.incident.id, first.incident.id);
+    assert_eq!(other_scope.incident.occurrences, 1);
+    let other_code = store
+        .raise_incident(&raise("exit-1", "LZ-PROCESS-EXIT", Some(employee)))
+        .unwrap();
+    assert_ne!(other_code.incident.id, first.incident.id);
+
+    assert_eq!(
+        incident_event_types(&store),
+        vec![
+            "incident.raised",
+            "incident.recurred",
+            "incident.escalated",
+            "incident.raised",
+            "incident.raised",
+        ]
+    );
+    let priority_only = store
+        .list_incidents(&ListIncidentsInput {
+            limit: 10,
+            priority: Some(IncidentPriority::Priority),
+            ..ListIncidentsInput::default()
+        })
+        .unwrap();
+    assert_eq!(priority_only.len(), 1);
+    assert_eq!(priority_only[0].id, first.incident.id);
+    let for_employee = store
+        .list_incidents(&ListIncidentsInput {
+            limit: 10,
+            employee_id: Some(employee),
+            ..ListIncidentsInput::default()
+        })
+        .unwrap();
+    assert_eq!(for_employee.len(), 2);
+    let by_code = store
+        .list_incidents(&ListIncidentsInput {
+            limit: 10,
+            code: Some("LZ-PROCESS-EXIT".to_owned()),
+            ..ListIncidentsInput::default()
+        })
+        .unwrap();
+    assert_eq!(by_code.len(), 1);
+    assert!(matches!(
+        store.list_incidents(&ListIncidentsInput {
+            limit: 0,
+            ..ListIncidentsInput::default()
+        }),
+        Err(StoreError::IncidentValidation(_))
+    ));
+    assert!(matches!(
+        store.raise_incident(&raise("bad-code", "process-exit", Some(employee))),
+        Err(StoreError::IncidentValidation(_))
+    ));
+}
+
+#[test]
+fn acknowledge_and_resolve_are_revisioned_idempotent_and_recurrence_reopens_until_resolved() {
+    let (_temporary, store, employee) = store_with_employee();
+    let raised = store
+        .raise_incident(&raise("exit-1", "LZ-PROCESS-EXIT", Some(employee)))
+        .unwrap()
+        .incident;
+
+    assert!(matches!(
+        store.acknowledge_incident(&settle("ack-stale", raised.id, 7)),
+        Err(StoreError::IncidentStale {
+            current_revision: 1,
+            ..
+        })
+    ));
+    let acknowledged = store
+        .acknowledge_incident(&settle("ack-1", raised.id, raised.revision))
+        .unwrap();
+    assert_eq!(acknowledged.incident.state, IncidentState::Acknowledged);
+    assert_eq!(acknowledged.incident.revision, 2);
+    assert!(acknowledged.incident.acknowledged_at.is_some());
+    let replay = store
+        .acknowledge_incident(&settle("ack-1", raised.id, 99))
+        .unwrap();
+    assert_eq!(replay.incident, acknowledged.incident);
+    assert!(replay.event_sequence.is_none());
+    assert!(
+        matches!(
+            store.acknowledge_incident(&settle("ack-2", raised.id, 2)),
+            Err(StoreError::IncidentState { .. })
+        ),
+        "an acknowledged incident cannot be acknowledged again"
+    );
+
+    let recurred = store
+        .raise_incident(&raise("exit-2", "LZ-PROCESS-EXIT", Some(employee)))
+        .unwrap()
+        .incident;
+    assert_eq!(recurred.id, raised.id);
+    assert_eq!(
+        recurred.state,
+        IncidentState::Open,
+        "a new occurrence reopens an acknowledged incident"
+    );
+    assert!(recurred.acknowledged_at.is_none());
+    assert_eq!(recurred.revision, 3);
+
+    let resolved = store
+        .resolve_incident(&settle("resolve-1", raised.id, recurred.revision))
+        .unwrap()
+        .incident;
+    assert_eq!(resolved.state, IncidentState::Resolved);
+    assert!(resolved.resolved_at.is_some());
+    assert!(matches!(
+        store.resolve_incident(&settle("resolve-2", raised.id, resolved.revision)),
+        Err(StoreError::IncidentState { .. })
+    ));
+    assert!(matches!(
+        store.acknowledge_incident(&settle("ack-3", Uuid::new_v4(), 1)),
+        Err(StoreError::IncidentNotFound { .. })
+    ));
+
+    let fresh = store
+        .raise_incident(&raise("exit-3", "LZ-PROCESS-EXIT", Some(employee)))
+        .unwrap()
+        .incident;
+    assert_ne!(fresh.id, raised.id, "a resolved incident never reopens");
+    assert_eq!(fresh.occurrences, 1);
+    assert_eq!(
+        incident_event_types(&store),
+        vec![
+            "incident.raised",
+            "incident.acknowledged",
+            "incident.recurred",
+            "incident.resolved",
+            "incident.raised",
+        ]
+    );
+    let open = store
+        .list_incidents(&ListIncidentsInput {
+            limit: 10,
+            state: Some(IncidentState::Open),
+            ..ListIncidentsInput::default()
+        })
+        .unwrap();
+    assert_eq!(open.len(), 1);
+    assert_eq!(open[0].id, fresh.id);
+}
+
+#[test]
+fn emergency_spool_records_fold_into_keeper_incidents_exactly_once() {
+    let temporary = tempdir().unwrap();
+    let root = DataRoot::from_path(temporary.path());
+    root.ensure().unwrap();
+    fs::write(
+        root.spool_pending().join("incident-1.ndjson"),
+        concat!(
+            r#"{"incident_id":"incident-1","code":"LZ-DAEMON-UNAVAILABLE","#,
+            r#""message":"restart budget exhausted","occurred_at":"2026-08-28T00:00:00Z"}"#,
+            "\n",
+            r#"{"incident_id":"incident-2","code":"not a code","#,
+            r#""message":"daemon exited 3","occurred_at":"2026-08-28T00:01:00Z"}"#,
+            "\n"
+        ),
+    )
+    .unwrap();
+    let store = Store::open_path(root.state_db()).unwrap();
+    assert_eq!(store.status().unwrap().schema_version, 9);
+    assert_eq!(store.import_pending_incidents(&root).unwrap(), 2);
+
+    let raised = store.reconcile_emergency_incidents().unwrap();
+    assert_eq!(raised.len(), 2, "both spool records fold on this boot");
+    assert_eq!(
+        raised[0].id, raised[1].id,
+        "both spool records share one keeper scope"
+    );
+    assert_eq!(raised[0].code, "LZ-DAEMON-UNAVAILABLE");
+    assert_eq!(raised[0].source, IncidentSource::Keeper);
+    assert_eq!(raised[0].occurrences, 1);
+    assert_eq!(raised[1].occurrences, 2);
+    let folded = store.get_incident(raised[0].id).unwrap();
+    assert_eq!(folded.occurrences, 2);
+    assert_eq!(folded.window_occurrences, 2);
+    assert_eq!(folded.first_occurred_at, "2026-08-28T00:00:00Z");
+    assert_eq!(folded.last_occurred_at, "2026-08-28T00:01:00Z");
+    assert_eq!(folded.explanation, "daemon exited 3");
+    assert_eq!(folded.detail["emergencyIncidentId"], "incident-2");
+
+    assert!(
+        store.reconcile_emergency_incidents().unwrap().is_empty(),
+        "a second startup folds nothing new"
+    );
+    assert_eq!(store.get_incident(raised[0].id).unwrap().occurrences, 2);
+    assert_eq!(
+        store
+            .list_incidents(&ListIncidentsInput {
+                limit: 10,
+                ..ListIncidentsInput::default()
+            })
+            .unwrap()
+            .len(),
+        1
+    );
+}

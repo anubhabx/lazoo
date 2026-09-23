@@ -25,7 +25,10 @@ use serde_json::{Value, json};
 use tokio::time::{Duration, sleep};
 use uuid::Uuid;
 
-use super::{App, LiveTurn, ProviderIoState, to_value, truncate_utf8};
+use super::{
+    App, LiveTurn, ProviderIoState, incident::incident_code_for_provider_error, to_value,
+    truncate_utf8,
+};
 
 struct AppTurnObserver {
     app: App,
@@ -465,6 +468,14 @@ impl App {
             })
             .map_err(turn_store_error)?;
         self.publish_events()?;
+        self.note_provider_incident(
+            &current,
+            "turn-no-evidence",
+            "LZ-SESSION-STALLED",
+            None,
+            "LZ-TURN-NO-ACCEPTANCE-EVIDENCE",
+            "provider returned without durable completion evidence",
+        );
         Err(turn_failure(
             "LZ-TURN-UNCERTAIN",
             "provider delivery outcome is uncertain",
@@ -493,6 +504,14 @@ impl App {
                 })
                 .map_err(turn_store_error)?;
             self.publish_events()?;
+            self.note_provider_incident(
+                &current,
+                "turn-failure",
+                incident_code_for_provider_error(error),
+                Some(error),
+                "LZ-TURN-PROVIDER",
+                "provider rejected the turn before acceptance",
+            );
             return Err(turn_failure(
                 "LZ-TURN-PROVIDER",
                 "provider rejected the turn before acceptance",
@@ -512,6 +531,14 @@ impl App {
                 })
                 .map_err(turn_store_error)?;
             self.publish_events()?;
+            self.note_provider_incident(
+                &current,
+                "turn-uncertain",
+                incident_code_for_provider_error(error),
+                Some(error),
+                "LZ-TURN-PROVIDER-UNCERTAIN",
+                "provider delivery could not be proven after input began",
+            );
             return Err(turn_failure(
                 "LZ-TURN-UNCERTAIN",
                 "provider delivery outcome is uncertain",
@@ -705,7 +732,8 @@ impl App {
         request_id: &str,
         reason: &str,
     ) -> Result<Value, RpcError> {
-        self.store
+        let uncertain = self
+            .store
             .mark_turn_uncertain(&MarkTurnUncertainInput {
                 request_id: format!("{request_id}:uncertain"),
                 idempotency_key: format!("turn:{turn_id}:cancel-uncertain"),
@@ -716,6 +744,14 @@ impl App {
             })
             .map_err(turn_store_error)?;
         self.publish_events()?;
+        self.note_provider_incident(
+            &uncertain.turn,
+            "turn-cancel-uncertain",
+            "LZ-SESSION-STALLED",
+            None,
+            "LZ-TURN-CANCEL-UNCERTAIN",
+            reason,
+        );
         Err(turn_failure(
             "LZ-TURN-UNCERTAIN",
             "provider cancellation outcome is uncertain",

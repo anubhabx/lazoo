@@ -77,7 +77,8 @@ impl App {
         if message.delivery.state != MessageDeliveryState::Queued {
             return Ok(());
         }
-        self.store
+        let failed = self
+            .store
             .fail_task_dispatch(&FailTaskDispatchInput {
                 task_id,
                 owner_boot_id: self.boot_id,
@@ -85,7 +86,24 @@ impl App {
                 failure_message: error.message.clone(),
             })
             .map_err(task_store_error)?;
-        self.publish_events()
+        self.publish_events()?;
+        self.note_incident(
+            &format!("dispatch-failure:{task_id}:{}", failed.dispatch.revision),
+            super::incident::incident_code_for_dispatch_failure(&error.code),
+            super::incident::IncidentScope {
+                project_id: failed.task.project_id,
+                employee_id: Some(failed.task.assigned_employee_id),
+                task_id: Some(task_id),
+                message_id: Some(failed.dispatch.message_id),
+                ..super::incident::IncidentScope::default()
+            },
+            json!({
+                "failureCode": error.code,
+                "failureMessage": error.message,
+                "dispatchState": failed.dispatch.state,
+            }),
+        );
+        Ok(())
     }
 
     async fn dispatch_task(&self, task_id: uuid::Uuid) -> Result<(), RpcError> {

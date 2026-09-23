@@ -1,4 +1,5 @@
 mod approval;
+mod incident;
 mod task;
 mod tools;
 mod turn;
@@ -266,16 +267,16 @@ impl App {
         let (events, _) = broadcast::channel(1024);
         let (shutdown, _) = watch::channel(false);
         let boot_id = Uuid::new_v4();
-        store.reconcile_sessions(boot_id)?;
-        store.reconcile_messages()?;
-        store.reconcile_turns(boot_id)?;
+        let sessions = store.reconcile_sessions(boot_id)?;
+        let messages = store.reconcile_messages()?;
+        let turns = store.reconcile_turns(boot_id)?;
         store.reconcile_approvals(boot_id)?;
-        store.reconcile_tasks()?;
-        store.reconcile_task_dispatches(boot_id)?;
+        let mut tasks = store.reconcile_tasks()?.tasks;
+        tasks.extend(store.reconcile_task_dispatches(boot_id)?.tasks);
         for event in store.publish_pending_outbox()? {
             let _ = events.send(event);
         }
-        Ok(Self {
+        let app = Self {
             store,
             root,
             boot_id,
@@ -290,7 +291,9 @@ impl App {
             task_dispatch_notify: Arc::new(Notify::new()),
             approval_notify: Arc::new(Notify::new()),
             approval_timeout: DEFAULT_APPROVAL_TIMEOUT,
-        })
+        };
+        app.note_startup_incidents(&sessions.sessions, &messages.messages, &turns.turns, &tasks);
+        Ok(app)
     }
 
     #[doc(hidden)]
@@ -352,6 +355,10 @@ impl App {
             "approval.decide" => self.decide_approval(&request),
             "approval.list" => self.approval_list(&request.params),
             "approval.show" => self.approval_show(&request.params),
+            "incident.list" => self.incident_list(&request.params),
+            "incident.show" => self.incident_show(&request.params),
+            "incident.acknowledge" => self.acknowledge_incident(&request),
+            "incident.resolve" => self.resolve_incident(&request),
             "message.send" => self.send_message(&request),
             "message.claim" => self.claim_message(&request),
             "message.acknowledge" => self.acknowledge_message(&request),
@@ -983,7 +990,8 @@ impl App {
         code: &str,
         message: &str,
     ) -> Result<(), RpcError> {
-        self.store
+        let failed = self
+            .store
             .fail_session(&FailSessionInput {
                 session_id,
                 expected_revision,
@@ -991,7 +999,9 @@ impl App {
                 failure_message: message.to_owned(),
             })
             .map_err(session_store_error)?;
-        self.publish_events()
+        self.publish_events()?;
+        self.note_session_incident(&failed.session, code);
+        Ok(())
     }
 
     fn send_message(&self, request: &JsonRpcRequest) -> Result<Value, RpcError> {
@@ -1074,6 +1084,29 @@ impl App {
             })
             .map_err(message_store_error)?;
         self.publish_events()?;
+        if result.event_sequence.is_some()
+            && let Some(dead_letter) = &result.message.dead_letter
+        {
+            self.note_incident(
+                &format!(
+                    "dead-letter:{}:{}",
+                    result.message.envelope.id, dead_letter.attempt_id
+                ),
+                "LZ-MESSAGE-DEADLETTER",
+                incident::IncidentScope {
+                    project_id: result.message.envelope.project_id,
+                    employee_id: Some(result.message.envelope.recipient.employee_id),
+                    task_id: result.message.envelope.task_id,
+                    message_id: Some(result.message.envelope.id),
+                    ..incident::IncidentScope::default()
+                },
+                json!({
+                    "failureCode": dead_letter.failure_code,
+                    "failureMessage": dead_letter.failure_message,
+                    "attempts": result.message.delivery.attempt_count,
+                }),
+            );
+        }
         Ok(to_value(result))
     }
 

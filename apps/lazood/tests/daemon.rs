@@ -3499,7 +3499,7 @@ async fn status_reports_protocol_store_and_boot_identity() {
     let result = response.result.unwrap();
 
     assert_eq!(result["protocolVersion"], 1);
-    assert_eq!(result["schemaVersion"], 8);
+    assert_eq!(result["schemaVersion"], 9);
     assert_eq!(result["journalMode"], "wal");
     assert!(
         result["bootId"]
@@ -4447,7 +4447,7 @@ fn task_graph_acceptance_executes_backend_only_contract() {
     )
     .unwrap();
     assert_eq!(manifest["status"], "PASS");
-    assert_eq!(manifest["schemaVersion"], 8);
+    assert_eq!(manifest["schemaVersion"], 9);
     assert_eq!(manifest["mode"], "deterministic-fixture");
     for field in [
         "rootIdentity",
@@ -5586,7 +5586,641 @@ fn collaboration_tools_acceptance_contract_is_deterministic_and_backend_only() {
         "worker_turn_reports_failure_through_task_report_before_native_completion",
         "collaboration-tools-manifest.json",
         "deterministic-fake-transport",
-        "schemaVersion = 8",
+        "schemaVersion = 9",
+    ] {
+        assert!(
+            script.contains(required),
+            "acceptance script must contain {required}"
+        );
+    }
+    for forbidden in [
+        "provider', 'smoke",
+        "apps\\lazoo-desktop\\src",
+        "LivePrompt",
+    ] {
+        assert!(
+            !script.contains(forbidden),
+            "acceptance script must not contain {forbidden}"
+        );
+    }
+}
+
+async fn list_incidents(app: &App, params: serde_json::Value) -> Vec<serde_json::Value> {
+    app.handle(request("incident-list", "incident.list", params))
+        .await
+        .result
+        .unwrap()
+        .as_array()
+        .unwrap()
+        .clone()
+}
+
+fn incident_event_types(store: &Store) -> Vec<String> {
+    store
+        .list_events(0, 1000)
+        .unwrap()
+        .into_iter()
+        .map(|event| event.event_type)
+        .filter(|kind| kind.starts_with("incident"))
+        .collect()
+}
+
+#[tokio::test]
+async fn session_start_failure_raises_a_human_readable_incident() {
+    let temporary = tempdir().unwrap();
+    let root = DataRoot::from_path(temporary.path().join("data"));
+    root.ensure().unwrap();
+    let store = Store::open_path(root.state_db()).unwrap();
+    let employee = configured_employee(&store);
+    let app = App::new_with_session_backend(
+        store.clone(),
+        root,
+        DiscoveryEnvironment::empty(),
+        Arc::new(FailingSessionBackend),
+    )
+    .unwrap();
+    let snapshot_before = app
+        .handle(request("desktop-before", "desktop.snapshot", json!({})))
+        .await
+        .result
+        .unwrap();
+
+    for key in ["warm-fail-1", "warm-fail-2"] {
+        let error = app
+            .handle(request(
+                key,
+                "session.warm",
+                json!({
+                    "employeeId": employee.id,
+                    "expectedEmployeeRevision": employee.configuration_revision,
+                    "idempotencyKey": key
+                }),
+            ))
+            .await
+            .error
+            .unwrap();
+        assert_eq!(error.code, "LZ-SESSION-START-FAILED");
+    }
+
+    let incidents = list_incidents(&app, json!({"state": "open"})).await;
+    assert_eq!(
+        incidents.len(),
+        1,
+        "equivalent failures fold into one incident"
+    );
+    let incident = &incidents[0];
+    assert_eq!(incident["code"], "LZ-SESSION-START-FAILED");
+    assert_eq!(incident["source"], "daemon");
+    assert_eq!(incident["title"], "Employee session failed to start");
+    assert!(
+        incident["nextAction"]
+            .as_str()
+            .unwrap()
+            .contains("Probe the provider")
+    );
+    assert_eq!(incident["employeeId"], employee.id.to_string());
+    assert_eq!(incident["provider"], "codex");
+    assert!(incident["sessionId"].as_str().is_some());
+    assert_eq!(incident["occurrences"], 2);
+    assert_eq!(incident["priority"], "normal");
+    assert!(
+        incident["detail"]["failureMessage"]
+            .as_str()
+            .unwrap()
+            .contains("did not become ready")
+    );
+    assert_eq!(
+        incident_event_types(&store),
+        vec!["incident.raised", "incident.recurred"]
+    );
+
+    let snapshot_after = app
+        .handle(request("desktop-after", "desktop.snapshot", json!({})))
+        .await
+        .result
+        .unwrap();
+    let keys = |value: &serde_json::Value| {
+        value
+            .as_object()
+            .unwrap()
+            .keys()
+            .cloned()
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(keys(&snapshot_before), keys(&snapshot_after));
+    assert!(
+        !snapshot_after.to_string().contains("\"incidents\""),
+        "the desktop snapshot gains no incident field in this slice"
+    );
+}
+
+#[tokio::test]
+#[allow(clippy::too_many_lines)] // One fixture proves escalation and every RPC settlement boundary together.
+async fn provider_turn_failures_fold_into_one_incident_escalate_and_settle_through_rpc() {
+    let (_temporary, harness) = tool_harness(AuthorityMode::SelfDecision);
+    harness
+        .backend
+        .turn_retryable_failure
+        .store(true, Ordering::SeqCst);
+    warm_tool_lead(&harness).await;
+    let mut last_turn_id = String::new();
+    for index in 1..=3 {
+        let key = format!("submit-fail-{index}");
+        let error = harness
+            .app
+            .handle(request(
+                &key,
+                "turn.submit",
+                json!({
+                    "conversationId": harness.conversation_id,
+                    "author": {"kind": "user"},
+                    "recipient": null,
+                    "authorityMode": "self-decision",
+                    "text": format!("Attempt {index}"),
+                    "activateIfNeeded": false,
+                    "maxAttempts": 3,
+                    "idempotencyKey": key
+                }),
+            ))
+            .await
+            .error
+            .unwrap();
+        assert_eq!(error.code, "LZ-TURN-PROVIDER");
+        last_turn_id = error.data.unwrap()["turnId"].as_str().unwrap().to_owned();
+    }
+
+    let incidents = list_incidents(&harness.app, json!({})).await;
+    assert_eq!(incidents.len(), 1);
+    let incident = &incidents[0];
+    assert_eq!(incident["code"], "LZ-MESSAGE-TIMEOUT");
+    assert_eq!(incident["title"], "Delivery deadline expired");
+    assert_eq!(incident["occurrences"], 3);
+    assert_eq!(incident["windowOccurrences"], 3);
+    assert_eq!(
+        incident["priority"], "priority",
+        "three equivalent failures inside five minutes cross the threshold"
+    );
+    assert_eq!(incident["state"], "open");
+    assert_eq!(incident["employeeId"], harness.lead.id.to_string());
+    assert_eq!(incident["turnId"], last_turn_id);
+    assert_eq!(incident["detail"]["failureCode"], "LZ-TURN-PROVIDER");
+    assert!(
+        incident["detail"]["providerError"]
+            .as_str()
+            .unwrap()
+            .contains("timed out")
+    );
+    assert_eq!(
+        incident_event_types(&harness.store),
+        vec!["incident.raised", "incident.recurred", "incident.escalated"]
+    );
+
+    let id = incident["id"].clone();
+    let acknowledged = harness
+        .app
+        .handle(request(
+            "ack",
+            "incident.acknowledge",
+            json!({"id": id, "expectedRevision": 3, "idempotencyKey": "ack-incident"}),
+        ))
+        .await
+        .result
+        .unwrap();
+    assert_eq!(acknowledged["incident"]["state"], "acknowledged");
+    assert_eq!(acknowledged["incident"]["revision"], 4);
+    assert!(acknowledged["eventSequence"].is_number());
+    let replay = harness
+        .app
+        .handle(request(
+            "ack-again",
+            "incident.acknowledge",
+            json!({"id": id, "expectedRevision": 99, "idempotencyKey": "ack-incident"}),
+        ))
+        .await
+        .result
+        .unwrap();
+    assert_eq!(replay["incident"]["revision"], 4);
+    assert!(replay["eventSequence"].is_null(), "replays are write-free");
+    let stale = harness
+        .app
+        .handle(request(
+            "ack-stale",
+            "incident.acknowledge",
+            json!({"id": id, "expectedRevision": 3, "idempotencyKey": "ack-stale"}),
+        ))
+        .await
+        .error
+        .unwrap();
+    assert_eq!(stale.code, "LZ-INCIDENT-STALE");
+    let resolved = harness
+        .app
+        .handle(request(
+            "resolve",
+            "incident.resolve",
+            json!({"id": id, "expectedRevision": 4, "idempotencyKey": "resolve-incident"}),
+        ))
+        .await
+        .result
+        .unwrap();
+    assert_eq!(resolved["incident"]["state"], "resolved");
+    assert!(resolved["incident"]["resolvedAt"].is_string());
+    let settled = harness
+        .app
+        .handle(request(
+            "resolve-again",
+            "incident.resolve",
+            json!({"id": id, "expectedRevision": 5, "idempotencyKey": "resolve-twice"}),
+        ))
+        .await
+        .error
+        .unwrap();
+    assert_eq!(settled.code, "LZ-INCIDENT-STATE");
+    let missing = harness
+        .app
+        .handle(request(
+            "show-missing",
+            "incident.show",
+            json!({"id": uuid::Uuid::new_v4()}),
+        ))
+        .await
+        .error
+        .unwrap();
+    assert_eq!(missing.code, "LZ-INCIDENT-NOT-FOUND");
+    assert!(
+        list_incidents(&harness.app, json!({"state": "open"}))
+            .await
+            .is_empty()
+    );
+    assert_eq!(
+        list_incidents(&harness.app, json!({"state": "resolved"}))
+            .await
+            .len(),
+        1
+    );
+}
+
+#[tokio::test]
+#[allow(clippy::too_many_lines)] // Two independent failure paths prove their scope in one fixture.
+async fn dead_letters_and_dispatch_failures_raise_incidents_with_their_scope() {
+    use lazoo_protocol::{MessageSender, UserMessageEndpoint, UserMessageKind};
+    use lazoo_store::{RecordTurnInput, UpdateEmployeeInput};
+
+    let (_temporary, _root, _store, app, sender, recipient) = message_test_app();
+    let sent = app
+        .handle(request(
+            "send-incident",
+            "message.send",
+            json!({
+                "sender": {"employeeId": sender},
+                "recipient": {"employeeId": recipient},
+                "kind": "peer",
+                "body": {"text": "ping"},
+                "idempotencyKey": "send-incident"
+            }),
+        ))
+        .await
+        .result
+        .unwrap();
+    let message_id = sent["message"]["envelope"]["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let claimed = app
+        .handle(request(
+            "claim-incident",
+            "message.claim",
+            json!({"id": message_id, "expectedRevision": 1, "idempotencyKey": "claim-incident"}),
+        ))
+        .await
+        .result
+        .unwrap();
+    let attempt_id = claimed["message"]["attempts"][0]["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let fail_params = json!({
+        "id": message_id,
+        "expectedRevision": 2,
+        "attemptId": attempt_id,
+        "retryable": false,
+        "failureCode": "LZ-MESSAGE-TIMEOUT",
+        "failureMessage": "recipient never acknowledged",
+        "idempotencyKey": "fail-incident"
+    });
+    let failed = app
+        .handle(request(
+            "fail-incident",
+            "message.fail",
+            fail_params.clone(),
+        ))
+        .await
+        .result
+        .unwrap();
+    assert_eq!(failed["message"]["delivery"]["state"], "terminal-failed");
+    assert!(failed["message"]["deadLetter"].is_object());
+    app.handle(request("fail-incident-replay", "message.fail", fail_params))
+        .await
+        .result
+        .unwrap();
+    let incidents = list_incidents(&app, json!({"code": "LZ-MESSAGE-DEADLETTER"})).await;
+    assert_eq!(incidents.len(), 1);
+    assert_eq!(incidents[0]["messageId"], message_id);
+    assert_eq!(incidents[0]["employeeId"], recipient.to_string());
+    assert_eq!(
+        incidents[0]["occurrences"], 1,
+        "a replayed failure raises nothing new"
+    );
+    assert_eq!(incidents[0]["detail"]["failureCode"], "LZ-MESSAGE-TIMEOUT");
+    assert_eq!(
+        incidents[0]["title"],
+        "Message exhausted safe delivery attempts"
+    );
+
+    let (_temporary, harness) = tool_harness(AuthorityMode::FullAutonomy);
+    let warmed = harness
+        .app
+        .handle(request(
+            "warm-dispatch-lead",
+            "session.warm",
+            json!({
+                "employeeId": harness.lead.id,
+                "expectedEmployeeRevision": harness.lead.configuration_revision,
+                "idempotencyKey": "warm-dispatch-lead"
+            }),
+        ))
+        .await
+        .result
+        .unwrap();
+    let lead_session_id = warmed["session"]["id"].as_str().unwrap().to_owned();
+    let root_task = harness
+        .store
+        .record_turn(&RecordTurnInput {
+            request_id: "incident-root-request".to_owned(),
+            idempotency_key: "incident-root".to_owned(),
+            conversation_id: harness.conversation_id,
+            author: MessageSender::User(UserMessageEndpoint {
+                kind: UserMessageKind::User,
+            }),
+            recipient: None,
+            task_id: None,
+            authority_mode: AuthorityMode::FullAutonomy,
+            text: "Lead objective".to_owned(),
+            activate_if_needed: false,
+            max_attempts: 3,
+        })
+        .unwrap()
+        .task
+        .unwrap();
+    let delegated = harness
+        .app
+        .handle(request(
+            "incident-delegate",
+            "task.delegate",
+            json!({
+                "parentTaskId": root_task.id,
+                "actor": {"employeeId": harness.lead.id, "sessionId": lead_session_id},
+                "assignedEmployeeId": harness.worker.id,
+                "objective": "Use the drifted worker",
+                "references": [],
+                "requestedAuthority": "full-autonomy",
+                "rosterRevision": harness.store.roster_snapshot().unwrap().revision,
+                "idempotencyKey": "incident-delegate"
+            }),
+        ))
+        .await
+        .result
+        .unwrap();
+    let task_id = delegated["task"]["id"].as_str().unwrap().to_owned();
+    harness
+        .store
+        .update_employee(&UpdateEmployeeInput {
+            request_id: "incident-drift-request".to_owned(),
+            idempotency_key: "incident-drift".to_owned(),
+            employee_id: harness.worker.id,
+            expected_revision: harness.worker.configuration_revision,
+            name: None,
+            provider: None,
+            role: Some("Updated worker".to_owned()),
+            instructions: None,
+            model: None,
+            reasoning_effort: None,
+            native_settings: None,
+            authority_mode: None,
+            checkout_policy: None,
+            enabled: None,
+            provider_observation: None,
+        })
+        .unwrap();
+    let error = harness.app.dispatch_pending_tasks_once().await.unwrap_err();
+    assert_eq!(error.code, "LZ-TASK-EMPLOYEE-STALE");
+    let incidents = list_incidents(&harness.app, json!({"code": "LZ-CONFIG-INCOMPATIBLE"})).await;
+    assert_eq!(incidents.len(), 1);
+    assert_eq!(incidents[0]["taskId"], task_id);
+    assert_eq!(incidents[0]["employeeId"], harness.worker.id.to_string());
+    assert_eq!(
+        incidents[0]["detail"]["failureCode"],
+        "LZ-TASK-EMPLOYEE-STALE"
+    );
+    assert_eq!(
+        incidents[0]["title"],
+        "Configuration changed before dispatch"
+    );
+    assert!(incidents[0]["messageId"].is_string());
+}
+
+#[tokio::test]
+async fn restart_owner_loss_and_emergency_spool_fold_into_startup_incidents_once() {
+    use lazoo_store::{BeginSessionInput, MarkSessionReadyInput};
+
+    let temporary = tempdir().unwrap();
+    let root = DataRoot::from_path(temporary.path().join("data"));
+    root.ensure().unwrap();
+    let store = Store::open_path(root.state_db()).unwrap();
+    let lead = configured_employee_named(&store, "Rhea", "restart-rhea");
+    let peer = configured_employee_named(&store, "Mira", "restart-mira");
+    let foreign_boot = uuid::Uuid::new_v4();
+    for (employee, key, pid) in [(&lead, "lead", 4001), (&peer, "peer", 4002)] {
+        let starting = store
+            .begin_session(&BeginSessionInput {
+                request_id: format!("restart-{key}-request"),
+                idempotency_key: format!("restart-{key}"),
+                employee_id: employee.id,
+                expected_employee_revision: employee.configuration_revision,
+                owner_boot_id: foreign_boot,
+            })
+            .unwrap();
+        store
+            .mark_session_ready(&MarkSessionReadyInput {
+                session_id: starting.session.id,
+                expected_revision: starting.session.revision,
+                owner_boot_id: foreign_boot,
+                native_session_id: format!("native-{key}"),
+                native_host_pid: pid,
+            })
+            .unwrap();
+    }
+    std::fs::write(
+        root.spool_pending().join("incident-1.ndjson"),
+        concat!(
+            r#"{"incident_id":"incident-1","code":"LZ-DAEMON-UNAVAILABLE","#,
+            r#""message":"restart budget exhausted","occurred_at":"2026-09-23T00:00:00Z"}"#,
+            "\n"
+        ),
+    )
+    .unwrap();
+    assert_eq!(store.import_pending_incidents(&root).unwrap(), 1);
+
+    let app = App::new_with_provider_environment(
+        store.clone(),
+        root.clone(),
+        DiscoveryEnvironment::empty(),
+    )
+    .unwrap();
+    let incidents = list_incidents(&app, json!({})).await;
+    assert_eq!(incidents.len(), 3);
+    let owner_lost: Vec<_> = incidents
+        .iter()
+        .filter(|incident| incident["code"] == "LZ-SESSION-OWNER-LOST")
+        .collect();
+    assert_eq!(
+        owner_lost.len(),
+        2,
+        "one folded incident per employee scope"
+    );
+    for incident in &owner_lost {
+        assert_eq!(incident["title"], "In-flight work lost its daemon");
+        assert_eq!(incident["occurrences"], 1);
+        assert!(incident["sessionId"].is_string());
+        let employee_id = incident["employeeId"].as_str().unwrap();
+        assert!(employee_id == lead.id.to_string() || employee_id == peer.id.to_string());
+    }
+    let keeper = incidents
+        .iter()
+        .find(|incident| incident["code"] == "LZ-DAEMON-UNAVAILABLE")
+        .expect("the emergency spool record folds into an incident");
+    assert_eq!(keeper["source"], "keeper");
+    assert_eq!(keeper["explanation"], "restart budget exhausted");
+    assert_eq!(keeper["firstOccurredAt"], "2026-09-23T00:00:00Z");
+
+    let again =
+        App::new_with_provider_environment(store.clone(), root, DiscoveryEnvironment::empty())
+            .unwrap();
+    let incidents = list_incidents(&again, json!({})).await;
+    assert_eq!(incidents.len(), 3, "a second boot raises nothing new");
+    assert!(
+        incidents
+            .iter()
+            .all(|incident| incident["occurrences"] == 1)
+    );
+    let status = again
+        .handle(request("status", "system.status", json!({})))
+        .await
+        .result
+        .unwrap();
+    assert_eq!(status["schemaVersion"], 9);
+    assert_eq!(status["emergencyIncidentCount"], 1);
+}
+
+#[tokio::test]
+async fn incident_tools_report_and_list_within_the_caller_scope() {
+    let (_temporary, harness) = tool_harness(AuthorityMode::SelfDecision);
+    warm_tool_lead(&harness).await;
+    harness.backend.tool_calls.lock().unwrap().extend([
+        tool_call(
+            "call-1",
+            "incident_report",
+            json!({
+                "title": "Dependency missing",
+                "explanation": "npm install fails behind the proxy",
+                "detail": {"package": "left-pad"}
+            }),
+        ),
+        tool_call(
+            "call-2",
+            "incident_report",
+            json!({"title": "Dependency missing", "explanation": "still failing"}),
+        ),
+        tool_call("call-3", "incident_list", json!({})),
+        tool_call(
+            "call-4",
+            "incident_report",
+            json!({"explanation": "no title"}),
+        ),
+    ]);
+
+    let submitted = submit_lead_turn(&harness, "self-decision").await;
+    assert_eq!(submitted["turn"]["state"], "completed");
+    let declared = harness.backend.session_tools.lock().unwrap().clone();
+    assert!(declared[0].contains(&"incident_report".to_owned()));
+    assert!(declared[0].contains(&"incident_list".to_owned()));
+
+    let results = harness.backend.tool_results.lock().unwrap().clone();
+    assert_eq!(results.len(), 4);
+    assert!(results[0].success, "{:?}", results[0]);
+    assert_eq!(results[0].content["state"], "open");
+    assert_eq!(results[0].content["priority"], "normal");
+    assert_eq!(results[0].content["occurrences"], 1);
+    assert!(results[1].success, "{:?}", results[1]);
+    assert_eq!(
+        results[1].content["incidentId"],
+        results[0].content["incidentId"]
+    );
+    assert_eq!(results[1].content["occurrences"], 2);
+    assert!(results[2].success, "{:?}", results[2]);
+    let visible = results[2].content["incidents"].as_array().unwrap();
+    assert_eq!(visible.len(), 1);
+    assert_eq!(visible[0]["code"], "LZ-EMPLOYEE-REPORTED");
+    assert_eq!(visible[0]["title"], "Dependency missing");
+    assert!(
+        visible[0]["nextAction"]
+            .as_str()
+            .unwrap()
+            .contains("Review")
+    );
+    assert!(!results[3].success);
+    assert_eq!(results[3].content["error"]["code"], "LZ-TOOL-INVALID");
+
+    let incident_id: uuid::Uuid = results[0].content["incidentId"]
+        .as_str()
+        .unwrap()
+        .parse()
+        .unwrap();
+    let incident = harness.store.get_incident(incident_id).unwrap();
+    assert_eq!(incident.source, lazoo_protocol::IncidentSource::Employee);
+    assert_eq!(incident.employee_id, Some(harness.lead.id));
+    assert_eq!(
+        incident.task_id.map(|id| id.to_string()),
+        submitted["turn"]["taskId"].as_str().map(str::to_owned)
+    );
+    assert_eq!(
+        incident.turn_id.map(|id| id.to_string()),
+        submitted["turn"]["id"].as_str().map(str::to_owned)
+    );
+    assert_eq!(incident.explanation, "still failing");
+    assert_eq!(incident.occurrences, 2);
+}
+
+#[test]
+fn minimum_incidents_acceptance_contract_is_deterministic_and_backend_only() {
+    let repository = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let script =
+        std::fs::read_to_string(repository.join("scripts/acceptance/minimum-incidents.ps1"))
+            .unwrap();
+    for required in [
+        "known_codes_describe_the_situation_and_the_next_safe_action",
+        "equivalent_failures_fold_escalate_at_the_threshold_and_replay_without_writes",
+        "acknowledge_and_resolve_are_revisioned_idempotent_and_recurrence_reopens_until_resolved",
+        "emergency_spool_records_fold_into_keeper_incidents_exactly_once",
+        "session_start_failure_raises_a_human_readable_incident",
+        "provider_turn_failures_fold_into_one_incident_escalate_and_settle_through_rpc",
+        "dead_letters_and_dispatch_failures_raise_incidents_with_their_scope",
+        "restart_owner_loss_and_emergency_spool_fold_into_startup_incidents_once",
+        "incident_tools_report_and_list_within_the_caller_scope",
+        "incident_cli_maps_list_show_acknowledge_and_resolve",
+        "incident_errors_use_exit_code_fifteen",
+        "minimum-incidents-manifest.json",
+        "deterministic-fake-transport",
+        "schemaVersion = 9",
     ] {
         assert!(
             script.contains(required),
