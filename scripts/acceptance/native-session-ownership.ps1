@@ -223,7 +223,7 @@ try {
     $daemon = Start-Daemon
     $status = Wait-Status
     Assert-Equal $status.protocolVersion 1 'protocol version'
-    Assert-Equal $status.schemaVersion 8 'schemaVersion 8'
+    Assert-Equal $status.schemaVersion 9 'schemaVersion 9'
     Assert-Equal $status.journalMode 'wal' 'SQLite journal mode'
     $gates.schemaVersion = 'PASS'
 

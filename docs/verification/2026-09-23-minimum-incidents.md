@@ -14,7 +14,7 @@ Scope: domain taxonomy, protocol contracts, schema-9 store ledger, daemon raise 
 
 ## Outcome
 
-PASS on the focused verification below; the full workspace gate must be re-run before merge (see "Interrupted full gate").
+PASS. The focused verification below passed with commit `762aec2`; the full workspace gate passed on 2026-09-24 after three follow-up fixes (see "Full gate re-run").
 
 Every committed operational failure now becomes one human-readable incident. The daemon raises an incident immediately after it commits a session start failure, a provider rejection, stall, timeout, exit, or missing completion evidence, a dead letter, a dispatch failure before provider I/O, or restart owner loss, and folds keeper emergency spool records in at startup. Equivalent failures (same code, employee, project) share one row whose occurrence counters advance; three inside five minutes promote it to `priority` with an `incident.escalated` event. Each incident carries a plain-language title, explanation, and next action, the linked scope ids, and bounded detail holding the raw failure code and provider error.
 
@@ -50,26 +50,38 @@ All commands were run from `C:\workspace\Orchestrator` on branch `feat/minimum-i
 | `scripts\acceptance\minimum-incidents.ps1` | 0 | PASS schema-9 manifest, `deterministic-fake-transport`, 14 commands, every evidence flag true. |
 | `git diff --check` | 0 | No whitespace errors. |
 
-## Interrupted full gate
+## Full gate re-run (2026-09-24)
 
-The combined background run of `cargo test --workspace --locked`, `cargo build --workspace --release --locked`, `npm --prefix apps/lazoo-desktop/ui run check`, and the other nine acceptance scripts was stopped by the Claude Code harness because the host was critically low on memory, with an instruction not to restart it unattended. Those commands were therefore **not re-run** on this branch after the schema bump. They passed on the base commit `d72de10` with schema 8, and every acceptance script now asserts schema 9, so they must be re-run before merge:
+The combined background gate behind commit `762aec2` was stopped by the Claude Code harness for host memory pressure, so on 2026-09-24 IST it was re-run in the foreground one piece at a time on `feat/minimum-incidents`. It surfaced three gaps that the focused verification above could not see; all three are fixed in the follow-up commit on this branch.
 
-```powershell
-cargo test --workspace --locked
-cargo build --workspace --release --locked
-npm --prefix apps\lazoo-desktop\ui run check
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts\acceptance\collaboration-tools.ps1
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts\acceptance\approval-gate.ps1
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts\acceptance\first-slice.ps1 -SkipBuild
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts\acceptance\employee-roster.ps1 -SkipBuild
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts\acceptance\native-session-ownership.ps1 -SkipBuild -Provider codex
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts\acceptance\collaboration-bus.ps1 -SkipBuild
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts\acceptance\conversation-delivery.ps1 -SkipBuild
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts\acceptance\task-delegation-graph.ps1 -SkipBuild
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts\acceptance\automatic-task-dispatch.ps1
-```
+| Gap | Symptom | Fix |
+|---|---|---|
+| `crates/lazoo-store/src/migration.rs` still declared `VERSION = 8` while its table listed migration 9 | `employee_and_roster_survive_store_reopen` failed with `UnknownMigration { found: 9, supported: 8 }`: a fresh database applied schema 9 and then refused to reopen. The daemon and CLI tests never reopen a store, so they could not see it. | `VERSION` is derived from the last `MIGRATIONS` entry, so the guard can no longer drift from the table. |
+| `lead_turn_lists_employees_delegates_and_waits_through_collaboration_tools` still asserted the four-tool catalog | The daemon suite failed on "every daemon-managed Codex session declares the Lazoo tool catalog". | The assertion lists all six tools. |
+| `first-slice`, `employee-roster`, `native-session-ownership`, `collaboration-bus`, and `conversation-delivery` still asserted schema 8 | Each script exited 1 with `expected '8' but found '9'`. The earlier claim that every acceptance script asserted schema 9 was wrong. | The five scripts assert 9, and `first-slice` writes `databaseSchemaVersion = 9`. |
 
-The embedded `task_graph_acceptance_executes_backend_only_contract` daemon test and the `status_reports_protocol_store_and_boot_identity` test already assert schema 9 and are part of the workspace test run above.
+Fresh results after those fixes, all from `C:\workspace\Orchestrator` on `feat/minimum-incidents`:
+
+| Command | Exit | Evidence |
+|---|---:|---|
+| `cargo fmt --all -- --check` | 0 | No formatting differences. |
+| `cargo clippy --workspace --all-targets --locked -- -D warnings` | 0 | All workspace targets linted with warnings denied. |
+| `cargo test --workspace --locked` | 0 | Entire Rust workspace passed: 66 daemon integration tests, 20 CLI tests, 16 Codex adapter tests, every store suite including the reopen test, doc-tests. Explicit live-provider tests remained ignored. |
+| `cargo build --workspace --release --locked` | 0 | Locked release build; the binaries postdate the store fix. |
+| `npm --prefix apps\lazoo-desktop\ui run check` | 0 | Prettier, TypeScript, 47 Vitest tests in 5 files, and the Vite production build passed on the unchanged frontend. |
+| `scripts\acceptance\minimum-incidents.ps1` | 0 | PASS schema-9 manifest, re-run after the store fix. |
+| `scripts\acceptance\collaboration-tools.ps1` | 0 | PASS schema-9 manifest. |
+| `scripts\acceptance\approval-gate.ps1` | 0 | PASS schema-9 manifest. |
+| `scripts\acceptance\first-slice.ps1 -SkipBuild` | 0 | PASS manifest; database schema 9. |
+| `scripts\acceptance\employee-roster.ps1 -SkipBuild` | 0 | PASS manifest. |
+| `scripts\acceptance\native-session-ownership.ps1 -SkipBuild -Provider codex` | 0 | PASS manifest; real Codex CLI accepting the six declared tools, non-model session contract only. |
+| `scripts\acceptance\collaboration-bus.ps1 -SkipBuild` | 0 | PASS manifest. |
+| `scripts\acceptance\conversation-delivery.ps1 -SkipBuild` | 0 | PASS deterministic manifest. |
+| `scripts\acceptance\task-delegation-graph.ps1 -SkipBuild` | 0 | PASS manifest. |
+| `scripts\acceptance\automatic-task-dispatch.ps1` | 0 | PASS schema-9 fake-transport manifest. |
+| `git diff --check` | 0 | No whitespace errors. |
+
+The embedded `task_graph_acceptance_executes_backend_only_contract` daemon test and the `status_reports_protocol_store_and_boot_identity` test assert schema 9 and are part of the workspace test run above.
 
 ## Minimum-incidents acceptance evidence
 

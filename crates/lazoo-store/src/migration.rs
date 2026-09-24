@@ -5,7 +5,7 @@ use sha2::{Digest, Sha256};
 
 use crate::StoreError;
 
-const VERSION: u32 = 8;
+const VERSION: u32 = MIGRATIONS[MIGRATIONS.len() - 1].0;
 const MIGRATIONS: &[(u32, &str)] = &[
     (
         1,

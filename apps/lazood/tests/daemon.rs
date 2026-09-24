@@ -5256,7 +5256,9 @@ async fn lead_turn_lists_employees_delegates_and_waits_through_collaboration_too
             "employees_list",
             "task_delegate",
             "task_wait",
-            "task_report"
+            "task_report",
+            "incident_report",
+            "incident_list"
         ],
         "every daemon-managed Codex session declares the Lazoo tool catalog"
     );
