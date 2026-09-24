@@ -20,6 +20,8 @@ pub async fn run() -> Result<(), DaemonError> {
     let app = App::new(store, root)?;
     let dispatcher_app = app.clone();
     let dispatcher = tokio::spawn(async move { dispatcher_app.run_task_dispatcher().await });
+    let notices_app = app.clone();
+    let notices = tokio::spawn(async move { notices_app.run_notice_delivery().await });
     let owner = OwnerSecurity::current()?;
     let mut server = PipeServer::bind(&installation, &owner)?;
     let mut shutdown = app.shutdown_receiver();
@@ -44,6 +46,8 @@ pub async fn run() -> Result<(), DaemonError> {
     app.shutdown_live_sessions().await;
     dispatcher.abort();
     let _ = dispatcher.await;
+    notices.abort();
+    let _ = notices.await;
     Ok(())
 }
 

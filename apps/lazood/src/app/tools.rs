@@ -12,7 +12,8 @@ use lazoo_protocol::{
 };
 use lazoo_providers::{ToolCall, ToolResult, ToolSpec};
 use lazoo_store::{
-    DelegateTaskInput, ListIncidentsInput, ListTasksInput, RaiseIncidentInput, ReportTaskInput,
+    ConsumeTaskResultInput, DelegateTaskInput, ListIncidentsInput, ListTasksInput,
+    RaiseIncidentInput, ReportTaskInput,
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -332,6 +333,27 @@ impl App {
                 .all(|detail| task_is_terminal(detail.task.state));
             let now = Instant::now();
             if all_terminal || now >= deadline {
+                // The lead is reading these outcomes now, so their result notices are delivered
+                // here rather than as a later notice turn.
+                for detail in details
+                    .iter()
+                    .filter(|detail| task_is_terminal(detail.task.state))
+                    .filter(|detail| detail.task.parent_task_id == Some(task_id))
+                {
+                    let consumed = self.store.consume_task_result(&ConsumeTaskResultInput {
+                        request_id: format!(
+                            "{}:consume:{}",
+                            tool_command_key(turn_id, call),
+                            detail.task.id
+                        ),
+                        child_task_id: detail.task.id,
+                        turn_id,
+                    });
+                    if let Err(error) = consumed {
+                        tracing::debug!(task_id = %detail.task.id, %error, "child result was not consumed");
+                    }
+                }
+                self.publish_events()?;
                 let tasks: Vec<Value> = details
                     .iter()
                     .map(|detail| self.task_outcome(detail))

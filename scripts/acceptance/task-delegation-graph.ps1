@@ -261,6 +261,7 @@ $evidence = [ordered]@{
     nativeEvidenceRequired = $false
     evidenceOrdered = $false
     activeDescendantBlocked = $false
+    childResultNoticeCompletesParent = $false
     ownerLossUncertain = $false
     uncertaintyResolutionIdempotent = $false
     restartCorrelations = $false
@@ -473,12 +474,20 @@ try {
         Assert-True ($evidenceKinds -contains $kind) "child evidence kind $kind"
     }
     $evidence.evidenceOrdered = $true
-    $completedParent = Invoke-Json @(
-        'task', 'report', ([string]$rootAsk.id), '--expected-revision', ([string]$activeParent.task.revision),
+    # The cancelled child's outcome reaches the lead as a result notice on its idle session. The
+    # lead's notice turn ends with no unfinished child, which completes the parent, so the lead's
+    # own later completion report is refused as already terminal.
+    $noticedParent = Wait-TaskState ([string]$rootAsk.id) @('completed')
+    $resultNotices = @(Invoke-Json @('message', 'list', '--after-sequence', '0', '--limit', '1024') |
+        Where-Object { [string]$_.kind -eq 'result' -and [string]$_.taskId -eq [string]$rootAsk.id })
+    Assert-Equal $resultNotices.Count 1 'one result notice per terminal child'
+    Assert-Equal ([string]$resultNotices[0].state) 'acknowledged' 'result notice delivered to the lead'
+    Invoke-ExpectedFailure 13 'LZ-TASK-STATE' @(
+        'task', 'report', ([string]$rootAsk.id), '--expected-revision', ([string]$noticedParent.task.revision),
         '--actor-employee', $leadId, '--actor-session', $leadSessionId, '--kind', 'completed',
         '--idempotency-key', "complete-parent-$script:runId"
-    )
-    Assert-Equal $completedParent.task.state 'completed' 'parent completion after child terminal'
+    ) | Out-Null
+    $evidence.childResultNoticeCompletesParent = $true
 
     $bounded = Invoke-Delegate ([string]$rootAuthority.id) $leadId $leadSessionId $workerId `
         'DEPTH_1' 'self-decision' $rosterRevision "depth-1-$script:runId"

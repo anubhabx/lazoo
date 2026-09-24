@@ -1,5 +1,6 @@
 mod approval;
 mod conversation;
+mod delivery;
 mod employee;
 mod incident;
 mod message;
@@ -19,6 +20,10 @@ pub use conversation::{
     validate_conversation_list_limit, validate_conversation_title, validate_envelope_sender,
     validate_turn_event_payload, validate_turn_text, validate_turn_transcript_size,
     validate_turn_transition,
+};
+pub use delivery::{
+    IncidentNotice, MAX_NOTICE_OUTPUT_BYTES, TaskResultNotice, render_incident_notice_text,
+    render_task_result_text,
 };
 pub use employee::{
     EmployeeValidationError, validate_employee_name, validate_employee_text_fields,

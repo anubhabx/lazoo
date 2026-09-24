@@ -1,46 +1,48 @@
-# Next session: post-incidents backend boundary
+# Next session: post-result-delivery backend boundary
 
 ## Current owner boundary
 
 Backend orchestration remains the active scope. UI implementation is owned separately. Do not change the desktop frontend, Tauri command surface, `desktop.snapshot`, or UI capabilities without a separate reviewed desktop contract.
 
-This handoff does not authorize ConPTY, terminal I/O, session-wide approval grants, per-capability policy, managed memory, resource governance, scheduling, other-provider task delivery, approval bridging, or tool surfaces, peer-message tools, lead notification or bounded remediation, user notification channels, provider smoke, or a live model turn.
+This handoff does not authorize ConPTY, terminal I/O, session-wide approval grants, per-capability policy, managed memory, resource governance, scheduling, other-provider task delivery, approval bridging, or tool surfaces, peer-message tools, automatic activation of a dormant employee, bounded remediation, user notification channels, provider smoke, or a live model turn.
 
 ## Completed backend baseline
 
-- Database schema 9 adds the `incidents` ledger and `incident_commands` to the employee, session, message, conversation, turn, task/evidence, dispatch, approval, audit, and outbox ledgers.
-- The daemon raises an incident right after it commits a session start failure, a provider rejection, stall, timeout, exit, or missing completion evidence, a dead letter, a dispatch failure before provider I/O, and restart owner loss, and folds keeper emergency spool records in at startup. Raising is idempotent per command key; equivalent failures share one row per code, employee, and project; three occurrences inside five minutes promote it to `priority`.
-- `incident.list|show|acknowledge|resolve` are local-user RPCs; acknowledge and resolve are revision-checked and idempotent. `lazooctl incident` maps them with exit code 15 for `LZ-INCIDENT-*`.
-- Codex sessions declare six Lazoo tools: `employees_list`, `task_delegate`, `task_wait`, `task_report`, `incident_report`, `incident_list`. Every call acts as the turn's recipient endpoint and answers `success = false` with a stable code instead of ending the turn.
-- The collaboration-tools slice (commit `d72de10`) underneath this one is unchanged: dynamic tools are declared only on Codex `thread/start` behind `experimentalApi`, with names in the Responses API alphabet.
-- The desktop snapshot and every file under `apps/lazoo-desktop` remain unchanged.
+- Schema stays at 9. The message ledger's `result` and `status` kinds now carry lead notices: one `result` per terminal child task, addressed to the parent task's employee and threaded under the delegation; one `status` per priority incident about a child task, addressed to the root task's employee. Both are queued idempotently by child task or incident id under their own `message_commands` scopes and are the only messages the daemon auto-delivers.
+- The daemon runs a notice-delivery loop beside the task dispatcher: one pass at boot and one after every published event. A pass queues pending results and incident notices, then delivers each queued notice as one provider turn that reuses the notice as its canonical message, under the lead task's effective authority, through the same delivery pipeline as `turn.submit`.
+- Activation policy: a notice is delivered only when the lead has an idle session owned by this boot and no unfinished turn on its task. A dormant lead is never activated by employee-authored traffic; the notice turn stays `recorded` until the local user resumes the lead with `session.warm` or a user turn. A notice whose task is terminal, or whose lead was disabled or reconfigured, is cancelled with the reason logged.
+- `task_wait` consumes the results it returns: the notice is queued if missing, then claimed and acknowledged with `{via: "task_wait", turnId}` as evidence, so an outcome the lead already read is never delivered again.
+- Incidents about the lead itself, about the root task, without a task, below priority, or on a terminal tree never notify the lead.
+- The collaboration-tools (`d72de10`) and minimum-incidents (`762aec2`, `24a851a`) slices underneath are unchanged, and every acceptance script asserts schema 9.
+- The desktop snapshot, the CLI, and every file under `apps/lazoo-desktop` remain unchanged.
 
 ## Deterministic acceptance
 
-`scripts/acceptance/minimum-incidents.ps1` runs focused domain, store, daemon fake-backend, and CLI proofs and writes `artifacts/acceptance/minimum-incidents-manifest.json`. Every other acceptance script now asserts schema 9.
+`scripts/acceptance/result-delivery.ps1` runs focused domain, store, and daemon fake-backend proofs and writes `artifacts/acceptance/result-delivery-manifest.json`.
 
-No provider smoke or live model turn is part of this slice. A live Codex tool-call gate (a real model calling `employees_list`, `task_delegate`, and `incident_report`) remains the natural next authorized live proof and must be run explicitly.
+No provider smoke or live model turn is part of this slice. A live Codex gate (a real model calling `employees_list`, `task_delegate`, and `incident_report`, then receiving a result notice after its turn ended) remains the natural next authorized live proof and must be run explicitly.
 
 ## Next backend objective
 
 Choose and design one separately reviewed slice:
 
-- **Activation controls and result delivery**: a lead whose turn ended before its children finished has no way to receive their outcomes, and a promoted incident has no way to reach the lead. Decide how child completion and threshold events reach a dormant or idle lead (queued message, explicit user resume, or bounded policy-gated activation) without letting employee-authored traffic activate dormant recipients by accident. This unblocks the brief's lead notification and bounded remediation.
-- **Peer messaging tools**: `message_send` and `message_reply` over the existing bus, including the activation policy above.
-- **Live Codex tool-call gate**: one explicitly authorized model turn proving the six tools end to end through the real app-server.
+- **Peer messaging tools**: `message_send` and `message_reply` for daemon-managed Codex sessions over the existing bus, delivered through the notice path with the same activation policy (idle owned session only, never activating a dormant recipient), linked to both tasks, and never changing task ownership, approvals, or permissions.
+- **Activation policy and bounded automatic activation**: a per-employee `activationPolicy` (schema 10) that lets a queued notice or peer message start a session for a dormant lead under explicit bounds (one activation per queued batch, the lead's own task tree only, stop after the turn), with the default staying manual.
+- **Live Codex tool-call and notice gate**: one explicitly authorized model turn proving the six tools and a result notice end to end through the real app-server.
 
-Do not combine these boundaries implicitly. ConPTY, typed desktop Inbox binding (tasks, approvals, incidents), and ACP approval bridging remain available candidates behind those.
+Do not combine these boundaries implicitly. Bounded lead remediation (at most two policy-approved remedies inside five minutes), user notification channels, ConPTY, typed desktop Inbox binding (tasks, approvals, incidents, notices), and ACP approval bridging remain available candidates behind those.
 
-Do not emit `UI BACKEND CONTRACT: GO` yet. Approval, dispatch, task, tool, and incident read models exist in the daemon, but the typed desktop-facing contract has not been separately reviewed.
+Do not emit `UI BACKEND CONTRACT: GO` yet. Approval, dispatch, task, tool, incident, and notice read models exist in the daemon, but the typed desktop-facing contract has not been separately reviewed.
 
 ## Guardrails
 
 - Preserve the Windows-first, local-first, single-user boundary.
 - Reuse the durable record-first ledgers and native provider evidence.
-- An incident is derived evidence: the failure row it points at stays authoritative, and an incident never retries work, restarts anything, re-authenticates, changes authority, or deletes data.
-- A tool result is never an approval; governed actions inside a child turn still flow through the schema-8 approval gate.
+- A notice is derived evidence: the child task, message, and incident rows it points at stay authoritative, and a notice never retries work, restarts anything, re-authenticates, changes authority, or deletes data.
+- Never let employee-authored traffic start a provider process; only the local user resumes a dormant employee until a reviewed activation policy exists.
+- A notice turn runs under the lead task's effective authority; governed actions inside it still flow through the schema-8 approval gate, and a tool result is never an approval.
 - Never let a tool name a different actor, widen authority, or bypass a store guard; the daemon fixes the actor to the turn's recipient endpoint.
 - Never declare tools on a resumed Codex thread; the adapter fails closed until Codex accepts `dynamicTools` on `thread/resume`.
-- Never retry an uncertain dispatch or re-answer an expired approval automatically.
+- Never retry an uncertain dispatch, a failed notice turn, or an expired approval automatically.
 - Never delete or rewrite a retained task worktree without an explicit cleanup contract.
 - Keep UI, ConPTY, session-wide grants, managed memory, scheduling, resource governance, other-provider expansion, and live model use outside this completed slice.

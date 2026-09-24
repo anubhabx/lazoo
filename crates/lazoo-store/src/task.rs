@@ -2511,7 +2511,7 @@ fn query_task_evidence(
     rows.map(|row| evidence_from_raw(row?)).collect()
 }
 
-fn query_task_dispatch(
+pub(crate) fn query_task_dispatch(
     connection: &Connection,
     task_id: Uuid,
 ) -> Result<Option<TaskDispatchRecord>, StoreError> {

@@ -378,7 +378,7 @@ fn require_message_revision(
     }
 }
 
-fn require_message_state(
+pub(crate) fn require_message_state(
     message: &MessageRecord,
     expected_states: &[MessageDeliveryState],
     expected: &'static str,
@@ -537,7 +537,7 @@ fn insert_message_command(
     Ok(())
 }
 
-fn message_for_command(
+pub(crate) fn message_for_command(
     connection: &Connection,
     scope: &str,
     idempotency_key: &str,

@@ -1,5 +1,6 @@
 mod approval;
 mod conversation;
+mod delivery;
 mod emergency;
 mod employee;
 mod incident;
@@ -29,6 +30,9 @@ pub use conversation::{
     BeginTurnSubmissionInput, CreateConversationInput, FailTurnInput, FinishTurnCancelInput,
     MarkTurnUncertainInput, ObserveTurnInput, RecordTurnInput, RequestTurnCancelInput,
     RetryTurnInput,
+};
+pub use delivery::{
+    ConsumeTaskResultInput, QueueIncidentNoticeInput, QueueTaskResultInput, RecordNoticeTurnInput,
 };
 pub use emergency::EmergencyIncident;
 pub use employee::{
@@ -294,6 +298,12 @@ pub enum StoreError {
     ApprovalValidation(#[from] lazoo_domain::ApprovalValidationError),
     #[error("incident {incident_id} was not found")]
     IncidentNotFound { incident_id: Uuid },
+    #[error("task {task_id} has no parent task to receive its result")]
+    TaskResultWithoutParent { task_id: Uuid },
+    #[error("incident {incident_id} has no lead to notify")]
+    IncidentNoticeNotApplicable { incident_id: Uuid },
+    #[error("message {message_id} is not a lead notice")]
+    MessageNotNotice { message_id: Uuid },
     #[error("incident {incident_id} changed; current revision is {current_revision}")]
     IncidentStale {
         incident_id: Uuid,

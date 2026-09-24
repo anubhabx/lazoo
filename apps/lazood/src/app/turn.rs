@@ -219,7 +219,7 @@ impl App {
             .await
     }
 
-    async fn deliver_recorded_turn(
+    pub(super) async fn deliver_recorded_turn(
         &self,
         request: &JsonRpcRequest,
         recorded: TurnMutationResult,
@@ -1001,7 +1001,7 @@ fn conversation_store_error(error: StoreError) -> RpcError {
 }
 
 #[allow(clippy::needless_pass_by_value)]
-fn turn_store_error(error: StoreError) -> RpcError {
+pub(super) fn turn_store_error(error: StoreError) -> RpcError {
     let (code, data, public_message) = match &error {
         StoreError::TurnNotFound { turn_id } => (
             "LZ-TURN-NOT-FOUND",

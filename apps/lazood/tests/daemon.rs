@@ -4243,7 +4243,7 @@ fn employee_roster_acceptance_contract_is_backend_only() {
         "roster', 'refresh",
         "LZ-EMPLOYEE-STALE",
         "restartDurability",
-        "schemaVersion 8",
+        "schemaVersion 9",
         "providerSmokeAbsent",
     ] {
         assert!(
@@ -4281,7 +4281,7 @@ fn native_session_acceptance_contract_covers_containment_and_owner_loss() {
         "completeTreeTerminated",
         "nativeHostPid",
         "providerSmokeAbsent",
-        "schemaVersion 8",
+        "schemaVersion 9",
     ] {
         assert!(
             script.contains(required),
@@ -4311,7 +4311,7 @@ fn collaboration_bus_acceptance_contract_is_backend_only() {
         "deadLetterEvidence",
         "restartDurability",
         "auditOutboxEvidence",
-        "schemaVersion 8",
+        "schemaVersion 9",
         "providerSmokeAbsent",
         "desktopCapabilityExpansionAbsent",
     ] {
@@ -4460,6 +4460,7 @@ fn task_graph_acceptance_executes_backend_only_contract() {
         "nativeEvidenceRequired",
         "evidenceOrdered",
         "activeDescendantBlocked",
+        "childResultNoticeCompletesParent",
         "ownerLossUncertain",
         "uncertaintyResolutionIdempotent",
         "restartCorrelations",
@@ -6221,6 +6222,463 @@ fn minimum_incidents_acceptance_contract_is_deterministic_and_backend_only() {
         "incident_cli_maps_list_show_acknowledge_and_resolve",
         "incident_errors_use_exit_code_fifteen",
         "minimum-incidents-manifest.json",
+        "deterministic-fake-transport",
+        "schemaVersion = 9",
+    ] {
+        assert!(
+            script.contains(required),
+            "acceptance script must contain {required}"
+        );
+    }
+    for forbidden in [
+        "provider', 'smoke",
+        "apps\\lazoo-desktop\\src",
+        "LivePrompt",
+    ] {
+        assert!(
+            !script.contains(forbidden),
+            "acceptance script must not contain {forbidden}"
+        );
+    }
+}
+
+// ---------------------------------------------------------------------------------------------
+// Lead notice delivery: child results and promoted incidents reach the lead after its turn
+// ended, without employee-authored traffic ever starting a provider process.
+// ---------------------------------------------------------------------------------------------
+
+fn lead_messages(
+    store: &Store,
+    kind: lazoo_protocol::MessageKind,
+) -> Vec<lazoo_protocol::MessageSummary> {
+    store
+        .list_messages(0, 100)
+        .unwrap()
+        .into_iter()
+        .filter(|message| message.kind == kind)
+        .collect()
+}
+
+/// Turns addressed to the lead, in order; the worker's dispatch turn shares the conversation.
+fn lead_turns(harness: &ToolHarness) -> Vec<lazoo_protocol::ConversationTurnSummary> {
+    harness
+        .store
+        .list_turns(harness.conversation_id, 0, 10)
+        .unwrap()
+        .into_iter()
+        .filter(|turn| turn.recipient.employee_id == harness.lead.id)
+        .collect()
+}
+
+fn last_prompt(backend: &FakeSessionBackend) -> String {
+    backend
+        .turn_requests
+        .lock()
+        .unwrap()
+        .last()
+        .map(|request| request.prompt.clone())
+        .unwrap_or_default()
+}
+
+/// Lead turn that delegates one child and ends without waiting; returns (root task id, child id).
+async fn delegate_without_waiting(harness: &ToolHarness) -> (uuid::Uuid, uuid::Uuid) {
+    use lazoo_protocol::TaskState;
+
+    warm_tool_lead(harness).await;
+    let roster_revision = harness.store.roster_snapshot().unwrap().revision;
+    harness
+        .backend
+        .tool_calls
+        .lock()
+        .unwrap()
+        .extend([tool_call(
+            "call-1",
+            "task_delegate",
+            json!({
+                "employeeId": harness.worker.id,
+                "objective": "Implement the parser fix",
+                "rosterRevision": roster_revision,
+                "requestedAuthority": "self-decision"
+            }),
+        )]);
+    let submitted = submit_lead_turn(harness, "self-decision").await;
+    assert_eq!(submitted["turn"]["state"], "completed");
+    let root_task_id: uuid::Uuid = submitted["turn"]["taskId"]
+        .as_str()
+        .unwrap()
+        .parse()
+        .unwrap();
+    let results = harness.backend.tool_results.lock().unwrap().clone();
+    assert!(results[0].success, "{:?}", results[0]);
+    let child_id: uuid::Uuid = results[0].content["taskId"]
+        .as_str()
+        .unwrap()
+        .parse()
+        .unwrap();
+    let root = harness.store.get_task(root_task_id).unwrap().task;
+    assert_eq!(
+        root.state,
+        TaskState::Running,
+        "the lead's task stays running while its child is unfinished"
+    );
+    assert!(root.active_turn_id.is_none());
+    (root_task_id, child_id)
+}
+
+#[tokio::test]
+async fn child_results_reach_an_idle_lead_as_a_notice_turn_after_its_turn_ended() {
+    use lazoo_protocol::{MessageKind, MessageSender, TaskState};
+
+    let (_temporary, harness) = tool_harness(AuthorityMode::SelfDecision);
+    let (root_task_id, child_id) = delegate_without_waiting(&harness).await;
+    harness.app.dispatch_pending_tasks_once().await.unwrap();
+    let child = harness.store.get_task(child_id).unwrap().task;
+    assert_eq!(child.state, TaskState::Completed);
+    assert_eq!(harness.backend.turns.load(Ordering::SeqCst), 2);
+    assert_eq!(
+        harness.store.pending_task_results(10).unwrap(),
+        vec![child_id],
+        "the terminal child has a result waiting to be queued"
+    );
+    assert!(lead_messages(&harness.store, MessageKind::Result).is_empty());
+
+    harness.app.deliver_pending_notices_once().await.unwrap();
+
+    assert_eq!(
+        harness.backend.turns.load(Ordering::SeqCst),
+        3,
+        "the notice is delivered as one more turn on the lead's idle session"
+    );
+    assert_eq!(
+        harness.backend.starts.load(Ordering::SeqCst),
+        2,
+        "no provider process was started for the notice"
+    );
+    let prompt = last_prompt(&harness.backend);
+    assert!(prompt.starts_with("[Lazoo task result]"), "{prompt}");
+    assert!(prompt.contains(&child_id.to_string()));
+    assert!(prompt.contains("finished with state completed"));
+    assert!(prompt.contains("Output:\ndone"));
+    assert!(prompt.contains(&root_task_id.to_string()));
+
+    let results = lead_messages(&harness.store, MessageKind::Result);
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0].state, MessageDeliveryState::Acknowledged);
+    assert_eq!(results[0].recipient.employee_id, harness.lead.id);
+    assert_eq!(results[0].task_id, Some(root_task_id));
+    let MessageSender::Employee(sender) = results[0].sender else {
+        panic!("a result notice is authored by the worker endpoint");
+    };
+    assert_eq!(sender.employee_id, harness.worker.id);
+
+    let turns = lead_turns(&harness);
+    assert_eq!(
+        turns.len(),
+        2,
+        "the lead has its user turn and the notice turn; the worker turn is the child's"
+    );
+    assert_eq!(turns[1].state, TurnState::Completed);
+    assert_eq!(turns[1].task_id, Some(root_task_id));
+    assert_eq!(turns[1].recipient.employee_id, harness.lead.id);
+    let root = harness.store.get_task(root_task_id).unwrap().task;
+    assert_eq!(
+        root.state,
+        TaskState::Completed,
+        "the lead ended its notice turn with no child left, so its task completed"
+    );
+
+    harness.app.deliver_pending_notices_once().await.unwrap();
+    assert_eq!(harness.backend.turns.load(Ordering::SeqCst), 3);
+    assert!(harness.store.pending_lead_notices(10).unwrap().is_empty());
+    let event_types: Vec<String> = harness
+        .store
+        .list_events(0, 1000)
+        .unwrap()
+        .into_iter()
+        .map(|event| event.event_type)
+        .collect();
+    assert_eq!(
+        event_types
+            .iter()
+            .filter(|kind| *kind == "turn.recorded")
+            .count(),
+        2
+    );
+    assert!(
+        event_types
+            .iter()
+            .any(|kind| kind == "message.acknowledged")
+    );
+}
+
+#[tokio::test]
+async fn task_wait_consumes_child_results_so_no_notice_turn_follows() {
+    use lazoo_protocol::MessageKind;
+
+    let (_temporary, harness) = tool_harness(AuthorityMode::SelfDecision);
+    warm_tool_lead(&harness).await;
+    let roster_revision = harness.store.roster_snapshot().unwrap().revision;
+    harness.backend.tool_calls.lock().unwrap().extend([
+        tool_call(
+            "call-1",
+            "task_delegate",
+            json!({
+                "employeeId": harness.worker.id,
+                "objective": "Implement the parser fix",
+                "rosterRevision": roster_revision,
+                "requestedAuthority": "self-decision"
+            }),
+        ),
+        tool_call("call-2", "task_wait", json!({"timeoutSeconds": 10})),
+    ]);
+    let dispatcher_app = harness.app.clone();
+    let dispatcher = tokio::spawn(async move { dispatcher_app.run_task_dispatcher().await });
+    let submitted = submit_lead_turn(&harness, "self-decision").await;
+    assert_eq!(submitted["turn"]["state"], "completed");
+    dispatcher.abort();
+    let _ = dispatcher.await;
+    let results = harness.backend.tool_results.lock().unwrap().clone();
+    assert!(results[1].success, "{:?}", results[1]);
+    assert_eq!(results[1].content["timedOut"], false);
+    assert_eq!(harness.backend.turns.load(Ordering::SeqCst), 2);
+
+    let notices = lead_messages(&harness.store, MessageKind::Result);
+    assert_eq!(
+        notices.len(),
+        1,
+        "task_wait queued the child's result itself"
+    );
+    assert_eq!(notices[0].state, MessageDeliveryState::Acknowledged);
+    let record = harness.store.get_message(notices[0].id).unwrap();
+    let attempt = record.attempts.last().unwrap();
+    assert_eq!(
+        attempt.acknowledgement_evidence.as_ref().unwrap()["via"],
+        "task_wait"
+    );
+    assert_eq!(
+        attempt.acknowledgement_evidence.as_ref().unwrap()["turnId"],
+        submitted["turn"]["id"]
+    );
+
+    harness.app.deliver_pending_notices_once().await.unwrap();
+    assert_eq!(
+        harness.backend.turns.load(Ordering::SeqCst),
+        2,
+        "a result the lead already read through task_wait is never delivered twice"
+    );
+    assert!(harness.store.pending_task_results(10).unwrap().is_empty());
+    assert!(harness.store.pending_lead_notices(10).unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn notices_wait_for_a_dormant_lead_until_the_user_resumes_it() {
+    use lazoo_protocol::{MessageKind, SessionLifecycleState, TaskState};
+
+    let (_temporary, harness) = tool_harness(AuthorityMode::SelfDecision);
+    let (root_task_id, child_id) = delegate_without_waiting(&harness).await;
+    harness.app.dispatch_pending_tasks_once().await.unwrap();
+    assert_eq!(
+        harness.store.get_task(child_id).unwrap().task.state,
+        TaskState::Completed
+    );
+    let lead_session = harness
+        .store
+        .list_sessions()
+        .unwrap()
+        .into_iter()
+        .find(|session| {
+            session.employee_id == harness.lead.id && session.state == SessionLifecycleState::Idle
+        })
+        .expect("the lead session is idle after its turn");
+    harness
+        .app
+        .handle(request(
+            "stop-lead",
+            "session.stop",
+            json!({
+                "id": lead_session.id,
+                "expectedRevision": lead_session.revision,
+                "idempotencyKey": "stop-lead"
+            }),
+        ))
+        .await
+        .result
+        .unwrap();
+    assert_eq!(harness.backend.starts.load(Ordering::SeqCst), 2);
+
+    harness.app.deliver_pending_notices_once().await.unwrap();
+
+    assert_eq!(
+        harness.backend.starts.load(Ordering::SeqCst),
+        2,
+        "an employee-authored notice never activates a dormant lead"
+    );
+    assert_eq!(harness.backend.turns.load(Ordering::SeqCst), 2);
+    let queued = lead_messages(&harness.store, MessageKind::Result);
+    assert_eq!(queued.len(), 1);
+    assert_eq!(queued[0].state, MessageDeliveryState::Queued);
+    let turns = lead_turns(&harness);
+    assert_eq!(turns.len(), 2);
+    assert_eq!(
+        turns[1].state,
+        TurnState::Recorded,
+        "the notice turn is recorded and waits for the lead"
+    );
+    assert_eq!(
+        harness.store.get_task(root_task_id).unwrap().task.state,
+        TaskState::Running
+    );
+
+    // The local user resumes the lead explicitly; the next pass delivers the waiting notice.
+    harness
+        .app
+        .handle(request(
+            "warm-lead-again",
+            "session.warm",
+            json!({
+                "employeeId": harness.lead.id,
+                "expectedEmployeeRevision": harness.lead.configuration_revision,
+                "idempotencyKey": "warm-lead-again"
+            }),
+        ))
+        .await
+        .result
+        .unwrap();
+    assert_eq!(harness.backend.starts.load(Ordering::SeqCst), 3);
+    harness.app.deliver_pending_notices_once().await.unwrap();
+
+    assert_eq!(harness.backend.turns.load(Ordering::SeqCst), 3);
+    assert!(last_prompt(&harness.backend).contains(&child_id.to_string()));
+    let delivered = lead_messages(&harness.store, MessageKind::Result);
+    assert_eq!(delivered[0].state, MessageDeliveryState::Acknowledged);
+    let turns = lead_turns(&harness);
+    assert_eq!(
+        turns.len(),
+        2,
+        "the same recorded turn was delivered, not a new one"
+    );
+    assert_eq!(turns[1].state, TurnState::Completed);
+    assert_eq!(
+        harness.store.get_task(root_task_id).unwrap().task.state,
+        TaskState::Completed
+    );
+}
+
+#[tokio::test]
+async fn escalated_incidents_notify_the_lead_once_as_a_status_turn() {
+    use lazoo_protocol::{IncidentPriority, IncidentSource, MessageKind, TaskState};
+    use lazoo_store::RaiseIncidentInput;
+
+    let (_temporary, harness) = tool_harness(AuthorityMode::SelfDecision);
+    let (root_task_id, child_id) = delegate_without_waiting(&harness).await;
+    let raise = |key: &str, employee: uuid::Uuid, task: uuid::Uuid| RaiseIncidentInput {
+        request_id: format!("request-{key}"),
+        idempotency_key: key.to_owned(),
+        code: "LZ-MESSAGE-TIMEOUT".to_owned(),
+        source: IncidentSource::Daemon,
+        title: None,
+        explanation: None,
+        project_id: None,
+        employee_id: Some(employee),
+        provider: Some("codex".to_owned()),
+        task_id: Some(task),
+        session_id: None,
+        turn_id: None,
+        message_id: None,
+        detail: json!({"failureCode": "LZ-MESSAGE-TIMEOUT"}),
+        occurred_at: None,
+    };
+    for key in ["timeout-1", "timeout-2"] {
+        harness
+            .store
+            .raise_incident(&raise(key, harness.worker.id, child_id))
+            .unwrap();
+    }
+    harness.app.deliver_pending_notices_once().await.unwrap();
+    assert_eq!(
+        harness.backend.turns.load(Ordering::SeqCst),
+        1,
+        "a normal incident does not interrupt the lead"
+    );
+    let escalated = harness
+        .store
+        .raise_incident(&raise("timeout-3", harness.worker.id, child_id))
+        .unwrap()
+        .incident;
+    assert_eq!(escalated.priority, IncidentPriority::Priority);
+
+    harness.app.deliver_pending_notices_once().await.unwrap();
+
+    assert_eq!(harness.backend.turns.load(Ordering::SeqCst), 2);
+    assert_eq!(harness.backend.starts.load(Ordering::SeqCst), 1);
+    let prompt = last_prompt(&harness.backend);
+    assert!(
+        prompt.starts_with("[Lazoo incident] Priority incident LZ-MESSAGE-TIMEOUT"),
+        "{prompt}"
+    );
+    assert!(prompt.contains(&child_id.to_string()));
+    assert!(prompt.contains(&escalated.title));
+    assert!(prompt.contains(&escalated.id.to_string()));
+    let notices = lead_messages(&harness.store, MessageKind::Status);
+    assert_eq!(notices.len(), 1);
+    assert_eq!(notices[0].state, MessageDeliveryState::Acknowledged);
+    assert_eq!(notices[0].task_id, Some(root_task_id));
+    assert_eq!(
+        harness.store.get_task(root_task_id).unwrap().task.state,
+        TaskState::Running,
+        "the child is still accepted, so the lead's task stays running"
+    );
+
+    harness.app.deliver_pending_notices_once().await.unwrap();
+    assert_eq!(
+        harness.backend.turns.load(Ordering::SeqCst),
+        2,
+        "one promoted incident produces exactly one notice"
+    );
+
+    // Incidents about the lead itself are visible to the user but never sent to the lead.
+    for key in ["lead-1", "lead-2", "lead-3"] {
+        harness
+            .store
+            .raise_incident(&raise(key, harness.lead.id, root_task_id))
+            .unwrap();
+    }
+    harness.app.deliver_pending_notices_once().await.unwrap();
+    assert_eq!(harness.backend.turns.load(Ordering::SeqCst), 2);
+    assert_eq!(lead_messages(&harness.store, MessageKind::Status).len(), 1);
+    assert!(
+        harness
+            .store
+            .pending_incident_notices(10)
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[test]
+fn result_delivery_acceptance_contract_is_deterministic_and_backend_only() {
+    let repository = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let script_path = repository.join("scripts/acceptance/result-delivery.ps1");
+    let script = std::fs::read_to_string(&script_path).expect("result delivery acceptance script");
+
+    for required in [
+        "completed_result_names_the_child_its_output_and_the_parent",
+        "oversized_output_is_bounded_on_a_utf8_boundary_and_marked",
+        "incident_notice_states_the_code_title_action_and_boundary",
+        "terminal_child_results_queue_once_to_the_parent_lead",
+        "notice_turns_reuse_the_notice_message_and_wait_for_the_lead_to_be_free",
+        "task_wait_consumes_a_result_with_the_waiting_turn_as_evidence",
+        "a_foreign_turn_cannot_consume_another_leads_result",
+        "priority_incidents_on_a_child_notify_the_lead_once",
+        "child_results_reach_an_idle_lead_as_a_notice_turn_after_its_turn_ended",
+        "task_wait_consumes_child_results_so_no_notice_turn_follows",
+        "notices_wait_for_a_dormant_lead_until_the_user_resumes_it",
+        "escalated_incidents_notify_the_lead_once_as_a_status_turn",
+        "store_enables_wal_foreign_keys_and_schema_version",
+        "dormantLeadNeverActivated",
+        "providerSmokeAbsent",
+        "externalModelUseAbsent",
+        "uiChangesAbsent",
         "deterministic-fake-transport",
         "schemaVersion = 9",
     ] {

@@ -964,7 +964,7 @@ impl Store {
     }
 }
 
-fn require_route_ready_employee(
+pub(crate) fn require_route_ready_employee(
     connection: &Connection,
     employee_id: Uuid,
 ) -> Result<lazoo_protocol::EmployeeRecord, StoreError> {
@@ -1128,7 +1128,9 @@ fn require_owned_idle_session(
     Ok(session)
 }
 
-fn sender_columns(sender: MessageSender) -> (&'static str, Option<String>, Option<String>) {
+pub(crate) fn sender_columns(
+    sender: MessageSender,
+) -> (&'static str, Option<String>, Option<String>) {
     match sender {
         MessageSender::Employee(endpoint) => (
             "employee",
@@ -1186,7 +1188,7 @@ fn insert_conversation_command(
     Ok(())
 }
 
-fn insert_turn_command(
+pub(crate) fn insert_turn_command(
     transaction: &Transaction<'_>,
     scope: &str,
     idempotency_key: &str,
@@ -1225,7 +1227,7 @@ fn conversation_for_command(
         .transpose()
 }
 
-fn turn_for_command(
+pub(crate) fn turn_for_command(
     connection: &Connection,
     scope: &str,
     idempotency_key: &str,
@@ -1672,7 +1674,7 @@ fn effective_turn_result(
     })
 }
 
-fn turn_result(
+pub(crate) fn turn_result(
     connection: &Connection,
     turn: ConversationTurnRecord,
     event_sequence: Option<u64>,
