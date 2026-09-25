@@ -1694,6 +1694,7 @@ fn insert_delegation_message_tx(
             request_id: request_id.to_owned(),
             command_scope: "task.delegation-message",
             idempotency_key: format!("task-delegation-{task_id}"),
+            id: None,
             version: MESSAGE_ENVELOPE_V1,
             sender: MessageSender::Employee(sender),
             recipient,
@@ -1787,6 +1788,9 @@ pub(crate) fn project_turn_tx(
     }
 
     let active_descendants = has_active_descendants(transaction, current.id)?;
+    // Answering a peer message is not finishing the task: the result notices that follow (or
+    // the employee's own turn) complete it, so a peer turn never closes a task early.
+    let peer_turn = crate::delivery::is_peer_message(transaction, turn.message_id)?;
     let projection = match (current.state, turn.state, cause) {
         (TaskState::Accepted, TurnState::Accepted, _) => Some((
             TaskState::Running,
@@ -1804,7 +1808,7 @@ pub(crate) fn project_turn_tx(
                 false,
             ))
         }
-        (TaskState::Running, TurnState::Completed, _) if active_descendants => Some((
+        (TaskState::Running, TurnState::Completed, _) if active_descendants || peer_turn => Some((
             TaskState::Running,
             TaskEvidenceKind::Progress,
             "task.progressed",

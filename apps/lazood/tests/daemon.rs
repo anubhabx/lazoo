@@ -189,8 +189,19 @@ impl ManagedSession for FakeManagedSession {
                 observer.observe(&event)?;
                 returned.push(event);
                 if index == 0 {
-                    let calls = std::mem::take(&mut *self.tool_calls.lock().unwrap());
-                    for call in calls {
+                    // Each session issues only the calls scripted for it; `$message-id` stands
+                    // for the id a live model would read from its last tool result or prompt.
+                    let calls = {
+                        let mut queued = self.tool_calls.lock().unwrap();
+                        let (mine, others): (Vec<_>, Vec<_>) = std::mem::take(&mut *queued)
+                            .into_iter()
+                            .partition(|call| call.session_id == self.id);
+                        *queued = others;
+                        mine
+                    };
+                    for mut call in calls {
+                        let last_result = self.tool_results.lock().unwrap().last().cloned();
+                        substitute_message_id(&mut call, &request.prompt, last_result.as_ref());
                         let result = observer.call_tool(&call).await?;
                         self.tool_results.lock().unwrap().push(result);
                     }
@@ -257,6 +268,35 @@ impl SessionBackend for FakeSessionBackend {
                 tool_results: Arc::clone(&self.tool_results),
             }) as Box<dyn ManagedSession>)
         })
+    }
+}
+
+/// Replaces `"$message-id"` arguments with the message id from the last tool result's inbox
+/// (`messages[0].messageId`) or, failing that, from the turn prompt's `message id <uuid>`.
+fn substitute_message_id(call: &mut ToolCall, prompt: &str, last_result: Option<&ToolResult>) {
+    let Some(arguments) = call.arguments.as_object_mut() else {
+        return;
+    };
+    if !arguments.values().any(|value| value == "$message-id") {
+        return;
+    }
+    let from_result = last_result.and_then(|result| {
+        result.content["messages"][0]["messageId"]
+            .as_str()
+            .map(str::to_owned)
+    });
+    let from_prompt = prompt.split("message id ").nth(1).map(|rest| {
+        rest.chars()
+            .take_while(|character| character.is_ascii_hexdigit() || *character == '-')
+            .collect::<String>()
+    });
+    let Some(id) = from_result.or(from_prompt) else {
+        return;
+    };
+    for value in arguments.values_mut() {
+        if value == "$message-id" {
+            *value = json!(id);
+        }
     }
 }
 
@@ -5169,9 +5209,19 @@ fn tool_harness(authority: AuthorityMode) -> (tempfile::TempDir, ToolHarness) {
 }
 
 fn tool_call(call_id: &str, name: &str, arguments: serde_json::Value) -> ToolCall {
+    session_tool_call("native-1", call_id, name, arguments)
+}
+
+/// A scripted call issued by one fake session; sessions are numbered in start order.
+fn session_tool_call(
+    session_id: &str,
+    call_id: &str,
+    name: &str,
+    arguments: serde_json::Value,
+) -> ToolCall {
     ToolCall {
         provider: ProviderKind::Codex,
-        session_id: "native-1".to_owned(),
+        session_id: session_id.to_owned(),
         turn_id: Some("approval-turn".to_owned()),
         call_id: call_id.to_owned(),
         name: name.to_owned(),
@@ -5220,6 +5270,7 @@ async fn submit_lead_turn(harness: &ToolHarness, authority: &str) -> serde_json:
 }
 
 #[tokio::test]
+#[allow(clippy::too_many_lines)] // The full catalog declaration plus one delegate-and-wait story.
 async fn lead_turn_lists_employees_delegates_and_waits_through_collaboration_tools() {
     use lazoo_protocol::{MessageSender, TaskState};
 
@@ -5259,7 +5310,9 @@ async fn lead_turn_lists_employees_delegates_and_waits_through_collaboration_too
             "task_wait",
             "task_report",
             "incident_report",
-            "incident_list"
+            "incident_list",
+            "message_send",
+            "message_reply"
         ],
         "every daemon-managed Codex session declares the Lazoo tool catalog"
     );
@@ -6676,6 +6729,505 @@ fn result_delivery_acceptance_contract_is_deterministic_and_backend_only() {
         "escalated_incidents_notify_the_lead_once_as_a_status_turn",
         "store_enables_wal_foreign_keys_and_schema_version",
         "dormantLeadNeverActivated",
+        "providerSmokeAbsent",
+        "externalModelUseAbsent",
+        "uiChangesAbsent",
+        "deterministic-fake-transport",
+        "schemaVersion = 9",
+    ] {
+        assert!(
+            script.contains(required),
+            "acceptance script must contain {required}"
+        );
+    }
+    for forbidden in [
+        "provider', 'smoke",
+        "apps\\lazoo-desktop\\src",
+        "LivePrompt",
+    ] {
+        assert!(
+            !script.contains(forbidden),
+            "acceptance script must not contain {forbidden}"
+        );
+    }
+}
+
+/// Peer messages and replies in the message ledger, oldest first; user turn messages share
+/// the `peer` kind, so employee authorship is what distinguishes them.
+fn employee_messages(store: &Store) -> Vec<lazoo_protocol::MessageSummary> {
+    use lazoo_protocol::{MessageKind, MessageSender};
+
+    store
+        .list_messages(0, 100)
+        .unwrap()
+        .into_iter()
+        .filter(|message| {
+            matches!(message.kind, MessageKind::Peer | MessageKind::Reply)
+                && matches!(message.sender, MessageSender::Employee(_))
+        })
+        .collect()
+}
+
+fn acknowledgement_via(store: &Store, message_id: uuid::Uuid) -> serde_json::Value {
+    store
+        .get_message(message_id)
+        .unwrap()
+        .attempts
+        .last()
+        .and_then(|attempt| attempt.acknowledgement_evidence.clone())
+        .map(|evidence| evidence["via"].clone())
+        .unwrap_or_default()
+}
+
+fn prompts(backend: &FakeSessionBackend) -> Vec<String> {
+    backend
+        .turn_requests
+        .lock()
+        .unwrap()
+        .iter()
+        .map(|request| request.prompt.clone())
+        .collect()
+}
+
+#[tokio::test]
+#[allow(clippy::too_many_lines)] // One worker question and one lead answer, end to end.
+async fn peer_questions_reach_an_idle_lead_as_a_turn_and_the_reply_returns_to_the_waiting_worker() {
+    use lazoo_protocol::{MessageKind, TaskEvidenceKind, TaskState};
+
+    let (_temporary, harness) = tool_harness(AuthorityMode::SelfDecision);
+    let (root_task_id, child_id) = delegate_without_waiting(&harness).await;
+    // The worker asks the lead mid-turn and waits; the idle lead answers inside the peer turn
+    // the notice loop delivers, citing the message id it reads in that turn's text.
+    harness.backend.tool_calls.lock().unwrap().extend([
+        session_tool_call(
+            "native-2",
+            "call-w1",
+            "message_send",
+            json!({
+                "employeeId": harness.lead.id,
+                "text": "Which spacing token should the parser emit?",
+                "waitForReplySeconds": 10
+            }),
+        ),
+        session_tool_call(
+            "native-1",
+            "call-l2",
+            "message_reply",
+            json!({"messageId": "$message-id", "text": "Use spacing.md; the token is space-4."}),
+        ),
+    ]);
+    let notices_app = harness.app.clone();
+    let notices = tokio::spawn(async move { notices_app.run_notice_delivery().await });
+    timeout(
+        Duration::from_secs(20),
+        harness.app.dispatch_pending_tasks_once(),
+    )
+    .await
+    .expect("the worker turn ends once the reply arrives")
+    .unwrap();
+    timeout(Duration::from_secs(10), async {
+        while harness.store.get_task(root_task_id).unwrap().task.state != TaskState::Completed {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("the child's result completes the lead's task");
+    notices.abort();
+    let _ = notices.await;
+
+    assert_eq!(
+        harness.backend.starts.load(Ordering::SeqCst),
+        2,
+        "no provider process was started for peer traffic"
+    );
+    assert_eq!(
+        harness.backend.turns.load(Ordering::SeqCst),
+        4,
+        "lead user turn, worker turn, lead peer turn, lead result turn"
+    );
+    let prompts = prompts(&harness.backend);
+    let peer_prompt = prompts
+        .iter()
+        .find(|prompt| prompt.starts_with("[Lazoo peer message]"))
+        .expect("the lead received the question as a turn");
+    assert!(
+        peer_prompt.contains(&format!("Mira (task {child_id}) sent you message")),
+        "{peer_prompt}"
+    );
+    assert!(peer_prompt.contains("Which spacing token should the parser emit?"));
+    assert!(peer_prompt.contains(&format!("about your task {root_task_id}")));
+    assert!(peer_prompt.contains("not an approval"));
+
+    let results = harness.backend.tool_results.lock().unwrap().clone();
+    assert_eq!(results.len(), 3);
+    assert!(results[1].success, "{:?}", results[1]);
+    assert_eq!(
+        results[1].content["recipientEmployeeId"],
+        harness.worker.id.to_string()
+    );
+    assert_eq!(results[1].content["recipientTaskId"], child_id.to_string());
+    assert!(results[2].success, "{:?}", results[2]);
+    assert_eq!(results[2].content["timedOut"], false);
+    assert_eq!(results[2].content["state"], "acknowledged");
+    assert_eq!(
+        results[2].content["reply"]["text"],
+        "Use spacing.md; the token is space-4."
+    );
+    assert_eq!(
+        results[2].content["reply"]["fromEmployeeId"],
+        harness.lead.id.to_string()
+    );
+    assert_eq!(
+        results[2].content["reply"]["replyToMessageId"],
+        results[2].content["messageId"]
+    );
+    assert_eq!(results[2].content["messages"].as_array().unwrap().len(), 1);
+
+    let messages = employee_messages(&harness.store);
+    assert_eq!(messages.len(), 2);
+    assert_eq!(messages[0].kind, MessageKind::Peer);
+    assert_eq!(messages[0].state, MessageDeliveryState::Acknowledged);
+    assert_eq!(messages[0].task_id, Some(root_task_id));
+    assert_eq!(messages[1].kind, MessageKind::Reply);
+    assert_eq!(messages[1].state, MessageDeliveryState::Acknowledged);
+    assert_eq!(messages[1].task_id, Some(child_id));
+    assert_eq!(messages[1].causation_id, Some(messages[0].id));
+    assert_eq!(
+        acknowledgement_via(&harness.store, messages[1].id),
+        "message_send"
+    );
+
+    let turns = lead_turns(&harness);
+    assert_eq!(turns.len(), 3, "user turn, peer turn, result turn");
+    assert!(turns.iter().all(|turn| turn.state == TurnState::Completed));
+    let root = harness.store.get_task(root_task_id).unwrap();
+    assert!(
+        root.evidence.iter().any(|evidence| {
+            evidence.turn_id == Some(turns[1].id) && evidence.kind == TaskEvidenceKind::Progress
+        }),
+        "the peer turn only progressed the lead's task"
+    );
+    assert!(root.evidence.iter().any(|evidence| {
+        evidence.turn_id == Some(turns[2].id) && evidence.kind == TaskEvidenceKind::Completed
+    }));
+    assert_eq!(
+        harness.store.get_task(child_id).unwrap().task.state,
+        TaskState::Completed
+    );
+}
+
+#[tokio::test]
+async fn task_wait_returns_early_with_a_peer_question_so_the_lead_answers_in_turn() {
+    use lazoo_protocol::{MessageKind, TaskState};
+
+    let (_temporary, harness) = tool_harness(AuthorityMode::SelfDecision);
+    warm_tool_lead(&harness).await;
+    let roster_revision = harness.store.roster_snapshot().unwrap().revision;
+    harness.backend.tool_calls.lock().unwrap().extend([
+        tool_call(
+            "call-1",
+            "task_delegate",
+            json!({
+                "employeeId": harness.worker.id,
+                "objective": "Implement the parser fix",
+                "rosterRevision": roster_revision,
+                "requestedAuthority": "self-decision"
+            }),
+        ),
+        tool_call("call-2", "task_wait", json!({"timeoutSeconds": 10})),
+        tool_call(
+            "call-3",
+            "message_reply",
+            json!({"messageId": "$message-id", "text": "space-4"}),
+        ),
+        tool_call("call-4", "task_wait", json!({"timeoutSeconds": 10})),
+        session_tool_call(
+            "native-2",
+            "call-w1",
+            "message_send",
+            json!({
+                "employeeId": harness.lead.id,
+                "text": "Which token?",
+                "waitForReplySeconds": 10
+            }),
+        ),
+    ]);
+    let dispatcher_app = harness.app.clone();
+    let dispatcher = tokio::spawn(async move { dispatcher_app.run_task_dispatcher().await });
+    let submitted = submit_lead_turn(&harness, "self-decision").await;
+    assert_eq!(submitted["turn"]["state"], "completed");
+    dispatcher.abort();
+    let _ = dispatcher.await;
+
+    let results = harness.backend.tool_results.lock().unwrap().clone();
+    assert_eq!(results.len(), 5, "{results:?}");
+    assert!(results[1].success, "{:?}", results[1]);
+    assert_eq!(results[1].content["timedOut"], false);
+    assert_eq!(results[1].content["tasks"][0]["state"], "running");
+    let inbox = results[1].content["messages"].as_array().unwrap();
+    assert_eq!(inbox.len(), 1, "task_wait returned early with the question");
+    assert_eq!(inbox[0]["kind"], "peer");
+    assert_eq!(inbox[0]["text"], "Which token?");
+    assert_eq!(inbox[0]["fromEmployeeId"], harness.worker.id.to_string());
+    assert_eq!(inbox[0]["fromEmployeeName"], "Mira");
+    assert!(results[2].success, "{:?}", results[2]);
+    assert_eq!(
+        results[2].content["replyToMessageId"],
+        inbox[0]["messageId"]
+    );
+    assert!(results[3].success, "{:?}", results[3]);
+    assert_eq!(results[3].content["reply"]["text"], "space-4");
+    assert_eq!(results[3].content["timedOut"], false);
+    assert_eq!(results[3].content["state"], "acknowledged");
+    assert!(results[4].success, "{:?}", results[4]);
+    assert_eq!(results[4].content["timedOut"], false);
+    assert_eq!(results[4].content["tasks"][0]["state"], "completed");
+    assert!(
+        results[4].content["messages"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+
+    assert_eq!(harness.backend.turns.load(Ordering::SeqCst), 2);
+    assert_eq!(harness.backend.starts.load(Ordering::SeqCst), 2);
+    assert_eq!(
+        lead_turns(&harness).len(),
+        1,
+        "the whole exchange happened inside the lead's own turn"
+    );
+    let messages = employee_messages(&harness.store);
+    assert_eq!(messages.len(), 2);
+    assert_eq!(messages[0].kind, MessageKind::Peer);
+    assert_eq!(messages[0].state, MessageDeliveryState::Acknowledged);
+    assert_eq!(
+        acknowledgement_via(&harness.store, messages[0].id),
+        "task_wait"
+    );
+    assert_eq!(messages[1].kind, MessageKind::Reply);
+    assert_eq!(messages[1].state, MessageDeliveryState::Acknowledged);
+    assert_eq!(
+        acknowledgement_via(&harness.store, messages[1].id),
+        "message_send"
+    );
+    let root_task_id: uuid::Uuid = submitted["turn"]["taskId"]
+        .as_str()
+        .unwrap()
+        .parse()
+        .unwrap();
+    assert_eq!(
+        harness.store.get_task(root_task_id).unwrap().task.state,
+        TaskState::Completed
+    );
+}
+
+#[tokio::test]
+#[allow(clippy::too_many_lines)] // Dormant recipient, resume, refusals, and ordering in one story.
+async fn peer_messages_never_activate_a_dormant_recipient_and_refusals_never_end_the_turn() {
+    use lazoo_protocol::{MessageKind, SessionLifecycleState, TaskEvidenceKind, TaskState};
+
+    let (_temporary, harness) = tool_harness(AuthorityMode::SelfDecision);
+    let (root_task_id, child_id) = delegate_without_waiting(&harness).await;
+    let lead_session = harness
+        .store
+        .list_sessions()
+        .unwrap()
+        .into_iter()
+        .find(|session| {
+            session.employee_id == harness.lead.id && session.state == SessionLifecycleState::Idle
+        })
+        .expect("the lead session is idle after its turn");
+    harness
+        .app
+        .handle(request(
+            "stop-lead",
+            "session.stop",
+            json!({
+                "id": lead_session.id,
+                "expectedRevision": lead_session.revision,
+                "idempotencyKey": "stop-lead"
+            }),
+        ))
+        .await
+        .result
+        .unwrap();
+
+    harness
+        .backend
+        .tool_calls
+        .lock()
+        .unwrap()
+        .push(session_tool_call(
+            "native-2",
+            "call-w1",
+            "message_send",
+            json!({
+                "employeeId": harness.lead.id,
+                "text": "Heads up: the parser fix is ready for review."
+            }),
+        ));
+    harness.app.dispatch_pending_tasks_once().await.unwrap();
+    assert_eq!(
+        harness.store.get_task(child_id).unwrap().task.state,
+        TaskState::Completed
+    );
+    let results = harness.backend.tool_results.lock().unwrap().clone();
+    assert!(results[1].success, "{:?}", results[1]);
+    assert_eq!(results[1].content["state"], "queued");
+    assert_eq!(results[1].content["timedOut"], false);
+    assert!(results[1].content["reply"].is_null());
+
+    harness.app.deliver_pending_notices_once().await.unwrap();
+
+    assert_eq!(
+        harness.backend.starts.load(Ordering::SeqCst),
+        2,
+        "a peer message never activates a dormant recipient"
+    );
+    assert_eq!(harness.backend.turns.load(Ordering::SeqCst), 2);
+    let turns = lead_turns(&harness);
+    assert_eq!(turns.len(), 2);
+    assert_eq!(
+        turns[1].state,
+        TurnState::Recorded,
+        "the peer turn is recorded and waits for the lead"
+    );
+    let messages = employee_messages(&harness.store);
+    assert_eq!(messages.len(), 1);
+    assert_eq!(messages[0].state, MessageDeliveryState::Queued);
+    let result_notices = lead_messages(&harness.store, MessageKind::Result);
+    assert_eq!(result_notices.len(), 1);
+    assert_eq!(result_notices[0].state, MessageDeliveryState::Queued);
+    assert_eq!(
+        harness.store.get_task(root_task_id).unwrap().task.state,
+        TaskState::Running
+    );
+
+    // The user resumes the lead. Inside the peer turn the lead tries four calls that must all
+    // be refused with a stable code and must not end the turn; the child's result then follows
+    // in the same pass and completes the lead's task.
+    // The resumed lead runs on the third session the backend starts.
+    harness.backend.tool_calls.lock().unwrap().extend([
+        session_tool_call(
+            "native-3",
+            "call-l2",
+            "message_send",
+            json!({"employeeId": harness.lead.id, "text": "note to self"}),
+        ),
+        session_tool_call(
+            "native-3",
+            "call-l3",
+            "message_send",
+            json!({"employeeId": harness.worker.id, "text": "too late"}),
+        ),
+        session_tool_call(
+            "native-3",
+            "call-l4",
+            "message_reply",
+            json!({"messageId": uuid::Uuid::new_v4(), "text": "?"}),
+        ),
+        session_tool_call(
+            "native-3",
+            "call-l5",
+            "message_send",
+            json!({"employeeId": harness.worker.id}),
+        ),
+    ]);
+    harness
+        .app
+        .handle(request(
+            "warm-lead-again",
+            "session.warm",
+            json!({
+                "employeeId": harness.lead.id,
+                "expectedEmployeeRevision": harness.lead.configuration_revision,
+                "idempotencyKey": "warm-lead-again"
+            }),
+        ))
+        .await
+        .result
+        .unwrap();
+    assert_eq!(harness.backend.starts.load(Ordering::SeqCst), 3);
+    harness.app.deliver_pending_notices_once().await.unwrap();
+
+    assert_eq!(harness.backend.turns.load(Ordering::SeqCst), 4);
+    let prompts = prompts(&harness.backend);
+    assert!(
+        prompts[2].starts_with("[Lazoo peer message]"),
+        "{}",
+        prompts[2]
+    );
+    assert!(prompts[2].contains("Heads up: the parser fix is ready for review."));
+    assert!(
+        prompts[3].starts_with("[Lazoo task result]"),
+        "{}",
+        prompts[3]
+    );
+    let results = harness.backend.tool_results.lock().unwrap().clone();
+    assert_eq!(results.len(), 6);
+    let codes: Vec<&str> = results[2..]
+        .iter()
+        .map(|result| {
+            assert!(!result.success);
+            result.content["error"]["code"].as_str().unwrap()
+        })
+        .collect();
+    assert_eq!(
+        codes,
+        vec![
+            "LZ-TOOL-INVALID",
+            "LZ-TOOL-SCOPE",
+            "LZ-TOOL-SCOPE",
+            "LZ-TOOL-INVALID"
+        ]
+    );
+    let turns = lead_turns(&harness);
+    assert_eq!(
+        turns.len(),
+        3,
+        "the recorded peer turn was delivered, not a new one"
+    );
+    assert!(turns.iter().all(|turn| turn.state == TurnState::Completed));
+    let root = harness.store.get_task(root_task_id).unwrap();
+    assert_eq!(root.task.state, TaskState::Completed);
+    assert!(
+        root.evidence.iter().any(|evidence| {
+            evidence.turn_id == Some(turns[1].id) && evidence.kind == TaskEvidenceKind::Progress
+        }),
+        "the peer turn left the task running for the result that followed"
+    );
+    assert!(root.evidence.iter().any(|evidence| {
+        evidence.turn_id == Some(turns[2].id) && evidence.kind == TaskEvidenceKind::Completed
+    }));
+    assert_eq!(
+        employee_messages(&harness.store)[0].state,
+        MessageDeliveryState::Acknowledged
+    );
+    assert_eq!(
+        lead_messages(&harness.store, MessageKind::Result)[0].state,
+        MessageDeliveryState::Acknowledged
+    );
+}
+
+#[test]
+fn peer_messaging_acceptance_contract_is_deterministic_and_backend_only() {
+    let repository = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let script_path = repository.join("scripts/acceptance/peer-messaging.ps1");
+    let script = std::fs::read_to_string(&script_path).expect("peer messaging acceptance script");
+
+    for required in [
+        "peer_message_text_names_the_sender_tasks_and_reply_tool",
+        "peer_reply_text_threads_under_the_question",
+        "peer_message_content_is_refused_when_empty_or_oversized",
+        "peer_messages_link_both_tasks_and_queue_once",
+        "replies_thread_under_the_question_and_return_to_the_sender_task",
+        "peer_messages_are_consumed_in_turn_with_evidence_and_close_an_orphan_notice_turn",
+        "peer_turns_never_complete_the_recipient_task",
+        "peer_questions_reach_an_idle_lead_as_a_turn_and_the_reply_returns_to_the_waiting_worker",
+        "task_wait_returns_early_with_a_peer_question_so_the_lead_answers_in_turn",
+        "peer_messages_never_activate_a_dormant_recipient_and_refusals_never_end_the_turn",
+        "store_enables_wal_foreign_keys_and_schema_version",
+        "dormantRecipientNeverActivated",
         "providerSmokeAbsent",
         "externalModelUseAbsent",
         "uiChangesAbsent",

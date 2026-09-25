@@ -93,6 +93,7 @@ impl Store {
                 request_id: input.request_id.clone(),
                 command_scope: "message.send",
                 idempotency_key: input.idempotency_key.clone(),
+                id: None,
                 version: MESSAGE_ENVELOPE_V1,
                 sender: MessageSender::Employee(input.sender),
                 recipient: input.recipient,
@@ -733,6 +734,8 @@ pub(crate) struct InsertMessageInput {
     pub request_id: String,
     pub command_scope: &'static str,
     pub idempotency_key: String,
+    /// A caller-chosen id, for a body that must name its own message; otherwise fresh.
+    pub id: Option<Uuid>,
     pub version: u32,
     pub sender: MessageSender,
     pub recipient: MessageEndpoint,
@@ -792,7 +795,7 @@ pub(crate) fn insert_message_tx(
         ),
         MessageSender::User(_) => ("user", None, None),
     };
-    let message_id = Uuid::new_v4();
+    let message_id = input.id.unwrap_or_else(Uuid::new_v4);
     let correlation_id = resolve_correlation(
         transaction,
         message_id,

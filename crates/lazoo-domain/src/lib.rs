@@ -22,8 +22,9 @@ pub use conversation::{
     validate_turn_transition,
 };
 pub use delivery::{
-    IncidentNotice, MAX_NOTICE_OUTPUT_BYTES, TaskResultNotice, render_incident_notice_text,
-    render_task_result_text,
+    IncidentNotice, MAX_NOTICE_OUTPUT_BYTES, MAX_PEER_MESSAGE_BYTES, PeerMessageNotice,
+    TaskResultNotice, render_incident_notice_text, render_peer_message_text,
+    render_task_result_text, validate_peer_message_content,
 };
 pub use employee::{
     EmployeeValidationError, validate_employee_name, validate_employee_text_fields,

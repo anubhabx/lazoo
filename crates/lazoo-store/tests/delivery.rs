@@ -1,13 +1,15 @@
+use lazoo_domain::MAX_PEER_MESSAGE_BYTES;
 use lazoo_protocol::{
     AuthorityMode, EmployeeCheckoutPolicy, IncidentPriority, IncidentSource, MessageDeliveryState,
-    MessageEndpoint, MessageKind, MessageSender, ProviderObservation, SessionLifecycleState,
-    TaskState, TurnState, UserMessageEndpoint, UserMessageKind,
+    MessageEndpoint, MessageKind, MessageMutationResult, MessageSender, ProviderObservation,
+    SessionLifecycleState, TaskState, TurnState, UserMessageEndpoint, UserMessageKind,
 };
 use lazoo_store::{
-    BeginSessionInput, BeginTurnSubmissionInput, CancelTaskInput, ConsumeTaskResultInput,
-    CreateConversationInput, CreateEmployeeInput, DelegateTaskInput, MarkSessionReadyInput,
-    ObserveTurnInput, QueueIncidentNoticeInput, QueueTaskResultInput, RaiseIncidentInput,
-    RecordNoticeTurnInput, RecordTurnInput, Store, StoreError,
+    BeginSessionInput, BeginTurnSubmissionInput, CancelTaskInput, ConsumePeerMessageInput,
+    ConsumeTaskResultInput, CreateConversationInput, CreateEmployeeInput, DelegateTaskInput,
+    MarkSessionReadyInput, ObserveTurnInput, QueueIncidentNoticeInput, QueueTaskResultInput,
+    RaiseIncidentInput, RecordNoticeTurnInput, RecordTurnInput, ReplyPeerMessageInput,
+    SendPeerMessageInput, Store, StoreError,
 };
 use serde_json::json;
 use tempfile::tempdir;
@@ -17,6 +19,7 @@ struct Fixture {
     store: Store,
     lead: Uuid,
     lead_session: Uuid,
+    boot_id: Uuid,
     worker: Uuid,
     root: lazoo_protocol::TaskRecord,
     child: lazoo_protocol::TaskRecord,
@@ -133,11 +136,138 @@ fn fixture() -> (tempfile::TempDir, Fixture) {
             store,
             lead: lead.id,
             lead_session,
+            boot_id: owner_boot_id,
             worker: worker.id,
             root,
             child,
         },
     )
+}
+
+fn lead_turn(fixture: &Fixture) -> lazoo_protocol::ConversationTurnSummary {
+    fixture
+        .store
+        .list_turns(fixture.root.conversation_id, 0, 10)
+        .unwrap()
+        .into_iter()
+        .next()
+        .unwrap()
+}
+
+/// A turn on the child task addressed to the worker, recorded by the user so a store test can
+/// act as the worker without the daemon's dispatch pipeline.
+fn worker_turn(fixture: &Fixture, key: &str) -> lazoo_protocol::ConversationTurnRecord {
+    fixture
+        .store
+        .record_turn(&RecordTurnInput {
+            request_id: format!("request-{key}"),
+            idempotency_key: key.to_owned(),
+            conversation_id: fixture.root.conversation_id,
+            author: user(),
+            recipient: Some(MessageEndpoint {
+                employee_id: fixture.worker,
+                session_id: None,
+            }),
+            task_id: Some(fixture.child.id),
+            authority_mode: AuthorityMode::SelfDecision,
+            text: "Implement the parser fix".to_owned(),
+            activate_if_needed: false,
+            max_attempts: 3,
+        })
+        .unwrap()
+        .turn
+}
+
+fn send(
+    fixture: &Fixture,
+    key: &str,
+    turn_id: Uuid,
+    recipient: Uuid,
+    content: &str,
+) -> Result<MessageMutationResult, StoreError> {
+    fixture.store.send_peer_message(&SendPeerMessageInput {
+        request_id: format!("request-{key}"),
+        idempotency_key: key.to_owned(),
+        turn_id,
+        recipient_employee_id: recipient,
+        content: content.to_owned(),
+        references: Vec::new(),
+    })
+}
+
+fn reply(
+    fixture: &Fixture,
+    key: &str,
+    turn_id: Uuid,
+    message_id: Uuid,
+    content: &str,
+) -> Result<MessageMutationResult, StoreError> {
+    fixture.store.reply_peer_message(&ReplyPeerMessageInput {
+        request_id: format!("request-{key}"),
+        idempotency_key: key.to_owned(),
+        turn_id,
+        message_id,
+        content: content.to_owned(),
+        references: Vec::new(),
+    })
+}
+
+fn consume(
+    fixture: &Fixture,
+    key: &str,
+    message_id: Uuid,
+    turn_id: Uuid,
+    via: &'static str,
+) -> Result<MessageMutationResult, StoreError> {
+    fixture
+        .store
+        .consume_peer_message(&ConsumePeerMessageInput {
+            request_id: format!("request-{key}"),
+            message_id,
+            turn_id,
+            via,
+        })
+}
+
+/// Drives a recorded lead turn through submission, acceptance, and completion on the lead's
+/// idle session, exactly as the daemon does, and returns the lead's task afterwards.
+fn complete_lead_turn(fixture: &Fixture, turn_id: Uuid, key: &str) -> lazoo_protocol::TaskRecord {
+    let store = &fixture.store;
+    let turn = store.get_turn(turn_id).unwrap();
+    let submitting = store
+        .begin_turn_submission(&BeginTurnSubmissionInput {
+            request_id: format!("request-{key}-begin"),
+            idempotency_key: format!("{key}-begin"),
+            turn_id,
+            expected_revision: turn.revision,
+            owner_boot_id: fixture.boot_id,
+            recipient_session_id: fixture.lead_session,
+        })
+        .unwrap();
+    let mut revision = submitting.turn.revision;
+    let mut task = None;
+    for (stage, status, transition) in [
+        ("start", "in-progress", TurnState::Accepted),
+        ("complete", "completed", TurnState::Completed),
+    ] {
+        let observed = store
+            .observe_turn(&ObserveTurnInput {
+                request_id: format!("request-{key}-{stage}"),
+                idempotency_key: format!("{key}-{stage}"),
+                turn_id,
+                expected_revision: revision,
+                kind: format!("turn-{stage}"),
+                provider: "codex".to_owned(),
+                native_session_id: Some("native-lead".to_owned()),
+                native_turn_id: Some(format!("native-{key}")),
+                payload: json!({"status": status, "output": "noted"}),
+                transition: Some(transition),
+            })
+            .unwrap();
+        revision = observed.turn.revision;
+        task = observed.task;
+    }
+    task.unwrap()
 }
 
 fn cancel_child(fixture: &Fixture) -> lazoo_protocol::TaskRecord {
@@ -548,6 +678,441 @@ fn priority_incidents_on_a_child_notify_the_lead_once() {
         .unwrap();
     assert_eq!(recorded.turn.state, TurnState::Recorded);
     assert_eq!(recorded.turn.text, text);
+}
+
+#[test]
+#[allow(clippy::too_many_lines)] // Refusals and the full envelope of one message share a fixture.
+fn peer_messages_link_both_tasks_and_queue_once() {
+    let (_temporary, fixture) = fixture();
+    let store = &fixture.store;
+    let lead_turn = lead_turn(&fixture);
+    let stranger = store
+        .create_employee(&employee("Noor", AuthorityMode::FullAutonomy))
+        .unwrap()
+        .employee;
+
+    let before = store.list_messages(0, 100).unwrap().len();
+    let selfish = send(&fixture, "self", lead_turn.id, fixture.lead, "hello").unwrap_err();
+    assert!(matches!(selfish, StoreError::PeerRecipientSelf { .. }));
+    let outside = send(&fixture, "outside", lead_turn.id, stranger.id, "hello").unwrap_err();
+    assert!(matches!(
+        outside,
+        StoreError::PeerRecipientTaskNotFound { .. }
+    ));
+    let empty = send(&fixture, "empty", lead_turn.id, fixture.worker, "   ").unwrap_err();
+    assert!(matches!(empty, StoreError::MessageValidation(_)));
+    let oversized = send(
+        &fixture,
+        "big",
+        lead_turn.id,
+        fixture.worker,
+        &"x".repeat(MAX_PEER_MESSAGE_BYTES + 1),
+    )
+    .unwrap_err();
+    assert!(matches!(oversized, StoreError::MessageValidation(_)));
+    assert_eq!(
+        store.list_messages(0, 100).unwrap().len(),
+        before,
+        "a refused send leaves nothing behind"
+    );
+
+    let sent = send(
+        &fixture,
+        "question",
+        lead_turn.id,
+        fixture.worker,
+        "Use the spacing token from tokens.md.",
+    )
+    .unwrap();
+    assert!(sent.event_sequence.is_some());
+    let envelope = &sent.message.envelope;
+    assert_eq!(envelope.kind, MessageKind::Peer);
+    assert_eq!(
+        envelope.sender,
+        MessageSender::Employee(MessageEndpoint {
+            employee_id: fixture.lead,
+            session_id: Some(fixture.lead_session),
+        }),
+        "the sender is the turn's own endpoint"
+    );
+    assert_eq!(
+        envelope.recipient,
+        MessageEndpoint {
+            employee_id: fixture.worker,
+            session_id: None,
+        }
+    );
+    assert_eq!(envelope.task_id, Some(fixture.child.id));
+    assert_eq!(envelope.conversation_id, Some(fixture.root.conversation_id));
+    assert_eq!(envelope.causation_id, None);
+    assert_eq!(envelope.correlation_id, envelope.id);
+    assert_eq!(envelope.body["kind"], "peer-message");
+    assert_eq!(
+        envelope.body["content"],
+        "Use the spacing token from tokens.md."
+    );
+    assert_eq!(envelope.body["senderEmployeeName"], "Rhea");
+    assert_eq!(envelope.body["senderTaskId"], fixture.root.id.to_string());
+    assert_eq!(
+        envelope.body["recipientTaskId"],
+        fixture.child.id.to_string()
+    );
+    assert!(envelope.body["replyToMessageId"].is_null());
+    let text = envelope.body["text"].as_str().unwrap();
+    assert!(
+        text.starts_with(&format!(
+            "[Lazoo peer message] Rhea (task {}) sent you message {} about your task {}:",
+            fixture.root.id, envelope.id, fixture.child.id
+        )),
+        "{text}"
+    );
+    assert_eq!(
+        envelope
+            .references
+            .iter()
+            .map(|reference| reference.target.clone())
+            .collect::<Vec<_>>(),
+        vec![fixture.root.id.to_string(), fixture.child.id.to_string()],
+        "both tasks are linked"
+    );
+    assert_eq!(sent.message.delivery.state, MessageDeliveryState::Queued);
+
+    let replay = send(
+        &fixture,
+        "question",
+        lead_turn.id,
+        fixture.worker,
+        "different text",
+    )
+    .unwrap();
+    assert_eq!(replay.message, sent.message);
+    assert!(replay.event_sequence.is_none());
+
+    let inbox = store
+        .pending_peer_messages(fixture.worker, fixture.child.id)
+        .unwrap();
+    assert_eq!(inbox.len(), 1);
+    assert_eq!(inbox[0].envelope.id, envelope.id);
+    assert!(
+        store
+            .pending_peer_messages(fixture.lead, fixture.root.id)
+            .unwrap()
+            .is_empty()
+    );
+    let notices = store.pending_lead_notices(10).unwrap();
+    assert_eq!(notices.len(), 1);
+    assert_eq!(notices[0].envelope.id, envelope.id);
+
+    // The child has not started: delivering the message now would start it with a peer
+    // message instead of its objective, so the message waits.
+    let early = store
+        .record_notice_turn(&RecordNoticeTurnInput {
+            request_id: "request-early".to_owned(),
+            message_id: envelope.id,
+        })
+        .unwrap_err();
+    assert!(matches!(early, StoreError::TurnTaskScope { .. }));
+}
+
+#[test]
+fn replies_thread_under_the_question_and_return_to_the_sender_task() {
+    let (_temporary, fixture) = fixture();
+    let store = &fixture.store;
+    let lead_turn = lead_turn(&fixture);
+    let question = send(
+        &fixture,
+        "question",
+        lead_turn.id,
+        fixture.worker,
+        "Which token?",
+    )
+    .unwrap()
+    .message;
+    let worker_turn = worker_turn(&fixture, "worker-turn");
+
+    // Only the addressed employee, from the addressed task, can reply, and only to a peer message.
+    let own = reply(
+        &fixture,
+        "own",
+        lead_turn.id,
+        question.envelope.id,
+        "Answering myself",
+    )
+    .unwrap_err();
+    assert!(matches!(own, StoreError::PeerMessageScope { .. }));
+    let delegation = store
+        .list_messages(0, 100)
+        .unwrap()
+        .into_iter()
+        .find(|message| message.kind == MessageKind::Delegation)
+        .unwrap();
+    let not_peer = reply(&fixture, "not-peer", worker_turn.id, delegation.id, "hi").unwrap_err();
+    assert!(matches!(not_peer, StoreError::PeerMessageScope { .. }));
+    let missing = reply(&fixture, "missing", worker_turn.id, Uuid::new_v4(), "hi").unwrap_err();
+    assert!(matches!(missing, StoreError::MessageNotFound { .. }));
+
+    let answer = reply(
+        &fixture,
+        "answer",
+        worker_turn.id,
+        question.envelope.id,
+        "spacing.md",
+    )
+    .unwrap();
+    assert!(answer.event_sequence.is_some());
+    let envelope = &answer.message.envelope;
+    assert_eq!(envelope.kind, MessageKind::Reply);
+    assert_eq!(envelope.causation_id, Some(question.envelope.id));
+    assert_eq!(envelope.correlation_id, question.envelope.correlation_id);
+    assert_eq!(
+        envelope.sender,
+        MessageSender::Employee(MessageEndpoint {
+            employee_id: fixture.worker,
+            session_id: None,
+        })
+    );
+    assert_eq!(envelope.recipient.employee_id, fixture.lead);
+    assert_eq!(envelope.task_id, Some(fixture.root.id));
+    assert_eq!(
+        envelope.body["replyToMessageId"],
+        question.envelope.id.to_string()
+    );
+    assert_eq!(envelope.body["senderTaskId"], fixture.child.id.to_string());
+    let text = envelope.body["text"].as_str().unwrap();
+    assert!(
+        text.starts_with(&format!(
+            "[Lazoo peer reply] Mira (task {}) replied to your message {} with message {}",
+            fixture.child.id, question.envelope.id, envelope.id
+        )),
+        "{text}"
+    );
+    assert_eq!(
+        store
+            .pending_peer_messages(fixture.lead, fixture.root.id)
+            .unwrap()
+            .len(),
+        1
+    );
+
+    // The idle lead receives the reply as a turn authored by the worker.
+    let recorded = store
+        .record_notice_turn(&RecordNoticeTurnInput {
+            request_id: "request-reply-turn".to_owned(),
+            message_id: envelope.id,
+        })
+        .unwrap();
+    assert_eq!(recorded.turn.state, TurnState::Recorded);
+    assert_eq!(recorded.turn.text, text);
+    assert_eq!(recorded.turn.author, envelope.sender);
+    assert_eq!(recorded.turn.task_id, Some(fixture.root.id));
+}
+
+#[test]
+#[allow(clippy::too_many_lines)] // In-turn consumption and the stale-turn cleanup share a fixture.
+fn peer_messages_are_consumed_in_turn_with_evidence_and_close_an_orphan_notice_turn() {
+    let (_temporary, fixture) = fixture();
+    let store = &fixture.store;
+    let lead_turn = lead_turn(&fixture);
+    let question = send(
+        &fixture,
+        "question",
+        lead_turn.id,
+        fixture.worker,
+        "Which token?",
+    )
+    .unwrap()
+    .message;
+    let worker_turn = worker_turn(&fixture, "worker-turn");
+
+    let foreign = consume(
+        &fixture,
+        "foreign",
+        question.envelope.id,
+        lead_turn.id,
+        "task_wait",
+    )
+    .unwrap_err();
+    assert!(matches!(foreign, StoreError::PeerMessageScope { .. }));
+
+    let consumed = consume(
+        &fixture,
+        "consume",
+        question.envelope.id,
+        worker_turn.id,
+        "task_wait",
+    )
+    .unwrap();
+    assert!(consumed.event_sequence.is_some());
+    assert_eq!(
+        consumed.message.delivery.state,
+        MessageDeliveryState::Acknowledged
+    );
+    let attempt = consumed.message.attempts.last().unwrap();
+    assert_eq!(
+        attempt.acknowledgement_key.as_deref(),
+        Some(format!("task-wait:{}", worker_turn.id).as_str())
+    );
+    assert_eq!(
+        attempt.acknowledgement_evidence.as_ref().unwrap()["via"],
+        "task_wait"
+    );
+    assert!(
+        store
+            .pending_peer_messages(fixture.worker, fixture.child.id)
+            .unwrap()
+            .is_empty()
+    );
+    let replay = consume(
+        &fixture,
+        "consume-replay",
+        question.envelope.id,
+        worker_turn.id,
+        "task_wait",
+    )
+    .unwrap();
+    assert_eq!(replay.message, consumed.message);
+    assert!(replay.event_sequence.is_none());
+    let late = store
+        .record_notice_turn(&RecordNoticeTurnInput {
+            request_id: "request-late".to_owned(),
+            message_id: question.envelope.id,
+        })
+        .unwrap_err();
+    assert!(matches!(late, StoreError::MessageState { .. }));
+
+    // A reply reaches a dormant lead as a recorded notice turn. When the user resumes the lead
+    // and it reads the reply inside its new turn, that stale notice turn is closed so it can
+    // neither deliver the reply twice nor block later notices.
+    let answer = reply(
+        &fixture,
+        "answer",
+        worker_turn.id,
+        question.envelope.id,
+        "spacing.md",
+    )
+    .unwrap()
+    .message;
+    let orphan = store
+        .record_notice_turn(&RecordNoticeTurnInput {
+            request_id: "request-orphan".to_owned(),
+            message_id: answer.envelope.id,
+        })
+        .unwrap()
+        .turn;
+    assert_eq!(orphan.state, TurnState::Recorded);
+    let resumed = store
+        .record_turn(&RecordTurnInput {
+            request_id: "request-resume".to_owned(),
+            idempotency_key: "resume".to_owned(),
+            conversation_id: fixture.root.conversation_id,
+            author: user(),
+            recipient: None,
+            task_id: Some(fixture.root.id),
+            authority_mode: AuthorityMode::FullAutonomy,
+            text: "Carry on".to_owned(),
+            activate_if_needed: false,
+            max_attempts: 3,
+        })
+        .unwrap()
+        .turn;
+    let read = consume(
+        &fixture,
+        "read",
+        answer.envelope.id,
+        resumed.id,
+        "message_send",
+    )
+    .unwrap();
+    assert_eq!(
+        read.message.delivery.state,
+        MessageDeliveryState::Acknowledged
+    );
+    assert_eq!(
+        read.message
+            .attempts
+            .last()
+            .unwrap()
+            .acknowledgement_evidence
+            .as_ref()
+            .unwrap()["via"],
+        "message_send"
+    );
+    assert_eq!(
+        store.get_turn(orphan.id).unwrap().state,
+        TurnState::Cancelled,
+        "the stale notice turn is closed"
+    );
+    assert!(store.pending_lead_notices(10).unwrap().is_empty());
+    let events: Vec<String> = store
+        .list_events(0, 1000)
+        .unwrap()
+        .into_iter()
+        .map(|event| event.event_type)
+        .collect();
+    assert!(events.iter().any(|kind| kind == "turn.cancelled"));
+    assert_eq!(
+        store.get_task(fixture.root.id).unwrap().task.state,
+        TaskState::Running,
+        "closing the stale turn touches no task"
+    );
+}
+
+#[test]
+fn peer_turns_never_complete_the_recipient_task() {
+    let (_temporary, fixture) = fixture();
+    let store = &fixture.store;
+    let worker_turn = worker_turn(&fixture, "worker-turn");
+    let question = send(
+        &fixture,
+        "question",
+        worker_turn.id,
+        fixture.lead,
+        "Is the parser fix still wanted?",
+    )
+    .unwrap()
+    .message;
+    assert_eq!(question.envelope.task_id, Some(fixture.root.id));
+    cancel_child(&fixture);
+    assert_eq!(
+        store.get_task(fixture.root.id).unwrap().task.state,
+        TaskState::Running
+    );
+
+    // With no unfinished child left, a result notice turn would complete the lead's task; the
+    // peer turn that is delivered first must not, or the result would be lost.
+    let recorded = store
+        .record_notice_turn(&RecordNoticeTurnInput {
+            request_id: "request-question-turn".to_owned(),
+            message_id: question.envelope.id,
+        })
+        .unwrap();
+    let after_peer = complete_lead_turn(&fixture, recorded.turn.id, "question");
+    assert_eq!(after_peer.state, TaskState::Running);
+    assert!(after_peer.active_turn_id.is_none());
+    assert_eq!(
+        store
+            .get_message(question.envelope.id)
+            .unwrap()
+            .delivery
+            .state,
+        MessageDeliveryState::Acknowledged
+    );
+
+    let result = store
+        .queue_task_result(&QueueTaskResultInput {
+            request_id: "request-result".to_owned(),
+            child_task_id: fixture.child.id,
+        })
+        .unwrap()
+        .message;
+    let recorded = store
+        .record_notice_turn(&RecordNoticeTurnInput {
+            request_id: "request-result-turn".to_owned(),
+            message_id: result.envelope.id,
+        })
+        .unwrap();
+    let after_result = complete_lead_turn(&fixture, recorded.turn.id, "result");
+    assert_eq!(after_result.state, TaskState::Completed);
 }
 
 fn employee(name: &str, authority_mode: AuthorityMode) -> CreateEmployeeInput {

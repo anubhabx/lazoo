@@ -55,6 +55,10 @@ pub enum MessageValidationError {
     FailureMessageTooLong,
     #[error("message max attempts must be between 1 and 5")]
     MaxAttemptsOutOfRange,
+    #[error("peer message content must not be empty")]
+    PeerContentEmpty,
+    #[error("peer message content must contain at most 16384 UTF-8 bytes")]
+    PeerContentTooLarge,
 }
 
 pub fn validate_message_content(

@@ -305,6 +305,7 @@ impl Store {
                 request_id: input.request_id.clone(),
                 command_scope: "turn.record",
                 idempotency_key: input.idempotency_key.clone(),
+                id: None,
                 version: MESSAGE_ENVELOPE_V2,
                 sender: input.author,
                 recipient,

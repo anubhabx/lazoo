@@ -32,7 +32,8 @@ pub use conversation::{
     RetryTurnInput,
 };
 pub use delivery::{
-    ConsumeTaskResultInput, QueueIncidentNoticeInput, QueueTaskResultInput, RecordNoticeTurnInput,
+    ConsumePeerMessageInput, ConsumeTaskResultInput, QueueIncidentNoticeInput,
+    QueueTaskResultInput, RecordNoticeTurnInput, ReplyPeerMessageInput, SendPeerMessageInput,
 };
 pub use emergency::EmergencyIncident;
 pub use employee::{
@@ -304,6 +305,14 @@ pub enum StoreError {
     IncidentNoticeNotApplicable { incident_id: Uuid },
     #[error("message {message_id} is not a lead notice")]
     MessageNotNotice { message_id: Uuid },
+    #[error("peer message recipient {employee_id} is the sender itself")]
+    PeerRecipientSelf { employee_id: Uuid },
+    #[error("employee {employee_id} has no active task in this task tree")]
+    PeerRecipientTaskNotFound { employee_id: Uuid },
+    #[error(
+        "message {message_id} is not a peer message addressed to this turn's employee and task"
+    )]
+    PeerMessageScope { message_id: Uuid },
     #[error("incident {incident_id} changed; current revision is {current_revision}")]
     IncidentStale {
         incident_id: Uuid,

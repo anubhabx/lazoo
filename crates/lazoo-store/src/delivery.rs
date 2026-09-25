@@ -7,15 +7,16 @@
 
 use chrono::Utc;
 use lazoo_domain::{
-    IncidentNotice, MAX_NOTICE_OUTPUT_BYTES, TaskResultNotice, render_incident_notice_text,
-    render_task_result_text, validate_turn_text,
+    IncidentNotice, MAX_NOTICE_OUTPUT_BYTES, PeerMessageNotice, TaskResultNotice,
+    render_incident_notice_text, render_peer_message_text, render_task_result_text,
+    validate_peer_message_content, validate_turn_text,
 };
 use lazoo_protocol::{
-    CONVERSATION_CONTRACT_V1, IncidentPriority, MESSAGE_ENVELOPE_V1, MessageDeliveryState,
-    MessageEndpoint, MessageKind, MessageMutationResult, MessageRecord, MessageReference,
-    MessageSender, TaskState, TurnMutationResult,
+    CONVERSATION_CONTRACT_V1, ConversationTurnRecord, IncidentPriority, MESSAGE_ENVELOPE_V1,
+    MessageDeliveryState, MessageEndpoint, MessageKind, MessageMutationResult, MessageRecord,
+    MessageReference, MessageSender, TaskRecord, TaskState, TurnMutationResult, TurnState,
 };
-use rusqlite::{Connection, Transaction, TransactionBehavior, params};
+use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, params};
 use serde_json::{Value, json};
 use uuid::Uuid;
 
@@ -23,7 +24,10 @@ use crate::{Store, StoreError, conversation, employee, incident, message, sessio
 
 const TASK_RESULT_SCOPE: &str = "task.result";
 const INCIDENT_NOTICE_SCOPE: &str = "incident.notice";
+/// Peer messages and replies sent by an employee through `message_send` / `message_reply`.
+const PEER_SCOPE: &str = "message.peer";
 const NOTICE_MAX_ATTEMPTS: u32 = 3;
+const PEER_INBOX_LIMIT: i64 = 64;
 
 #[derive(Clone, Debug)]
 pub struct QueueTaskResultInput {
@@ -48,6 +52,39 @@ pub struct ConsumeTaskResultInput {
     pub request_id: String,
     pub child_task_id: Uuid,
     pub turn_id: Uuid,
+}
+
+/// A peer message from the employee owning `turn_id` to another employee working in the same
+/// task tree. The daemon fixes the sender to the turn's recipient endpoint.
+#[derive(Clone, Debug)]
+pub struct SendPeerMessageInput {
+    pub request_id: String,
+    pub idempotency_key: String,
+    pub turn_id: Uuid,
+    pub recipient_employee_id: Uuid,
+    pub content: String,
+    pub references: Vec<MessageReference>,
+}
+
+/// A reply, from the employee owning `turn_id`, to a peer message that turn's task received.
+#[derive(Clone, Debug)]
+pub struct ReplyPeerMessageInput {
+    pub request_id: String,
+    pub idempotency_key: String,
+    pub turn_id: Uuid,
+    pub message_id: Uuid,
+    pub content: String,
+    pub references: Vec<MessageReference>,
+}
+
+/// Marks a queued peer message as read inside the recipient's own in-flight turn.
+#[derive(Clone, Debug)]
+pub struct ConsumePeerMessageInput {
+    pub request_id: String,
+    pub message_id: Uuid,
+    pub turn_id: Uuid,
+    /// The tool that read it, recorded as acknowledgement evidence (`task_wait`, `message_send`).
+    pub via: &'static str,
 }
 
 impl Store {
@@ -122,26 +159,100 @@ impl Store {
         rows.map(|row| parse_uuid(&row?, "incidents.id")).collect()
     }
 
-    /// Queued lead notices, oldest first. Only messages this module queued are returned; peer
-    /// messages sent through `message.send` keep their manual claim and acknowledge path.
+    /// Queued lead notices and peer messages, oldest first. Only messages this module queued
+    /// are returned; messages sent through `message.send` keep their manual claim path.
     pub fn pending_lead_notices(&self, limit: u32) -> Result<Vec<MessageRecord>, StoreError> {
         let connection = self.lock()?;
         let mut statement = connection.prepare(
             "SELECT m.id FROM messages m
              JOIN message_deliveries d ON d.message_id = m.id
-             JOIN message_commands mc ON mc.message_id = m.id AND mc.scope IN (?1, ?2)
+             JOIN message_commands mc ON mc.message_id = m.id AND mc.scope IN (?1, ?2, ?3)
              WHERE d.state = 'queued'
-             ORDER BY m.sequence LIMIT ?3",
+             ORDER BY m.sequence LIMIT ?4",
         )?;
         let ids: Vec<String> = statement
             .query_map(
-                params![TASK_RESULT_SCOPE, INCIDENT_NOTICE_SCOPE, i64::from(limit)],
+                params![
+                    TASK_RESULT_SCOPE,
+                    INCIDENT_NOTICE_SCOPE,
+                    PEER_SCOPE,
+                    i64::from(limit)
+                ],
                 |row| row.get::<_, String>(0),
             )?
             .collect::<Result<_, _>>()?;
         ids.iter()
             .map(|id| message::required_message(&connection, parse_uuid(id, "messages.id")?))
             .collect()
+    }
+
+    /// Sends one peer message from the turn's employee to another employee's active task in
+    /// the same task tree. Replays by idempotency key return the existing message.
+    pub fn send_peer_message(
+        &self,
+        input: &SendPeerMessageInput,
+    ) -> Result<MessageMutationResult, StoreError> {
+        let mut connection = self.lock()?;
+        let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let result = send_peer_message_tx(&transaction, input)?;
+        transaction.commit()?;
+        Ok(result)
+    }
+
+    /// Replies to a peer message the turn's task received; the reply goes back to the original
+    /// sender's task and threads under the original message.
+    pub fn reply_peer_message(
+        &self,
+        input: &ReplyPeerMessageInput,
+    ) -> Result<MessageMutationResult, StoreError> {
+        let mut connection = self.lock()?;
+        let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let result = reply_peer_message_tx(&transaction, input)?;
+        transaction.commit()?;
+        Ok(result)
+    }
+
+    /// Queued peer messages and replies addressed to one employee's task, oldest first.
+    pub fn pending_peer_messages(
+        &self,
+        employee_id: Uuid,
+        task_id: Uuid,
+    ) -> Result<Vec<MessageRecord>, StoreError> {
+        let connection = self.lock()?;
+        let mut statement = connection.prepare(
+            "SELECT m.id FROM messages m
+             JOIN message_deliveries d ON d.message_id = m.id
+             JOIN message_commands mc ON mc.message_id = m.id AND mc.scope = ?1
+             WHERE d.state = 'queued' AND m.recipient_employee_id = ?2 AND m.task_id = ?3
+             ORDER BY m.sequence LIMIT ?4",
+        )?;
+        let ids: Vec<String> = statement
+            .query_map(
+                params![
+                    PEER_SCOPE,
+                    employee_id.to_string(),
+                    task_id.to_string(),
+                    PEER_INBOX_LIMIT
+                ],
+                |row| row.get::<_, String>(0),
+            )?
+            .collect::<Result<_, _>>()?;
+        ids.iter()
+            .map(|id| message::required_message(&connection, parse_uuid(id, "messages.id")?))
+            .collect()
+    }
+
+    /// Marks a peer message as delivered inside the recipient's own turn: claimed and
+    /// acknowledged with that turn as evidence, so no notice turn follows.
+    pub fn consume_peer_message(
+        &self,
+        input: &ConsumePeerMessageInput,
+    ) -> Result<MessageMutationResult, StoreError> {
+        let mut connection = self.lock()?;
+        let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let result = consume_peer_message_tx(&transaction, input)?;
+        transaction.commit()?;
+        Ok(result)
     }
 
     /// Records the conversation turn that delivers a queued notice to the lead, reusing the
@@ -268,6 +379,7 @@ fn queue_task_result_tx(
             request_id: request_id.to_owned(),
             command_scope: TASK_RESULT_SCOPE,
             idempotency_key: key,
+            id: None,
             version: MESSAGE_ENVELOPE_V1,
             sender: MessageSender::Employee(MessageEndpoint {
                 employee_id: child.assigned_employee_id,
@@ -353,6 +465,7 @@ fn queue_incident_notice_tx(
             request_id: request_id.to_owned(),
             command_scope: INCIDENT_NOTICE_SCOPE,
             idempotency_key: key,
+            id: None,
             version: MESSAGE_ENVELOPE_V1,
             sender: MessageSender::Employee(MessageEndpoint {
                 employee_id: task.assigned_employee_id,
@@ -410,11 +523,13 @@ fn record_notice_turn_tx(
     let not_notice = StoreError::MessageNotNotice {
         message_id: input.message_id,
     };
+    let Some(scope) = notice_scope(transaction, input.message_id)? else {
+        return Err(not_notice);
+    };
     if !matches!(
         message.envelope.kind,
-        MessageKind::Result | MessageKind::Status
-    ) || !is_lead_notice(transaction, input.message_id)?
-    {
+        MessageKind::Result | MessageKind::Status | MessageKind::Peer | MessageKind::Reply
+    ) {
         return Err(not_notice);
     }
     message::require_message_state(&message, &[MessageDeliveryState::Queued], "queued")?;
@@ -422,21 +537,12 @@ fn record_notice_turn_tx(
         return Err(not_notice);
     };
     let task = task::required_task(transaction, task_id)?;
-    let another_turn_unfinished: bool = transaction.query_row(
-        "SELECT EXISTS (
-            SELECT 1 FROM conversation_turns
-            WHERE task_id = ?1 AND state IN ('recorded', 'submitting', 'accepted')
-         )",
-        [task.id.to_string()],
-        |row| row.get(0),
+    require_recipient_free(
+        transaction,
+        &task,
+        message.envelope.recipient.employee_id,
+        scope == PEER_SCOPE,
     )?;
-    if task.assigned_employee_id != message.envelope.recipient.employee_id
-        || !matches!(task.state, TaskState::Accepted | TaskState::Running)
-        || task.active_turn_id.is_some()
-        || another_turn_unfinished
-    {
-        return Err(StoreError::TurnTaskScope { task_id: task.id });
-    }
     task::require_valid_ancestry(transaction, &task)?;
     let recipient =
         conversation::require_route_ready_employee(transaction, task.assigned_employee_id)?;
@@ -502,6 +608,38 @@ fn record_notice_turn_tx(
     })
 }
 
+/// The recipient's task must belong to the notice's recipient, be deliverable, and have no
+/// unfinished turn. A peer message also waits until that task is running: delivering it to
+/// an accepted task would start the task with a peer message instead of its objective.
+fn require_recipient_free(
+    transaction: &Transaction<'_>,
+    task: &TaskRecord,
+    recipient_employee_id: Uuid,
+    peer: bool,
+) -> Result<(), StoreError> {
+    let another_turn_unfinished: bool = transaction.query_row(
+        "SELECT EXISTS (
+            SELECT 1 FROM conversation_turns
+            WHERE task_id = ?1 AND state IN ('recorded', 'submitting', 'accepted')
+         )",
+        [task.id.to_string()],
+        |row| row.get(0),
+    )?;
+    let state_allows = if peer {
+        task.state == TaskState::Running
+    } else {
+        matches!(task.state, TaskState::Accepted | TaskState::Running)
+    };
+    if task.assigned_employee_id != recipient_employee_id
+        || !state_allows
+        || task.active_turn_id.is_some()
+        || another_turn_unfinished
+    {
+        return Err(StoreError::TurnTaskScope { task_id: task.id });
+    }
+    Ok(())
+}
+
 fn consume_task_result_tx(
     transaction: &Transaction<'_>,
     input: &ConsumeTaskResultInput,
@@ -516,17 +654,297 @@ fn consume_task_result_tx(
             task_id: message.envelope.task_id.unwrap_or(input.child_task_id),
         });
     }
+    consume_queued_message_tx(
+        transaction,
+        message,
+        &turn,
+        &input.request_id,
+        "task-result",
+        "task_wait",
+    )
+}
+
+fn send_peer_message_tx(
+    transaction: &Transaction<'_>,
+    input: &SendPeerMessageInput,
+) -> Result<MessageMutationResult, StoreError> {
+    if let Some(message) =
+        message::message_for_command(transaction, PEER_SCOPE, &input.idempotency_key)?
+    {
+        return Ok(MessageMutationResult {
+            message,
+            event_sequence: None,
+        });
+    }
+    validate_peer_message_content(&input.content)?;
+    let (sender, sender_task) = peer_sender(transaction, input.turn_id)?;
+    if input.recipient_employee_id == sender.employee_id {
+        return Err(StoreError::PeerRecipientSelf {
+            employee_id: sender.employee_id,
+        });
+    }
+    let recipient_task = active_task_in_tree(
+        transaction,
+        sender_task.root_task_id,
+        input.recipient_employee_id,
+    )?
+    .ok_or(StoreError::PeerRecipientTaskNotFound {
+        employee_id: input.recipient_employee_id,
+    })?;
+    insert_peer_message_tx(
+        transaction,
+        &input.request_id,
+        &input.idempotency_key,
+        sender,
+        &sender_task,
+        &recipient_task,
+        None,
+        &input.content,
+        &input.references,
+    )
+}
+
+fn reply_peer_message_tx(
+    transaction: &Transaction<'_>,
+    input: &ReplyPeerMessageInput,
+) -> Result<MessageMutationResult, StoreError> {
+    if let Some(message) =
+        message::message_for_command(transaction, PEER_SCOPE, &input.idempotency_key)?
+    {
+        return Ok(MessageMutationResult {
+            message,
+            event_sequence: None,
+        });
+    }
+    validate_peer_message_content(&input.content)?;
+    let (sender, sender_task) = peer_sender(transaction, input.turn_id)?;
+    let original = message::required_message(transaction, input.message_id)?;
+    let scope_error = StoreError::PeerMessageScope {
+        message_id: input.message_id,
+    };
+    if notice_scope(transaction, input.message_id)? != Some(PEER_SCOPE)
+        || original.envelope.recipient.employee_id != sender.employee_id
+        || original.envelope.task_id != Some(sender_task.id)
+    {
+        return Err(scope_error);
+    }
+    let MessageSender::Employee(original_sender) = original.envelope.sender else {
+        return Err(scope_error);
+    };
+    let original_task_id = original
+        .envelope
+        .body
+        .get("senderTaskId")
+        .and_then(Value::as_str)
+        .map(|id| parse_uuid(id, "messages.body_json.senderTaskId"))
+        .transpose()?
+        .ok_or(StoreError::InvalidRecord {
+            field: "messages.body_json",
+            message: "peer message has no sender task".to_owned(),
+        })?;
+    let recipient_task = task::required_task(transaction, original_task_id)?;
+    if !matches!(
+        recipient_task.state,
+        TaskState::Accepted | TaskState::Running
+    ) || recipient_task.assigned_employee_id != original_sender.employee_id
+    {
+        return Err(StoreError::PeerRecipientTaskNotFound {
+            employee_id: original_sender.employee_id,
+        });
+    }
+    insert_peer_message_tx(
+        transaction,
+        &input.request_id,
+        &input.idempotency_key,
+        sender,
+        &sender_task,
+        &recipient_task,
+        Some(&original),
+        &input.content,
+        &input.references,
+    )
+}
+
+/// The sending endpoint is always the turn's recipient employee on the turn's task.
+fn peer_sender(
+    transaction: &Transaction<'_>,
+    turn_id: Uuid,
+) -> Result<(MessageEndpoint, TaskRecord), StoreError> {
+    let turn = conversation::required_turn(transaction, turn_id)?;
+    let task_id = turn.task_id.ok_or(StoreError::TurnTaskRequired)?;
+    let task = task::required_task(transaction, task_id)?;
+    if !matches!(task.state, TaskState::Accepted | TaskState::Running) {
+        return Err(StoreError::TaskState {
+            task_id: task.id,
+            state: serialized_name(task.state)?,
+            expected: "accepted or running",
+        });
+    }
+    Ok((turn.recipient, task))
+}
+
+/// The recipient's unfinished task in the sender's tree: its running task, else its oldest
+/// accepted one. An employee outside the tree has none and cannot be messaged.
+fn active_task_in_tree(
+    transaction: &Transaction<'_>,
+    root_task_id: Uuid,
+    employee_id: Uuid,
+) -> Result<Option<TaskRecord>, StoreError> {
+    transaction
+        .query_row(
+            "SELECT id FROM tasks
+             WHERE root_task_id = ?1 AND assigned_employee_id = ?2
+               AND state IN ('accepted', 'running')
+             ORDER BY CASE state WHEN 'running' THEN 0 ELSE 1 END, sequence LIMIT 1",
+            params![root_task_id.to_string(), employee_id.to_string()],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()?
+        .map(|id| task::required_task(transaction, parse_uuid(&id, "tasks.id")?))
+        .transpose()
+}
+
+#[allow(clippy::too_many_arguments)] // One record-first insert names every party of the exchange.
+fn insert_peer_message_tx(
+    transaction: &Transaction<'_>,
+    request_id: &str,
+    idempotency_key: &str,
+    sender: MessageEndpoint,
+    sender_task: &TaskRecord,
+    recipient_task: &TaskRecord,
+    reply_to: Option<&MessageRecord>,
+    content: &str,
+    references: &[MessageReference],
+) -> Result<MessageMutationResult, StoreError> {
+    let sender_name = employee::query_employee(transaction, sender.employee_id)?
+        .ok_or(StoreError::EmployeeNotFound {
+            employee_id: sender.employee_id,
+        })?
+        .name;
+    let message_id = Uuid::new_v4();
+    let reply_to_id = reply_to.map(|message| message.envelope.id);
+    let text = render_peer_message_text(&PeerMessageNotice {
+        message_id,
+        sender_employee_name: &sender_name,
+        sender_task_id: sender_task.id,
+        recipient_task_id: recipient_task.id,
+        reply_to_message_id: reply_to_id,
+        content,
+    });
+    validate_turn_text(&text)?;
+    let task_reference = |task: &TaskRecord| MessageReference {
+        kind: "task".to_owned(),
+        target: task.id.to_string(),
+        metadata: json!({}),
+    };
+    let mut all_references = vec![task_reference(sender_task), task_reference(recipient_task)];
+    all_references.extend_from_slice(references);
+    message::insert_message_tx(
+        transaction,
+        &message::InsertMessageInput {
+            request_id: request_id.to_owned(),
+            command_scope: PEER_SCOPE,
+            idempotency_key: idempotency_key.to_owned(),
+            id: Some(message_id),
+            version: MESSAGE_ENVELOPE_V1,
+            sender: MessageSender::Employee(sender),
+            recipient: MessageEndpoint {
+                employee_id: recipient_task.assigned_employee_id,
+                session_id: None,
+            },
+            project_id: recipient_task.project_id,
+            conversation_id: Some(recipient_task.conversation_id),
+            task_id: Some(recipient_task.id),
+            correlation_id: None,
+            causation_id: reply_to_id,
+            kind: if reply_to.is_some() {
+                MessageKind::Reply
+            } else {
+                MessageKind::Peer
+            },
+            body: json!({
+                "kind": "peer-message",
+                "content": content,
+                "senderEmployeeId": sender.employee_id,
+                "senderEmployeeName": sender_name,
+                "senderTaskId": sender_task.id,
+                "recipientTaskId": recipient_task.id,
+                "replyToMessageId": reply_to_id,
+                "text": text,
+            }),
+            references: all_references,
+            max_attempts: NOTICE_MAX_ATTEMPTS,
+        },
+    )
+}
+
+fn consume_peer_message_tx(
+    transaction: &Transaction<'_>,
+    input: &ConsumePeerMessageInput,
+) -> Result<MessageMutationResult, StoreError> {
+    let turn = conversation::required_turn(transaction, input.turn_id)?;
+    let message = message::required_message(transaction, input.message_id)?;
+    if notice_scope(transaction, input.message_id)? != Some(PEER_SCOPE)
+        || message.envelope.recipient.employee_id != turn.recipient.employee_id
+        || message.envelope.task_id != turn.task_id
+    {
+        return Err(StoreError::PeerMessageScope {
+            message_id: input.message_id,
+        });
+    }
+    consume_queued_message_tx(
+        transaction,
+        message,
+        &turn,
+        &input.request_id,
+        "peer",
+        input.via,
+    )
+}
+
+/// Claims and acknowledges a queued notice with the reading turn as evidence. A notice turn
+/// recorded earlier for the same message (the recipient was dormant at the time) is closed
+/// here, so it can neither deliver the message twice nor block later notice turns.
+fn consume_queued_message_tx(
+    transaction: &Transaction<'_>,
+    message: MessageRecord,
+    turn: &ConversationTurnRecord,
+    request_id: &str,
+    key_prefix: &str,
+    via: &str,
+) -> Result<MessageMutationResult, StoreError> {
     if message.delivery.state != MessageDeliveryState::Queued {
         return Ok(MessageMutationResult {
             message,
             event_sequence: None,
         });
     }
+    let now = Utc::now().to_rfc3339();
+    if let Some(orphan) = conversation::turn_for_command(
+        transaction,
+        "turn.record",
+        &notice_turn_key(message.envelope.id),
+    )? && orphan.state == TurnState::Recorded
+    {
+        transaction.execute(
+            "UPDATE conversation_turns SET state = 'cancelled', revision = revision + 1,
+                    owner_boot_id = NULL, terminal_at = ?2, updated_at = ?2
+             WHERE id = ?1 AND state = 'recorded'",
+            params![orphan.id.to_string(), now],
+        )?;
+        let cancelled = conversation::required_turn(transaction, orphan.id)?;
+        employee::insert_event(
+            transaction,
+            "turn.cancelled",
+            &json!({"turn": &cancelled, "reason": "the notice was read inside another turn"}),
+            &now,
+        )?;
+    }
     let claimed = message::claim_message_tx(
         transaction,
         &message::ClaimMessageInput {
-            request_id: input.request_id.clone(),
-            idempotency_key: format!("task-result-claim:{}:{}", input.child_task_id, turn.id),
+            request_id: request_id.to_owned(),
+            idempotency_key: format!("{key_prefix}-claim:{}:{}", message.envelope.id, turn.id),
             message_id: message.envelope.id,
             expected_revision: message.delivery.revision,
         },
@@ -543,29 +961,48 @@ fn consume_task_result_tx(
     message::acknowledge_message_tx(
         transaction,
         &message::AcknowledgeMessageInput {
-            request_id: input.request_id.clone(),
-            idempotency_key: format!("task-result-ack:{}:{}", input.child_task_id, turn.id),
+            request_id: request_id.to_owned(),
+            idempotency_key: format!("{key_prefix}-ack:{}:{}", message.envelope.id, turn.id),
             message_id: message.envelope.id,
             expected_revision: claimed.message.delivery.revision,
             attempt_id,
-            acknowledgement_key: format!("task-wait:{}", turn.id),
-            evidence: json!({"via": "task_wait", "turnId": turn.id}),
+            acknowledgement_key: format!("{}:{}", via.replace('_', "-"), turn.id),
+            evidence: json!({"via": via, "turnId": turn.id}),
         },
     )
 }
 
-fn is_lead_notice(connection: &Connection, message_id: Uuid) -> Result<bool, StoreError> {
-    Ok(connection.query_row(
-        "SELECT EXISTS (
-            SELECT 1 FROM message_commands WHERE message_id = ?1 AND scope IN (?2, ?3)
-         )",
-        params![
-            message_id.to_string(),
-            TASK_RESULT_SCOPE,
-            INCIDENT_NOTICE_SCOPE
-        ],
-        |row| row.get(0),
-    )?)
+/// The auto-delivery scope a message was queued under, if any.
+fn notice_scope(
+    connection: &Connection,
+    message_id: Uuid,
+) -> Result<Option<&'static str>, StoreError> {
+    let scope: Option<String> = connection
+        .query_row(
+            "SELECT scope FROM message_commands
+             WHERE message_id = ?1 AND scope IN (?2, ?3, ?4) LIMIT 1",
+            params![
+                message_id.to_string(),
+                TASK_RESULT_SCOPE,
+                INCIDENT_NOTICE_SCOPE,
+                PEER_SCOPE
+            ],
+            |row| row.get(0),
+        )
+        .optional()?;
+    Ok(scope.and_then(|scope| {
+        [TASK_RESULT_SCOPE, INCIDENT_NOTICE_SCOPE, PEER_SCOPE]
+            .into_iter()
+            .find(|known| *known == scope)
+    }))
+}
+
+/// Whether a turn delivers a peer message; such a turn never completes the recipient's task.
+pub(crate) fn is_peer_message(
+    connection: &Connection,
+    message_id: Uuid,
+) -> Result<bool, StoreError> {
+    Ok(notice_scope(connection, message_id)? == Some(PEER_SCOPE))
 }
 
 fn latest_turn_output(

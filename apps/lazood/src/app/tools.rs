@@ -7,13 +7,15 @@
 //! the provider turn.
 
 use lazoo_protocol::{
-    AuthorityMode, ConversationTurnRecord, IncidentSource, IncidentState, MessageEndpoint,
-    MessageReference, RpcError, TaskDetail, TaskReportKind, TaskState, TurnState,
+    AuthorityMode, ConversationTurnRecord, IncidentSource, IncidentState, MessageDeliveryState,
+    MessageEndpoint, MessageRecord, MessageReference, RpcError, TaskDetail, TaskReportKind,
+    TaskState, TurnState,
 };
 use lazoo_providers::{ToolCall, ToolResult, ToolSpec};
 use lazoo_store::{
-    ConsumeTaskResultInput, DelegateTaskInput, ListIncidentsInput, ListTasksInput,
-    RaiseIncidentInput, ReportTaskInput,
+    ConsumePeerMessageInput, ConsumeTaskResultInput, DelegateTaskInput, ListIncidentsInput,
+    ListTasksInput, RaiseIncidentInput, ReplyPeerMessageInput, ReportTaskInput,
+    SendPeerMessageInput, StoreError,
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -30,6 +32,7 @@ const MAX_OUTPUT_BYTES: usize = 16 * 1024;
 const WAIT_POLL_INTERVAL: Duration = Duration::from_millis(250);
 
 /// The versioned tool catalog declared to every daemon-managed Codex session.
+#[allow(clippy::too_many_lines)] // The catalog is one declaration, read top to bottom.
 pub(super) fn collaboration_tools() -> Vec<ToolSpec> {
     vec![
         ToolSpec {
@@ -58,18 +61,7 @@ pub(super) fn collaboration_tools() -> Vec<ToolSpec> {
                         "type": "string",
                         "enum": ["ask", "self-decision", "full-autonomy"]
                     },
-                    "references": {
-                        "type": "array",
-                        "items": {
-                            "type": "object",
-                            "required": ["kind", "target"],
-                            "properties": {
-                                "kind": {"type": "string"},
-                                "target": {"type": "string"},
-                                "metadata": {"type": "object"}
-                            }
-                        }
-                    }
+                    "references": references_schema()
                 },
                 "additionalProperties": false
             }),
@@ -78,7 +70,9 @@ pub(super) fn collaboration_tools() -> Vec<ToolSpec> {
             name: "task_wait".to_owned(),
             description: "Wait up to timeoutSeconds (default 60, maximum 600) until every listed \
                           task (default: your current task's unfinished children) reaches a \
-                          terminal state. Returns each task's state, failure, and final output."
+                          terminal state. Returns each task's state, failure, and final output. \
+                          Returns early with `messages` when a peer message arrives for you; \
+                          answer it with message_reply and call task_wait again to keep waiting."
                 .to_owned(),
             input_schema: json!({
                 "type": "object",
@@ -128,7 +122,59 @@ pub(super) fn collaboration_tools() -> Vec<ToolSpec> {
                 .to_owned(),
             input_schema: json!({"type": "object", "properties": {}, "additionalProperties": false}),
         },
+        ToolSpec {
+            name: "message_send".to_owned(),
+            description: "Send a peer message to another employee working in your task tree \
+                          (your lead or a sibling), by employee id. It reaches them between \
+                          turns or inside their task_wait; set waitForReplySeconds (maximum \
+                          600) to block for the reply, which is returned as `reply`. A peer \
+                          message is not an approval and never changes task ownership, \
+                          authority, or permissions."
+                .to_owned(),
+            input_schema: json!({
+                "type": "object",
+                "required": ["employeeId", "text"],
+                "properties": {
+                    "employeeId": {"type": "string"},
+                    "text": {"type": "string"},
+                    "waitForReplySeconds": {"type": "integer", "minimum": 0, "maximum": 600},
+                    "references": references_schema()
+                },
+                "additionalProperties": false
+            }),
+        },
+        ToolSpec {
+            name: "message_reply".to_owned(),
+            description: "Reply to a peer message you received, citing its message id. The \
+                          reply returns to the sender's task and threads under that message."
+                .to_owned(),
+            input_schema: json!({
+                "type": "object",
+                "required": ["messageId", "text"],
+                "properties": {
+                    "messageId": {"type": "string"},
+                    "text": {"type": "string"},
+                    "references": references_schema()
+                },
+                "additionalProperties": false
+            }),
+        },
     ]
+}
+
+fn references_schema() -> Value {
+    json!({
+        "type": "array",
+        "items": {
+            "type": "object",
+            "required": ["kind", "target"],
+            "properties": {
+                "kind": {"type": "string"},
+                "target": {"type": "string"},
+                "metadata": {"type": "object"}
+            }
+        }
+    })
 }
 
 #[derive(Deserialize)]
@@ -158,6 +204,25 @@ struct ReportArguments {
     evidence: Value,
     failure_code: Option<String>,
     failure_message: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct SendArguments {
+    employee_id: Uuid,
+    text: String,
+    wait_for_reply_seconds: Option<u64>,
+    #[serde(default)]
+    references: Vec<MessageReference>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct ReplyArguments {
+    message_id: Uuid,
+    text: String,
+    #[serde(default)]
+    references: Vec<MessageReference>,
 }
 
 impl App {
@@ -202,10 +267,12 @@ impl App {
         match call.name.as_str() {
             "employees_list" => self.tool_employees_list(actor),
             "task_delegate" => self.tool_task_delegate(turn_id, call, task_id?, actor),
-            "task_wait" => self.tool_task_wait(turn_id, call, task_id?).await,
+            "task_wait" => self.tool_task_wait(turn_id, call, task_id?, actor).await,
             "task_report" => self.tool_task_report(turn_id, call, task_id?, actor),
             "incident_report" => self.tool_incident_report(call, &turn, task_id?),
             "incident_list" => self.tool_incident_list(&turn),
+            "message_send" => self.tool_message_send(turn_id, call, task_id?, actor).await,
+            "message_reply" => self.tool_message_reply(turn_id, call),
             other => Err(tool_error(
                 "LZ-TOOL-UNKNOWN",
                 format!("unknown Lazoo tool: {other}"),
@@ -280,6 +347,7 @@ impl App {
         turn_id: Uuid,
         call: &ToolCall,
         task_id: Uuid,
+        actor: MessageEndpoint,
     ) -> Result<Value, RpcError> {
         let arguments: WaitArguments = tool_arguments(call)?;
         let caller = self.store.get_task(task_id).map_err(task_store_error)?.task;
@@ -331,8 +399,14 @@ impl App {
             let all_terminal = details
                 .iter()
                 .all(|detail| task_is_terminal(detail.task.state));
+            // A peer message for the waiting employee ends the wait early: the lead answers
+            // it and calls task_wait again, instead of the sender blocking on a busy lead.
+            let inbox = self
+                .store
+                .pending_peer_messages(actor.employee_id, task_id)
+                .map_err(peer_store_error)?;
             let now = Instant::now();
-            if all_terminal || now >= deadline {
+            if all_terminal || !inbox.is_empty() || now >= deadline {
                 // The lead is reading these outcomes now, so their result notices are delivered
                 // here rather than as a later notice turn.
                 for detail in details
@@ -353,12 +427,17 @@ impl App {
                         tracing::debug!(task_id = %detail.task.id, %error, "child result was not consumed");
                     }
                 }
+                let messages = self.consume_inbox(turn_id, call, &inbox, "task_wait");
                 self.publish_events()?;
                 let tasks: Vec<Value> = details
                     .iter()
                     .map(|detail| self.task_outcome(detail))
                     .collect();
-                return Ok(json!({"timedOut": !all_terminal, "tasks": tasks}));
+                return Ok(json!({
+                    "timedOut": !all_terminal && messages.is_empty(),
+                    "tasks": tasks,
+                    "messages": messages,
+                }));
             }
             let turn = self.store.get_turn(turn_id).map_err(task_store_error)?;
             if turn.cancel_requested_at.is_some()
@@ -451,6 +530,174 @@ impl App {
             "revision": result.task.revision,
         }))
     }
+}
+
+impl App {
+    /// Sends a peer message and, when asked, waits for its reply. Whatever else arrived for
+    /// the caller meanwhile is read here too, so nothing is delivered twice.
+    async fn tool_message_send(
+        &self,
+        turn_id: Uuid,
+        call: &ToolCall,
+        task_id: Uuid,
+        actor: MessageEndpoint,
+    ) -> Result<Value, RpcError> {
+        let arguments: SendArguments = tool_arguments(call)?;
+        let key = tool_command_key(turn_id, call);
+        let sent = self
+            .store
+            .send_peer_message(&SendPeerMessageInput {
+                request_id: key.clone(),
+                idempotency_key: key,
+                turn_id,
+                recipient_employee_id: arguments.employee_id,
+                content: arguments.text,
+                references: arguments.references,
+            })
+            .map_err(peer_store_error)?;
+        self.publish_events()?;
+        let message_id = sent.message.envelope.id;
+        let wait = Duration::from_secs(
+            arguments
+                .wait_for_reply_seconds
+                .unwrap_or(0)
+                .min(MAX_WAIT_SECONDS),
+        );
+        let deadline = Instant::now() + wait;
+        loop {
+            let current = self
+                .store
+                .get_message(message_id)
+                .map_err(peer_store_error)?;
+            let inbox = self
+                .store
+                .pending_peer_messages(actor.employee_id, task_id)
+                .map_err(peer_store_error)?;
+            let replied = inbox
+                .iter()
+                .any(|message| message.envelope.causation_id == Some(message_id));
+            // The recipient's task ended before it read the message; nobody will answer.
+            let closed = matches!(
+                current.delivery.state,
+                MessageDeliveryState::Cancelled | MessageDeliveryState::TerminalFailed
+            );
+            let now = Instant::now();
+            if replied || closed || now >= deadline {
+                let messages = self.consume_inbox(turn_id, call, &inbox, "message_send");
+                self.publish_events()?;
+                let reply = messages
+                    .iter()
+                    .find(|message| message["replyToMessageId"] == json!(message_id))
+                    .cloned();
+                return Ok(json!({
+                    "messageId": message_id,
+                    "state": current.delivery.state,
+                    "recipientEmployeeId": current.envelope.recipient.employee_id,
+                    "recipientTaskId": current.envelope.task_id,
+                    "timedOut": !wait.is_zero() && reply.is_none() && !closed,
+                    "reply": reply,
+                    "messages": messages,
+                }));
+            }
+            let turn = self.store.get_turn(turn_id).map_err(task_store_error)?;
+            if turn.cancel_requested_at.is_some()
+                || !matches!(turn.state, TurnState::Submitting | TurnState::Accepted)
+            {
+                return Err(tool_error(
+                    "LZ-TOOL-TURN-CANCELLED",
+                    "the calling turn ended while waiting",
+                ));
+            }
+            sleep(WAIT_POLL_INTERVAL.min(deadline - now)).await;
+        }
+    }
+
+    fn tool_message_reply(&self, turn_id: Uuid, call: &ToolCall) -> Result<Value, RpcError> {
+        let arguments: ReplyArguments = tool_arguments(call)?;
+        let key = tool_command_key(turn_id, call);
+        let sent = self
+            .store
+            .reply_peer_message(&ReplyPeerMessageInput {
+                request_id: key.clone(),
+                idempotency_key: key,
+                turn_id,
+                message_id: arguments.message_id,
+                content: arguments.text,
+                references: arguments.references,
+            })
+            .map_err(peer_store_error)?;
+        self.publish_events()?;
+        Ok(json!({
+            "messageId": sent.message.envelope.id,
+            "state": sent.message.delivery.state,
+            "recipientEmployeeId": sent.message.envelope.recipient.employee_id,
+            "recipientTaskId": sent.message.envelope.task_id,
+            "replyToMessageId": arguments.message_id,
+        }))
+    }
+
+    /// Marks queued peer messages as read inside the calling turn and renders them for the
+    /// model. A message that cannot be consumed (already read elsewhere) is left out.
+    fn consume_inbox(
+        &self,
+        turn_id: Uuid,
+        call: &ToolCall,
+        inbox: &[MessageRecord],
+        via: &'static str,
+    ) -> Vec<Value> {
+        inbox
+            .iter()
+            .filter_map(|message| {
+                let consumed = self.store.consume_peer_message(&ConsumePeerMessageInput {
+                    request_id: format!(
+                        "{}:inbox:{}",
+                        tool_command_key(turn_id, call),
+                        message.envelope.id
+                    ),
+                    message_id: message.envelope.id,
+                    turn_id,
+                    via,
+                });
+                match consumed {
+                    Ok(_) => Some(peer_message_value(message)),
+                    Err(error) => {
+                        tracing::debug!(message_id = %message.envelope.id, %error, "peer message was not consumed");
+                        None
+                    }
+                }
+            })
+            .collect()
+    }
+}
+
+fn peer_message_value(message: &MessageRecord) -> Value {
+    let body = &message.envelope.body;
+    json!({
+        "messageId": message.envelope.id,
+        "kind": message.envelope.kind,
+        "fromEmployeeId": body["senderEmployeeId"],
+        "fromEmployeeName": body["senderEmployeeName"],
+        "senderTaskId": body["senderTaskId"],
+        "replyToMessageId": body["replyToMessageId"],
+        "text": body["content"],
+        "createdAt": message.envelope.created_at,
+    })
+}
+
+#[allow(clippy::needless_pass_by_value)]
+fn peer_store_error(error: StoreError) -> RpcError {
+    let code = match &error {
+        StoreError::PeerRecipientSelf { .. }
+        | StoreError::MessageValidation(_)
+        | StoreError::ConversationValidation(_) => "LZ-TOOL-INVALID",
+        StoreError::PeerRecipientTaskNotFound { .. }
+        | StoreError::PeerMessageScope { .. }
+        | StoreError::MessageNotFound { .. }
+        | StoreError::MessageEmployeeNotFound { .. }
+        | StoreError::MessageEmployeeDisabled { .. } => "LZ-TOOL-SCOPE",
+        _ => return task_store_error(error),
+    };
+    tool_error(code, error.to_string())
 }
 
 fn tool_arguments<T: serde::de::DeserializeOwned>(call: &ToolCall) -> Result<T, RpcError> {
