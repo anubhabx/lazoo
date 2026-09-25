@@ -1790,7 +1790,7 @@ pub(crate) fn project_turn_tx(
     let active_descendants = has_active_descendants(transaction, current.id)?;
     // Answering a peer message is not finishing the task: the result notices that follow (or
     // the employee's own turn) complete it, so a peer turn never closes a task early.
-    let peer_turn = crate::delivery::is_peer_message(transaction, turn.message_id)?;
+    let peer_turn = crate::delivery::is_peer_only_turn(transaction, &turn)?;
     let projection = match (current.state, turn.state, cause) {
         (TaskState::Accepted, TurnState::Accepted, _) => Some((
             TaskState::Running,

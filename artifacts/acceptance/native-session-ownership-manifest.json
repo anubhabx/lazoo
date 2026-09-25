@@ -1,29 +1,29 @@
 ﻿{
     "manifestVersion":  1,
     "status":  "PASS",
-    "startedAt":  "2026-09-25T09:01:07.5309382Z",
-    "completedAt":  "2026-09-25T09:01:24.0341211Z",
-    "durationMs":  16352,
+    "startedAt":  "2026-09-25T09:41:36.6286338Z",
+    "completedAt":  "2026-09-25T09:41:50.2475082Z",
+    "durationMs":  13493,
     "protocolVersion":  1,
     "schemaVersion":  9,
     "provider":  "codex",
-    "isolatedDataRoot":  "C:\\Users\\anubhab\\AppData\\Local\\Temp\\lazoo-native-session-e3e5267acdd6456dafdaa3a69b0326c8\\data",
+    "isolatedDataRoot":  "C:\\Users\\anubhab\\AppData\\Local\\Temp\\lazoo-native-session-9eb99bfe1f984be4b7afb88e6e7e9994\\data",
     "temporaryDataRetained":  false,
     "commands":  [
                      {
                          "command":  "lazoo-job-containment.exe",
                          "exitCode":  0,
-                         "durationMs":  198
+                         "durationMs":  178
                      },
                      {
                          "command":  "lazooctl --json status",
                          "exitCode":  0,
-                         "durationMs":  120
+                         "durationMs":  137
                      },
                      {
-                         "command":  "lazooctl --json employee create Session Acceptance --provider codex --role Acceptance employee --idempotency-key employee-create-e3e5267acdd6456dafdaa3a69b0326c8",
+                         "command":  "lazooctl --json employee create Session Acceptance --provider codex --role Acceptance employee --idempotency-key employee-create-9eb99bfe1f984be4b7afb88e6e7e9994",
                          "exitCode":  0,
-                         "durationMs":  6558
+                         "durationMs":  4480
                      },
                      {
                          "command":  "lazooctl --json roster show",
@@ -31,74 +31,74 @@
                          "durationMs":  19
                      },
                      {
-                         "command":  "lazooctl --json session warm 7480b75e-4ee2-4723-8b99-1bc516e8eeb5 --expected-employee-revision 1 --idempotency-key session-warm-e3e5267acdd6456dafdaa3a69b0326c8",
+                         "command":  "lazooctl --json session warm ed0544a7-3b37-476f-bca7-6684d5eca940 --expected-employee-revision 1 --idempotency-key session-warm-9eb99bfe1f984be4b7afb88e6e7e9994",
                          "exitCode":  0,
-                         "durationMs":  1795
+                         "durationMs":  1706
                      },
                      {
-                         "command":  "lazooctl --json session warm 7480b75e-4ee2-4723-8b99-1bc516e8eeb5 --expected-employee-revision 1 --idempotency-key session-warm-e3e5267acdd6456dafdaa3a69b0326c8",
+                         "command":  "lazooctl --json session warm ed0544a7-3b37-476f-bca7-6684d5eca940 --expected-employee-revision 1 --idempotency-key session-warm-9eb99bfe1f984be4b7afb88e6e7e9994",
                          "exitCode":  0,
-                         "durationMs":  23
+                         "durationMs":  19
                      },
                      {
                          "command":  "lazooctl --json session list",
                          "exitCode":  0,
-                         "durationMs":  21
+                         "durationMs":  19
                      },
                      {
-                         "command":  "lazooctl --json session show 2c0b1a5c-c016-478c-acb3-dabe86db859a",
+                         "command":  "lazooctl --json session show 06162bca-ecbc-4c0c-85a3-e688d8959f20",
+                         "exitCode":  0,
+                         "durationMs":  19
+                     },
+                     {
+                         "command":  "lazooctl --json session stop 06162bca-ecbc-4c0c-85a3-e688d8959f20 --expected-revision 1 --idempotency-key session-stale-stop-9eb99bfe1f984be4b7afb88e6e7e9994",
+                         "exitCode":  10,
+                         "durationMs":  19
+                     },
+                     {
+                         "command":  "lazooctl --json session stop 06162bca-ecbc-4c0c-85a3-e688d8959f20 --expected-revision 2 --idempotency-key session-stop-9eb99bfe1f984be4b7afb88e6e7e9994",
+                         "exitCode":  0,
+                         "durationMs":  2050
+                     },
+                     {
+                         "command":  "lazooctl --json session stop 06162bca-ecbc-4c0c-85a3-e688d8959f20 --expected-revision 2 --idempotency-key session-stop-9eb99bfe1f984be4b7afb88e6e7e9994",
                          "exitCode":  0,
                          "durationMs":  18
-                     },
-                     {
-                         "command":  "lazooctl --json session stop 2c0b1a5c-c016-478c-acb3-dabe86db859a --expected-revision 1 --idempotency-key session-stale-stop-e3e5267acdd6456dafdaa3a69b0326c8",
-                         "exitCode":  10,
-                         "durationMs":  20
-                     },
-                     {
-                         "command":  "lazooctl --json session stop 2c0b1a5c-c016-478c-acb3-dabe86db859a --expected-revision 2 --idempotency-key session-stop-e3e5267acdd6456dafdaa3a69b0326c8",
-                         "exitCode":  0,
-                         "durationMs":  2049
-                     },
-                     {
-                         "command":  "lazooctl --json session stop 2c0b1a5c-c016-478c-acb3-dabe86db859a --expected-revision 2 --idempotency-key session-stop-e3e5267acdd6456dafdaa3a69b0326c8",
-                         "exitCode":  0,
-                         "durationMs":  26
                      },
                      {
                          "command":  "lazooctl --json roster show",
                          "exitCode":  0,
-                         "durationMs":  18
+                         "durationMs":  15
                      },
                      {
-                         "command":  "lazooctl --json session warm 7480b75e-4ee2-4723-8b99-1bc516e8eeb5 --expected-employee-revision 1 --idempotency-key session-crash-warm-e3e5267acdd6456dafdaa3a69b0326c8",
+                         "command":  "lazooctl --json session warm ed0544a7-3b37-476f-bca7-6684d5eca940 --expected-employee-revision 1 --idempotency-key session-crash-warm-9eb99bfe1f984be4b7afb88e6e7e9994",
                          "exitCode":  0,
-                         "durationMs":  1512
+                         "durationMs":  1506
                      },
                      {
                          "command":  "lazooctl --json status",
                          "exitCode":  0,
-                         "durationMs":  91
+                         "durationMs":  80
                      },
                      {
-                         "command":  "lazooctl --json session show f4b7c6c8-7627-4b66-8653-8ecc08eab9a2",
+                         "command":  "lazooctl --json session show 3b23b7a2-5d86-4f78-ad09-27c456a8b9ae",
                          "exitCode":  0,
-                         "durationMs":  17
+                         "durationMs":  16
                      },
                      {
                          "command":  "lazooctl --json roster show",
                          "exitCode":  0,
-                         "durationMs":  17
+                         "durationMs":  15
                      },
                      {
                          "command":  "lazooctl --json session list",
                          "exitCode":  0,
-                         "durationMs":  23
+                         "durationMs":  14
                      },
                      {
                          "command":  "lazooctl --json system shutdown",
                          "exitCode":  0,
-                         "durationMs":  18
+                         "durationMs":  17
                      }
                  ],
     "gates":  {

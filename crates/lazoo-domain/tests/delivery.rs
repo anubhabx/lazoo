@@ -1,7 +1,7 @@
 use lazoo_domain::{
     IncidentNotice, MAX_NOTICE_OUTPUT_BYTES, MAX_PEER_MESSAGE_BYTES, MessageValidationError,
-    PeerMessageNotice, TaskResultNotice, render_incident_notice_text, render_peer_message_text,
-    render_task_result_text, validate_peer_message_content,
+    PeerMessageNotice, TaskResultNotice, render_coalesced_notice_text, render_incident_notice_text,
+    render_peer_message_text, render_task_result_text, validate_peer_message_content,
 };
 use lazoo_protocol::{IncidentPriority, TaskState};
 use uuid::Uuid;
@@ -135,4 +135,44 @@ fn peer_message_content_is_refused_when_empty_or_oversized() {
         Err(MessageValidationError::PeerContentTooLarge)
     );
     assert!(validate_peer_message_content(&"x".repeat(MAX_PEER_MESSAGE_BYTES)).is_ok());
+}
+
+#[test]
+fn coalesced_notice_text_lists_every_notice_oldest_first_and_passes_one_through() {
+    let result = render_task_result_text(&notice(TaskState::Completed, Some("done"), 1));
+    let incident = render_incident_notice_text(&IncidentNotice {
+        incident_id: Uuid::from_u128(7),
+        code: "LZ-MESSAGE-TIMEOUT",
+        title: "Provider timed out",
+        explanation: "No reply in time.",
+        next_action: "Wait.",
+        priority: IncidentPriority::Priority,
+        occurrences: 3,
+        task_id: Uuid::from_u128(1),
+        employee_name: Some("Mira"),
+    });
+    let question = render_peer_message_text(&peer(None));
+
+    assert_eq!(render_coalesced_notice_text(&[]), "");
+    assert_eq!(
+        render_coalesced_notice_text(&[&result]),
+        result,
+        "one notice is delivered exactly as before"
+    );
+
+    let text = render_coalesced_notice_text(&[&result, &incident, &question]);
+    assert!(
+        text.starts_with("[Lazoo notices] 3 Lazoo notices are waiting"),
+        "{text}"
+    );
+    assert!(text.contains("oldest first"));
+    assert!(text.contains("act on all of them"));
+    let positions: Vec<usize> = [&result, &incident, &question]
+        .iter()
+        .map(|part| {
+            text.find(part.as_str())
+                .expect("every notice is carried whole")
+        })
+        .collect();
+    assert!(positions[0] < positions[1] && positions[1] < positions[2]);
 }

@@ -6335,6 +6335,16 @@ fn last_prompt(backend: &FakeSessionBackend) -> String {
 
 /// Lead turn that delegates one child and ends without waiting; returns (root task id, child id).
 async fn delegate_without_waiting(harness: &ToolHarness) -> (uuid::Uuid, uuid::Uuid) {
+    let (root_task_id, children) = delegate_children(harness, &["Implement the parser fix"]).await;
+    (root_task_id, children[0])
+}
+
+/// Lead turn that delegates one child per objective to the worker and ends without waiting;
+/// returns the root task id and the child ids in objective order.
+async fn delegate_children(
+    harness: &ToolHarness,
+    objectives: &[&str],
+) -> (uuid::Uuid, Vec<uuid::Uuid>) {
     use lazoo_protocol::TaskState;
 
     warm_tool_lead(harness).await;
@@ -6344,16 +6354,18 @@ async fn delegate_without_waiting(harness: &ToolHarness) -> (uuid::Uuid, uuid::U
         .tool_calls
         .lock()
         .unwrap()
-        .extend([tool_call(
-            "call-1",
-            "task_delegate",
-            json!({
-                "employeeId": harness.worker.id,
-                "objective": "Implement the parser fix",
-                "rosterRevision": roster_revision,
-                "requestedAuthority": "self-decision"
-            }),
-        )]);
+        .extend(objectives.iter().enumerate().map(|(index, objective)| {
+            tool_call(
+                &format!("call-{}", index + 1),
+                "task_delegate",
+                json!({
+                    "employeeId": harness.worker.id,
+                    "objective": objective,
+                    "rosterRevision": roster_revision,
+                    "requestedAuthority": "self-decision"
+                }),
+            )
+        }));
     let submitted = submit_lead_turn(harness, "self-decision").await;
     assert_eq!(submitted["turn"]["state"], "completed");
     let root_task_id: uuid::Uuid = submitted["turn"]["taskId"]
@@ -6362,20 +6374,21 @@ async fn delegate_without_waiting(harness: &ToolHarness) -> (uuid::Uuid, uuid::U
         .parse()
         .unwrap();
     let results = harness.backend.tool_results.lock().unwrap().clone();
-    assert!(results[0].success, "{:?}", results[0]);
-    let child_id: uuid::Uuid = results[0].content["taskId"]
-        .as_str()
-        .unwrap()
-        .parse()
-        .unwrap();
+    let children = results[..objectives.len()]
+        .iter()
+        .map(|result| {
+            assert!(result.success, "{result:?}");
+            result.content["taskId"].as_str().unwrap().parse().unwrap()
+        })
+        .collect();
     let root = harness.store.get_task(root_task_id).unwrap().task;
     assert_eq!(
         root.state,
         TaskState::Running,
-        "the lead's task stays running while its child is unfinished"
+        "the lead's task stays running while its children are unfinished"
     );
     assert!(root.active_turn_id.is_none());
-    (root_task_id, child_id)
+    (root_task_id, children)
 }
 
 #[tokio::test]
@@ -6769,14 +6782,7 @@ fn employee_messages(store: &Store) -> Vec<lazoo_protocol::MessageSummary> {
 }
 
 fn acknowledgement_via(store: &Store, message_id: uuid::Uuid) -> serde_json::Value {
-    store
-        .get_message(message_id)
-        .unwrap()
-        .attempts
-        .last()
-        .and_then(|attempt| attempt.acknowledgement_evidence.clone())
-        .map(|evidence| evidence["via"].clone())
-        .unwrap_or_default()
+    acknowledgement_evidence(store, message_id)["via"].clone()
 }
 
 fn prompts(backend: &FakeSessionBackend) -> Vec<String> {
@@ -7103,9 +7109,9 @@ async fn peer_messages_never_activate_a_dormant_recipient_and_refusals_never_end
         TaskState::Running
     );
 
-    // The user resumes the lead. Inside the peer turn the lead tries four calls that must all
-    // be refused with a stable code and must not end the turn; the child's result then follows
-    // in the same pass and completes the lead's task.
+    // The user resumes the lead. The waiting peer message and the child's result reach it as
+    // one coalesced turn; inside it the lead tries four calls that must all be refused with a
+    // stable code and must not end the turn, and the result it carried completes the task.
     // The resumed lead runs on the third session the backend starts.
     harness.backend.tool_calls.lock().unwrap().extend([
         session_tool_call(
@@ -7150,19 +7156,21 @@ async fn peer_messages_never_activate_a_dormant_recipient_and_refusals_never_end
     assert_eq!(harness.backend.starts.load(Ordering::SeqCst), 3);
     harness.app.deliver_pending_notices_once().await.unwrap();
 
-    assert_eq!(harness.backend.turns.load(Ordering::SeqCst), 4);
+    assert_eq!(
+        harness.backend.turns.load(Ordering::SeqCst),
+        3,
+        "the peer message and the result share one turn"
+    );
     let prompts = prompts(&harness.backend);
     assert!(
-        prompts[2].starts_with("[Lazoo peer message]"),
+        prompts[2].starts_with("[Lazoo notices] 2 Lazoo notices are waiting"),
         "{}",
         prompts[2]
     );
+    assert!(prompts[2].contains("[Lazoo peer message]"));
     assert!(prompts[2].contains("Heads up: the parser fix is ready for review."));
-    assert!(
-        prompts[3].starts_with("[Lazoo task result]"),
-        "{}",
-        prompts[3]
-    );
+    assert!(prompts[2].contains("[Lazoo task result]"));
+    assert!(prompts[2].contains(&child_id.to_string()));
     let results = harness.backend.tool_results.lock().unwrap().clone();
     assert_eq!(results.len(), 6);
     let codes: Vec<&str> = results[2..]
@@ -7184,29 +7192,42 @@ async fn peer_messages_never_activate_a_dormant_recipient_and_refusals_never_end
     let turns = lead_turns(&harness);
     assert_eq!(
         turns.len(),
-        3,
-        "the recorded peer turn was delivered, not a new one"
+        2,
+        "the recorded coalesced turn was delivered, not a new one"
     );
     assert!(turns.iter().all(|turn| turn.state == TurnState::Completed));
     let root = harness.store.get_task(root_task_id).unwrap();
     assert_eq!(root.task.state, TaskState::Completed);
     assert!(
         root.evidence.iter().any(|evidence| {
-            evidence.turn_id == Some(turns[1].id) && evidence.kind == TaskEvidenceKind::Progress
+            evidence.turn_id == Some(turns[1].id) && evidence.kind == TaskEvidenceKind::Completed
         }),
-        "the peer turn left the task running for the result that followed"
+        "a turn carrying the child's result completes the task"
     );
-    assert!(root.evidence.iter().any(|evidence| {
-        evidence.turn_id == Some(turns[2].id) && evidence.kind == TaskEvidenceKind::Completed
-    }));
+    let peer = employee_messages(&harness.store)[0].clone();
+    assert_eq!(peer.state, MessageDeliveryState::Acknowledged);
     assert_eq!(
-        employee_messages(&harness.store)[0].state,
-        MessageDeliveryState::Acknowledged
+        harness.store.get_turn(turns[1].id).unwrap().message_id,
+        peer.id,
+        "the older notice is canonical"
     );
+    let result = lead_messages(&harness.store, MessageKind::Result)[0].clone();
+    assert_eq!(result.state, MessageDeliveryState::Acknowledged);
     assert_eq!(
-        lead_messages(&harness.store, MessageKind::Result)[0].state,
-        MessageDeliveryState::Acknowledged
+        acknowledgement_evidence(&harness.store, result.id)["turnId"],
+        json!(turns[1].id),
+        "the companion result cites the turn that carried it"
     );
+}
+
+fn acknowledgement_evidence(store: &Store, message_id: uuid::Uuid) -> serde_json::Value {
+    store
+        .get_message(message_id)
+        .unwrap()
+        .attempts
+        .last()
+        .and_then(|attempt| attempt.acknowledgement_evidence.clone())
+        .unwrap_or_default()
 }
 
 #[test]
@@ -7228,6 +7249,129 @@ fn peer_messaging_acceptance_contract_is_deterministic_and_backend_only() {
         "peer_messages_never_activate_a_dormant_recipient_and_refusals_never_end_the_turn",
         "store_enables_wal_foreign_keys_and_schema_version",
         "dormantRecipientNeverActivated",
+        "providerSmokeAbsent",
+        "externalModelUseAbsent",
+        "uiChangesAbsent",
+        "deterministic-fake-transport",
+        "schemaVersion = 9",
+    ] {
+        assert!(
+            script.contains(required),
+            "acceptance script must contain {required}"
+        );
+    }
+    for forbidden in [
+        "provider', 'smoke",
+        "apps\\lazoo-desktop\\src",
+        "LivePrompt",
+    ] {
+        assert!(
+            !script.contains(forbidden),
+            "acceptance script must not contain {forbidden}"
+        );
+    }
+}
+
+// ---------------------------------------------------------------------------------------------
+// Coalesced notice turns: every notice queued for one recipient and task rides one turn.
+// ---------------------------------------------------------------------------------------------
+
+#[tokio::test]
+async fn queued_notices_reach_an_idle_lead_as_one_turn() {
+    use lazoo_protocol::{MessageKind, TaskState};
+
+    let (_temporary, harness) = tool_harness(AuthorityMode::SelfDecision);
+    let (root_task_id, children) = delegate_children(
+        &harness,
+        &["Implement the parser fix", "Write the parser tests"],
+    )
+    .await;
+    // Both children run on the one worker; a second pass covers a dispatch left waiting.
+    harness.app.dispatch_pending_tasks_once().await.unwrap();
+    harness.app.dispatch_pending_tasks_once().await.unwrap();
+    for child in &children {
+        assert_eq!(
+            harness.store.get_task(*child).unwrap().task.state,
+            TaskState::Completed
+        );
+    }
+    assert_eq!(harness.backend.turns.load(Ordering::SeqCst), 3);
+    let starts = harness.backend.starts.load(Ordering::SeqCst);
+
+    harness.app.deliver_pending_notices_once().await.unwrap();
+
+    assert_eq!(
+        harness.backend.turns.load(Ordering::SeqCst),
+        4,
+        "two child results reach the lead as one turn"
+    );
+    assert_eq!(
+        harness.backend.starts.load(Ordering::SeqCst),
+        starts,
+        "no provider process was started for the notices"
+    );
+    let prompt = last_prompt(&harness.backend);
+    assert!(
+        prompt.starts_with("[Lazoo notices] 2 Lazoo notices are waiting"),
+        "{prompt}"
+    );
+    assert_eq!(prompt.matches("[Lazoo task result]").count(), 2);
+    assert!(
+        prompt.find(&children[0].to_string()) < prompt.find(&children[1].to_string()),
+        "notices are carried oldest first"
+    );
+
+    let results = lead_messages(&harness.store, MessageKind::Result);
+    assert_eq!(results.len(), 2);
+    assert!(
+        results
+            .iter()
+            .all(|result| result.state == MessageDeliveryState::Acknowledged)
+    );
+    let turns = lead_turns(&harness);
+    assert_eq!(
+        turns.len(),
+        2,
+        "the user turn and one coalesced notice turn"
+    );
+    assert_eq!(turns[1].state, TurnState::Completed);
+    assert_eq!(
+        harness.store.get_turn(turns[1].id).unwrap().message_id,
+        results[0].id,
+        "the oldest result is the turn's canonical message"
+    );
+    let companion = acknowledgement_evidence(&harness.store, results[1].id);
+    assert_eq!(companion["turnId"], json!(turns[1].id));
+    assert_eq!(companion["canonicalMessageId"], json!(results[0].id));
+    assert_eq!(
+        harness.store.get_task(root_task_id).unwrap().task.state,
+        TaskState::Completed
+    );
+
+    harness.app.deliver_pending_notices_once().await.unwrap();
+    assert_eq!(harness.backend.turns.load(Ordering::SeqCst), 4);
+    assert!(harness.store.pending_lead_notices(10).unwrap().is_empty());
+}
+
+#[test]
+fn coalesced_notices_acceptance_contract_is_deterministic_and_backend_only() {
+    let repository = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let script_path = repository.join("scripts/acceptance/coalesced-notices.ps1");
+    let script =
+        std::fs::read_to_string(&script_path).expect("coalesced notices acceptance script");
+
+    for required in [
+        "coalesced_notice_text_lists_every_notice_oldest_first_and_passes_one_through",
+        "queued_notices_for_one_recipient_coalesce_into_one_turn_with_evidence_for_each",
+        "a_notice_read_inside_another_turn_releases_its_batch_for_a_fresh_turn",
+        "a_coalesced_turn_stays_within_the_turn_text_limit",
+        "peer_turns_never_complete_the_recipient_task",
+        "queued_notices_reach_an_idle_lead_as_one_turn",
+        "child_results_reach_an_idle_lead_as_a_notice_turn_after_its_turn_ended",
+        "peer_messages_never_activate_a_dormant_recipient_and_refusals_never_end_the_turn",
+        "store_enables_wal_foreign_keys_and_schema_version",
+        "eachNoticeKeepsOwnEvidence",
+        "dormantLeadNeverActivated",
         "providerSmokeAbsent",
         "externalModelUseAbsent",
         "uiChangesAbsent",

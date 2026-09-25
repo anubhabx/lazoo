@@ -4,12 +4,17 @@
 //! A notice is derived evidence. It is queued idempotently after the task or incident commit,
 //! keyed by the child task or incident id, so a second daemon boot never duplicates it. The
 //! failure, task, and incident rows it points at stay authoritative.
+//!
+//! One notice turn carries every notice queued for the same recipient and task at the time it
+//! is recorded: the oldest is the turn's canonical message and the rest are companions linked
+//! through their own `turn.record` command, so each keeps its own delivery evidence.
 
 use chrono::Utc;
 use lazoo_domain::{
-    IncidentNotice, MAX_NOTICE_OUTPUT_BYTES, PeerMessageNotice, TaskResultNotice,
-    render_incident_notice_text, render_peer_message_text, render_task_result_text,
-    validate_peer_message_content, validate_turn_text,
+    IncidentNotice, MAX_NOTICE_OUTPUT_BYTES, MAX_TURN_TEXT_BYTES, PeerMessageNotice,
+    TaskResultNotice, render_coalesced_notice_text, render_incident_notice_text,
+    render_peer_message_text, render_task_result_text, validate_peer_message_content,
+    validate_turn_text,
 };
 use lazoo_protocol::{
     CONVERSATION_CONTRACT_V1, ConversationTurnRecord, IncidentPriority, MESSAGE_ENVELOPE_V1,
@@ -28,6 +33,10 @@ const INCIDENT_NOTICE_SCOPE: &str = "incident.notice";
 const PEER_SCOPE: &str = "message.peer";
 const NOTICE_MAX_ATTEMPTS: u32 = 3;
 const PEER_INBOX_LIMIT: i64 = 64;
+/// The `turn.record` command key prefix shared by every notice a turn delivers.
+const NOTICE_TURN_PREFIX: &str = "notice-turn:";
+/// Queued notices considered for one coalesced turn; the turn text limit bounds it further.
+const NOTICE_BATCH_LIMIT: i64 = 128;
 
 #[derive(Clone, Debug)]
 pub struct QueueTaskResultInput {
@@ -256,7 +265,8 @@ impl Store {
     }
 
     /// Records the conversation turn that delivers a queued notice to the lead, reusing the
-    /// notice as the turn's canonical message. Replays by message id return the same turn.
+    /// notice as the turn's canonical message and carrying every other notice queued for the
+    /// same recipient and task as companions. Replays by message id return the same turn.
     /// Fails closed while the lead's task has any other unfinished turn.
     pub fn record_notice_turn(
         &self,
@@ -291,8 +301,96 @@ fn incident_notice_key(incident_id: Uuid) -> String {
     format!("incident-notice:{incident_id}")
 }
 
-fn notice_turn_key(message_id: Uuid) -> String {
-    format!("notice-turn:{message_id}")
+/// One `turn.record` command per notice a turn delivers. The turn id is part of the key so a
+/// notice whose recorded turn was closed before delivery can be recorded again.
+fn notice_turn_key(message_id: Uuid, turn_id: Uuid) -> String {
+    format!("{NOTICE_TURN_PREFIX}{message_id}:{turn_id}")
+}
+
+/// The newest turn recorded to deliver a notice, if any. Keys were `notice-turn:<message>`
+/// before a turn could carry companions; the prefix match covers both forms.
+fn latest_notice_turn(
+    connection: &Connection,
+    message_id: Uuid,
+) -> Result<Option<ConversationTurnRecord>, StoreError> {
+    connection
+        .query_row(
+            "SELECT tc.turn_id FROM turn_commands tc
+             JOIN conversation_turns t ON t.id = tc.turn_id
+             WHERE tc.scope = 'turn.record' AND tc.idempotency_key LIKE ?1
+             ORDER BY t.sequence DESC LIMIT 1",
+            [format!("{NOTICE_TURN_PREFIX}{message_id}%")],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()?
+        .map(|id| {
+            conversation::required_turn(connection, parse_uuid(&id, "turn_commands.turn_id")?)
+        })
+        .transpose()
+}
+
+/// Every notice a turn delivers, oldest first: the message id sits right after the key prefix.
+fn notice_member_ids(connection: &Connection, turn_id: Uuid) -> Result<Vec<Uuid>, StoreError> {
+    let mut statement = connection.prepare(
+        "SELECT m.id FROM turn_commands tc
+         JOIN messages m ON m.id = substr(tc.idempotency_key, ?2, 36)
+         WHERE tc.scope = 'turn.record' AND tc.turn_id = ?1 AND tc.idempotency_key LIKE ?3
+         ORDER BY m.sequence",
+    )?;
+    let prefix_end = i64::try_from(NOTICE_TURN_PREFIX.len() + 1).expect("short prefix");
+    let rows = statement.query_map(
+        params![
+            turn_id.to_string(),
+            prefix_end,
+            format!("{NOTICE_TURN_PREFIX}%")
+        ],
+        |row| row.get::<_, String>(0),
+    )?;
+    rows.map(|row| parse_uuid(&row?, "messages.id")).collect()
+}
+
+/// The notices a coalesced turn delivers besides its canonical message, oldest first. Their
+/// delivery follows the canonical message through every turn transition.
+pub(crate) fn notice_companions(
+    connection: &Connection,
+    turn: &ConversationTurnRecord,
+) -> Result<Vec<MessageRecord>, StoreError> {
+    notice_member_ids(connection, turn.id)?
+        .into_iter()
+        .filter(|id| *id != turn.message_id)
+        .map(|id| message::required_message(connection, id))
+        .collect()
+}
+
+/// Queued notices and peer messages addressed to one employee's task, oldest first.
+fn queued_notices_for(
+    connection: &Connection,
+    employee_id: Uuid,
+    task_id: Uuid,
+) -> Result<Vec<MessageRecord>, StoreError> {
+    let mut statement = connection.prepare(
+        "SELECT m.id FROM messages m
+         JOIN message_deliveries d ON d.message_id = m.id
+         JOIN message_commands mc ON mc.message_id = m.id AND mc.scope IN (?1, ?2, ?3)
+         WHERE d.state = 'queued' AND m.recipient_employee_id = ?4 AND m.task_id = ?5
+         ORDER BY m.sequence LIMIT ?6",
+    )?;
+    let ids: Vec<String> = statement
+        .query_map(
+            params![
+                TASK_RESULT_SCOPE,
+                INCIDENT_NOTICE_SCOPE,
+                PEER_SCOPE,
+                employee_id.to_string(),
+                task_id.to_string(),
+                NOTICE_BATCH_LIMIT
+            ],
+            |row| row.get::<_, String>(0),
+        )?
+        .collect::<Result<_, _>>()?;
+    ids.iter()
+        .map(|id| message::required_message(connection, parse_uuid(id, "messages.id")?))
+        .collect()
 }
 
 const fn task_is_terminal(state: TaskState) -> bool {
@@ -511,15 +609,20 @@ fn queue_incident_notice_tx(
     )
 }
 
+#[allow(clippy::too_many_lines)] // Guards, batch gathering, and the record-first insert stay together.
 fn record_notice_turn_tx(
     transaction: &Transaction<'_>,
     input: &RecordNoticeTurnInput,
 ) -> Result<TurnMutationResult, StoreError> {
-    let key = notice_turn_key(input.message_id);
-    if let Some(turn) = conversation::turn_for_command(transaction, "turn.record", &key)? {
+    let message = message::required_message(transaction, input.message_id)?;
+    // A turn closed before delivery (its notices were read inside another turn) releases the
+    // notices still queued for a fresh turn; every other recorded turn is the replay.
+    if let Some(turn) = latest_notice_turn(transaction, input.message_id)?
+        && !(turn.state == TurnState::Cancelled
+            && message.delivery.state == MessageDeliveryState::Queued)
+    {
         return conversation::turn_result(transaction, turn, None);
     }
-    let message = message::required_message(transaction, input.message_id)?;
     let not_notice = StoreError::MessageNotNotice {
         message_id: input.message_id,
     };
@@ -546,16 +649,28 @@ fn record_notice_turn_tx(
     task::require_valid_ancestry(transaction, &task)?;
     let recipient =
         conversation::require_route_ready_employee(transaction, task.assigned_employee_id)?;
-    let text = message
-        .envelope
-        .body
-        .get("text")
-        .and_then(Value::as_str)
-        .ok_or(StoreError::InvalidRecord {
-            field: "messages.body_json",
-            message: "lead notice has no text".to_owned(),
-        })?;
-    validate_turn_text(text)?;
+    let mut texts = vec![notice_text(&message)?];
+    let mut companions = Vec::new();
+    // The requested notice leads; the others queued for this recipient and task follow oldest
+    // first until the turn text limit. A peer message still waits for a running task.
+    for candidate in queued_notices_for(transaction, task.assigned_employee_id, task.id)? {
+        if candidate.envelope.id == message.envelope.id
+            || (task.state != TaskState::Running
+                && notice_scope(transaction, candidate.envelope.id)? == Some(PEER_SCOPE))
+        {
+            continue;
+        }
+        texts.push(notice_text(&candidate)?);
+        // ponytail: re-rendering per candidate is quadratic, but the 256 KiB text limit caps a
+        // batch at about sixteen notices.
+        if render_coalesced_notice_text(&as_strs(&texts)).len() > MAX_TURN_TEXT_BYTES {
+            texts.pop();
+            break;
+        }
+        companions.push(candidate.envelope.id);
+    }
+    let text = render_coalesced_notice_text(&as_strs(&texts));
+    validate_turn_text(&text)?;
     let turn_id = Uuid::new_v4();
     let now = Utc::now().to_rfc3339();
     let (author_kind, author_employee_id, author_session_id) =
@@ -585,19 +700,26 @@ fn record_notice_turn_tx(
             now,
         ],
     )?;
-    conversation::insert_turn_command(
-        transaction,
-        "turn.record",
-        &key,
-        &input.request_id,
-        turn_id,
-        &now,
-    )?;
+    for member in std::iter::once(message.envelope.id).chain(companions.iter().copied()) {
+        conversation::insert_turn_command(
+            transaction,
+            "turn.record",
+            &notice_turn_key(member, turn_id),
+            &input.request_id,
+            turn_id,
+            &now,
+        )?;
+    }
     let turn = conversation::required_turn(transaction, turn_id)?;
     let event_sequence = employee::insert_event(
         transaction,
         "turn.recorded",
-        &json!({"turn": &turn, "message": &message, "notice": true}),
+        &json!({
+            "turn": &turn,
+            "message": &message,
+            "notice": true,
+            "companions": companions,
+        }),
         &now,
     )?;
     Ok(TurnMutationResult {
@@ -606,6 +728,23 @@ fn record_notice_turn_tx(
         task: Some(task),
         event_sequence: Some(event_sequence),
     })
+}
+
+fn notice_text(message: &MessageRecord) -> Result<String, StoreError> {
+    message
+        .envelope
+        .body
+        .get("text")
+        .and_then(Value::as_str)
+        .map(str::to_owned)
+        .ok_or(StoreError::InvalidRecord {
+            field: "messages.body_json",
+            message: "lead notice has no text".to_owned(),
+        })
+}
+
+fn as_strs(texts: &[String]) -> Vec<&str> {
+    texts.iter().map(String::as_str).collect()
 }
 
 /// The recipient's task must belong to the notice's recipient, be deliverable, and have no
@@ -904,7 +1043,8 @@ fn consume_peer_message_tx(
 
 /// Claims and acknowledges a queued notice with the reading turn as evidence. A notice turn
 /// recorded earlier for the same message (the recipient was dormant at the time) is closed
-/// here, so it can neither deliver the message twice nor block later notice turns.
+/// here, so it can neither deliver the message twice nor block later notice turns; any other
+/// notice it carried stays queued and is recorded again once this turn is finished.
 fn consume_queued_message_tx(
     transaction: &Transaction<'_>,
     message: MessageRecord,
@@ -920,11 +1060,8 @@ fn consume_queued_message_tx(
         });
     }
     let now = Utc::now().to_rfc3339();
-    if let Some(orphan) = conversation::turn_for_command(
-        transaction,
-        "turn.record",
-        &notice_turn_key(message.envelope.id),
-    )? && orphan.state == TurnState::Recorded
+    if let Some(orphan) = latest_notice_turn(transaction, message.envelope.id)?
+        && orphan.state == TurnState::Recorded
     {
         transaction.execute(
             "UPDATE conversation_turns SET state = 'cancelled', revision = revision + 1,
@@ -997,12 +1134,21 @@ fn notice_scope(
     }))
 }
 
-/// Whether a turn delivers a peer message; such a turn never completes the recipient's task.
-pub(crate) fn is_peer_message(
+/// Whether a turn delivers only peer messages; such a turn never completes the recipient's
+/// task. A turn that also carries a result or incident notice projects like any other turn.
+pub(crate) fn is_peer_only_turn(
     connection: &Connection,
-    message_id: Uuid,
+    turn: &ConversationTurnRecord,
 ) -> Result<bool, StoreError> {
-    Ok(notice_scope(connection, message_id)? == Some(PEER_SCOPE))
+    if notice_scope(connection, turn.message_id)? != Some(PEER_SCOPE) {
+        return Ok(false);
+    }
+    for member in notice_member_ids(connection, turn.id)? {
+        if notice_scope(connection, member)? != Some(PEER_SCOPE) {
+            return Ok(false);
+        }
+    }
+    Ok(true)
 }
 
 fn latest_turn_output(

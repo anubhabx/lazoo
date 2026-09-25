@@ -1,4 +1,4 @@
-use lazoo_domain::MAX_PEER_MESSAGE_BYTES;
+use lazoo_domain::{MAX_PEER_MESSAGE_BYTES, MAX_TURN_TEXT_BYTES};
 use lazoo_protocol::{
     AuthorityMode, EmployeeCheckoutPolicy, IncidentPriority, IncidentSource, MessageDeliveryState,
     MessageEndpoint, MessageKind, MessageMutationResult, MessageSender, ProviderObservation,
@@ -1172,4 +1172,330 @@ fn user() -> MessageSender {
     MessageSender::User(UserMessageEndpoint {
         kind: UserMessageKind::User,
     })
+}
+
+// ---------------------------------------------------------------------------------------------
+// Coalesced notice turns
+// ---------------------------------------------------------------------------------------------
+
+/// Delegates one more child to the worker, cancels it, and queues its result notice.
+fn queue_cancelled_child_result(fixture: &Fixture, key: &str) -> lazoo_protocol::MessageRecord {
+    let store = &fixture.store;
+    let child = store
+        .delegate_task(&DelegateTaskInput {
+            request_id: format!("request-{key}"),
+            idempotency_key: key.to_owned(),
+            parent_task_id: fixture.root.id,
+            actor: MessageEndpoint {
+                employee_id: fixture.lead,
+                session_id: Some(fixture.lead_session),
+            },
+            assigned_employee_id: fixture.worker,
+            objective: format!("Objective {key}"),
+            references: Vec::new(),
+            requested_authority: Some(AuthorityMode::SelfDecision),
+            roster_revision: store.roster_snapshot().unwrap().revision,
+        })
+        .unwrap()
+        .task;
+    store
+        .cancel_task(&CancelTaskInput {
+            request_id: format!("request-cancel-{key}"),
+            idempotency_key: format!("cancel-{key}"),
+            task_id: child.id,
+            expected_revision: child.revision,
+            actor: user(),
+            evidence: json!({}),
+        })
+        .unwrap();
+    store
+        .queue_task_result(&QueueTaskResultInput {
+            request_id: format!("request-result-{key}"),
+            child_task_id: child.id,
+        })
+        .unwrap()
+        .message
+}
+
+fn text_of(message: &lazoo_protocol::MessageRecord) -> &str {
+    message.envelope.body["text"].as_str().unwrap()
+}
+
+#[test]
+#[allow(clippy::too_many_lines)] // One batch is recorded, replayed, delivered, and audited.
+fn queued_notices_for_one_recipient_coalesce_into_one_turn_with_evidence_for_each() {
+    let (_temporary, fixture) = fixture();
+    let store = &fixture.store;
+    let worker_turn = worker_turn(&fixture, "worker-turn");
+    let question = send(
+        &fixture,
+        "question",
+        worker_turn.id,
+        fixture.lead,
+        "Is the parser fix still wanted?",
+    )
+    .unwrap()
+    .message;
+    cancel_child(&fixture);
+    let first = store
+        .queue_task_result(&QueueTaskResultInput {
+            request_id: "request-first".to_owned(),
+            child_task_id: fixture.child.id,
+        })
+        .unwrap()
+        .message;
+    let second = queue_cancelled_child_result(&fixture, "second");
+    assert_eq!(store.pending_lead_notices(10).unwrap().len(), 3);
+
+    let recorded = store
+        .record_notice_turn(&RecordNoticeTurnInput {
+            request_id: "request-batch".to_owned(),
+            message_id: question.envelope.id,
+        })
+        .unwrap();
+    let turn = &recorded.turn;
+    assert_eq!(turn.state, TurnState::Recorded);
+    assert_eq!(
+        turn.message_id, question.envelope.id,
+        "the requested notice is the turn's canonical message"
+    );
+    assert!(
+        turn.text
+            .starts_with("[Lazoo notices] 3 Lazoo notices are waiting"),
+        "{}",
+        turn.text
+    );
+    let positions: Vec<usize> = [&question, &first, &second]
+        .iter()
+        .map(|message| turn.text.find(text_of(message)).expect("carried whole"))
+        .collect();
+    assert!(positions[0] < positions[1] && positions[1] < positions[2]);
+
+    let replay = store
+        .record_notice_turn(&RecordNoticeTurnInput {
+            request_id: "request-companion".to_owned(),
+            message_id: second.envelope.id,
+        })
+        .unwrap();
+    assert_eq!(
+        replay.turn.id, turn.id,
+        "a companion replays to the same turn"
+    );
+    assert!(replay.event_sequence.is_none());
+    assert_eq!(
+        store.pending_lead_notices(10).unwrap().len(),
+        3,
+        "every notice stays queued until the turn is submitted"
+    );
+
+    let task = complete_lead_turn(&fixture, turn.id, "batch");
+    assert_eq!(
+        task.state,
+        TaskState::Completed,
+        "a turn carrying results completes the task once no child is left"
+    );
+    for message in [&question, &first, &second] {
+        let delivered = store.get_message(message.envelope.id).unwrap();
+        assert_eq!(delivered.delivery.state, MessageDeliveryState::Acknowledged);
+    }
+    let canonical = store.get_message(question.envelope.id).unwrap();
+    assert_eq!(
+        canonical
+            .attempts
+            .last()
+            .unwrap()
+            .acknowledgement_evidence
+            .as_ref()
+            .unwrap()["status"],
+        "in-progress",
+        "the canonical notice keeps the provider's acceptance evidence"
+    );
+    for companion in [&first, &second] {
+        let delivered = store.get_message(companion.envelope.id).unwrap();
+        let attempt = delivered.attempts.last().unwrap();
+        let evidence = attempt.acknowledgement_evidence.as_ref().unwrap();
+        assert_eq!(evidence["turnId"], json!(turn.id));
+        assert_eq!(evidence["canonicalMessageId"], json!(question.envelope.id));
+        assert_eq!(
+            attempt.acknowledgement_key.as_deref(),
+            Some(format!("coalesced:{}", turn.id).as_str())
+        );
+    }
+    assert!(store.pending_lead_notices(10).unwrap().is_empty());
+}
+
+#[test]
+#[allow(clippy::too_many_lines)] // One batch is recorded, split by an in-turn read, and re-recorded.
+fn a_notice_read_inside_another_turn_releases_its_batch_for_a_fresh_turn() {
+    let (_temporary, fixture) = fixture();
+    let store = &fixture.store;
+    cancel_child(&fixture);
+    let first = store
+        .queue_task_result(&QueueTaskResultInput {
+            request_id: "request-first".to_owned(),
+            child_task_id: fixture.child.id,
+        })
+        .unwrap()
+        .message;
+    let second = queue_cancelled_child_result(&fixture, "second");
+    // A third child stays accepted so the lead's task keeps running throughout.
+    let third = store
+        .delegate_task(&DelegateTaskInput {
+            request_id: "request-third".to_owned(),
+            idempotency_key: "third".to_owned(),
+            parent_task_id: fixture.root.id,
+            actor: MessageEndpoint {
+                employee_id: fixture.lead,
+                session_id: Some(fixture.lead_session),
+            },
+            assigned_employee_id: fixture.worker,
+            objective: "Objective third".to_owned(),
+            references: Vec::new(),
+            requested_authority: Some(AuthorityMode::SelfDecision),
+            roster_revision: store.roster_snapshot().unwrap().revision,
+        })
+        .unwrap()
+        .task;
+    assert_eq!(third.state, TaskState::Accepted);
+    let batch = store
+        .record_notice_turn(&RecordNoticeTurnInput {
+            request_id: "request-batch".to_owned(),
+            message_id: first.envelope.id,
+        })
+        .unwrap()
+        .turn;
+    assert!(
+        batch.text.starts_with("[Lazoo notices] 2 "),
+        "{}",
+        batch.text
+    );
+
+    // The lead was dormant; the user resumes it and it reads the first result in task_wait.
+    let resumed = store
+        .record_turn(&RecordTurnInput {
+            request_id: "request-resume".to_owned(),
+            idempotency_key: "resume".to_owned(),
+            conversation_id: fixture.root.conversation_id,
+            author: user(),
+            recipient: None,
+            task_id: Some(fixture.root.id),
+            authority_mode: AuthorityMode::FullAutonomy,
+            text: "Carry on".to_owned(),
+            activate_if_needed: false,
+            max_attempts: 3,
+        })
+        .unwrap()
+        .turn;
+    let read = store
+        .consume_task_result(&ConsumeTaskResultInput {
+            request_id: "request-read".to_owned(),
+            child_task_id: fixture.child.id,
+            turn_id: resumed.id,
+        })
+        .unwrap();
+    assert_eq!(
+        read.message.delivery.state,
+        MessageDeliveryState::Acknowledged
+    );
+    assert_eq!(
+        store.get_turn(batch.id).unwrap().state,
+        TurnState::Cancelled,
+        "the undelivered batch turn is closed"
+    );
+    let waiting = store.pending_lead_notices(10).unwrap();
+    assert_eq!(waiting.len(), 1);
+    assert_eq!(
+        waiting[0].envelope.id, second.envelope.id,
+        "the other result stays queued"
+    );
+    let blocked = store
+        .record_notice_turn(&RecordNoticeTurnInput {
+            request_id: "request-blocked".to_owned(),
+            message_id: second.envelope.id,
+        })
+        .unwrap_err();
+    assert!(matches!(blocked, StoreError::TurnTaskScope { .. }));
+
+    let task = complete_lead_turn(&fixture, resumed.id, "resume");
+    assert_eq!(task.state, TaskState::Running);
+    let fresh = store
+        .record_notice_turn(&RecordNoticeTurnInput {
+            request_id: "request-fresh".to_owned(),
+            message_id: second.envelope.id,
+        })
+        .unwrap()
+        .turn;
+    assert_ne!(fresh.id, batch.id, "the closed turn is never reused");
+    assert_eq!(fresh.state, TurnState::Recorded);
+    assert_eq!(fresh.message_id, second.envelope.id);
+    assert_eq!(
+        fresh.text,
+        text_of(&second),
+        "one remaining notice is delivered as itself"
+    );
+    let task = complete_lead_turn(&fixture, fresh.id, "fresh");
+    assert_eq!(task.state, TaskState::Running);
+    assert_eq!(
+        store
+            .get_message(second.envelope.id)
+            .unwrap()
+            .delivery
+            .state,
+        MessageDeliveryState::Acknowledged
+    );
+    assert!(store.pending_lead_notices(10).unwrap().is_empty());
+}
+
+#[test]
+fn a_coalesced_turn_stays_within_the_turn_text_limit() {
+    let (_temporary, fixture) = fixture();
+    let store = &fixture.store;
+    let worker_turn = worker_turn(&fixture, "worker-turn");
+    let ids: Vec<Uuid> = (0..17)
+        .map(|index| {
+            send(
+                &fixture,
+                &format!("q{index}"),
+                worker_turn.id,
+                fixture.lead,
+                &"x".repeat(MAX_PEER_MESSAGE_BYTES),
+            )
+            .unwrap()
+            .message
+            .envelope
+            .id
+        })
+        .collect();
+
+    let turn = store
+        .record_notice_turn(&RecordNoticeTurnInput {
+            request_id: "request-batch".to_owned(),
+            message_id: ids[0],
+        })
+        .unwrap()
+        .turn;
+    assert!(turn.text.len() <= MAX_TURN_TEXT_BYTES);
+    let carried = turn.text.matches("[Lazoo peer message]").count();
+    assert!((2..17).contains(&carried), "carried {carried}");
+    assert!(
+        ids[..carried]
+            .iter()
+            .all(|id| turn.text.contains(&id.to_string())),
+        "the oldest messages ride first"
+    );
+    assert!(!turn.text.contains(&ids[carried].to_string()));
+
+    let task = complete_lead_turn(&fixture, turn.id, "batch");
+    assert_eq!(
+        task.state,
+        TaskState::Running,
+        "a turn carrying only peer messages never completes the task"
+    );
+    let waiting = store.pending_lead_notices(20).unwrap();
+    assert_eq!(
+        waiting.len(),
+        17 - carried,
+        "the overflow waits for the next turn"
+    );
+    assert_eq!(waiting[0].envelope.id, ids[carried]);
 }

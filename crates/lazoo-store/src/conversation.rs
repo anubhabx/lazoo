@@ -17,7 +17,7 @@ use serde::Serialize;
 use serde_json::{Value, json};
 use uuid::Uuid;
 
-use crate::{Store, StoreError, employee, message, session, task};
+use crate::{Store, StoreError, delivery, employee, message, session, task};
 
 #[derive(Clone, Debug)]
 pub struct CreateConversationInput {
@@ -462,6 +462,21 @@ impl Store {
                 message: "claimed message has no delivery attempt".to_owned(),
             })?
             .id;
+        for companion in companions_in(&transaction, &current, &[MessageDeliveryState::Queued])? {
+            message::claim_message_tx(
+                &transaction,
+                &message::ClaimMessageInput {
+                    request_id: input.request_id.clone(),
+                    idempotency_key: companion_key(
+                        input.turn_id,
+                        &input.idempotency_key,
+                        companion.envelope.id,
+                    ),
+                    message_id: companion.envelope.id,
+                    expected_revision: companion.delivery.revision,
+                },
+            )?;
+        }
         let now = Utc::now().to_rfc3339();
         transaction.execute(
             "UPDATE conversation_turns SET
@@ -546,6 +561,12 @@ impl Store {
                     evidence: input.payload.clone(),
                 },
             )?;
+            acknowledge_companions(
+                &transaction,
+                &current,
+                &input.request_id,
+                &input.idempotency_key,
+            )?;
         }
 
         let now = Utc::now().to_rfc3339();
@@ -614,6 +635,26 @@ impl Store {
                 failure_message: input.failure_message.clone(),
             },
         )?;
+        for companion in companions_in(&transaction, &current, &[MessageDeliveryState::Delivering])?
+        {
+            message::fail_message_tx(
+                &transaction,
+                &message::FailMessageInput {
+                    request_id: input.request_id.clone(),
+                    idempotency_key: companion_key(
+                        input.turn_id,
+                        &input.idempotency_key,
+                        companion.envelope.id,
+                    ),
+                    message_id: companion.envelope.id,
+                    expected_revision: companion.delivery.revision,
+                    attempt_id: active_attempt_id(&companion)?,
+                    retryable: input.retryable,
+                    failure_code: input.failure_code.clone(),
+                    failure_message: input.failure_message.clone(),
+                },
+            )?;
+        }
         let target = match message_result.message.delivery.state {
             MessageDeliveryState::RetryableFailed => TurnState::RetryableFailed,
             MessageDeliveryState::TerminalFailed => TurnState::TerminalFailed,
@@ -684,6 +725,25 @@ impl Store {
             },
         )?;
         let attempt_id = message_result.message.attempts.last().unwrap().id;
+        for companion in companions_in(
+            &transaction,
+            &current,
+            &[MessageDeliveryState::RetryableFailed],
+        )? {
+            message::retry_message_tx(
+                &transaction,
+                &message::RetryMessageInput {
+                    request_id: input.request_id.clone(),
+                    idempotency_key: companion_key(
+                        input.turn_id,
+                        &input.idempotency_key,
+                        companion.envelope.id,
+                    ),
+                    message_id: companion.envelope.id,
+                    expected_revision: companion.delivery.revision,
+                },
+            )?;
+        }
         let now = Utc::now().to_rfc3339();
         transaction.execute(
             "UPDATE conversation_turns SET
@@ -755,6 +815,12 @@ impl Store {
                     expected_revision: message_record.delivery.revision,
                 },
             )?;
+            cancel_companions(
+                &transaction,
+                &current,
+                &input.request_id,
+                &input.idempotency_key,
+            )?;
             validate_turn_transition(current.state, TurnState::Cancelled)?;
             transaction.execute(
                 "UPDATE conversation_turns SET
@@ -824,6 +890,12 @@ impl Store {
                 },
             )?;
         }
+        cancel_companions(
+            &transaction,
+            &current,
+            &input.request_id,
+            &input.idempotency_key,
+        )?;
         let now = Utc::now().to_rfc3339();
         let append = append_turn_event(
             &transaction,
@@ -1733,6 +1805,88 @@ fn require_turn_state(
 
 fn message_key(turn_id: Uuid, key: &str) -> String {
     format!("turn:{turn_id}:{key}")
+}
+
+/// The companion notices a coalesced turn carries that are in one of `states`; each follows
+/// the canonical message through the transition under its own command key.
+fn companions_in(
+    transaction: &Transaction<'_>,
+    turn: &ConversationTurnRecord,
+    states: &[MessageDeliveryState],
+) -> Result<Vec<lazoo_protocol::MessageRecord>, StoreError> {
+    Ok(delivery::notice_companions(transaction, turn)?
+        .into_iter()
+        .filter(|message| states.contains(&message.delivery.state))
+        .collect())
+}
+
+fn companion_key(turn_id: Uuid, key: &str, message_id: Uuid) -> String {
+    message_key(turn_id, &format!("{key}:{message_id}"))
+}
+
+/// Acknowledges every companion notice a coalesced turn delivered, citing that turn and its
+/// canonical message; the canonical message keeps the provider's acceptance evidence.
+fn acknowledge_companions(
+    transaction: &Transaction<'_>,
+    turn: &ConversationTurnRecord,
+    request_id: &str,
+    key: &str,
+) -> Result<(), StoreError> {
+    for companion in companions_in(transaction, turn, &[MessageDeliveryState::Delivering])? {
+        message::acknowledge_message_tx(
+            transaction,
+            &message::AcknowledgeMessageInput {
+                request_id: request_id.to_owned(),
+                idempotency_key: companion_key(turn.id, key, companion.envelope.id),
+                message_id: companion.envelope.id,
+                expected_revision: companion.delivery.revision,
+                attempt_id: active_attempt_id(&companion)?,
+                acknowledgement_key: format!("coalesced:{}", turn.id),
+                evidence: json!({"turnId": turn.id, "canonicalMessageId": turn.message_id}),
+            },
+        )?;
+    }
+    Ok(())
+}
+
+/// Closes every companion notice that the cancelled turn had not delivered yet.
+fn cancel_companions(
+    transaction: &Transaction<'_>,
+    turn: &ConversationTurnRecord,
+    request_id: &str,
+    key: &str,
+) -> Result<(), StoreError> {
+    for companion in companions_in(
+        transaction,
+        turn,
+        &[
+            MessageDeliveryState::Queued,
+            MessageDeliveryState::Delivering,
+            MessageDeliveryState::RetryableFailed,
+        ],
+    )? {
+        message::cancel_message_tx(
+            transaction,
+            &message::CancelMessageInput {
+                request_id: request_id.to_owned(),
+                idempotency_key: companion_key(turn.id, key, companion.envelope.id),
+                message_id: companion.envelope.id,
+                expected_revision: companion.delivery.revision,
+            },
+        )?;
+    }
+    Ok(())
+}
+
+fn active_attempt_id(message: &lazoo_protocol::MessageRecord) -> Result<Uuid, StoreError> {
+    message
+        .attempts
+        .last()
+        .map(|attempt| attempt.id)
+        .ok_or(StoreError::InvalidRecord {
+            field: "message_delivery_attempts",
+            message: "delivering companion notice has no delivery attempt".to_owned(),
+        })
 }
 
 fn event_type_for_state(state: TurnState, fallback: &'static str) -> &'static str {

@@ -180,6 +180,22 @@ pub fn render_incident_notice_text(notice: &IncidentNotice<'_>) -> String {
     )
 }
 
+/// Renders one turn that carries several notices, oldest first. A single notice passes through
+/// unchanged, so the recipient reads the same text whether or not others were waiting.
+#[must_use]
+pub fn render_coalesced_notice_text(texts: &[&str]) -> String {
+    match texts {
+        [] => String::new(),
+        [only] => (*only).to_owned(),
+        many => format!(
+            "[Lazoo notices] {} Lazoo notices are waiting since your last turn, oldest first. \
+             Each one is separate evidence; act on all of them.\n\n{}",
+            many.len(),
+            many.join("\n\n"),
+        ),
+    }
+}
+
 const fn state_name(state: TaskState) -> &'static str {
     match state {
         TaskState::Proposed => "proposed",

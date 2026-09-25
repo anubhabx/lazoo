@@ -6,13 +6,18 @@
 //! daemon boot; otherwise it stays queued until the local user resumes the lead with
 //! `session.warm` or a new user turn, and the next pass delivers it.
 
-use lazoo_protocol::{JsonRpcRequest, MessageRecord, RpcError, TaskState, TurnState};
+use std::collections::HashSet;
+
+use lazoo_protocol::{
+    JsonRpcRequest, MessageDeliveryState, MessageRecord, RpcError, TaskState, TurnState,
+};
 use lazoo_store::{
     CancelMessageInput, QueueIncidentNoticeInput, QueueTaskResultInput, RecordNoticeTurnInput,
     StoreError,
 };
 use serde_json::Value;
 use tokio::sync::broadcast::error::RecvError;
+use uuid::Uuid;
 
 use super::{App, task::task_store_error, turn::turn_store_error};
 
@@ -47,8 +52,9 @@ impl App {
     }
 
     /// One delivery pass: queue results for terminal children, queue notices for promoted
-    /// incidents, then deliver queued notices whose lead is idle and free. Delivery is
-    /// sequential; a notice whose lead is busy or dormant is skipped without error.
+    /// incidents, then deliver queued notices whose lead is idle and free, every notice for
+    /// one recipient and task as a single turn. Delivery is sequential; a notice whose lead
+    /// is busy or dormant is skipped without error.
     #[doc(hidden)]
     pub async fn deliver_pending_notices_once(&self) -> Result<(), RpcError> {
         let mut first_error = None;
@@ -87,12 +93,15 @@ impl App {
                 }
             }
         }
+        // Notices queued for the same recipient and task share one turn; the first member
+        // handled in a pass delivers (or holds) the turn for the rest.
+        let mut handled_turns = HashSet::new();
         for notice in self
             .store
             .pending_lead_notices(PASS_LIMIT)
             .map_err(task_store_error)?
         {
-            if let Err(error) = self.deliver_lead_notice(&notice).await {
+            if let Err(error) = self.deliver_lead_notice(&notice, &mut handled_turns).await {
                 tracing::warn!(
                     message_id = %notice.envelope.id,
                     code = %error.code,
@@ -105,10 +114,22 @@ impl App {
         first_error.map_or(Ok(()), Err)
     }
 
-    async fn deliver_lead_notice(&self, notice: &MessageRecord) -> Result<(), RpcError> {
+    async fn deliver_lead_notice(
+        &self,
+        notice: &MessageRecord,
+        handled_turns: &mut HashSet<Uuid>,
+    ) -> Result<(), RpcError> {
         let Some(task_id) = notice.envelope.task_id else {
             return Ok(());
         };
+        // An earlier turn in this pass may have carried this notice already.
+        let notice = &self
+            .store
+            .get_message(notice.envelope.id)
+            .map_err(task_store_error)?;
+        if notice.delivery.state != MessageDeliveryState::Queued {
+            return Ok(());
+        }
         let task = self.store.get_task(task_id).map_err(task_store_error)?.task;
         if matches!(
             task.state,
@@ -132,7 +153,7 @@ impl App {
             Err(error) => return Err(turn_store_error(error)),
         };
         self.publish_events()?;
-        if recorded.turn.state != TurnState::Recorded {
+        if recorded.turn.state != TurnState::Recorded || !handled_turns.insert(recorded.turn.id) {
             return Ok(());
         }
         let request = JsonRpcRequest {
