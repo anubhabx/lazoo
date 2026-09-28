@@ -82,6 +82,8 @@ struct FakeSessionBackend {
     turn_requests: Arc<Mutex<Vec<TurnRequest>>>,
     turn_failure: Arc<Mutex<Option<String>>>,
     turn_retryable_failure: Arc<AtomicBool>,
+    /// Scripted start refusals: each one fails the next `start` before any session is counted.
+    fail_starts: Arc<AtomicUsize>,
     working_directories: Arc<Mutex<Vec<PathBuf>>>,
     permission_requests: Arc<Mutex<Vec<PermissionRequest>>>,
     permission_decisions: Arc<Mutex<Vec<PermissionDecision>>>,
@@ -110,6 +112,7 @@ impl Default for FakeSessionBackend {
             turn_requests: Arc::new(Mutex::new(Vec::new())),
             turn_failure: Arc::new(Mutex::new(None)),
             turn_retryable_failure: Arc::new(AtomicBool::new(false)),
+            fail_starts: Arc::new(AtomicUsize::new(0)),
             working_directories: Arc::new(Mutex::new(Vec::new())),
             permission_requests: Arc::new(Mutex::new(Vec::new())),
             permission_decisions: Arc::new(Mutex::new(Vec::new())),
@@ -236,6 +239,10 @@ impl SessionBackend for FakeSessionBackend {
         request: &'a SessionRequest,
     ) -> SessionBackendFuture<'a> {
         Box::pin(async move {
+            if self.fail_starts.load(Ordering::SeqCst) > 0 {
+                self.fail_starts.fetch_sub(1, Ordering::SeqCst);
+                return Err(ProviderError::Protocol("scripted start failure".to_owned()));
+            }
             let number = self.starts.fetch_add(1, Ordering::SeqCst) + 1;
             if self.gate_start.load(Ordering::SeqCst) {
                 self.start_permits.acquire().await.unwrap().forget();
@@ -338,6 +345,7 @@ fn configured_employee_named(
             native_settings: json!({}),
             authority_mode: AuthorityMode::Ask,
             checkout_policy: EmployeeCheckoutPolicy::Isolated,
+            activation_policy: lazoo_protocol::ActivationPolicy::Manual,
             enabled: true,
             provider_observation: Some(ProviderObservation {
                 provider: "codex".to_owned(),
@@ -418,6 +426,7 @@ async fn accepted_projectless_child_dispatches_automatically_through_the_canonic
         native_settings: json!({}),
         authority_mode: AuthorityMode::FullAutonomy,
         checkout_policy: EmployeeCheckoutPolicy::Isolated,
+        activation_policy: lazoo_protocol::ActivationPolicy::Manual,
         enabled: true,
         provider_observation: Some(ProviderObservation {
             provider: "codex".to_owned(),
@@ -638,6 +647,7 @@ async fn automatic_dispatch_configuration_drift_terminalizes_before_provider_io(
         native_settings: json!({}),
         authority_mode: AuthorityMode::FullAutonomy,
         checkout_policy: EmployeeCheckoutPolicy::Isolated,
+        activation_policy: lazoo_protocol::ActivationPolicy::Manual,
         enabled: true,
         provider_observation: Some(ProviderObservation {
             provider: provider.to_owned(),
@@ -773,6 +783,7 @@ async fn automatic_dispatch_configuration_drift_terminalizes_before_provider_io(
             native_settings: None,
             authority_mode: None,
             checkout_policy: None,
+            activation_policy: None,
             enabled: None,
             provider_observation: None,
         })
@@ -1133,6 +1144,7 @@ async fn project_task_dispatch_uses_an_isolated_worktree_and_preserves_dirty_use
         native_settings: json!({}),
         authority_mode: AuthorityMode::FullAutonomy,
         checkout_policy: EmployeeCheckoutPolicy::Isolated,
+        activation_policy: lazoo_protocol::ActivationPolicy::Manual,
         enabled: true,
         provider_observation: Some(ProviderObservation {
             provider: "codex".to_owned(),
@@ -1653,6 +1665,7 @@ async fn task_authority_narrows_the_permission_mode_for_the_provider_turn() {
             native_settings: json!({}),
             authority_mode: AuthorityMode::FullAutonomy,
             checkout_policy: EmployeeCheckoutPolicy::Isolated,
+            activation_policy: lazoo_protocol::ActivationPolicy::Manual,
             enabled: true,
             provider_observation: Some(ProviderObservation {
                 provider: "codex".to_owned(),
@@ -2216,6 +2229,7 @@ async fn task_turn_rejects_a_provider_without_authority_override_support_before_
             native_settings: json!({}),
             authority_mode: AuthorityMode::Ask,
             checkout_policy: EmployeeCheckoutPolicy::Isolated,
+            activation_policy: lazoo_protocol::ActivationPolicy::Manual,
             enabled: true,
             provider_observation: Some(ProviderObservation {
                 provider: "claude".to_owned(),
@@ -3539,7 +3553,7 @@ async fn status_reports_protocol_store_and_boot_identity() {
     let result = response.result.unwrap();
 
     assert_eq!(result["protocolVersion"], 1);
-    assert_eq!(result["schemaVersion"], 9);
+    assert_eq!(result["schemaVersion"], 10);
     assert_eq!(result["journalMode"], "wal");
     assert!(
         result["bootId"]
@@ -4283,7 +4297,7 @@ fn employee_roster_acceptance_contract_is_backend_only() {
         "roster', 'refresh",
         "LZ-EMPLOYEE-STALE",
         "restartDurability",
-        "schemaVersion 9",
+        "schemaVersion 10",
         "providerSmokeAbsent",
     ] {
         assert!(
@@ -4321,7 +4335,7 @@ fn native_session_acceptance_contract_covers_containment_and_owner_loss() {
         "completeTreeTerminated",
         "nativeHostPid",
         "providerSmokeAbsent",
-        "schemaVersion 9",
+        "schemaVersion 10",
     ] {
         assert!(
             script.contains(required),
@@ -4351,7 +4365,7 @@ fn collaboration_bus_acceptance_contract_is_backend_only() {
         "deadLetterEvidence",
         "restartDurability",
         "auditOutboxEvidence",
-        "schemaVersion 9",
+        "schemaVersion 10",
         "providerSmokeAbsent",
         "desktopCapabilityExpansionAbsent",
     ] {
@@ -4487,7 +4501,7 @@ fn task_graph_acceptance_executes_backend_only_contract() {
     )
     .unwrap();
     assert_eq!(manifest["status"], "PASS");
-    assert_eq!(manifest["schemaVersion"], 9);
+    assert_eq!(manifest["schemaVersion"], 10);
     assert_eq!(manifest["mode"], "deterministic-fixture");
     for field in [
         "rootIdentity",
@@ -4589,6 +4603,7 @@ fn approval_harness(
             native_settings: json!({}),
             authority_mode: authority,
             checkout_policy: EmployeeCheckoutPolicy::Isolated,
+            activation_policy: lazoo_protocol::ActivationPolicy::Manual,
             enabled: true,
             provider_observation: Some(ProviderObservation {
                 provider: "codex".to_owned(),
@@ -5136,6 +5151,15 @@ struct ToolHarness {
 }
 
 fn tool_harness(authority: AuthorityMode) -> (tempfile::TempDir, ToolHarness) {
+    tool_harness_with(authority, lazoo_protocol::ActivationPolicy::Manual)
+}
+
+/// The tool harness with the lead and worker under one activation policy; `manual` is the
+/// default every other scenario relies on.
+fn tool_harness_with(
+    authority: AuthorityMode,
+    activation: lazoo_protocol::ActivationPolicy,
+) -> (tempfile::TempDir, ToolHarness) {
     let temporary = tempdir().unwrap();
     let root = DataRoot::from_path(temporary.path().join("data"));
     root.ensure().unwrap();
@@ -5152,6 +5176,7 @@ fn tool_harness(authority: AuthorityMode) -> (tempfile::TempDir, ToolHarness) {
         native_settings: json!({}),
         authority_mode: authority,
         checkout_policy: EmployeeCheckoutPolicy::Isolated,
+        activation_policy: activation,
         enabled: true,
         provider_observation: Some(ProviderObservation {
             provider: "codex".to_owned(),
@@ -5642,7 +5667,7 @@ fn collaboration_tools_acceptance_contract_is_deterministic_and_backend_only() {
         "worker_turn_reports_failure_through_task_report_before_native_completion",
         "collaboration-tools-manifest.json",
         "deterministic-fake-transport",
-        "schemaVersion = 9",
+        "schemaVersion = 10",
     ] {
         assert!(
             script.contains(required),
@@ -6063,6 +6088,7 @@ async fn dead_letters_and_dispatch_failures_raise_incidents_with_their_scope() {
             native_settings: None,
             authority_mode: None,
             checkout_policy: None,
+            activation_policy: None,
             enabled: None,
             provider_observation: None,
         })
@@ -6173,7 +6199,7 @@ async fn restart_owner_loss_and_emergency_spool_fold_into_startup_incidents_once
         .await
         .result
         .unwrap();
-    assert_eq!(status["schemaVersion"], 9);
+    assert_eq!(status["schemaVersion"], 10);
     assert_eq!(status["emergencyIncidentCount"], 1);
 }
 
@@ -6276,7 +6302,7 @@ fn minimum_incidents_acceptance_contract_is_deterministic_and_backend_only() {
         "incident_errors_use_exit_code_fifteen",
         "minimum-incidents-manifest.json",
         "deterministic-fake-transport",
-        "schemaVersion = 9",
+        "schemaVersion = 10",
     ] {
         assert!(
             script.contains(required),
@@ -6746,7 +6772,7 @@ fn result_delivery_acceptance_contract_is_deterministic_and_backend_only() {
         "externalModelUseAbsent",
         "uiChangesAbsent",
         "deterministic-fake-transport",
-        "schemaVersion = 9",
+        "schemaVersion = 10",
     ] {
         assert!(
             script.contains(required),
@@ -7253,7 +7279,7 @@ fn peer_messaging_acceptance_contract_is_deterministic_and_backend_only() {
         "externalModelUseAbsent",
         "uiChangesAbsent",
         "deterministic-fake-transport",
-        "schemaVersion = 9",
+        "schemaVersion = 10",
     ] {
         assert!(
             script.contains(required),
@@ -7376,7 +7402,246 @@ fn coalesced_notices_acceptance_contract_is_deterministic_and_backend_only() {
         "externalModelUseAbsent",
         "uiChangesAbsent",
         "deterministic-fake-transport",
-        "schemaVersion = 9",
+        "schemaVersion = 10",
+    ] {
+        assert!(
+            script.contains(required),
+            "acceptance script must contain {required}"
+        );
+    }
+    for forbidden in [
+        "provider', 'smoke",
+        "apps\\lazoo-desktop\\src",
+        "LivePrompt",
+    ] {
+        assert!(
+            !script.contains(forbidden),
+            "acceptance script must not contain {forbidden}"
+        );
+    }
+}
+
+// ---------------------------------------------------------------------------------------------
+// Activation policy: a recorded notice turn wakes its dormant recipient only by that
+// recipient's own policy, once per turn, for its own task, and the session stops with the turn.
+
+/// Delegates one child, lets it complete, and stops the lead's session so the child's result
+/// finds the lead dormant with two sessions started so far; returns the root and child ids.
+async fn dormant_lead_with_a_completed_child(harness: &ToolHarness) -> (uuid::Uuid, uuid::Uuid) {
+    use lazoo_protocol::{SessionLifecycleState, TaskState};
+
+    let (root_task_id, child_id) = delegate_without_waiting(harness).await;
+    harness.app.dispatch_pending_tasks_once().await.unwrap();
+    assert_eq!(
+        harness.store.get_task(child_id).unwrap().task.state,
+        TaskState::Completed
+    );
+    let lead_session = harness
+        .store
+        .list_sessions()
+        .unwrap()
+        .into_iter()
+        .find(|session| {
+            session.employee_id == harness.lead.id && session.state == SessionLifecycleState::Idle
+        })
+        .expect("the lead session is idle after its turn");
+    harness
+        .app
+        .handle(request(
+            "stop-lead",
+            "session.stop",
+            json!({
+                "id": lead_session.id,
+                "expectedRevision": lead_session.revision,
+                "idempotencyKey": "stop-lead"
+            }),
+        ))
+        .await
+        .result
+        .unwrap();
+    assert_eq!(harness.backend.starts.load(Ordering::SeqCst), 2);
+    (root_task_id, child_id)
+}
+
+#[tokio::test]
+async fn a_notice_turn_activates_a_dormant_lead_by_policy_and_stops_the_session_after_it() {
+    use lazoo_protocol::{ActivationPolicy, MessageKind, SessionLifecycleState, TaskState};
+
+    let (_temporary, harness) =
+        tool_harness_with(AuthorityMode::SelfDecision, ActivationPolicy::NoticeTurns);
+    let (root_task_id, child_id) = dormant_lead_with_a_completed_child(&harness).await;
+    let stops_before = harness.backend.stops.load(Ordering::SeqCst);
+
+    harness.app.deliver_pending_notices_once().await.unwrap();
+
+    assert_eq!(
+        harness.backend.starts.load(Ordering::SeqCst),
+        3,
+        "the notice turn started one session for the lead by policy"
+    );
+    assert_eq!(harness.backend.turns.load(Ordering::SeqCst), 3);
+    assert!(last_prompt(&harness.backend).contains(&child_id.to_string()));
+    let delivered = lead_messages(&harness.store, MessageKind::Result);
+    assert_eq!(delivered.len(), 1);
+    assert_eq!(delivered[0].state, MessageDeliveryState::Acknowledged);
+    let turns = lead_turns(&harness);
+    assert_eq!(turns.len(), 2);
+    assert_eq!(turns[1].state, TurnState::Completed);
+    assert_eq!(
+        harness.store.get_task(root_task_id).unwrap().task.state,
+        TaskState::Completed
+    );
+    assert_eq!(
+        harness.backend.stops.load(Ordering::SeqCst),
+        stops_before + 1,
+        "the activated session was stopped as soon as the turn ended"
+    );
+    let lead_sessions: Vec<_> = harness
+        .store
+        .list_sessions()
+        .unwrap()
+        .into_iter()
+        .filter(|session| session.employee_id == harness.lead.id)
+        .collect();
+    assert_eq!(
+        lead_sessions.len(),
+        2,
+        "the user's warm session and the one policy activation"
+    );
+    assert!(
+        lead_sessions
+            .iter()
+            .all(|session| session.state == SessionLifecycleState::Suspended),
+        "the lead is dormant again once the turn ended: {lead_sessions:?}"
+    );
+
+    // Nothing is queued any more, so nothing starts again.
+    harness.app.deliver_pending_notices_once().await.unwrap();
+    assert_eq!(harness.backend.starts.load(Ordering::SeqCst), 3);
+    assert_eq!(harness.backend.turns.load(Ordering::SeqCst), 3);
+}
+
+#[tokio::test]
+async fn a_failed_activation_is_never_retried_and_the_user_still_resumes_the_lead() {
+    use lazoo_protocol::{ActivationPolicy, MessageKind, SessionLifecycleState, TaskState};
+
+    let (_temporary, harness) =
+        tool_harness_with(AuthorityMode::SelfDecision, ActivationPolicy::NoticeTurns);
+    let (root_task_id, child_id) = dormant_lead_with_a_completed_child(&harness).await;
+    harness.backend.fail_starts.store(1, Ordering::SeqCst);
+
+    let failed = harness
+        .app
+        .deliver_pending_notices_once()
+        .await
+        .expect_err("the refused start surfaces as the pass error");
+
+    assert_eq!(failed.code, "LZ-SESSION-START-FAILED");
+    assert_eq!(
+        harness.backend.starts.load(Ordering::SeqCst),
+        2,
+        "a refused start is not a provider process"
+    );
+    assert_eq!(harness.backend.turns.load(Ordering::SeqCst), 2);
+    let queued = lead_messages(&harness.store, MessageKind::Result);
+    assert_eq!(queued.len(), 1);
+    assert_eq!(queued[0].state, MessageDeliveryState::Queued);
+    let turns = lead_turns(&harness);
+    assert_eq!(turns.len(), 2);
+    assert_eq!(turns[1].state, TurnState::Recorded);
+    let failed_session = harness
+        .store
+        .list_sessions()
+        .unwrap()
+        .into_iter()
+        .find(|session| {
+            session.employee_id == harness.lead.id && session.state == SessionLifecycleState::Failed
+        })
+        .expect("the failed activation is on the session ledger");
+    assert_eq!(
+        failed_session.failure_code.as_deref(),
+        Some("LZ-SESSION-START-FAILED")
+    );
+    let incidents = list_incidents(&harness.app, json!({"code": "LZ-SESSION-START-FAILED"})).await;
+    assert_eq!(incidents.len(), 1, "{incidents:?}");
+    assert_eq!(incidents[0]["employeeId"], harness.lead.id.to_string());
+    assert_eq!(incidents[0]["sessionId"], failed_session.id.to_string());
+
+    // The same recorded turn never activates the lead a second time.
+    harness.app.deliver_pending_notices_once().await.unwrap();
+    assert_eq!(harness.backend.starts.load(Ordering::SeqCst), 2);
+    assert_eq!(lead_turns(&harness)[1].state, TurnState::Recorded);
+    assert_eq!(
+        lead_messages(&harness.store, MessageKind::Result)[0].state,
+        MessageDeliveryState::Queued
+    );
+
+    // The local user resumes the lead exactly as under `manual`; the waiting turn is delivered
+    // on that session, and a session the user started is not stopped by the notice.
+    harness
+        .app
+        .handle(request(
+            "warm-lead-again",
+            "session.warm",
+            json!({
+                "employeeId": harness.lead.id,
+                "expectedEmployeeRevision": harness.lead.configuration_revision,
+                "idempotencyKey": "warm-lead-again"
+            }),
+        ))
+        .await
+        .result
+        .unwrap();
+    assert_eq!(harness.backend.starts.load(Ordering::SeqCst), 3);
+    let stops_before = harness.backend.stops.load(Ordering::SeqCst);
+    harness.app.deliver_pending_notices_once().await.unwrap();
+
+    assert_eq!(harness.backend.turns.load(Ordering::SeqCst), 3);
+    assert!(last_prompt(&harness.backend).contains(&child_id.to_string()));
+    assert_eq!(
+        lead_messages(&harness.store, MessageKind::Result)[0].state,
+        MessageDeliveryState::Acknowledged
+    );
+    let turns = lead_turns(&harness);
+    assert_eq!(
+        turns.len(),
+        2,
+        "the same recorded turn was delivered, not a new one"
+    );
+    assert_eq!(turns[1].state, TurnState::Completed);
+    assert_eq!(
+        harness.store.get_task(root_task_id).unwrap().task.state,
+        TaskState::Completed
+    );
+    assert_eq!(harness.backend.stops.load(Ordering::SeqCst), stops_before);
+}
+
+#[test]
+fn activation_policy_acceptance_contract_is_deterministic_and_backend_only() {
+    let repository = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let script_path = repository.join("scripts/acceptance/activation-policy.ps1");
+    let script =
+        std::fs::read_to_string(&script_path).expect("activation policy acceptance script");
+
+    for required in [
+        "activation_policies_round_trip_as_kebab_case_and_default_to_manual",
+        "notice_turns_activate_a_recipient_only_under_the_notice_turns_policy",
+        "activation_policy_defaults_to_manual_and_a_change_bumps_the_configuration_revision",
+        "employee_cli_maps_mutations_and_roster_refresh",
+        "a_notice_turn_activates_a_dormant_lead_by_policy_and_stops_the_session_after_it",
+        "a_failed_activation_is_never_retried_and_the_user_still_resumes_the_lead",
+        "notices_wait_for_a_dormant_lead_until_the_user_resumes_it",
+        "peer_messages_never_activate_a_dormant_recipient_and_refusals_never_end_the_turn",
+        "store_enables_wal_foreign_keys_and_schema_version",
+        "manualPolicyNeverActivates",
+        "oneActivationPerRecordedTurn",
+        "sessionStoppedAfterTurn",
+        "failedActivationNeverRetried",
+        "providerSmokeAbsent",
+        "externalModelUseAbsent",
+        "uiChangesAbsent",
+        "deterministic-fake-transport",
+        "schemaVersion = 10",
     ] {
         assert!(
             script.contains(required),

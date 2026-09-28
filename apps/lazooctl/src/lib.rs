@@ -3,10 +3,10 @@ use std::path::PathBuf;
 use clap::{Parser, Subcommand};
 use lazoo_ipc::{IpcError, PipeClient};
 use lazoo_protocol::{
-    ApprovalDecision, ApprovalState, AuthorityMode, CheckoutMode, EmployeeCheckoutPolicy,
-    IncidentPriority, IncidentState, JsonRpcRequest, JsonRpcResponse, MessageEndpoint, MessageKind,
-    MessageSender, RpcError, TaskReportKind, TaskResolution, TaskState, UserMessageEndpoint,
-    UserMessageKind,
+    ActivationPolicy, ApprovalDecision, ApprovalState, AuthorityMode, CheckoutMode,
+    EmployeeCheckoutPolicy, IncidentPriority, IncidentState, JsonRpcRequest, JsonRpcResponse,
+    MessageEndpoint, MessageKind, MessageSender, RpcError, TaskReportKind, TaskResolution,
+    TaskState, UserMessageEndpoint, UserMessageKind,
 };
 use lazoo_runtime::{DataRoot, Installation, RuntimeError};
 use serde_json::{Value, json};
@@ -193,6 +193,8 @@ pub enum EmployeeCommand {
         authority_mode: AuthorityMode,
         #[arg(long, default_value = "isolated", value_parser = parse_employee_checkout_policy)]
         checkout_policy: EmployeeCheckoutPolicy,
+        #[arg(long, default_value = "manual", value_parser = parse_employee_activation_policy)]
+        activation_policy: ActivationPolicy,
         #[arg(long)]
         disabled: bool,
         #[arg(long)]
@@ -224,6 +226,8 @@ pub enum EmployeeCommand {
         authority_mode: Option<AuthorityMode>,
         #[arg(long, value_parser = parse_employee_checkout_policy)]
         checkout_policy: Option<EmployeeCheckoutPolicy>,
+        #[arg(long, value_parser = parse_employee_activation_policy)]
+        activation_policy: Option<ActivationPolicy>,
         #[arg(long, action = clap::ArgAction::Set)]
         enabled: Option<bool>,
         #[arg(long)]
@@ -1282,6 +1286,7 @@ fn employee_request(command: &EmployeeCommand) -> (&'static str, Value, bool) {
             native_settings,
             authority_mode,
             checkout_policy,
+            activation_policy,
             disabled,
             idempotency_key,
         } => (
@@ -1296,6 +1301,7 @@ fn employee_request(command: &EmployeeCommand) -> (&'static str, Value, bool) {
                 "nativeSettings": native_settings,
                 "authorityMode": authority_mode,
                 "checkoutPolicy": checkout_policy,
+                "activationPolicy": activation_policy,
                 "enabled": !disabled,
                 "idempotencyKey": idempotency_key.clone().unwrap_or_else(|| Uuid::new_v4().to_string()),
             }),
@@ -1315,6 +1321,7 @@ fn employee_request(command: &EmployeeCommand) -> (&'static str, Value, bool) {
             native_settings,
             authority_mode,
             checkout_policy,
+            activation_policy,
             enabled,
             idempotency_key,
         } => (
@@ -1331,6 +1338,7 @@ fn employee_request(command: &EmployeeCommand) -> (&'static str, Value, bool) {
                 "nativeSettings": native_settings,
                 "authorityMode": authority_mode,
                 "checkoutPolicy": checkout_policy,
+                "activationPolicy": activation_policy,
                 "enabled": enabled,
                 "idempotencyKey": idempotency_key.clone().unwrap_or_else(|| Uuid::new_v4().to_string()),
             }),
@@ -1500,5 +1508,13 @@ fn parse_employee_checkout_policy(value: &str) -> Result<EmployeeCheckoutPolicy,
         "isolated" => Ok(EmployeeCheckoutPolicy::Isolated),
         "read-only" => Ok(EmployeeCheckoutPolicy::ReadOnly),
         _ => Err("expected isolated or read-only".to_owned()),
+    }
+}
+
+fn parse_employee_activation_policy(value: &str) -> Result<ActivationPolicy, String> {
+    match value {
+        "manual" => Ok(ActivationPolicy::Manual),
+        "notice-turns" => Ok(ActivationPolicy::NoticeTurns),
+        _ => Err("expected manual or notice-turns".to_owned()),
     }
 }

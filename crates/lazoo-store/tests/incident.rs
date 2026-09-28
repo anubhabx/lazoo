@@ -28,6 +28,7 @@ fn store_with_employee() -> (tempfile::TempDir, Store, Uuid) {
             native_settings: json!({}),
             authority_mode: AuthorityMode::Ask,
             checkout_policy: EmployeeCheckoutPolicy::Isolated,
+            activation_policy: lazoo_protocol::ActivationPolicy::Manual,
             enabled: true,
             provider_observation: None,
         })
@@ -298,7 +299,7 @@ fn emergency_spool_records_fold_into_keeper_incidents_exactly_once() {
     )
     .unwrap();
     let store = Store::open_path(root.state_db()).unwrap();
-    assert_eq!(store.status().unwrap().schema_version, 9);
+    assert_eq!(store.status().unwrap().schema_version, 10);
     assert_eq!(store.import_pending_incidents(&root).unwrap(), 2);
 
     let raised = store.reconcile_emergency_incidents().unwrap();

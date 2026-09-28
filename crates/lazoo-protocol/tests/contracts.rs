@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use lazoo_protocol::{
-    AuthorityMode, CancelTurnParams, CheckoutMode, ConversationListParams,
+    ActivationPolicy, AuthorityMode, CancelTurnParams, CheckoutMode, ConversationListParams,
     CreateConversationParams, CreateEmployeeParams, DesktopSnapshot, EmployeeCheckoutPolicy,
     JsonRpcRequest, JsonRpcResponse, MAX_FRAME_BYTES, MessageDeliveryState, MessageEndpoint,
     MessageKind, MessageSender, PROTOCOL_V1, ProviderProbeParams, ProviderSmokeParams,
@@ -77,6 +77,7 @@ fn employee_defaults_are_ask_isolated_enabled_and_strict() {
 
     assert_eq!(params.authority_mode, AuthorityMode::Ask);
     assert_eq!(params.checkout_policy, EmployeeCheckoutPolicy::Isolated);
+    assert_eq!(params.activation_policy, ActivationPolicy::Manual);
     assert!(params.enabled);
     assert_eq!(params.role, "");
     assert_eq!(params.instructions, "");
@@ -348,4 +349,18 @@ fn desktop_snapshot_uses_strict_camel_case_contract() {
     let mut invalid = value;
     invalid["unexpected"] = json!(true);
     assert!(serde_json::from_value::<DesktopSnapshot>(invalid).is_err());
+}
+
+#[test]
+fn activation_policies_round_trip_as_kebab_case_and_default_to_manual() {
+    assert_eq!(
+        serde_json::to_string(&ActivationPolicy::NoticeTurns).unwrap(),
+        r#""notice-turns""#
+    );
+    assert_eq!(
+        serde_json::from_str::<ActivationPolicy>(r#""manual""#).unwrap(),
+        ActivationPolicy::Manual
+    );
+    assert_eq!(ActivationPolicy::default(), ActivationPolicy::Manual);
+    assert!(serde_json::from_str::<ActivationPolicy>(r#""automatic""#).is_err());
 }

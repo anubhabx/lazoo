@@ -23,6 +23,7 @@ fn employee() -> CreateEmployeeInput {
         native_settings: json!({}),
         authority_mode: AuthorityMode::Ask,
         checkout_policy: EmployeeCheckoutPolicy::Isolated,
+        activation_policy: lazoo_protocol::ActivationPolicy::Manual,
         enabled: true,
         provider_observation: Some(ProviderObservation {
             provider: "codex".to_owned(),
@@ -268,6 +269,7 @@ fn warm_requires_route_ready_provider_and_active_sessions_lock_employee_configur
             native_settings: None,
             authority_mode: None,
             checkout_policy: None,
+            activation_policy: None,
             enabled: None,
             provider_observation: None,
         })

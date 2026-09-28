@@ -6,7 +6,7 @@
 
 use std::fmt::Write;
 
-use lazoo_protocol::{IncidentPriority, TaskState};
+use lazoo_protocol::{ActivationPolicy, IncidentPriority, TaskState};
 use uuid::Uuid;
 
 use crate::MessageValidationError;
@@ -218,4 +218,12 @@ fn truncate_utf8(value: &str, maximum: usize) -> &str {
         end -= 1;
     }
     &value[..end]
+}
+
+/// Activation is policy, not traffic. A notice turn may start a provider session for its
+/// dormant recipient only when that recipient's own policy says so; the default never does,
+/// so employee-authored traffic still cannot wake anyone the user did not opt in.
+#[must_use]
+pub const fn notice_turn_may_activate(policy: ActivationPolicy) -> bool {
+    matches!(policy, ActivationPolicy::NoticeTurns)
 }

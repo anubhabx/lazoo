@@ -932,7 +932,7 @@ fn provider_error_is_retryable(error: &ProviderError) -> bool {
     )
 }
 
-fn turn_failure(code: &str, message: &str, turn_id: Uuid) -> RpcError {
+pub(super) fn turn_failure(code: &str, message: &str, turn_id: Uuid) -> RpcError {
     RpcError {
         code: code.to_owned(),
         message: message.to_owned(),

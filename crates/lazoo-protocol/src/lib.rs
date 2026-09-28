@@ -40,12 +40,12 @@ pub use task::{
     TaskState, TaskSummary, TaskWorkspaceKind,
 };
 pub use types::{
-    AuthorityMode, CheckoutMode, CreateEmployeeParams, DesktopSnapshot, DisableEmployeeParams,
-    EmployeeAvailability, EmployeeCheckoutPolicy, EmployeeMutationResult, EmployeeRecord,
-    EmployeeSessionRecord, EmployeeShowParams, EventSummary, EventsListParams, ProjectRecord,
-    ProviderListEntry, ProviderObservation, ProviderProbeParams, ProviderSmokeParams,
-    ProviderSmokeResult, RegisterProjectParams, RegisterProjectResult, RosterEntry,
-    RosterRefreshParams, RosterRefreshResult, RosterSnapshot, SessionLifecycleState,
+    ActivationPolicy, AuthorityMode, CheckoutMode, CreateEmployeeParams, DesktopSnapshot,
+    DisableEmployeeParams, EmployeeAvailability, EmployeeCheckoutPolicy, EmployeeMutationResult,
+    EmployeeRecord, EmployeeSessionRecord, EmployeeShowParams, EventSummary, EventsListParams,
+    ProjectRecord, ProviderListEntry, ProviderObservation, ProviderProbeParams,
+    ProviderSmokeParams, ProviderSmokeResult, RegisterProjectParams, RegisterProjectResult,
+    RosterEntry, RosterRefreshParams, RosterRefreshResult, RosterSnapshot, SessionLifecycleState,
     SessionMutationResult, SessionReconcileResult, SessionShowParams, StopSessionParams,
     SystemStatus, UpdateEmployeeParams, WarmSessionParams,
 };
