@@ -1,9 +1,10 @@
 use lazoo_domain::{
     IncidentNotice, MAX_NOTICE_OUTPUT_BYTES, MAX_PEER_MESSAGE_BYTES, MessageValidationError,
-    PeerMessageNotice, TaskResultNotice, render_coalesced_notice_text, render_incident_notice_text,
-    render_peer_message_text, render_task_result_text, validate_peer_message_content,
+    PeerMessageNotice, TaskResultNotice, notice_turn_may_activate, render_coalesced_notice_text,
+    render_incident_notice_text, render_peer_message_text, render_task_result_text,
+    validate_peer_message_content,
 };
-use lazoo_protocol::{IncidentPriority, TaskState};
+use lazoo_protocol::{ActivationPolicy, IncidentPriority, TaskState};
 use uuid::Uuid;
 
 fn notice(state: TaskState, output: Option<&str>, remaining: u64) -> TaskResultNotice<'_> {
@@ -175,4 +176,14 @@ fn coalesced_notice_text_lists_every_notice_oldest_first_and_passes_one_through(
         })
         .collect();
     assert!(positions[0] < positions[1] && positions[1] < positions[2]);
+}
+
+#[test]
+fn notice_turns_activate_a_recipient_only_under_the_notice_turns_policy() {
+    assert!(!notice_turn_may_activate(ActivationPolicy::Manual));
+    assert!(
+        !notice_turn_may_activate(ActivationPolicy::default()),
+        "the default policy keeps activation with the user"
+    );
+    assert!(notice_turn_may_activate(ActivationPolicy::NoticeTurns));
 }

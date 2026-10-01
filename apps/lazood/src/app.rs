@@ -594,6 +594,7 @@ impl App {
                 native_settings: params.native_settings,
                 authority_mode: params.authority_mode,
                 checkout_policy: params.checkout_policy,
+                activation_policy: params.activation_policy,
                 enabled: params.enabled,
                 provider_observation: Some(observation),
             })
@@ -688,6 +689,7 @@ impl App {
                 native_settings: params.native_settings,
                 authority_mode: params.authority_mode,
                 checkout_policy: params.checkout_policy,
+                activation_policy: params.activation_policy,
                 enabled: params.enabled,
                 provider_observation,
             })

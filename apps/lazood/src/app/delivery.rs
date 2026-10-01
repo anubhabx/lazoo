@@ -1,25 +1,34 @@
 //! Lead notice delivery: folds terminal child tasks and promoted incidents into durable notice
 //! messages and delivers each one to the lead as a provider turn.
 //!
-//! Activation policy: a notice is employee-authored traffic, so it never starts a provider
-//! process. It is delivered only when the lead already has an idle session owned by this
-//! daemon boot; otherwise it stays queued until the local user resumes the lead with
-//! `session.warm` or a new user turn, and the next pass delivers it.
+//! Activation policy: a notice is employee-authored traffic, so by default it never starts a
+//! provider process. It is delivered when the recipient already has an idle session owned by
+//! this daemon boot; otherwise it stays queued until the local user resumes the recipient with
+//! `session.warm` or a new user turn, and the next pass delivers it. A recipient whose own
+//! `activationPolicy` is `notice-turns` is instead activated here under fixed bounds: one
+//! session per recorded notice turn, for the recipient's own task only, stopped as soon as that
+//! turn ends. A failed activation is never retried; the turn then waits for the user.
 
 use std::collections::HashSet;
 
 use lazoo_protocol::{
-    JsonRpcRequest, MessageDeliveryState, MessageRecord, RpcError, TaskState, TurnState,
+    JsonRpcRequest, MessageDeliveryState, MessageRecord, RpcError, TaskState, TurnMutationResult,
+    TurnState,
 };
+use lazoo_providers::ProviderKind;
 use lazoo_store::{
-    CancelMessageInput, QueueIncidentNoticeInput, QueueTaskResultInput, RecordNoticeTurnInput,
-    StoreError,
+    BeginSessionInput, CancelMessageInput, QueueIncidentNoticeInput, QueueTaskResultInput,
+    RecordNoticeTurnInput, StoreError,
 };
 use serde_json::Value;
 use tokio::sync::broadcast::error::RecvError;
 use uuid::Uuid;
 
-use super::{App, task::task_store_error, turn::turn_store_error};
+use super::{
+    App,
+    task::task_store_error,
+    turn::{turn_failure, turn_store_error},
+};
 
 const PASS_LIMIT: u32 = 128;
 
@@ -54,7 +63,7 @@ impl App {
     /// One delivery pass: queue results for terminal children, queue notices for promoted
     /// incidents, then deliver queued notices whose lead is idle and free, every notice for
     /// one recipient and task as a single turn. Delivery is sequential; a notice whose lead
-    /// is busy or dormant is skipped without error.
+    /// is busy, or dormant under a `manual` activation policy, is skipped without error.
     #[doc(hidden)]
     pub async fn deliver_pending_notices_once(&self) -> Result<(), RpcError> {
         let mut first_error = None;
@@ -162,15 +171,21 @@ impl App {
             method: "turn.deliver".to_owned(),
             params: Value::Null,
         };
-        match self.deliver_recorded_turn(&request, recorded, false).await {
+        match self
+            .deliver_recorded_turn(&request, recorded.clone(), false)
+            .await
+        {
             Ok(_) => Ok(()),
-            // The lead is dormant or not route ready: wait for the user to resume it.
+            // The lead is dormant: its own activation policy decides whether this turn wakes it.
+            Err(error) if error.code == "LZ-TURN-SESSION-NOT-READY" => {
+                Box::pin(self.activate_for_notice_turn(&request, notice, recorded)).await
+            }
+            // The lead is not route ready, or its session is not owned by this boot: wait for
+            // the user to resume it.
             Err(error)
                 if matches!(
                     error.code.as_str(),
-                    "LZ-TURN-SESSION-NOT-READY"
-                        | "LZ-TURN-EMPLOYEE-NOT-READY"
-                        | "LZ-TURN-SESSION-HANDLE-MISSING"
+                    "LZ-TURN-EMPLOYEE-NOT-READY" | "LZ-TURN-SESSION-HANDLE-MISSING"
                 ) =>
             {
                 tracing::debug!(
@@ -193,6 +208,90 @@ impl App {
             // Provider failures are already on the turn, message, and incident ledgers.
             Err(error) => Err(error),
         }
+    }
+
+    /// Bounded automatic activation for one recorded notice turn.
+    ///
+    /// The recipient's own `activationPolicy` decides; `manual` waits for the user exactly as
+    /// before. The `begin_session` command key `notice-activation:<turnId>` makes a second
+    /// attempt for the same turn a replay, so a turn that is still `recorded` after its one
+    /// activation (the start failed, or the daemon restarted mid-turn) waits for the user
+    /// instead of being retried. The session serves only this turn, whose task
+    /// `record_notice_turn` already fixed to the recipient, and is stopped right after it.
+    async fn activate_for_notice_turn(
+        &self,
+        request: &JsonRpcRequest,
+        notice: &MessageRecord,
+        recorded: TurnMutationResult,
+    ) -> Result<(), RpcError> {
+        let turn_id = recorded.turn.id;
+        let employee = self
+            .store
+            .get_employee(recorded.turn.recipient.employee_id)
+            .map_err(turn_store_error)?;
+        if !lazoo_domain::notice_turn_may_activate(employee.activation_policy) {
+            tracing::debug!(
+                message_id = %notice.envelope.id,
+                %turn_id,
+                "lead notice waits for the lead to be resumed"
+            );
+            return Ok(());
+        }
+        let provider = employee.provider.parse::<ProviderKind>().map_err(|_| {
+            turn_failure(
+                "LZ-TURN-PROVIDER-UNSUPPORTED",
+                "the recipient employee has an unknown provider",
+                turn_id,
+            )
+        })?;
+        let activation_key = format!("notice-activation:{turn_id}");
+        let starting = match self.store.begin_session(&BeginSessionInput {
+            request_id: format!("{}:activate", request.id),
+            idempotency_key: activation_key.clone(),
+            employee_id: employee.id,
+            expected_employee_revision: employee.configuration_revision,
+            owner_boot_id: self.boot_id,
+        }) {
+            Ok(starting) => starting,
+            // A session of the recipient is still starting or stopping, or the provider is no
+            // longer route ready: the next pass delivers on that session or keeps waiting.
+            Err(
+                StoreError::SessionConflict { .. } | StoreError::SessionProviderNotReady { .. },
+            ) => return Ok(()),
+            Err(error) => return Err(turn_store_error(error)),
+        };
+        self.publish_events()?;
+        if starting.event_sequence.is_none() {
+            // This turn already used its one activation; what became of that session is on
+            // the session and incident ledgers, and only the user resumes the recipient now.
+            tracing::debug!(
+                message_id = %notice.envelope.id,
+                %turn_id,
+                session_id = %starting.session.id,
+                "lead notice already activated its recipient once and waits for the user"
+            );
+            return Ok(());
+        }
+        tracing::info!(
+            employee_id = %employee.id,
+            %turn_id,
+            session_id = %starting.session.id,
+            "notice turn activates its dormant recipient by policy"
+        );
+        let ready = self
+            .start_new_session(employee, provider, starting, None)
+            .await?;
+        let delivered = self.deliver_recorded_turn(request, recorded, false).await;
+        // The activated session serves this one turn; stop it whether or not the turn succeeded.
+        let _ = self
+            .stop_session_command(
+                ready.session.id,
+                ready.session.revision,
+                format!("{activation_key}:stop"),
+                format!("{activation_key}:stop"),
+            )
+            .await;
+        delivered.map(|_| ())
     }
 
     fn cancel_notice(&self, notice: &MessageRecord, reason: &str) -> Result<(), RpcError> {

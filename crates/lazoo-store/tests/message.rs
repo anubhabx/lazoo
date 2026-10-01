@@ -24,6 +24,7 @@ fn employee(name: &str) -> CreateEmployeeInput {
         native_settings: json!({}),
         authority_mode: AuthorityMode::Ask,
         checkout_policy: EmployeeCheckoutPolicy::Isolated,
+        activation_policy: lazoo_protocol::ActivationPolicy::Manual,
         enabled: true,
         provider_observation: None,
     }

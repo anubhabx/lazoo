@@ -136,7 +136,7 @@ try {
     $keeper = Start-Keeper $dataRoot (Join-Path $runRoot 'keeper-real-1')
     $statusBefore = Wait-Status
     Assert-Equal $statusBefore.protocolVersion 1 'protocol version'
-    Assert-Equal $statusBefore.schemaVersion 9 'schema version'
+    Assert-Equal $statusBefore.schemaVersion 10 'schema version'
     Assert-Equal $statusBefore.journalMode 'wal' 'SQLite journal mode'
     $gates.controlPlaneReady = 'PASS'
 
@@ -212,7 +212,7 @@ try {
     }
     $manifest = [ordered]@{
         schemaVersion = 1
-        databaseSchemaVersion = 9
+        databaseSchemaVersion = 10
         status = $manifestStatus
         startedAt = $startedAt.ToString('o')
         completedAt = [DateTime]::UtcNow.ToString('o')

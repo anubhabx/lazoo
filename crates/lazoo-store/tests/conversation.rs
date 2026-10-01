@@ -27,6 +27,7 @@ fn employee(name: &str, enabled: bool, route_ready: bool) -> CreateEmployeeInput
         native_settings: json!({}),
         authority_mode: AuthorityMode::Ask,
         checkout_policy: EmployeeCheckoutPolicy::Isolated,
+        activation_policy: lazoo_protocol::ActivationPolicy::Manual,
         enabled,
         provider_observation: route_ready.then(|| ProviderObservation {
             provider: "codex".to_owned(),

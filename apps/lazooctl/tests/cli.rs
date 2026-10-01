@@ -386,6 +386,7 @@ fn employee_cli_maps_mutations_and_roster_refresh() {
     let Command::Employee(EmployeeCommand::Create {
         authority_mode,
         checkout_policy,
+        activation_policy,
         ..
     }) = &create.command
     else {
@@ -396,9 +397,11 @@ fn employee_cli_maps_mutations_and_roster_refresh() {
         *checkout_policy,
         lazoo_protocol::EmployeeCheckoutPolicy::Isolated
     );
+    assert_eq!(*activation_policy, lazoo_protocol::ActivationPolicy::Manual);
     let (method, params, follows) = command_request(&create.command);
     assert_eq!(method, "employee.create");
     assert_eq!(params["nativeSettings"], json!({}));
+    assert_eq!(params["activationPolicy"], "manual");
     assert!(!follows);
 
     let employee_id = "00000000-0000-4000-8000-000000000001";
@@ -411,9 +414,13 @@ fn employee_cli_maps_mutations_and_roster_refresh() {
         "1",
         "--role",
         "Lead",
+        "--activation-policy",
+        "notice-turns",
     ])
     .unwrap();
-    assert_eq!(command_request(&update.command).0, "employee.update");
+    let (method, params, _) = command_request(&update.command);
+    assert_eq!(method, "employee.update");
+    assert_eq!(params["activationPolicy"], "notice-turns");
 
     let disable = Cli::try_parse_from([
         "lazooctl",

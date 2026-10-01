@@ -29,6 +29,17 @@ pub enum EmployeeCheckoutPolicy {
     ReadOnly,
 }
 
+/// Whether the daemon may start a provider session for this employee on its own. `manual`
+/// leaves every activation to the local user; `notice-turns` lets a recorded notice turn start
+/// one bounded session for the employee's own task and stop it after the turn.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ActivationPolicy {
+    #[default]
+    Manual,
+    NoticeTurns,
+}
+
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum EmployeeAvailability {
@@ -85,6 +96,7 @@ pub struct EmployeeRecord {
     pub native_settings: Value,
     pub authority_mode: AuthorityMode,
     pub checkout_policy: EmployeeCheckoutPolicy,
+    pub activation_policy: ActivationPolicy,
     pub enabled: bool,
     pub configuration_revision: u64,
     pub created_at: String,
@@ -155,6 +167,8 @@ pub struct CreateEmployeeParams {
     pub authority_mode: AuthorityMode,
     #[serde(default)]
     pub checkout_policy: EmployeeCheckoutPolicy,
+    #[serde(default)]
+    pub activation_policy: ActivationPolicy,
     #[serde(default = "default_enabled")]
     pub enabled: bool,
     pub idempotency_key: String,
@@ -174,6 +188,7 @@ pub struct UpdateEmployeeParams {
     pub native_settings: Option<Value>,
     pub authority_mode: Option<AuthorityMode>,
     pub checkout_policy: Option<EmployeeCheckoutPolicy>,
+    pub activation_policy: Option<ActivationPolicy>,
     pub enabled: Option<bool>,
     pub idempotency_key: String,
 }

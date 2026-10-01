@@ -1,4 +1,6 @@
-use lazoo_protocol::{AuthorityMode, EmployeeCheckoutPolicy, ProviderObservation};
+use lazoo_protocol::{
+    ActivationPolicy, AuthorityMode, EmployeeCheckoutPolicy, ProviderObservation,
+};
 use lazoo_store::{
     CreateEmployeeInput, DisableEmployeeInput, RefreshProviderObservationsInput, Store, StoreError,
     UpdateEmployeeInput,
@@ -19,6 +21,7 @@ fn creation(key: &str, name: &str) -> CreateEmployeeInput {
         native_settings: json!({}),
         authority_mode: AuthorityMode::Ask,
         checkout_policy: EmployeeCheckoutPolicy::Isolated,
+        activation_policy: lazoo_protocol::ActivationPolicy::Manual,
         enabled: true,
         provider_observation: Some(ProviderObservation {
             provider: "codex".to_owned(),
@@ -53,6 +56,7 @@ fn update_role(
         native_settings: None,
         authority_mode: None,
         checkout_policy: None,
+        activation_policy: None,
         enabled: None,
         provider_observation: None,
     }
@@ -256,4 +260,57 @@ fn observation_for_an_unused_provider_does_not_change_roster_revision() {
     assert_eq!(result.event_sequence, None);
     assert!(result.roster.entries.is_empty());
     assert!(store.list_events(0, 100).unwrap().is_empty());
+}
+
+#[test]
+fn activation_policy_defaults_to_manual_and_a_change_bumps_the_configuration_revision() {
+    let temporary = tempdir().unwrap();
+    let store = Store::open_path(temporary.path().join("lazoo.db")).unwrap();
+    let created = store
+        .create_employee(&creation("rhea", "Rhea"))
+        .unwrap()
+        .employee;
+    assert_eq!(created.activation_policy, ActivationPolicy::Manual);
+
+    let mut opt_in = update_role("policy", created.id, 1, None);
+    opt_in.activation_policy = Some(ActivationPolicy::NoticeTurns);
+    let updated = store.update_employee(&opt_in).unwrap();
+    assert_eq!(
+        updated.employee.activation_policy,
+        ActivationPolicy::NoticeTurns
+    );
+    assert_eq!(updated.employee.configuration_revision, 2);
+    assert_eq!(updated.roster_revision, 2);
+    assert!(updated.event_sequence.is_some());
+    assert_eq!(
+        store.get_employee(created.id).unwrap().activation_policy,
+        ActivationPolicy::NoticeTurns
+    );
+
+    // Setting the same policy again changes nothing and bumps nothing.
+    let mut same = update_role("policy-again", created.id, 2, None);
+    same.activation_policy = Some(ActivationPolicy::NoticeTurns);
+    let unchanged = store.update_employee(&same).unwrap();
+    assert_eq!(unchanged.employee.configuration_revision, 2);
+    assert_eq!(unchanged.event_sequence, None);
+
+    // A row written without the schema-10 column takes the migration default: manual.
+    store
+        .execute_for_test(
+            "INSERT INTO employees (
+                id, name, provider, role, instructions, native_settings_json,
+                authority_mode, checkout_policy, enabled, configuration_revision,
+                created_at, updated_at
+             ) VALUES (
+                '00000000-0000-4000-8000-000000000009', 'Legacy', 'codex', '', '',
+                '{}', '\"ask\"', '\"isolated\"', 1, 1,
+                '2026-08-30T00:00:00Z', '2026-08-30T00:00:00Z'
+             )",
+        )
+        .unwrap();
+    let legacy = store
+        .get_employee("00000000-0000-4000-8000-000000000009".parse().unwrap())
+        .unwrap();
+    assert_eq!(legacy.activation_policy, ActivationPolicy::Manual);
+    assert_eq!(legacy.authority_mode, AuthorityMode::Ask);
 }

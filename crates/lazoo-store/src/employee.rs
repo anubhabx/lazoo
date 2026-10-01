@@ -1,8 +1,8 @@
 use chrono::Utc;
 use lazoo_domain::{apply_session_availability, derive_availability};
 use lazoo_protocol::{
-    AuthorityMode, EmployeeCheckoutPolicy, EmployeeMutationResult, EmployeeRecord,
-    ProviderObservation, RosterEntry, RosterRefreshResult, RosterSnapshot,
+    ActivationPolicy, AuthorityMode, EmployeeCheckoutPolicy, EmployeeMutationResult,
+    EmployeeRecord, ProviderObservation, RosterEntry, RosterRefreshResult, RosterSnapshot,
 };
 use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, params};
 use serde_json::{Value, json};
@@ -23,6 +23,7 @@ pub struct CreateEmployeeInput {
     pub native_settings: Value,
     pub authority_mode: AuthorityMode,
     pub checkout_policy: EmployeeCheckoutPolicy,
+    pub activation_policy: ActivationPolicy,
     pub enabled: bool,
     pub provider_observation: Option<ProviderObservation>,
 }
@@ -42,6 +43,7 @@ pub struct UpdateEmployeeInput {
     pub native_settings: Option<Value>,
     pub authority_mode: Option<AuthorityMode>,
     pub checkout_policy: Option<EmployeeCheckoutPolicy>,
+    pub activation_policy: Option<ActivationPolicy>,
     pub enabled: Option<bool>,
     pub provider_observation: Option<ProviderObservation>,
 }
@@ -94,9 +96,9 @@ impl Store {
         transaction.execute(
             "INSERT INTO employees (
                 id, name, provider, role, instructions, model, reasoning_effort,
-                native_settings_json, authority_mode, checkout_policy, enabled,
+                native_settings_json, authority_mode, checkout_policy, activation_policy, enabled,
                 configuration_revision, created_at, updated_at, disabled_at
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, 1, ?12, ?12, ?13)",
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, 1, ?13, ?13, ?14)",
             params![
                 employee_id.to_string(),
                 input.name,
@@ -108,6 +110,7 @@ impl Store {
                 serde_json::to_string(&input.native_settings)?,
                 serde_json::to_string(&input.authority_mode)?,
                 serde_json::to_string(&input.checkout_policy)?,
+                serde_json::to_string(&input.activation_policy)?,
                 i64::from(input.enabled),
                 now,
                 (!input.enabled).then_some(now.clone()),
@@ -512,6 +515,9 @@ fn apply_employee_update(current: &EmployeeRecord, input: &UpdateEmployeeInput) 
     if let Some(checkout_policy) = input.checkout_policy {
         desired.checkout_policy = checkout_policy;
     }
+    if let Some(activation_policy) = input.activation_policy {
+        desired.activation_policy = activation_policy;
+    }
     if let Some(enabled) = input.enabled {
         desired.enabled = enabled;
     }
@@ -551,6 +557,7 @@ fn configuration_changed(current: &EmployeeRecord, desired: &EmployeeRecord) -> 
         || current.native_settings != desired.native_settings
         || current.authority_mode != desired.authority_mode
         || current.checkout_policy != desired.checkout_policy
+        || current.activation_policy != desired.activation_policy
         || current.enabled != desired.enabled
 }
 
@@ -562,8 +569,8 @@ fn write_employee(
         "UPDATE employees SET
             name = ?2, provider = ?3, role = ?4, instructions = ?5, model = ?6,
             reasoning_effort = ?7, native_settings_json = ?8, authority_mode = ?9,
-            checkout_policy = ?10, enabled = ?11, configuration_revision = ?12,
-            updated_at = ?13, disabled_at = ?14
+            checkout_policy = ?10, activation_policy = ?11, enabled = ?12,
+            configuration_revision = ?13, updated_at = ?14, disabled_at = ?15
          WHERE id = ?1",
         params![
             employee.id.to_string(),
@@ -576,6 +583,7 @@ fn write_employee(
             serde_json::to_string(&employee.native_settings)?,
             serde_json::to_string(&employee.authority_mode)?,
             serde_json::to_string(&employee.checkout_policy)?,
+            serde_json::to_string(&employee.activation_policy)?,
             i64::from(employee.enabled),
             i64::try_from(employee.configuration_revision)
                 .map_err(|_| StoreError::NegativeSequence)?,
@@ -619,7 +627,7 @@ pub(crate) fn insert_event(
 fn query_employees(connection: &Connection) -> Result<Vec<EmployeeRecord>, StoreError> {
     let mut statement = connection.prepare(
         "SELECT id, name, provider, role, instructions, model, reasoning_effort,
-                native_settings_json, authority_mode, checkout_policy, enabled,
+                native_settings_json, authority_mode, checkout_policy, activation_policy, enabled,
                 configuration_revision, created_at, updated_at, disabled_at
          FROM employees ORDER BY created_at, id",
     )?;
@@ -634,7 +642,7 @@ pub(crate) fn query_employee(
     connection
         .query_row(
             "SELECT id, name, provider, role, instructions, model, reasoning_effort,
-                    native_settings_json, authority_mode, checkout_policy, enabled,
+                    native_settings_json, authority_mode, checkout_policy, activation_policy, enabled,
                     configuration_revision, created_at, updated_at, disabled_at
              FROM employees WHERE id = ?1",
             [employee_id.to_string()],
@@ -744,6 +752,7 @@ type RawEmployee = (
     String,
     String,
     String,
+    String,
     i64,
     i64,
     String,
@@ -768,6 +777,7 @@ fn raw_employee(row: &rusqlite::Row<'_>) -> rusqlite::Result<RawEmployee> {
         row.get(12)?,
         row.get(13)?,
         row.get(14)?,
+        row.get(15)?,
     ))
 }
 
@@ -783,11 +793,12 @@ fn employee_from_raw(row: RawEmployee) -> Result<EmployeeRecord, StoreError> {
         native_settings: serde_json::from_str(&row.7)?,
         authority_mode: serde_json::from_str(&row.8)?,
         checkout_policy: serde_json::from_str(&row.9)?,
-        enabled: row.10 == 1,
-        configuration_revision: u64::try_from(row.11).map_err(|_| StoreError::NegativeSequence)?,
-        created_at: row.12,
-        updated_at: row.13,
-        disabled_at: row.14,
+        activation_policy: serde_json::from_str(&row.10)?,
+        enabled: row.11 == 1,
+        configuration_revision: u64::try_from(row.12).map_err(|_| StoreError::NegativeSequence)?,
+        created_at: row.13,
+        updated_at: row.14,
+        disabled_at: row.15,
     })
 }
 
