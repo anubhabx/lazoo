@@ -176,7 +176,11 @@ impl Store {
                 current.window_started_at.clone()
             };
             let escalate = current.priority == IncidentPriority::Normal
-                && incident_threshold_crossed(window_occurrences);
+                && incident_threshold_crossed(
+                    &input.code,
+                    input.task_id.or(current.task_id).is_some(),
+                    window_occurrences,
+                );
             let priority = if escalate || current.priority == IncidentPriority::Priority {
                 "priority"
             } else {
@@ -241,6 +245,9 @@ impl Store {
         } else {
             let text = describe_incident(&input.code);
             let id = Uuid::new_v4();
+            // A code whose threshold is one (a stall, a crash, a death under assigned work) is
+            // promoted by its first occurrence.
+            let born_priority = incident_threshold_crossed(&input.code, input.task_id.is_some(), 1);
             transaction.execute(
                 "INSERT INTO incidents (
                             id, contract_version, code, fingerprint, title, explanation,
@@ -251,7 +258,7 @@ impl Store {
                             updated_at, acknowledged_at, resolved_at
                          ) VALUES (
                             ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15,
-                            ?16, 1, 1, ?17, ?17, ?17, 'normal', 'open', 1, ?18, ?18, NULL, NULL
+                            ?16, 1, 1, ?17, ?17, ?17, ?19, 'open', 1, ?18, ?18, NULL, NULL
                          )",
                 params![
                     id.to_string(),
@@ -272,9 +279,17 @@ impl Store {
                     detail_json,
                     occurred_at,
                     now,
+                    if born_priority { "priority" } else { "normal" },
                 ],
             )?;
-            (id, "incident.raised")
+            if born_priority {
+                let change =
+                    promotion_escalation(&transaction, input.task_id, input.employee_id, clock)?;
+                write_escalation(&transaction, id, &change)?;
+                (id, "incident.escalated")
+            } else {
+                (id, "incident.raised")
+            }
         };
         insert_incident_command_tx(
             &transaction,

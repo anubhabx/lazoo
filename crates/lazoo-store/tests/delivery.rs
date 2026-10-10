@@ -1899,3 +1899,35 @@ fn incidents_with_no_lead_to_remediate_go_to_the_user_at_promotion() {
             .is_empty()
     );
 }
+
+#[test]
+fn a_stall_or_a_death_under_assigned_work_opens_the_lead_window_on_its_first_occurrence() {
+    let (_temporary, fixture) = fixture();
+    let store = &fixture.store;
+    for (key, code) in [
+        ("stall", "LZ-SESSION-STALLED"),
+        ("death", "LZ-PROCESS-EXIT"),
+    ] {
+        let born = store
+            .raise_incident(&incident_on(key, code, fixture.worker, fixture.child.id))
+            .unwrap()
+            .incident;
+        assert_eq!(born.occurrences, 1, "{code}");
+        assert_eq!(born.priority, IncidentPriority::Priority, "{code}");
+        assert_eq!(born.escalation, IncidentEscalation::Lead, "{code}");
+        assert!(born.remediation_deadline_at.is_some());
+    }
+    // Both are queued to the lead once, like any promoted child incident.
+    assert_eq!(store.pending_incident_notices(10).unwrap().len(), 2);
+    // A failure that is not tied to assigned work still needs its full threshold.
+    let timeout = store
+        .raise_incident(&incident_on(
+            "timeout",
+            "LZ-MESSAGE-TIMEOUT",
+            fixture.worker,
+            fixture.child.id,
+        ))
+        .unwrap()
+        .incident;
+    assert_eq!(timeout.priority, IncidentPriority::Normal);
+}

@@ -6204,6 +6204,10 @@ async fn restart_owner_loss_and_emergency_spool_fold_into_startup_incidents_once
     assert_eq!(keeper["source"], "keeper");
     assert_eq!(keeper["explanation"], "restart budget exhausted");
     assert_eq!(keeper["firstOccurredAt"], "2026-09-23T00:00:00Z");
+    // One daemon crash crosses its threshold on its own and is the user's at once.
+    assert_eq!(keeper["priority"], "priority");
+    assert_eq!(keeper["escalation"], "user");
+    assert_eq!(keeper["escalationReason"], "no-lead");
 
     let again =
         App::new_with_provider_environment(store.clone(), root, DiscoveryEnvironment::empty())
@@ -8309,6 +8313,48 @@ fn lead_remediation_acceptance_contract_is_deterministic_and_backend_only() {
         "twoRemediesPerIncident",
         "refusedRemedyConsumesNoAttempt",
         "unremediedWindowEscalatesToUser",
+        "providerSmokeAbsent",
+        "externalModelUseAbsent",
+        "uiChangesAbsent",
+        "deterministic-fake-transport",
+        "schemaVersion = 12",
+    ] {
+        assert!(
+            script.contains(required),
+            "acceptance script must contain {required}"
+        );
+    }
+    for forbidden in [
+        "provider', 'smoke",
+        "apps\\lazoo-desktop\\src",
+        "LivePrompt",
+    ] {
+        assert!(
+            !script.contains(forbidden),
+            "acceptance script must not contain {forbidden}"
+        );
+    }
+}
+
+#[test]
+fn incident_thresholds_acceptance_contract_is_deterministic_and_backend_only() {
+    let repository = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let script_path = repository.join("scripts/acceptance/incident-thresholds.ps1");
+    let script =
+        std::fs::read_to_string(&script_path).expect("incident thresholds acceptance script");
+
+    for required in [
+        "section_fourteen_two_thresholds_promote_stalls_crashes_and_deaths_at_once",
+        "threshold_window_promotes_three_equivalent_failures_inside_five_minutes",
+        "stalls_and_crashes_promote_at_once_and_a_second_unexpected_exit_promotes",
+        "equivalent_failures_fold_escalate_at_the_threshold_and_replay_without_writes",
+        "a_stall_or_a_death_under_assigned_work_opens_the_lead_window_on_its_first_occurrence",
+        "restart_owner_loss_and_emergency_spool_fold_into_startup_incidents_once",
+        "an_unremedied_window_reaches_the_user_on_the_sweep_and_nothing_else_changes",
+        "a_promoted_child_incident_gives_the_lead_two_remedies_inside_its_window",
+        "store_enables_wal_foreign_keys_and_schema_version",
+        "secondUnexpectedExitPromotes",
+        "keeperCrashReachesUserAtStartup",
         "providerSmokeAbsent",
         "externalModelUseAbsent",
         "uiChangesAbsent",

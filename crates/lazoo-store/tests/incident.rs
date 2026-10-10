@@ -83,24 +83,21 @@ fn equivalent_failures_fold_escalate_at_the_threshold_and_replay_without_writes(
     let (_temporary, store, employee) = store_with_employee();
 
     let first = store
-        .raise_incident(&raise("stall-1", "LZ-SESSION-STALLED", Some(employee)))
+        .raise_incident(&raise("stall-1", "LZ-MESSAGE-TIMEOUT", Some(employee)))
         .unwrap();
     assert_eq!(first.incident.version, 1);
     assert_eq!(first.incident.state, IncidentState::Open);
     assert_eq!(first.incident.priority, IncidentPriority::Normal);
     assert_eq!(first.incident.occurrences, 1);
     assert_eq!(first.incident.revision, 1);
-    assert_eq!(
-        first.incident.title,
-        "Session accepted work but produced no progress"
-    );
-    assert!(first.incident.next_action.contains("never retries"));
+    assert_eq!(first.incident.title, "Delivery deadline expired");
+    assert!(first.incident.next_action.contains("explicitly"));
     assert_eq!(first.incident.employee_id, Some(employee));
     assert_eq!(first.incident.detail["key"], "stall-1");
     assert!(first.event_sequence.is_some());
 
     let replay = store
-        .raise_incident(&raise("stall-1", "LZ-SESSION-STALLED", Some(employee)))
+        .raise_incident(&raise("stall-1", "LZ-MESSAGE-TIMEOUT", Some(employee)))
         .unwrap();
     assert_eq!(replay.incident, first.incident);
     assert!(replay.event_sequence.is_none(), "replays are write-free");
@@ -110,7 +107,7 @@ fn equivalent_failures_fold_escalate_at_the_threshold_and_replay_without_writes(
     ));
 
     let second = store
-        .raise_incident(&raise("stall-2", "LZ-SESSION-STALLED", Some(employee)))
+        .raise_incident(&raise("stall-2", "LZ-MESSAGE-TIMEOUT", Some(employee)))
         .unwrap();
     assert_eq!(second.incident.id, first.incident.id);
     assert_eq!(second.incident.occurrences, 2);
@@ -120,7 +117,7 @@ fn equivalent_failures_fold_escalate_at_the_threshold_and_replay_without_writes(
     assert_eq!(second.incident.detail["key"], "stall-2");
 
     let third = store
-        .raise_incident(&raise("stall-3", "LZ-SESSION-STALLED", Some(employee)))
+        .raise_incident(&raise("stall-3", "LZ-MESSAGE-TIMEOUT", Some(employee)))
         .unwrap();
     assert_eq!(third.incident.id, first.incident.id);
     assert_eq!(third.incident.occurrences, 3);
@@ -146,7 +143,7 @@ fn equivalent_failures_fold_escalate_at_the_threshold_and_replay_without_writes(
     assert!(third.incident.last_occurred_at >= second.incident.last_occurred_at);
 
     let other_scope = store
-        .raise_incident(&raise("stall-other", "LZ-SESSION-STALLED", None))
+        .raise_incident(&raise("stall-other", "LZ-MESSAGE-TIMEOUT", None))
         .unwrap();
     assert_ne!(other_scope.incident.id, first.incident.id);
     assert_eq!(other_scope.incident.occurrences, 1);
@@ -207,7 +204,7 @@ fn equivalent_failures_fold_escalate_at_the_threshold_and_replay_without_writes(
 fn acknowledge_and_resolve_are_revisioned_idempotent_and_recurrence_reopens_until_resolved() {
     let (_temporary, store, employee) = store_with_employee();
     let raised = store
-        .raise_incident(&raise("exit-1", "LZ-PROCESS-EXIT", Some(employee)))
+        .raise_incident(&raise("exit-1", "LZ-MESSAGE-TIMEOUT", Some(employee)))
         .unwrap()
         .incident;
 
@@ -238,7 +235,7 @@ fn acknowledge_and_resolve_are_revisioned_idempotent_and_recurrence_reopens_unti
     );
 
     let recurred = store
-        .raise_incident(&raise("exit-2", "LZ-PROCESS-EXIT", Some(employee)))
+        .raise_incident(&raise("exit-2", "LZ-MESSAGE-TIMEOUT", Some(employee)))
         .unwrap()
         .incident;
     assert_eq!(recurred.id, raised.id);
@@ -266,7 +263,7 @@ fn acknowledge_and_resolve_are_revisioned_idempotent_and_recurrence_reopens_unti
     ));
 
     let fresh = store
-        .raise_incident(&raise("exit-3", "LZ-PROCESS-EXIT", Some(employee)))
+        .raise_incident(&raise("exit-3", "LZ-MESSAGE-TIMEOUT", Some(employee)))
         .unwrap()
         .incident;
     assert_ne!(fresh.id, raised.id, "a resolved incident never reopens");
@@ -345,5 +342,60 @@ fn emergency_spool_records_fold_into_keeper_incidents_exactly_once() {
             .unwrap()
             .len(),
         1
+    );
+}
+
+#[test]
+fn stalls_and_crashes_promote_at_once_and_a_second_unexpected_exit_promotes() {
+    use lazoo_protocol::{IncidentEscalation, IncidentEscalationReason};
+
+    let (_temporary, store, employee) = store_with_employee();
+    for (key, code) in [
+        ("stall", "LZ-SESSION-STALLED"),
+        ("crash", "LZ-DAEMON-UNAVAILABLE"),
+    ] {
+        let born = store
+            .raise_incident(&raise(key, code, Some(employee)))
+            .unwrap()
+            .incident;
+        assert_eq!(born.occurrences, 1);
+        assert_eq!(born.priority, IncidentPriority::Priority, "{code}");
+        // No task tree, so no lead: the user is told at once.
+        assert_eq!(born.escalation, IncidentEscalation::User);
+        assert_eq!(
+            born.escalation_reason,
+            Some(IncidentEscalationReason::NoLead)
+        );
+    }
+
+    let first_exit = store
+        .raise_incident(&raise("exit-1", "LZ-PROCESS-EXIT", Some(employee)))
+        .unwrap()
+        .incident;
+    assert_eq!(first_exit.priority, IncidentPriority::Normal);
+    assert_eq!(first_exit.escalation, IncidentEscalation::None);
+    let second_exit = store
+        .raise_incident(&raise("exit-2", "LZ-PROCESS-EXIT", Some(employee)))
+        .unwrap()
+        .incident;
+    assert_eq!(second_exit.id, first_exit.id);
+    assert_eq!(second_exit.priority, IncidentPriority::Priority);
+    assert_eq!(second_exit.escalation, IncidentEscalation::User);
+
+    // A third stall folds into the promoted incident without a second promotion.
+    let again = store
+        .raise_incident(&raise("stall-2", "LZ-SESSION-STALLED", Some(employee)))
+        .unwrap()
+        .incident;
+    assert_eq!(again.occurrences, 2);
+    assert_eq!(
+        incident_event_types(&store),
+        vec![
+            "incident.escalated",
+            "incident.escalated",
+            "incident.raised",
+            "incident.escalated",
+            "incident.recurred",
+        ]
     );
 }
