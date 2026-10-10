@@ -923,166 +923,11 @@ impl Store {
         &self,
         input: &DelegateTaskInput,
     ) -> Result<TaskMutationResult, StoreError> {
-        validate_message_command_key(&input.idempotency_key)?;
-        let objective = validate_task_objective(&input.objective)?;
-        validate_task_references(&input.references)?;
         let mut connection = self.lock()?;
         let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        if let Some(task) = task_for_command(&transaction, "task.delegate", &input.idempotency_key)?
-        {
-            require_delegation_replay(&task, input, &objective)?;
-            let delegation_message = task
-                .delegation_message_id
-                .map(|id| message::required_message(&transaction, id))
-                .transpose()?;
-            transaction.commit()?;
-            return Ok(TaskMutationResult {
-                task,
-                delegation_message,
-                event_sequence: None,
-            });
-        }
-
-        let parent = required_task(&transaction, input.parent_task_id)?;
-        if !matches!(parent.state, TaskState::Accepted | TaskState::Running) {
-            return Err(StoreError::TaskState {
-                task_id: parent.id,
-                state: serialized_name(parent.state)?,
-                expected: "accepted or running",
-            });
-        }
-        require_valid_ancestry(&transaction, &parent)?;
-        require_actor(&transaction, &parent, input.actor)?;
-        if input.assigned_employee_id == parent.assigned_employee_id {
-            return Err(StoreError::TaskSelfDelegation {
-                employee_id: input.assigned_employee_id,
-            });
-        }
-        let current_roster_revision = employee::roster_revision(&transaction)?;
-        if input.roster_revision != current_roster_revision {
-            return Err(StoreError::TaskRosterStale {
-                current_revision: current_roster_revision,
-            });
-        }
-        let assignee = employee::query_employee(&transaction, input.assigned_employee_id)?.ok_or(
-            StoreError::TaskAssigneeUnavailable {
-                employee_id: input.assigned_employee_id,
-            },
-        )?;
-        require_route_ready_assignee(&transaction, &assignee)?;
-        let requested_authority = input
-            .requested_authority
-            .unwrap_or(parent.effective_authority);
-        if authority_rank(requested_authority) > authority_rank(parent.effective_authority)
-            || authority_rank(requested_authority) > authority_rank(assignee.authority_mode)
-        {
-            return Err(StoreError::TaskAuthorityExpansion {
-                requested: serialized_name(requested_authority)?,
-            });
-        }
-        let effective_authority = effective_authority(
-            parent.effective_authority,
-            requested_authority,
-            assignee.authority_mode,
-        );
-        let depth = parent.depth + 1;
-        if depth > lazoo_domain::MAX_TASK_DEPTH {
-            return Err(StoreError::TaskDepthLimit {
-                parent_task_id: parent.id,
-            });
-        }
-        let active_children: i64 = transaction.query_row(
-            "SELECT COUNT(*) FROM tasks
-             WHERE parent_task_id = ?1
-               AND state NOT IN ('completed', 'failed', 'cancelled')",
-            [parent.id.to_string()],
-            |row| row.get(0),
-        )?;
-        if active_children >= 8 {
-            return Err(StoreError::TaskFanoutLimit {
-                parent_task_id: parent.id,
-            });
-        }
-
-        let child_id = Uuid::new_v4();
-        let now = Utc::now().to_rfc3339();
-        let state = if effective_authority == AuthorityMode::Ask {
-            TaskState::Proposed
-        } else {
-            TaskState::Accepted
-        };
-        insert_child_task_tx(
-            &transaction,
-            child_id,
-            &parent,
-            input,
-            &objective,
-            requested_authority,
-            effective_authority,
-            assignee.configuration_revision,
-            depth,
-            state,
-            &now,
-        )?;
-        let delegation_message = if state == TaskState::Accepted {
-            let created = insert_delegation_message_tx(
-                &transaction,
-                child_id,
-                &parent,
-                input.actor,
-                assignee.id,
-                &objective,
-                &input.references,
-                &input.request_id,
-            )?;
-            transaction.execute(
-                "UPDATE tasks SET delegation_message_id = ?2 WHERE id = ?1",
-                params![child_id.to_string(), created.envelope.id.to_string()],
-            )?;
-            Some(created)
-        } else {
-            None
-        };
-        let evidence_kind = if state == TaskState::Proposed {
-            TaskEvidenceKind::Proposed
-        } else {
-            TaskEvidenceKind::Accepted
-        };
-        insert_task_evidence_tx(
-            &transaction,
-            child_id,
-            1,
-            evidence_kind,
-            MessageSender::Employee(input.actor),
-            delegation_message
-                .as_ref()
-                .map(|message| message.envelope.id),
-            None,
-            input.actor.session_id,
-            &json!({"source": "task.delegate"}),
-            &now,
-        )?;
-        insert_task_command_tx(
-            &transaction,
-            "task.delegate",
-            &input.idempotency_key,
-            &input.request_id,
-            child_id,
-            &now,
-        )?;
-        let task = required_task(&transaction, child_id)?;
-        let event_sequence = employee::insert_event(
-            &transaction,
-            "task.delegated",
-            &json!({"task": &task, "delegationMessage": &delegation_message}),
-            &now,
-        )?;
+        let result = delegate_task_tx(&transaction, input)?;
         transaction.commit()?;
-        Ok(TaskMutationResult {
-            task,
-            delegation_message,
-            event_sequence: Some(event_sequence),
-        })
+        Ok(result)
     }
 
     #[allow(clippy::too_many_lines)] // Keep acceptance and canonical-message creation atomic and auditable.
@@ -1430,52 +1275,14 @@ impl Store {
                 });
             }
         }
-        let (target, evidence_kind) = task_cancel_target(&transaction, &current)?;
-        let now = Utc::now().to_rfc3339();
-        let terminal = target == TaskState::Cancelled;
-        if terminal {
-            cancel_queued_task_delivery_tx(&transaction, &current, &now)?;
-        }
-        transaction.execute(
-            "UPDATE tasks SET state = ?2, revision = revision + 1,
-                    active_turn_id = CASE WHEN ?3 THEN NULL ELSE active_turn_id END,
-                    active_session_id = CASE WHEN ?3 THEN NULL ELSE active_session_id END,
-                    terminal_at = CASE WHEN ?3 THEN ?4 ELSE terminal_at END,
-                    updated_at = ?4
-             WHERE id = ?1",
-            params![
-                current.id.to_string(),
-                serialized_name(target)?,
-                terminal,
-                now,
-            ],
-        )?;
-        insert_task_evidence_tx(
+        let result = cancel_task_tx(
             &transaction,
-            current.id,
-            current.revision + 1,
-            evidence_kind,
+            &current,
             input.actor,
-            None,
-            current.active_turn_id,
-            current.active_session_id,
             &input.evidence,
-            &now,
-        )?;
-        insert_task_command_tx(
-            &transaction,
-            "task.cancel",
             &input.idempotency_key,
             &input.request_id,
-            current.id,
-            &now,
         )?;
-        let event_type = if terminal {
-            "task.cancelled"
-        } else {
-            "task.cancel-requested"
-        };
-        let result = effective_task_result(&transaction, current.id, event_type, &now)?;
         transaction.commit()?;
         Ok(result)
     }
@@ -1565,6 +1372,229 @@ impl Store {
         transaction.commit()?;
         Ok(result)
     }
+}
+
+/// Delegates one child task inside the caller's transaction. Replays by idempotency key
+/// return the existing child without writing.
+#[allow(clippy::too_many_lines)] // Every delegation guard and the record-first insert stay together.
+pub(crate) fn delegate_task_tx(
+    transaction: &Transaction<'_>,
+    input: &DelegateTaskInput,
+) -> Result<TaskMutationResult, StoreError> {
+    validate_message_command_key(&input.idempotency_key)?;
+    let objective = validate_task_objective(&input.objective)?;
+    validate_task_references(&input.references)?;
+    if let Some(task) = task_for_command(transaction, "task.delegate", &input.idempotency_key)? {
+        require_delegation_replay(&task, input, &objective)?;
+        let delegation_message = task
+            .delegation_message_id
+            .map(|id| message::required_message(transaction, id))
+            .transpose()?;
+        return Ok(TaskMutationResult {
+            task,
+            delegation_message,
+            event_sequence: None,
+        });
+    }
+
+    let parent = required_task(transaction, input.parent_task_id)?;
+    if !matches!(parent.state, TaskState::Accepted | TaskState::Running) {
+        return Err(StoreError::TaskState {
+            task_id: parent.id,
+            state: serialized_name(parent.state)?,
+            expected: "accepted or running",
+        });
+    }
+    require_valid_ancestry(transaction, &parent)?;
+    require_actor(transaction, &parent, input.actor)?;
+    if input.assigned_employee_id == parent.assigned_employee_id {
+        return Err(StoreError::TaskSelfDelegation {
+            employee_id: input.assigned_employee_id,
+        });
+    }
+    let current_roster_revision = employee::roster_revision(transaction)?;
+    if input.roster_revision != current_roster_revision {
+        return Err(StoreError::TaskRosterStale {
+            current_revision: current_roster_revision,
+        });
+    }
+    let assignee = employee::query_employee(transaction, input.assigned_employee_id)?.ok_or(
+        StoreError::TaskAssigneeUnavailable {
+            employee_id: input.assigned_employee_id,
+        },
+    )?;
+    require_route_ready_assignee(transaction, &assignee)?;
+    let requested_authority = input
+        .requested_authority
+        .unwrap_or(parent.effective_authority);
+    if authority_rank(requested_authority) > authority_rank(parent.effective_authority)
+        || authority_rank(requested_authority) > authority_rank(assignee.authority_mode)
+    {
+        return Err(StoreError::TaskAuthorityExpansion {
+            requested: serialized_name(requested_authority)?,
+        });
+    }
+    let effective_authority = effective_authority(
+        parent.effective_authority,
+        requested_authority,
+        assignee.authority_mode,
+    );
+    let depth = parent.depth + 1;
+    if depth > lazoo_domain::MAX_TASK_DEPTH {
+        return Err(StoreError::TaskDepthLimit {
+            parent_task_id: parent.id,
+        });
+    }
+    let active_children: i64 = transaction.query_row(
+        "SELECT COUNT(*) FROM tasks
+         WHERE parent_task_id = ?1
+           AND state NOT IN ('completed', 'failed', 'cancelled')",
+        [parent.id.to_string()],
+        |row| row.get(0),
+    )?;
+    if active_children >= 8 {
+        return Err(StoreError::TaskFanoutLimit {
+            parent_task_id: parent.id,
+        });
+    }
+
+    let child_id = Uuid::new_v4();
+    let now = Utc::now().to_rfc3339();
+    let state = if effective_authority == AuthorityMode::Ask {
+        TaskState::Proposed
+    } else {
+        TaskState::Accepted
+    };
+    insert_child_task_tx(
+        transaction,
+        child_id,
+        &parent,
+        input,
+        &objective,
+        requested_authority,
+        effective_authority,
+        assignee.configuration_revision,
+        depth,
+        state,
+        &now,
+    )?;
+    let delegation_message = if state == TaskState::Accepted {
+        let created = insert_delegation_message_tx(
+            transaction,
+            child_id,
+            &parent,
+            input.actor,
+            assignee.id,
+            &objective,
+            &input.references,
+            &input.request_id,
+        )?;
+        transaction.execute(
+            "UPDATE tasks SET delegation_message_id = ?2 WHERE id = ?1",
+            params![child_id.to_string(), created.envelope.id.to_string()],
+        )?;
+        Some(created)
+    } else {
+        None
+    };
+    let evidence_kind = if state == TaskState::Proposed {
+        TaskEvidenceKind::Proposed
+    } else {
+        TaskEvidenceKind::Accepted
+    };
+    insert_task_evidence_tx(
+        transaction,
+        child_id,
+        1,
+        evidence_kind,
+        MessageSender::Employee(input.actor),
+        delegation_message
+            .as_ref()
+            .map(|message| message.envelope.id),
+        None,
+        input.actor.session_id,
+        &json!({"source": "task.delegate"}),
+        &now,
+    )?;
+    insert_task_command_tx(
+        transaction,
+        "task.delegate",
+        &input.idempotency_key,
+        &input.request_id,
+        child_id,
+        &now,
+    )?;
+    let task = required_task(transaction, child_id)?;
+    let event_sequence = employee::insert_event(
+        transaction,
+        "task.delegated",
+        &json!({"task": &task, "delegationMessage": &delegation_message}),
+        &now,
+    )?;
+    Ok(TaskMutationResult {
+        task,
+        delegation_message,
+        event_sequence: Some(event_sequence),
+    })
+}
+
+/// Cancels `current` (or requests cancellation of its in-flight turn) inside the caller's
+/// transaction, recording `actor` on the evidence. Callers check revision and actor first.
+pub(crate) fn cancel_task_tx(
+    transaction: &Transaction<'_>,
+    current: &TaskRecord,
+    actor: MessageSender,
+    evidence: &Value,
+    idempotency_key: &str,
+    request_id: &str,
+) -> Result<TaskMutationResult, StoreError> {
+    validate_task_evidence(evidence)?;
+    let (target, evidence_kind) = task_cancel_target(transaction, current)?;
+    let now = Utc::now().to_rfc3339();
+    let terminal = target == TaskState::Cancelled;
+    if terminal {
+        cancel_queued_task_delivery_tx(transaction, current, &now)?;
+    }
+    transaction.execute(
+        "UPDATE tasks SET state = ?2, revision = revision + 1,
+                active_turn_id = CASE WHEN ?3 THEN NULL ELSE active_turn_id END,
+                active_session_id = CASE WHEN ?3 THEN NULL ELSE active_session_id END,
+                terminal_at = CASE WHEN ?3 THEN ?4 ELSE terminal_at END,
+                updated_at = ?4
+         WHERE id = ?1",
+        params![
+            current.id.to_string(),
+            serialized_name(target)?,
+            terminal,
+            now,
+        ],
+    )?;
+    insert_task_evidence_tx(
+        transaction,
+        current.id,
+        current.revision + 1,
+        evidence_kind,
+        actor,
+        None,
+        current.active_turn_id,
+        current.active_session_id,
+        evidence,
+        &now,
+    )?;
+    insert_task_command_tx(
+        transaction,
+        "task.cancel",
+        idempotency_key,
+        request_id,
+        current.id,
+        &now,
+    )?;
+    let event_type = if terminal {
+        "task.cancelled"
+    } else {
+        "task.cancel-requested"
+    };
+    effective_task_result(transaction, current.id, event_type, &now)
 }
 
 pub(crate) fn insert_root_task_tx(

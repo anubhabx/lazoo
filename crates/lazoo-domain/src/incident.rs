@@ -1,5 +1,6 @@
 use std::fmt::Write as _;
 
+use lazoo_protocol::IncidentEscalationReason;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use thiserror::Error;
@@ -220,4 +221,42 @@ pub const fn incident_window(elapsed_seconds: i64, window_occurrences: u64) -> (
 #[must_use]
 pub const fn incident_threshold_crossed(window_occurrences: u64) -> bool {
     window_occurrences >= INCIDENT_THRESHOLD_OCCURRENCES
+}
+
+/// A lead may apply at most this many remedies to one promoted incident...
+pub const MAX_INCIDENT_REMEDIES: u32 = 2;
+/// ...and only within this long after the promotion.
+pub const INCIDENT_REMEDIATION_WINDOW_SECONDS: i64 = 5 * 60;
+
+/// What becomes of a promoted incident in its lead's remediation window.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum RemediationVerdict {
+    /// The lead may still act; nothing changes yet.
+    Open,
+    /// The window closed and the failure has not recurred since the lead's last remedy.
+    Remediated,
+    /// Unresolved: the incident becomes a priority notification for the user.
+    EscalateToUser(IncidentEscalationReason),
+}
+
+/// The whole bounded-remediation rule. `remedies` is how many the lead applied, and `recurred`
+/// whether the failure occurred again after the last of them (false while there are none).
+/// A remediated incident that recurs is judged with a closed window.
+#[must_use]
+pub const fn remediation_verdict(
+    window_closed: bool,
+    remedies: u32,
+    recurred: bool,
+) -> RemediationVerdict {
+    if recurred && remedies >= MAX_INCIDENT_REMEDIES {
+        RemediationVerdict::EscalateToUser(IncidentEscalationReason::RemediesExhausted)
+    } else if !window_closed {
+        RemediationVerdict::Open
+    } else if remedies == 0 {
+        RemediationVerdict::EscalateToUser(IncidentEscalationReason::NoRemedy)
+    } else if recurred {
+        RemediationVerdict::EscalateToUser(IncidentEscalationReason::RecurredAfterRemedy)
+    } else {
+        RemediationVerdict::Remediated
+    }
 }

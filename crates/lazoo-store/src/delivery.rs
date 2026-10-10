@@ -17,9 +17,10 @@ use lazoo_domain::{
     validate_turn_text,
 };
 use lazoo_protocol::{
-    CONVERSATION_CONTRACT_V1, ConversationTurnRecord, IncidentPriority, MESSAGE_ENVELOPE_V1,
-    MessageDeliveryState, MessageEndpoint, MessageKind, MessageMutationResult, MessageRecord,
-    MessageReference, MessageSender, TaskRecord, TaskState, TurnMutationResult, TurnState,
+    CONVERSATION_CONTRACT_V1, ConversationTurnRecord, IncidentEscalation, IncidentPriority,
+    MESSAGE_ENVELOPE_V1, MessageDeliveryState, MessageEndpoint, MessageKind, MessageMutationResult,
+    MessageRecord, MessageReference, MessageSender, TaskRecord, TaskState, TurnMutationResult,
+    TurnState,
 };
 use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, params};
 use serde_json::{Value, json};
@@ -529,17 +530,18 @@ fn queue_incident_notice_tx(
     }
     let not_applicable = StoreError::IncidentNoticeNotApplicable { incident_id };
     let record = incident::required_incident(transaction, incident_id)?;
-    let Some(task_id) = record.task_id else {
-        return Err(not_applicable);
-    };
     if record.priority != IncidentPriority::Priority {
         return Err(not_applicable);
     }
-    let task = task::required_task(transaction, task_id)?;
-    let root = task::required_task(transaction, task.root_task_id)?;
-    if task.id == root.id || record.employee_id == Some(root.assigned_employee_id) {
+    let Some(root) = incident::incident_lead_root(transaction, record.task_id, record.employee_id)?
+    else {
         return Err(not_applicable);
-    }
+    };
+    let task = task::required_task(transaction, record.task_id.ok_or(not_applicable)?)?;
+    // The lead reads its remediation window only while it is still open to it.
+    let remediation_deadline_at = (record.escalation == IncidentEscalation::Lead)
+        .then_some(record.remediation_deadline_at.as_deref())
+        .flatten();
     let employee_name = record
         .employee_id
         .map(|employee_id| employee::query_employee(transaction, employee_id))
@@ -556,6 +558,7 @@ fn queue_incident_notice_tx(
         occurrences: record.occurrences,
         task_id: task.id,
         employee_name: employee_name.as_deref(),
+        remediation_deadline_at,
     });
     message::insert_message_tx(
         transaction,
@@ -590,6 +593,7 @@ fn queue_incident_notice_tx(
                 "occurrences": record.occurrences,
                 "taskId": task.id,
                 "employeeId": record.employee_id,
+                "remediationDeadlineAt": remediation_deadline_at,
                 "text": text,
             }),
             references: vec![

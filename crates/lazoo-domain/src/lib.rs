@@ -33,11 +33,13 @@ pub use employee::{
     validate_native_settings,
 };
 pub use incident::{
-    INCIDENT_THRESHOLD_OCCURRENCES, INCIDENT_THRESHOLD_WINDOW_SECONDS, IncidentText,
-    IncidentValidationError, MAX_INCIDENT_CODE_BYTES, MAX_INCIDENT_DETAIL_BYTES,
-    MAX_INCIDENT_TEXT_BYTES, MAX_INCIDENT_TITLE_BYTES, describe_incident, incident_fingerprint,
-    incident_threshold_crossed, incident_window, validate_incident_code, validate_incident_detail,
-    validate_incident_list_limit, validate_incident_text, validate_incident_title,
+    INCIDENT_REMEDIATION_WINDOW_SECONDS, INCIDENT_THRESHOLD_OCCURRENCES,
+    INCIDENT_THRESHOLD_WINDOW_SECONDS, IncidentText, IncidentValidationError,
+    MAX_INCIDENT_CODE_BYTES, MAX_INCIDENT_DETAIL_BYTES, MAX_INCIDENT_REMEDIES,
+    MAX_INCIDENT_TEXT_BYTES, MAX_INCIDENT_TITLE_BYTES, RemediationVerdict, describe_incident,
+    incident_fingerprint, incident_threshold_crossed, incident_window, remediation_verdict,
+    validate_incident_code, validate_incident_detail, validate_incident_list_limit,
+    validate_incident_text, validate_incident_title,
 };
 pub use message::{
     MessageValidationError, retry_delay_seconds, validate_acknowledgement, validate_max_attempts,

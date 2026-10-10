@@ -6,16 +6,17 @@
 //! for the CLI. A refused or failed call answers the model with `success = false` and never ends
 //! the provider turn.
 
+use lazoo_domain::MAX_INCIDENT_REMEDIES;
 use lazoo_protocol::{
-    AuthorityMode, ConversationTurnRecord, IncidentSource, IncidentState, MessageDeliveryState,
-    MessageEndpoint, MessageRecord, MessageReference, RpcError, TaskDetail, TaskReportKind,
-    TaskState, TurnState,
+    AuthorityMode, ConversationTurnRecord, IncidentRemedyKind, IncidentSource, IncidentState,
+    MessageDeliveryState, MessageEndpoint, MessageRecord, MessageReference, RpcError, TaskDetail,
+    TaskReportKind, TaskState, TurnState,
 };
 use lazoo_providers::{ToolCall, ToolResult, ToolSpec};
 use lazoo_store::{
-    ConsumePeerMessageInput, ConsumeTaskResultInput, DelegateTaskInput, ListIncidentsInput,
-    ListTasksInput, RaiseIncidentInput, ReplyPeerMessageInput, ReportTaskInput,
-    SendPeerMessageInput, StoreError,
+    ApplyIncidentRemedyInput, ConsumePeerMessageInput, ConsumeTaskResultInput, DelegateTaskInput,
+    IncidentRemedyAction, ListIncidentsInput, ListTasksInput, RaiseIncidentInput,
+    ReplyPeerMessageInput, ReportTaskInput, SendPeerMessageInput, StoreError,
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -121,6 +122,36 @@ pub(super) fn collaboration_tools() -> Vec<ToolSpec> {
             description: "List open and acknowledged incidents visible to you: those in your                           project and those about you, with the recommended next action."
                 .to_owned(),
             input_schema: json!({"type": "object", "properties": {}, "additionalProperties": false}),
+        },
+        ToolSpec {
+            name: "incident_remedy".to_owned(),
+            description: "Apply one remedy to a priority incident about a child task you \
+                          delegated, inside its remediation window (named in the incident \
+                          notice and incident_list). At most two remedies per incident, within \
+                          five minutes of its promotion; a refused call uses none. cancel-task \
+                          cancels the affected child. redelegate-task delegates a failed or \
+                          cancelled child's objective again, to employeeId (default: the same \
+                          employee), citing rosterRevision from employees_list, under the \
+                          ordinary delegation guards. If the failure keeps recurring, Lazoo \
+                          escalates the incident to the user; a remedy never resolves an \
+                          incident, approves anything, or widens authority."
+                .to_owned(),
+            input_schema: json!({
+                "type": "object",
+                "required": ["incidentId", "remedy"],
+                "properties": {
+                    "incidentId": {"type": "string"},
+                    "remedy": {"type": "string", "enum": ["cancel-task", "redelegate-task"]},
+                    "employeeId": {"type": "string"},
+                    "rosterRevision": {"type": "integer", "minimum": 0},
+                    "requestedAuthority": {
+                        "type": "string",
+                        "enum": ["ask", "self-decision", "full-autonomy"]
+                    },
+                    "note": {"type": "string"}
+                },
+                "additionalProperties": false
+            }),
         },
         ToolSpec {
             name: "message_send".to_owned(),
@@ -271,6 +302,7 @@ impl App {
             "task_report" => self.tool_task_report(turn_id, call, task_id?, actor),
             "incident_report" => self.tool_incident_report(call, &turn, task_id?),
             "incident_list" => self.tool_incident_list(&turn),
+            "incident_remedy" => self.tool_incident_remedy(turn_id, call).await,
             "message_send" => self.tool_message_send(turn_id, call, task_id?, actor).await,
             "message_reply" => self.tool_message_reply(turn_id, call),
             other => Err(tool_error(
@@ -818,9 +850,119 @@ impl App {
                     "employeeId": incident.employee_id,
                     "taskId": incident.task_id,
                     "lastOccurredAt": incident.last_occurred_at,
+                    "escalation": incident.escalation,
+                    "remediationDeadlineAt": incident.remediation_deadline_at,
+                    "remediesApplied": incident.remedies.len(),
                 })
             })
             .collect();
         Ok(json!({"incidents": visible}))
     }
+
+    /// Applies one bounded remedy for the turn's employee. The store fixes the actor to the
+    /// turn's recipient and checks the window, the attempt bound, and the task-tree scope; a
+    /// cancellation that lands on an in-flight dispatch turn asks the provider to cancel it,
+    /// exactly as the user's `task.cancel` does.
+    async fn tool_incident_remedy(
+        &self,
+        turn_id: Uuid,
+        call: &ToolCall,
+    ) -> Result<Value, RpcError> {
+        let arguments: RemedyArguments = tool_arguments(call)?;
+        let action = match arguments.remedy {
+            IncidentRemedyKind::CancelTask => {
+                if arguments.employee_id.is_some()
+                    || arguments.roster_revision.is_some()
+                    || arguments.requested_authority.is_some()
+                {
+                    return Err(tool_error(
+                        "LZ-TOOL-INVALID",
+                        "employeeId, rosterRevision, and requestedAuthority apply only to \
+                         redelegate-task",
+                    ));
+                }
+                IncidentRemedyAction::CancelTask
+            }
+            IncidentRemedyKind::RedelegateTask => IncidentRemedyAction::RedelegateTask {
+                assigned_employee_id: arguments.employee_id,
+                roster_revision: arguments.roster_revision.ok_or_else(|| {
+                    tool_error(
+                        "LZ-TOOL-INVALID",
+                        "redelegate-task requires the rosterRevision from employees_list",
+                    )
+                })?,
+                requested_authority: arguments.requested_authority,
+            },
+        };
+        let key = tool_command_key(turn_id, call);
+        let applied = self
+            .store
+            .apply_incident_remedy(&ApplyIncidentRemedyInput {
+                request_id: key.clone(),
+                idempotency_key: key.clone(),
+                incident_id: arguments.incident_id,
+                turn_id,
+                action,
+                note: arguments.note,
+            })
+            .map_err(remedy_store_error)?;
+        self.publish_events()?;
+        let mut task = applied.task;
+        if applied.event_sequence.is_some() {
+            match task.state {
+                TaskState::Accepted => self.task_dispatch_notify.notify_one(),
+                TaskState::CancelRequested => task = self.cancel_dispatch_turn(&key, task).await?,
+                _ => {}
+            }
+        }
+        let note = match (applied.remedy.kind, task.state) {
+            (IncidentRemedyKind::RedelegateTask, TaskState::Proposed) => {
+                "the new task waits for the local user to accept it before any work starts"
+            }
+            (IncidentRemedyKind::RedelegateTask, _) => {
+                "the new task is accepted and will be dispatched when the assigned employee is free"
+            }
+            (IncidentRemedyKind::CancelTask, TaskState::Cancelled) => "the child task is cancelled",
+            (IncidentRemedyKind::CancelTask, _) => {
+                "cancellation was requested; the child stops when its provider confirms it"
+            }
+        };
+        Ok(json!({
+            "incidentId": applied.incident.id,
+            "remedy": applied.remedy.kind,
+            "attempt": applied.remedy.attempt,
+            "remediesRemaining": MAX_INCIDENT_REMEDIES.saturating_sub(applied.remedy.attempt),
+            "remediationDeadlineAt": applied.incident.remediation_deadline_at,
+            "taskId": task.id,
+            "state": task.state,
+            "revision": task.revision,
+            "note": note,
+        }))
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct RemedyArguments {
+    incident_id: Uuid,
+    remedy: IncidentRemedyKind,
+    employee_id: Option<Uuid>,
+    roster_revision: Option<u64>,
+    requested_authority: Option<AuthorityMode>,
+    #[serde(default)]
+    note: String,
+}
+
+#[allow(clippy::needless_pass_by_value)]
+fn remedy_store_error(error: StoreError) -> RpcError {
+    let code = match &error {
+        StoreError::IncidentRemedyClosed { .. } => "LZ-INCIDENT-REMEDY-CLOSED",
+        StoreError::IncidentRemedyScope { .. } => "LZ-INCIDENT-REMEDY-SCOPE",
+        StoreError::IncidentRemedyTarget { .. } => "LZ-INCIDENT-REMEDY-TARGET",
+        StoreError::IncidentNotFound { .. }
+        | StoreError::IncidentIdempotencyConflict
+        | StoreError::IncidentValidation(_) => return incident_store_error(error),
+        _ => return task_store_error(error),
+    };
+    tool_error(code, error.to_string())
 }

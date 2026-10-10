@@ -129,6 +129,16 @@ fn equivalent_failures_fold_escalate_at_the_threshold_and_replay_without_writes(
         IncidentPriority::Priority,
         "three equivalent failures inside five minutes cross the threshold"
     );
+    // No task tree means no lead to remediate it: the promotion is the user's at once.
+    assert_eq!(
+        third.incident.escalation,
+        lazoo_protocol::IncidentEscalation::User
+    );
+    assert_eq!(
+        third.incident.escalation_reason,
+        Some(lazoo_protocol::IncidentEscalationReason::NoLead)
+    );
+    assert!(third.incident.remediation_deadline_at.is_none());
     assert_eq!(
         third.incident.first_occurred_at,
         first.incident.first_occurred_at
@@ -300,7 +310,7 @@ fn emergency_spool_records_fold_into_keeper_incidents_exactly_once() {
     )
     .unwrap();
     let store = Store::open_path(root.state_db()).unwrap();
-    assert_eq!(store.status().unwrap().schema_version, 11);
+    assert_eq!(store.status().unwrap().schema_version, 12);
     assert_eq!(store.import_pending_incidents(&root).unwrap(), 2);
 
     let raised = store.reconcile_emergency_incidents().unwrap();

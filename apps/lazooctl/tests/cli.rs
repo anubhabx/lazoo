@@ -1067,7 +1067,22 @@ fn incident_cli_maps_list_show_acknowledge_and_resolve() {
                 "priority": "priority",
                 "code": "LZ-SESSION-STALLED",
                 "employeeId": null,
-                "projectId": null
+                "projectId": null,
+                "escalation": null
+            }),
+        ),
+        (
+            vec!["lazooctl", "incident", "list", "--escalation", "user"],
+            "incident.list",
+            json!({
+                "afterSequence": 0,
+                "limit": 100,
+                "state": null,
+                "priority": null,
+                "code": null,
+                "employeeId": null,
+                "projectId": null,
+                "escalation": "user"
             }),
         ),
         (
@@ -1120,6 +1135,9 @@ fn incident_cli_maps_list_show_acknowledge_and_resolve() {
         assert!(!follows);
     }
     assert!(Cli::try_parse_from(["lazooctl", "incident", "list", "--state", "closed"]).is_err());
+    assert!(
+        Cli::try_parse_from(["lazooctl", "incident", "list", "--escalation", "lead-only"]).is_err()
+    );
     assert!(
         Cli::try_parse_from(["lazooctl", "incident", "resolve", INCIDENT_ID]).is_err(),
         "a resolution must cite the incident revision it is bound to"

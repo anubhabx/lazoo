@@ -35,7 +35,7 @@ fn store_enables_wal_foreign_keys_and_schema_version() {
 
     let status = store.status().unwrap();
 
-    assert_eq!(status.schema_version, 11);
+    assert_eq!(status.schema_version, 12);
     assert_eq!(status.journal_mode.to_lowercase(), "wal");
     assert!(status.foreign_keys);
     assert_no_foreign_key_violations(&temporary.path().join("lazoo.db"));
@@ -75,7 +75,7 @@ fn version_one_database_upgrades_to_version_eight_without_rewriting_version_one(
 
     let store = Store::open_path(&database).unwrap();
 
-    assert_eq!(store.status().unwrap().schema_version, 11);
+    assert_eq!(store.status().unwrap().schema_version, 12);
     store
         .execute_for_test(
             "INSERT INTO employees (
@@ -136,7 +136,7 @@ fn version_two_database_upgrades_to_version_seven_with_session_tables() {
 
     let store = Store::open_path(&database).unwrap();
 
-    assert_eq!(store.status().unwrap().schema_version, 11);
+    assert_eq!(store.status().unwrap().schema_version, 12);
     store
         .execute_for_test(
             "INSERT INTO employees (
@@ -210,7 +210,7 @@ fn version_three_database_upgrades_to_version_seven_with_message_tables() {
 
     let store = Store::open_path(&database).unwrap();
 
-    assert_eq!(store.status().unwrap().schema_version, 11);
+    assert_eq!(store.status().unwrap().schema_version, 12);
     store
         .execute_for_test(
             "INSERT INTO employees (
@@ -344,7 +344,7 @@ fn version_four_database_upgrades_to_version_seven_without_losing_message_histor
     drop(connection);
 
     let store = Store::open_path(&database).unwrap();
-    assert_eq!(store.status().unwrap().schema_version, 11);
+    assert_eq!(store.status().unwrap().schema_version, 12);
 
     let message = store.get_message(message_id).unwrap();
     assert_eq!(message.envelope.version, 1);
@@ -526,7 +526,7 @@ fn version_five_turns_backfill_conservative_task_identity_and_state() {
     drop(connection);
 
     let store = Store::open_path(&database).unwrap();
-    assert_eq!(store.status().unwrap().schema_version, 11);
+    assert_eq!(store.status().unwrap().schema_version, 12);
     drop(store);
 
     let connection = Connection::open(&database).unwrap();
@@ -673,4 +673,101 @@ fn emergency_segments_import_exactly_once_and_reconcile() {
     assert_eq!(store.status().unwrap().emergency_incident_count, 1);
     assert!(!pending.exists());
     assert!(root.spool_reconciled().join("incident-1.ndjson").exists());
+}
+
+#[test]
+fn version_eleven_priority_incidents_upgrade_straight_to_the_user() {
+    use lazoo_protocol::{IncidentEscalation, IncidentEscalationReason};
+    use rusqlite::{Connection, params};
+    use sha2::{Digest, Sha256};
+
+    let migrations = [
+        include_str!("../../../migrations/0001_control_plane.sql"),
+        include_str!("../../../migrations/0002_employee_roster.sql"),
+        include_str!("../../../migrations/0003_employee_sessions.sql"),
+        include_str!("../../../migrations/0004_collaboration_bus.sql"),
+        include_str!("../../../migrations/0005_conversations.sql"),
+        include_str!("../../../migrations/0006_task_graph.sql"),
+        include_str!("../../../migrations/0007_task_dispatch.sql"),
+        include_str!("../../../migrations/0008_approvals.sql"),
+        include_str!("../../../migrations/0009_incidents.sql"),
+        include_str!("../../../migrations/0010_activation_policy.sql"),
+        include_str!("../../../migrations/0011_idle_suspension.sql"),
+    ];
+    let temporary = tempdir().unwrap();
+    let database = temporary.path().join("lazoo.db");
+    let connection = Connection::open(&database).unwrap();
+    connection
+        .execute_batch(
+            "CREATE TABLE schema_migrations (
+                version INTEGER PRIMARY KEY,
+                checksum TEXT NOT NULL,
+                applied_at TEXT NOT NULL
+            );",
+        )
+        .unwrap();
+    for (index, migration) in migrations.iter().enumerate() {
+        connection.execute_batch(migration).unwrap();
+        let mut checksum = String::with_capacity(64);
+        for byte in Sha256::digest(migration.as_bytes()) {
+            write!(&mut checksum, "{byte:02x}").unwrap();
+        }
+        connection
+            .execute(
+                "INSERT INTO schema_migrations (version, checksum, applied_at)
+                 VALUES (?1, ?2, '2026-10-10T00:00:00Z')",
+                params![i64::try_from(index + 1).unwrap(), checksum],
+            )
+            .unwrap();
+    }
+    for (id, priority, state) in [
+        (1, "priority", "open"),
+        (2, "priority", "resolved"),
+        (3, "normal", "open"),
+    ] {
+        connection
+            .execute(
+                "INSERT INTO incidents (
+                    id, contract_version, code, fingerprint, title, explanation, next_action,
+                    source, detail_json, occurrences, window_occurrences, first_occurred_at,
+                    last_occurred_at, window_started_at, priority, state, revision, created_at,
+                    updated_at, resolved_at
+                 ) VALUES (
+                    ?1, 1, 'LZ-PROCESS-EXIT', ?1, 'Exit', 'Exited.', 'Inspect.', 'daemon', '{}',
+                    3, 3, ?2, ?2, ?2, ?3, ?4, 1, ?2, ?2,
+                    CASE WHEN ?4 = 'resolved' THEN ?2 END
+                 )",
+                params![
+                    uuid::Uuid::from_u128(id).to_string(),
+                    "2026-10-09T00:00:00+00:00",
+                    priority,
+                    state,
+                ],
+            )
+            .unwrap();
+    }
+    drop(connection);
+
+    let store = Store::open_path(&database).unwrap();
+    assert_eq!(store.status().unwrap().schema_version, 12);
+    let open_priority = store.get_incident(uuid::Uuid::from_u128(1)).unwrap();
+    assert_eq!(open_priority.escalation, IncidentEscalation::User);
+    assert_eq!(
+        open_priority.escalation_reason,
+        Some(IncidentEscalationReason::SchemaUpgrade)
+    );
+    assert_eq!(
+        open_priority.escalated_at.as_deref(),
+        Some("2026-10-09T00:00:00+00:00")
+    );
+    assert!(open_priority.remedies.is_empty());
+    for untouched in [2, 3] {
+        let incident = store
+            .get_incident(uuid::Uuid::from_u128(untouched))
+            .unwrap();
+        assert_eq!(incident.escalation, IncidentEscalation::None);
+        assert!(incident.escalation_reason.is_none());
+    }
+    drop(store);
+    assert_no_foreign_key_violations(&database);
 }

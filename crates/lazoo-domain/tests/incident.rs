@@ -1,9 +1,11 @@
 use lazoo_domain::{
     INCIDENT_THRESHOLD_OCCURRENCES, INCIDENT_THRESHOLD_WINDOW_SECONDS, IncidentValidationError,
-    MAX_INCIDENT_TITLE_BYTES, describe_incident, incident_fingerprint, incident_threshold_crossed,
-    incident_window, validate_incident_code, validate_incident_detail,
-    validate_incident_list_limit, validate_incident_text, validate_incident_title,
+    MAX_INCIDENT_TITLE_BYTES, RemediationVerdict, describe_incident, incident_fingerprint,
+    incident_threshold_crossed, incident_window, remediation_verdict, validate_incident_code,
+    validate_incident_detail, validate_incident_list_limit, validate_incident_text,
+    validate_incident_title,
 };
+use lazoo_protocol::IncidentEscalationReason;
 use serde_json::json;
 use uuid::Uuid;
 
@@ -125,4 +127,29 @@ fn validation_bounds_codes_titles_text_detail_and_limits() {
         validate_incident_list_limit(1025),
         Err(IncidentValidationError::ListLimit)
     );
+}
+
+#[test]
+fn remediation_escalates_unless_a_remedy_holds_through_the_window() {
+    use IncidentEscalationReason::{NoRemedy, RecurredAfterRemedy, RemediesExhausted};
+    use RemediationVerdict::{EscalateToUser, Open, Remediated};
+    // (window closed, remedies applied, recurred since the last remedy) -> verdict
+    for (closed, remedies, recurred, verdict) in [
+        (false, 0, false, Open),
+        (false, 1, false, Open),
+        (false, 1, true, Open),
+        (false, 2, false, Open),
+        (false, 2, true, EscalateToUser(RemediesExhausted)),
+        (true, 0, false, EscalateToUser(NoRemedy)),
+        (true, 1, false, Remediated),
+        (true, 2, false, Remediated),
+        (true, 1, true, EscalateToUser(RecurredAfterRemedy)),
+        (true, 2, true, EscalateToUser(RemediesExhausted)),
+    ] {
+        assert_eq!(
+            remediation_verdict(closed, remedies, recurred),
+            verdict,
+            "closed={closed} remedies={remedies} recurred={recurred}"
+        );
+    }
 }

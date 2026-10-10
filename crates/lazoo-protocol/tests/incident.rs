@@ -1,6 +1,7 @@
 use lazoo_protocol::{
-    AcknowledgeIncidentParams, INCIDENT_CONTRACT_V1, IncidentListParams, IncidentPriority,
-    IncidentRecord, IncidentSource, IncidentState, ResolveIncidentParams,
+    AcknowledgeIncidentParams, INCIDENT_CONTRACT_V1, IncidentEscalation, IncidentEscalationReason,
+    IncidentListParams, IncidentPriority, IncidentRecord, IncidentRemedyKind, IncidentRemedyRecord,
+    IncidentSource, IncidentState, ResolveIncidentParams,
 };
 use serde_json::json;
 use uuid::Uuid;
@@ -36,6 +37,24 @@ fn incident_record() -> IncidentRecord {
         updated_at: "2026-09-23T00:02:00Z".to_owned(),
         acknowledged_at: None,
         resolved_at: None,
+        escalation: IncidentEscalation::Lead,
+        remediation_deadline_at: Some("2026-09-23T00:07:00Z".to_owned()),
+        escalated_at: None,
+        escalation_reason: None,
+        remedies: vec![IncidentRemedyRecord {
+            id: Uuid::nil(),
+            incident_id: Uuid::nil(),
+            attempt: 1,
+            kind: IncidentRemedyKind::RedelegateTask,
+            lead_employee_id: Uuid::nil(),
+            lead_task_id: Uuid::nil(),
+            turn_id: Uuid::nil(),
+            target_task_id: Uuid::nil(),
+            result_task_id: Some(Uuid::nil()),
+            occurrences_at_remedy: 3,
+            note: "try another worker".to_owned(),
+            created_at: "2026-09-23T00:03:00Z".to_owned(),
+        }],
     }
 }
 
@@ -57,6 +76,18 @@ fn incident_enums_use_stable_kebab_case_wire_values() {
         serde_json::from_str::<IncidentState>(r#""resolved""#).unwrap(),
         IncidentState::Resolved
     );
+    assert_eq!(
+        serde_json::to_string(&IncidentEscalation::Remediated).unwrap(),
+        r#""remediated""#
+    );
+    assert_eq!(
+        serde_json::to_string(&IncidentEscalationReason::RecurredAfterRemedy).unwrap(),
+        r#""recurred-after-remedy""#
+    );
+    assert_eq!(
+        serde_json::to_string(&IncidentRemedyKind::CancelTask).unwrap(),
+        r#""cancel-task""#
+    );
 }
 
 #[test]
@@ -67,8 +98,27 @@ fn incident_record_round_trips_with_camel_case_keys() {
     assert_eq!(value["windowOccurrences"], 3);
     assert_eq!(value["firstOccurredAt"], "2026-09-23T00:00:00Z");
     assert!(value.get("next_action").is_none());
-    let parsed: IncidentRecord = serde_json::from_value(value).unwrap();
+    assert_eq!(value["escalation"], "lead");
+    assert_eq!(value["remediationDeadlineAt"], "2026-09-23T00:07:00Z");
+    assert_eq!(value["remedies"][0]["kind"], "redelegate-task");
+    assert_eq!(value["remedies"][0]["occurrencesAtRemedy"], 3);
+    let parsed: IncidentRecord = serde_json::from_value(value.clone()).unwrap();
     assert_eq!(parsed, record);
+
+    // Records written before schema 12 (event payloads) carry no escalation fields.
+    let mut legacy = value;
+    for field in [
+        "escalation",
+        "remediationDeadlineAt",
+        "escalatedAt",
+        "escalationReason",
+        "remedies",
+    ] {
+        legacy.as_object_mut().unwrap().remove(field);
+    }
+    let legacy: IncidentRecord = serde_json::from_value(legacy).unwrap();
+    assert_eq!(legacy.escalation, IncidentEscalation::None);
+    assert!(legacy.remedies.is_empty());
 }
 
 #[test]
@@ -81,6 +131,9 @@ fn incident_params_have_defaults_and_reject_unknown_fields() {
             .unwrap();
     assert_eq!(filtered.state, Some(IncidentState::Open));
     assert_eq!(filtered.code.as_deref(), Some("LZ-X"));
+    let escalated: IncidentListParams =
+        serde_json::from_value(json!({"escalation": "user"})).unwrap();
+    assert_eq!(escalated.escalation, Some(IncidentEscalation::User));
     assert!(serde_json::from_value::<IncidentListParams>(json!({"severity": "high"})).is_err());
     let acknowledge: AcknowledgeIncidentParams = serde_json::from_value(json!({
         "id": Uuid::nil(),

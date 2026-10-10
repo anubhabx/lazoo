@@ -1,15 +1,17 @@
+use chrono::{TimeDelta, Utc};
 use lazoo_domain::{MAX_PEER_MESSAGE_BYTES, MAX_TURN_TEXT_BYTES};
 use lazoo_protocol::{
-    AuthorityMode, EmployeeCheckoutPolicy, IncidentPriority, IncidentSource, MessageDeliveryState,
-    MessageEndpoint, MessageKind, MessageMutationResult, MessageSender, ProviderObservation,
-    SessionLifecycleState, TaskState, TurnState, UserMessageEndpoint, UserMessageKind,
+    AuthorityMode, EmployeeCheckoutPolicy, IncidentEscalation, IncidentEscalationReason,
+    IncidentPriority, IncidentRemedyKind, IncidentSource, MessageDeliveryState, MessageEndpoint,
+    MessageKind, MessageMutationResult, MessageSender, ProviderObservation, SessionLifecycleState,
+    TaskState, TurnState, UserMessageEndpoint, UserMessageKind,
 };
 use lazoo_store::{
-    BeginSessionInput, BeginTurnSubmissionInput, CancelTaskInput, ConsumePeerMessageInput,
-    ConsumeTaskResultInput, CreateConversationInput, CreateEmployeeInput, DelegateTaskInput,
-    MarkSessionReadyInput, ObserveTurnInput, QueueIncidentNoticeInput, QueueTaskResultInput,
-    RaiseIncidentInput, RecordNoticeTurnInput, RecordTurnInput, ReplyPeerMessageInput,
-    SendPeerMessageInput, Store, StoreError,
+    ApplyIncidentRemedyInput, BeginSessionInput, BeginTurnSubmissionInput, CancelTaskInput,
+    ConsumePeerMessageInput, ConsumeTaskResultInput, CreateConversationInput, CreateEmployeeInput,
+    DelegateTaskInput, IncidentRemedyAction, MarkSessionReadyInput, ObserveTurnInput,
+    QueueIncidentNoticeInput, QueueTaskResultInput, RaiseIncidentInput, RecordNoticeTurnInput,
+    RecordTurnInput, ReplyPeerMessageInput, SendPeerMessageInput, Store, StoreError,
 };
 use serde_json::json;
 use tempfile::tempdir;
@@ -1500,4 +1502,400 @@ fn a_coalesced_turn_stays_within_the_turn_text_limit() {
         "the overflow waits for the next turn"
     );
     assert_eq!(waiting[0].envelope.id, ids[carried]);
+}
+
+fn incident_on(key: &str, code: &str, employee: Uuid, task: Uuid) -> RaiseIncidentInput {
+    RaiseIncidentInput {
+        request_id: format!("request-{key}"),
+        idempotency_key: key.to_owned(),
+        code: code.to_owned(),
+        source: IncidentSource::Daemon,
+        title: None,
+        explanation: None,
+        project_id: None,
+        employee_id: Some(employee),
+        provider: Some("codex".to_owned()),
+        task_id: Some(task),
+        session_id: None,
+        turn_id: None,
+        message_id: None,
+        detail: json!({"failureCode": code}),
+        occurred_at: None,
+    }
+}
+
+/// Raises `code` three times for the worker on `task`, which promotes it to priority.
+fn promote(
+    fixture: &Fixture,
+    prefix: &str,
+    code: &str,
+    task: Uuid,
+) -> lazoo_protocol::IncidentRecord {
+    let mut last = None;
+    for attempt in 1..=3 {
+        last = Some(
+            fixture
+                .store
+                .raise_incident(&incident_on(
+                    &format!("{prefix}-{attempt}"),
+                    code,
+                    fixture.worker,
+                    task,
+                ))
+                .unwrap()
+                .incident,
+        );
+    }
+    let promoted = last.unwrap();
+    assert_eq!(promoted.priority, IncidentPriority::Priority);
+    promoted
+}
+
+fn remedy(
+    fixture: &Fixture,
+    key: &str,
+    incident_id: Uuid,
+    turn_id: Uuid,
+    action: IncidentRemedyAction,
+) -> Result<lazoo_store::IncidentRemedyResult, StoreError> {
+    fixture
+        .store
+        .apply_incident_remedy(&ApplyIncidentRemedyInput {
+            request_id: format!("request-{key}"),
+            idempotency_key: key.to_owned(),
+            incident_id,
+            turn_id,
+            action,
+            note: format!("remedy {key}"),
+        })
+}
+
+fn redelegate(fixture: &Fixture) -> IncidentRemedyAction {
+    IncidentRemedyAction::RedelegateTask {
+        assigned_employee_id: None,
+        roster_revision: fixture.store.roster_snapshot().unwrap().revision,
+        requested_authority: None,
+    }
+}
+
+#[test]
+#[allow(clippy::too_many_lines)] // One window walks every bound in the order a lead meets it.
+fn a_promoted_child_incident_gives_the_lead_two_remedies_inside_its_window() {
+    let (_temporary, fixture) = fixture();
+    let store = &fixture.store;
+    let before = Utc::now();
+    let incident = promote(&fixture, "timeout", "LZ-MESSAGE-TIMEOUT", fixture.child.id);
+    assert_eq!(incident.escalation, IncidentEscalation::Lead);
+    assert!(incident.escalated_at.is_none() && incident.escalation_reason.is_none());
+    let deadline =
+        chrono::DateTime::parse_from_rfc3339(incident.remediation_deadline_at.as_deref().unwrap())
+            .unwrap();
+    assert!(deadline >= before + TimeDelta::seconds(300));
+    assert!(deadline <= Utc::now() + TimeDelta::seconds(300));
+
+    // The lead's notice names the window.
+    let notice = store
+        .queue_incident_notice(&QueueIncidentNoticeInput {
+            request_id: "request-notice".to_owned(),
+            incident_id: incident.id,
+        })
+        .unwrap()
+        .message;
+    let text = notice.envelope.body["text"].as_str().unwrap();
+    assert!(text.contains("incident_remedy (cancel-task, redelegate-task) until"));
+    assert_eq!(
+        notice.envelope.body["remediationDeadlineAt"],
+        json!(incident.remediation_deadline_at)
+    );
+
+    // Refusals consume no attempt: redelegating a live child, or a remedy from the worker.
+    let lead_turn = lead_turn(&fixture).id;
+    assert!(matches!(
+        remedy(
+            &fixture,
+            "early-redelegate",
+            incident.id,
+            lead_turn,
+            redelegate(&fixture)
+        ),
+        Err(StoreError::IncidentRemedyTarget { .. })
+    ));
+    let worker_turn = worker_turn(&fixture, "worker-turn").id;
+    assert!(matches!(
+        remedy(
+            &fixture,
+            "worker-cancel",
+            incident.id,
+            worker_turn,
+            IncidentRemedyAction::CancelTask
+        ),
+        Err(StoreError::IncidentRemedyScope { .. })
+    ));
+    assert!(store.get_incident(incident.id).unwrap().remedies.is_empty());
+
+    // Remedy 1: the lead cancels the affected child as itself.
+    let cancelled = remedy(
+        &fixture,
+        "cancel",
+        incident.id,
+        lead_turn,
+        IncidentRemedyAction::CancelTask,
+    )
+    .unwrap();
+    assert!(cancelled.event_sequence.is_some());
+    assert_eq!(cancelled.task.id, fixture.child.id);
+    assert_eq!(cancelled.task.state, TaskState::Cancelled);
+    assert_eq!(cancelled.remedy.attempt, 1);
+    assert_eq!(cancelled.remedy.kind, IncidentRemedyKind::CancelTask);
+    assert_eq!(cancelled.remedy.lead_employee_id, fixture.lead);
+    assert_eq!(cancelled.remedy.target_task_id, fixture.child.id);
+    assert_eq!(cancelled.remedy.result_task_id, None);
+    assert_eq!(cancelled.remedy.occurrences_at_remedy, 3);
+    assert_eq!(cancelled.incident.revision, incident.revision + 1);
+    assert_eq!(cancelled.incident.remedies, vec![cancelled.remedy.clone()]);
+    let evidence = store.get_task(fixture.child.id).unwrap().evidence;
+    let last = evidence.last().unwrap();
+    assert_eq!(
+        last.actor,
+        MessageSender::Employee(MessageEndpoint {
+            employee_id: fixture.lead,
+            session_id: Some(fixture.lead_session),
+        })
+    );
+    assert_eq!(last.detail["source"], "incident.remedy");
+
+    let replay = remedy(
+        &fixture,
+        "cancel",
+        incident.id,
+        lead_turn,
+        IncidentRemedyAction::CancelTask,
+    )
+    .unwrap();
+    assert!(replay.event_sequence.is_none());
+    assert_eq!(replay.remedy, cancelled.remedy);
+    assert!(matches!(
+        remedy(
+            &fixture,
+            "cancel",
+            incident.id,
+            lead_turn,
+            redelegate(&fixture)
+        ),
+        Err(StoreError::IncidentIdempotencyConflict)
+    ));
+
+    // Remedy 2: the cancelled child's objective goes out again through the delegation guards.
+    let redelegated = remedy(
+        &fixture,
+        "redelegate",
+        incident.id,
+        lead_turn,
+        redelegate(&fixture),
+    )
+    .unwrap();
+    let retry = redelegated.task;
+    assert_ne!(retry.id, fixture.child.id);
+    assert_eq!(retry.parent_task_id, Some(fixture.root.id));
+    assert_eq!(retry.assigned_employee_id, fixture.worker);
+    assert_eq!(retry.objective, fixture.child.objective);
+    assert_eq!(retry.state, TaskState::Accepted);
+    assert_eq!(redelegated.remedy.attempt, 2);
+    assert_eq!(redelegated.remedy.result_task_id, Some(retry.id));
+    let delegation = store
+        .get_message(retry.delegation_message_id.unwrap())
+        .unwrap();
+    let references: Vec<_> = delegation
+        .envelope
+        .references
+        .iter()
+        .map(|reference| (reference.kind.as_str(), reference.target.clone()))
+        .collect();
+    assert!(references.contains(&("task", fixture.child.id.to_string())));
+    assert!(references.contains(&("incident", incident.id.to_string())));
+
+    // A third remedy is refused, and the next recurrence goes straight to the user.
+    assert!(matches!(
+        remedy(
+            &fixture,
+            "third",
+            incident.id,
+            lead_turn,
+            IncidentRemedyAction::CancelTask
+        ),
+        Err(StoreError::IncidentRemedyClosed { .. })
+    ));
+    let recurred = store
+        .raise_incident(&incident_on(
+            "timeout-4",
+            "LZ-MESSAGE-TIMEOUT",
+            fixture.worker,
+            retry.id,
+        ))
+        .unwrap()
+        .incident;
+    assert_eq!(recurred.escalation, IncidentEscalation::User);
+    assert_eq!(
+        recurred.escalation_reason,
+        Some(IncidentEscalationReason::RemediesExhausted)
+    );
+    assert!(recurred.escalated_at.is_some());
+    assert_eq!(
+        recurred.remediation_deadline_at,
+        incident.remediation_deadline_at
+    );
+    let events: Vec<String> = store
+        .list_events(0, 1000)
+        .unwrap()
+        .into_iter()
+        .map(|event| event.event_type)
+        .filter(|kind| kind.starts_with("incident"))
+        .collect();
+    assert_eq!(
+        events,
+        [
+            "incident.raised",
+            "incident.recurred",
+            "incident.escalated",
+            "incident.remedy-applied",
+            "incident.remedy-applied",
+            "incident.escalated-to-user",
+        ]
+    );
+}
+
+#[test]
+#[allow(clippy::too_many_lines)] // Both window outcomes and the late recurrence share a fixture.
+fn the_sweep_escalates_an_unremedied_window_and_keeps_a_remedy_that_held() {
+    let (_temporary, fixture) = fixture();
+    let store = &fixture.store;
+    let lead_turn = lead_turn(&fixture).id;
+    let ignored = promote(&fixture, "stall", "LZ-SESSION-STALLED", fixture.child.id);
+    let remedied = promote(&fixture, "timeout", "LZ-MESSAGE-TIMEOUT", fixture.child.id);
+    remedy(
+        &fixture,
+        "cancel",
+        remedied.id,
+        lead_turn,
+        IncidentRemedyAction::CancelTask,
+    )
+    .unwrap();
+
+    assert!(store.escalate_due_incidents(Utc::now()).unwrap().is_empty());
+    let later = Utc::now() + TimeDelta::seconds(301);
+    let changed = store.escalate_due_incidents(later).unwrap();
+    assert_eq!(changed.len(), 2);
+    let ignored = store.get_incident(ignored.id).unwrap();
+    assert_eq!(ignored.escalation, IncidentEscalation::User);
+    assert_eq!(
+        ignored.escalation_reason,
+        Some(IncidentEscalationReason::NoRemedy)
+    );
+    assert_eq!(ignored.escalated_at, Some(later.to_rfc3339()));
+    let held = store.get_incident(remedied.id).unwrap();
+    assert_eq!(held.escalation, IncidentEscalation::Remediated);
+    assert!(held.escalated_at.is_none() && held.escalation_reason.is_none());
+    assert!(store.escalate_due_incidents(later).unwrap().is_empty());
+
+    // The window is closed for good: no remedy on either, whatever the lead asks.
+    for (key, incident_id) in [("late-1", ignored.id), ("late-2", held.id)] {
+        assert!(matches!(
+            remedy(&fixture, key, incident_id, lead_turn, redelegate(&fixture)),
+            Err(StoreError::IncidentRemedyClosed { .. })
+        ));
+    }
+
+    // A remediated failure that comes back is the user's.
+    let recurred = store
+        .raise_incident(&incident_on(
+            "timeout-late",
+            "LZ-MESSAGE-TIMEOUT",
+            fixture.worker,
+            fixture.child.id,
+        ))
+        .unwrap()
+        .incident;
+    assert_eq!(recurred.escalation, IncidentEscalation::User);
+    assert_eq!(
+        recurred.escalation_reason,
+        Some(IncidentEscalationReason::RecurredAfterRemedy)
+    );
+    let escalated_to_user = store
+        .list_incidents(&lazoo_store::ListIncidentsInput {
+            limit: 10,
+            escalation: Some(IncidentEscalation::User),
+            ..lazoo_store::ListIncidentsInput::default()
+        })
+        .unwrap();
+    assert_eq!(escalated_to_user.len(), 2);
+    let kinds: Vec<String> = store
+        .list_events(0, 1000)
+        .unwrap()
+        .into_iter()
+        .map(|event| event.event_type)
+        .filter(|kind| kind == "incident.remediated" || kind == "incident.escalated-to-user")
+        .collect();
+    assert_eq!(
+        kinds,
+        [
+            "incident.escalated-to-user",
+            "incident.remediated",
+            "incident.escalated-to-user",
+        ]
+    );
+}
+
+#[test]
+fn incidents_with_no_lead_to_remediate_go_to_the_user_at_promotion() {
+    let (_temporary, fixture) = fixture();
+    let store = &fixture.store;
+    // About the lead's own root task: nobody above it to remediate.
+    let mut lead_incident = None;
+    for attempt in 1..=3 {
+        lead_incident = Some(
+            store
+                .raise_incident(&incident_on(
+                    &format!("lead-{attempt}"),
+                    "LZ-PROCESS-EXIT",
+                    fixture.lead,
+                    fixture.root.id,
+                ))
+                .unwrap()
+                .incident,
+        );
+    }
+    let lead_incident = lead_incident.unwrap();
+    assert_eq!(lead_incident.escalation, IncidentEscalation::User);
+    assert_eq!(
+        lead_incident.escalation_reason,
+        Some(IncidentEscalationReason::NoLead)
+    );
+    assert!(lead_incident.remediation_deadline_at.is_none());
+    assert!(matches!(
+        remedy(
+            &fixture,
+            "lead-remedy",
+            lead_incident.id,
+            lead_turn(&fixture).id,
+            IncidentRemedyAction::CancelTask
+        ),
+        Err(StoreError::IncidentRemedyClosed { .. })
+    ));
+    // Normal incidents never escalate.
+    let normal = store
+        .raise_incident(&incident_on(
+            "once",
+            "LZ-WORKTREE-CONFLICT",
+            fixture.worker,
+            fixture.child.id,
+        ))
+        .unwrap()
+        .incident;
+    assert_eq!(normal.escalation, IncidentEscalation::None);
+    assert!(
+        store
+            .escalate_due_incidents(Utc::now() + TimeDelta::days(1))
+            .unwrap()
+            .is_empty()
+    );
 }

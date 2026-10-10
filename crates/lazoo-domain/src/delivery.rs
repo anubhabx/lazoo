@@ -9,7 +9,7 @@ use std::fmt::Write;
 use lazoo_protocol::{ActivationPolicy, IncidentPriority, TaskState};
 use uuid::Uuid;
 
-use crate::MessageValidationError;
+use crate::{MAX_INCIDENT_REMEDIES, MessageValidationError};
 
 /// Bytes of a child's native output carried into the lead's turn; the turn ledger keeps the rest.
 pub const MAX_NOTICE_OUTPUT_BYTES: usize = 16 * 1024;
@@ -92,6 +92,8 @@ pub struct IncidentNotice<'a> {
     pub occurrences: u64,
     pub task_id: Uuid,
     pub employee_name: Option<&'a str>,
+    /// When the lead's remediation window closes; `None` when the lead has no window.
+    pub remediation_deadline_at: Option<&'a str>,
 }
 
 /// Renders the turn text for a child task outcome. Output is bounded to
@@ -164,12 +166,24 @@ pub fn render_incident_notice_text(notice: &IncidentNotice<'_>) -> String {
     let subject = notice
         .employee_name
         .map_or_else(String::new, |name| format!(" for {name}"));
+    let remedies = notice.remediation_deadline_at.map_or_else(
+        || {
+            "If the work cannot continue, report your task as failed with task_report or \
+             delegate it elsewhere with task_delegate; the user sees this incident too."
+                .to_owned()
+        },
+        |deadline| {
+            format!(
+                "You may apply at most {MAX_INCIDENT_REMEDIES} remedies with incident_remedy \
+                 (cancel-task, redelegate-task) until {deadline}. If the failure is still \
+                 recurring then, Lazoo escalates it to the user."
+            )
+        },
+    );
     format!(
         "[Lazoo incident] {priority} incident {} on task {}{subject}: {}\n{}\nOccurrences: {}\n\
          Recommended next action: {}\nLazoo will not retry, restart, or change authority on its \
-         own. If the work cannot continue, report your task as failed with task_report or \
-         delegate it elsewhere with task_delegate; the user sees this incident too. \
-         Incident id: {}.",
+         own. {remedies} Incident id: {}.",
         notice.code,
         notice.task_id,
         notice.title,

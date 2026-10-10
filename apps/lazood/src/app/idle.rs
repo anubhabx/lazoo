@@ -19,15 +19,20 @@ use super::{App, session_store_error};
 const IDLE_SWEEP_INTERVAL: Duration = Duration::from_secs(15);
 
 impl App {
-    /// Runs the idle sweep until shutdown.
-    pub async fn run_idle_suspension(&self) {
+    /// Runs the timed sweeps until shutdown: idle suspension, and closing lead remediation
+    /// windows (`escalate_due_incidents_once`), which share this cadence and its slack.
+    pub async fn run_timed_sweeps(&self) {
         let mut shutdown = self.shutdown_receiver();
         loop {
             if *shutdown.borrow() {
                 return;
             }
-            if let Err(error) = self.suspend_idle_sessions_once(Utc::now()).await {
+            let now = Utc::now();
+            if let Err(error) = self.suspend_idle_sessions_once(now).await {
                 tracing::warn!(code = %error.code, message = %error.message, "idle suspension failed");
+            }
+            if let Err(error) = self.escalate_due_incidents_once(now) {
+                tracing::warn!(code = %error.code, message = %error.message, "incident escalation failed");
             }
             tokio::select! {
                 () = sleep(IDLE_SWEEP_INTERVAL) => {}

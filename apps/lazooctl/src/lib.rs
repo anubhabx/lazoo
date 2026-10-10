@@ -4,9 +4,9 @@ use clap::{Parser, Subcommand};
 use lazoo_ipc::{IpcError, PipeClient};
 use lazoo_protocol::{
     ActivationPolicy, ApprovalDecision, ApprovalState, AuthorityMode, CheckoutMode,
-    EmployeeCheckoutPolicy, IncidentPriority, IncidentState, JsonRpcRequest, JsonRpcResponse,
-    MessageEndpoint, MessageKind, MessageSender, RpcError, TaskReportKind, TaskResolution,
-    TaskState, UserMessageEndpoint, UserMessageKind,
+    EmployeeCheckoutPolicy, IncidentEscalation, IncidentPriority, IncidentState, JsonRpcRequest,
+    JsonRpcResponse, MessageEndpoint, MessageKind, MessageSender, RpcError, TaskReportKind,
+    TaskResolution, TaskState, UserMessageEndpoint, UserMessageKind,
 };
 use lazoo_runtime::{DataRoot, Installation, RuntimeError};
 use serde_json::{Value, json};
@@ -70,6 +70,9 @@ pub enum IncidentCommand {
         employee_id: Option<Uuid>,
         #[arg(long)]
         project_id: Option<Uuid>,
+        /// `user` lists the priority notifications: incidents no lead remedy settled.
+        #[arg(long, value_parser = parse_incident_escalation)]
+        escalation: Option<IncidentEscalation>,
     },
     Show {
         id: Uuid,
@@ -677,6 +680,7 @@ fn incident_request(command: &IncidentCommand) -> (&'static str, Value, bool) {
             code,
             employee_id,
             project_id,
+            escalation,
         } => (
             "incident.list",
             json!({
@@ -687,6 +691,7 @@ fn incident_request(command: &IncidentCommand) -> (&'static str, Value, bool) {
                 "code": code,
                 "employeeId": employee_id,
                 "projectId": project_id,
+                "escalation": escalation,
             }),
             false,
         ),
@@ -1413,6 +1418,16 @@ fn parse_incident_priority(value: &str) -> Result<IncidentPriority, String> {
         "normal" => Ok(IncidentPriority::Normal),
         "priority" => Ok(IncidentPriority::Priority),
         _ => Err("expected normal or priority".to_owned()),
+    }
+}
+
+fn parse_incident_escalation(value: &str) -> Result<IncidentEscalation, String> {
+    match value {
+        "none" => Ok(IncidentEscalation::None),
+        "lead" => Ok(IncidentEscalation::Lead),
+        "remediated" => Ok(IncidentEscalation::Remediated),
+        "user" => Ok(IncidentEscalation::User),
+        _ => Err("expected none, lead, remediated, or user".to_owned()),
     }
 }
 

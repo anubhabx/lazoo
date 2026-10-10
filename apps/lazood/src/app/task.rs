@@ -1,7 +1,7 @@
 use lazoo_protocol::{
     AcceptTaskParams, CancelTaskParams, DelegateTaskParams, JsonRpcRequest, MessageDeliveryState,
-    ReportTaskParams, ResolveTaskParams, RpcError, StartTaskParams, TaskListParams, TaskShowParams,
-    TaskState, TaskWorkspaceKind,
+    ReportTaskParams, ResolveTaskParams, RpcError, StartTaskParams, TaskListParams, TaskRecord,
+    TaskShowParams, TaskState, TaskWorkspaceKind,
 };
 use lazoo_providers::ProviderKind;
 use lazoo_store::{
@@ -428,34 +428,41 @@ impl App {
             .map_err(task_store_error)?;
         self.publish_events()?;
         if result.task.state == TaskState::CancelRequested {
-            let detail = self
-                .store
-                .get_task(result.task.id)
-                .map_err(task_store_error)?;
-            if let Some(dispatch) = detail.dispatch
-                && let Some(turn_id) = result.task.active_turn_id.or(dispatch.turn_id)
-                && dispatch.turn_id == Some(turn_id)
-            {
-                let turn = self.store.get_turn(turn_id).map_err(task_store_error)?;
-                let cancel_request = JsonRpcRequest {
-                    jsonrpc: "2.0".to_owned(),
-                    id: format!("{}:automatic-turn-cancel", request.id),
-                    method: "turn.cancel".to_owned(),
-                    params: json!({
-                        "id": turn_id,
-                        "expectedRevision": turn.revision,
-                        "idempotencyKey": format!("task:{}:automatic-turn-cancel", result.task.id)
-                    }),
-                };
-                self.cancel_turn(&cancel_request).await?;
-                result.task = self
-                    .store
-                    .get_task(result.task.id)
-                    .map_err(task_store_error)?
-                    .task;
-            }
+            result.task = self.cancel_dispatch_turn(&request.id, result.task).await?;
         }
         Ok(to_value(result))
+    }
+
+    /// A cancellation that landed while the task's automatic dispatch turn is in flight asks
+    /// the provider to cancel that turn, and returns the task as it stands afterwards.
+    pub(super) async fn cancel_dispatch_turn(
+        &self,
+        request_id: &str,
+        task: TaskRecord,
+    ) -> Result<TaskRecord, RpcError> {
+        let detail = self.store.get_task(task.id).map_err(task_store_error)?;
+        let Some(dispatch) = detail.dispatch else {
+            return Ok(task);
+        };
+        let Some(turn_id) = task.active_turn_id.or(dispatch.turn_id) else {
+            return Ok(task);
+        };
+        if dispatch.turn_id != Some(turn_id) {
+            return Ok(task);
+        }
+        let turn = self.store.get_turn(turn_id).map_err(task_store_error)?;
+        let cancel_request = JsonRpcRequest {
+            jsonrpc: "2.0".to_owned(),
+            id: format!("{request_id}:automatic-turn-cancel"),
+            method: "turn.cancel".to_owned(),
+            params: json!({
+                "id": turn_id,
+                "expectedRevision": turn.revision,
+                "idempotencyKey": format!("task:{}:automatic-turn-cancel", task.id)
+            }),
+        };
+        self.cancel_turn(&cancel_request).await?;
+        Ok(self.store.get_task(task.id).map_err(task_store_error)?.task)
     }
 
     pub(super) fn resolve_task(&self, request: &JsonRpcRequest) -> Result<Value, RpcError> {

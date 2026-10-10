@@ -3560,7 +3560,7 @@ async fn status_reports_protocol_store_and_boot_identity() {
     let result = response.result.unwrap();
 
     assert_eq!(result["protocolVersion"], 1);
-    assert_eq!(result["schemaVersion"], 11);
+    assert_eq!(result["schemaVersion"], 12);
     assert_eq!(result["journalMode"], "wal");
     assert!(
         result["bootId"]
@@ -4304,7 +4304,7 @@ fn employee_roster_acceptance_contract_is_backend_only() {
         "roster', 'refresh",
         "LZ-EMPLOYEE-STALE",
         "restartDurability",
-        "schemaVersion 11",
+        "schemaVersion 12",
         "providerSmokeAbsent",
     ] {
         assert!(
@@ -4342,7 +4342,7 @@ fn native_session_acceptance_contract_covers_containment_and_owner_loss() {
         "completeTreeTerminated",
         "nativeHostPid",
         "providerSmokeAbsent",
-        "schemaVersion 11",
+        "schemaVersion 12",
     ] {
         assert!(
             script.contains(required),
@@ -4372,7 +4372,7 @@ fn collaboration_bus_acceptance_contract_is_backend_only() {
         "deadLetterEvidence",
         "restartDurability",
         "auditOutboxEvidence",
-        "schemaVersion 11",
+        "schemaVersion 12",
         "providerSmokeAbsent",
         "desktopCapabilityExpansionAbsent",
     ] {
@@ -4508,7 +4508,7 @@ fn task_graph_acceptance_executes_backend_only_contract() {
     )
     .unwrap();
     assert_eq!(manifest["status"], "PASS");
-    assert_eq!(manifest["schemaVersion"], 11);
+    assert_eq!(manifest["schemaVersion"], 12);
     assert_eq!(manifest["mode"], "deterministic-fixture");
     for field in [
         "rootIdentity",
@@ -5355,6 +5355,7 @@ async fn lead_turn_lists_employees_delegates_and_waits_through_collaboration_too
             "task_report",
             "incident_report",
             "incident_list",
+            "incident_remedy",
             "message_send",
             "message_reply"
         ],
@@ -5686,7 +5687,7 @@ fn collaboration_tools_acceptance_contract_is_deterministic_and_backend_only() {
         "worker_turn_reports_failure_through_task_report_before_native_completion",
         "collaboration-tools-manifest.json",
         "deterministic-fake-transport",
-        "schemaVersion = 11",
+        "schemaVersion = 12",
     ] {
         assert!(
             script.contains(required),
@@ -6219,7 +6220,7 @@ async fn restart_owner_loss_and_emergency_spool_fold_into_startup_incidents_once
         .await
         .result
         .unwrap();
-    assert_eq!(status["schemaVersion"], 11);
+    assert_eq!(status["schemaVersion"], 12);
     assert_eq!(status["emergencyIncidentCount"], 1);
 }
 
@@ -6322,7 +6323,7 @@ fn minimum_incidents_acceptance_contract_is_deterministic_and_backend_only() {
         "incident_errors_use_exit_code_fifteen",
         "minimum-incidents-manifest.json",
         "deterministic-fake-transport",
-        "schemaVersion = 11",
+        "schemaVersion = 12",
     ] {
         assert!(
             script.contains(required),
@@ -6792,7 +6793,7 @@ fn result_delivery_acceptance_contract_is_deterministic_and_backend_only() {
         "externalModelUseAbsent",
         "uiChangesAbsent",
         "deterministic-fake-transport",
-        "schemaVersion = 11",
+        "schemaVersion = 12",
     ] {
         assert!(
             script.contains(required),
@@ -7299,7 +7300,7 @@ fn peer_messaging_acceptance_contract_is_deterministic_and_backend_only() {
         "externalModelUseAbsent",
         "uiChangesAbsent",
         "deterministic-fake-transport",
-        "schemaVersion = 11",
+        "schemaVersion = 12",
     ] {
         assert!(
             script.contains(required),
@@ -7422,7 +7423,7 @@ fn coalesced_notices_acceptance_contract_is_deterministic_and_backend_only() {
         "externalModelUseAbsent",
         "uiChangesAbsent",
         "deterministic-fake-transport",
-        "schemaVersion = 11",
+        "schemaVersion = 12",
     ] {
         assert!(
             script.contains(required),
@@ -7661,7 +7662,7 @@ fn activation_policy_acceptance_contract_is_deterministic_and_backend_only() {
         "externalModelUseAbsent",
         "uiChangesAbsent",
         "deterministic-fake-transport",
-        "schemaVersion = 11",
+        "schemaVersion = 12",
     ] {
         assert!(
             script.contains(required),
@@ -8028,7 +8029,291 @@ fn idle_suspension_acceptance_contract_is_deterministic_and_backend_only() {
         "externalModelUseAbsent",
         "uiChangesAbsent",
         "deterministic-fake-transport",
-        "schemaVersion = 11",
+        "schemaVersion = 12",
+    ] {
+        assert!(
+            script.contains(required),
+            "acceptance script must contain {required}"
+        );
+    }
+    for forbidden in [
+        "provider', 'smoke",
+        "apps\\lazoo-desktop\\src",
+        "LivePrompt",
+    ] {
+        assert!(
+            !script.contains(forbidden),
+            "acceptance script must not contain {forbidden}"
+        );
+    }
+}
+
+/// Raises `code` three times for the worker on `task`, which promotes it to priority.
+fn promote_child_incident(
+    harness: &ToolHarness,
+    prefix: &str,
+    code: &str,
+    task: uuid::Uuid,
+) -> lazoo_protocol::IncidentRecord {
+    use lazoo_protocol::{IncidentPriority, IncidentSource};
+    use lazoo_store::RaiseIncidentInput;
+
+    let mut promoted = None;
+    for attempt in 1..=3 {
+        promoted = Some(
+            harness
+                .store
+                .raise_incident(&RaiseIncidentInput {
+                    request_id: format!("request-{prefix}-{attempt}"),
+                    idempotency_key: format!("{prefix}-{attempt}"),
+                    code: code.to_owned(),
+                    source: IncidentSource::Daemon,
+                    title: None,
+                    explanation: None,
+                    project_id: None,
+                    employee_id: Some(harness.worker.id),
+                    provider: Some("codex".to_owned()),
+                    task_id: Some(task),
+                    session_id: None,
+                    turn_id: None,
+                    message_id: None,
+                    detail: json!({"failureCode": code}),
+                    occurred_at: None,
+                })
+                .unwrap()
+                .incident,
+        );
+    }
+    let promoted = promoted.unwrap();
+    assert_eq!(promoted.priority, IncidentPriority::Priority);
+    promoted
+}
+
+#[tokio::test]
+#[allow(clippy::too_many_lines)] // One remediation window, from notice to user escalation.
+async fn a_lead_remedies_a_promoted_child_incident_in_its_notice_turn_within_the_bound() {
+    use lazoo_protocol::{IncidentEscalation, IncidentEscalationReason, TaskState};
+
+    let (_temporary, harness) = tool_harness(AuthorityMode::SelfDecision);
+    let (root_task_id, child_id) = delegate_without_waiting(&harness).await;
+    let incident = promote_child_incident(&harness, "timeout", "LZ-MESSAGE-TIMEOUT", child_id);
+    assert_eq!(incident.escalation, IncidentEscalation::Lead);
+    let roster_revision = harness.store.roster_snapshot().unwrap().revision;
+    // The model reading the notice: cancel the stuck child, send its objective out again, try
+    // a third remedy, and read the incident back.
+    harness.backend.tool_calls.lock().unwrap().extend([
+        tool_call(
+            "call-r1",
+            "incident_remedy",
+            json!({"incidentId": incident.id, "remedy": "cancel-task", "note": "stuck"}),
+        ),
+        tool_call(
+            "call-r2",
+            "incident_remedy",
+            json!({
+                "incidentId": incident.id,
+                "remedy": "redelegate-task",
+                "rosterRevision": roster_revision,
+                "note": "try again on a fresh dispatch"
+            }),
+        ),
+        tool_call(
+            "call-r3",
+            "incident_remedy",
+            json!({"incidentId": incident.id, "remedy": "cancel-task"}),
+        ),
+        tool_call(
+            "call-r4",
+            "incident_remedy",
+            json!({"incidentId": incident.id, "remedy": "cancel-task", "rosterRevision": 1}),
+        ),
+        tool_call("call-r5", "incident_list", json!({})),
+    ]);
+
+    harness.app.deliver_pending_notices_once().await.unwrap();
+
+    let prompt = last_prompt(&harness.backend);
+    assert!(prompt.starts_with("[Lazoo incident] Priority incident LZ-MESSAGE-TIMEOUT"));
+    assert!(
+        prompt.contains("incident_remedy (cancel-task, redelegate-task) until"),
+        "{prompt}"
+    );
+    let results = harness.backend.tool_results.lock().unwrap().clone();
+    assert_eq!(
+        results.len(),
+        6,
+        "one delegation, then five calls in the notice turn"
+    );
+    let cancelled = &results[1];
+    assert!(cancelled.success, "{cancelled:?}");
+    assert_eq!(cancelled.content["remedy"], "cancel-task");
+    assert_eq!(cancelled.content["attempt"], 1);
+    assert_eq!(cancelled.content["remediesRemaining"], 1);
+    assert_eq!(cancelled.content["taskId"], child_id.to_string());
+    assert_eq!(cancelled.content["state"], "cancelled");
+    let redelegated = &results[2];
+    assert!(redelegated.success, "{redelegated:?}");
+    assert_eq!(redelegated.content["attempt"], 2);
+    assert_eq!(redelegated.content["remediesRemaining"], 0);
+    assert_eq!(redelegated.content["state"], "accepted");
+    let retry_id: uuid::Uuid = redelegated.content["taskId"]
+        .as_str()
+        .unwrap()
+        .parse()
+        .unwrap();
+    assert_ne!(retry_id, child_id);
+    let third = &results[3];
+    assert!(!third.success);
+    assert_eq!(third.content["error"]["code"], "LZ-INCIDENT-REMEDY-CLOSED");
+    let malformed = &results[4];
+    assert!(!malformed.success);
+    assert_eq!(malformed.content["error"]["code"], "LZ-TOOL-INVALID");
+    let listed = results[5].content["incidents"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|listed| listed["id"] == incident.id.to_string())
+        .cloned()
+        .unwrap();
+    assert_eq!(listed["escalation"], "lead");
+    assert_eq!(listed["remediesApplied"], 2);
+
+    let child = harness.store.get_task(child_id).unwrap().task;
+    assert_eq!(child.state, TaskState::Cancelled);
+    let retry = harness.store.get_task(retry_id).unwrap().task;
+    assert_eq!(retry.parent_task_id, Some(root_task_id));
+    assert_eq!(retry.assigned_employee_id, harness.worker.id);
+    assert_eq!(retry.objective, child.objective);
+    assert_eq!(retry.effective_authority, AuthorityMode::SelfDecision);
+
+    let shown = harness
+        .app
+        .handle(request(
+            "show-remedied",
+            "incident.show",
+            json!({"id": incident.id}),
+        ))
+        .await
+        .result
+        .unwrap();
+    let remedies = shown["remedies"].as_array().unwrap();
+    assert_eq!(remedies.len(), 2);
+    assert_eq!(remedies[0]["kind"], "cancel-task");
+    assert_eq!(remedies[1]["kind"], "redelegate-task");
+    assert_eq!(remedies[1]["resultTaskId"], retry_id.to_string());
+    assert_eq!(remedies[0]["leadEmployeeId"], harness.lead.id.to_string());
+
+    // The failure comes back on the redelegated task: both remedies are spent, so the user
+    // gets it now rather than at the window's end.
+    let recurred = harness
+        .store
+        .raise_incident(&lazoo_store::RaiseIncidentInput {
+            request_id: "request-timeout-4".to_owned(),
+            idempotency_key: "timeout-4".to_owned(),
+            code: "LZ-MESSAGE-TIMEOUT".to_owned(),
+            source: lazoo_protocol::IncidentSource::Daemon,
+            title: None,
+            explanation: None,
+            project_id: None,
+            employee_id: Some(harness.worker.id),
+            provider: Some("codex".to_owned()),
+            task_id: Some(retry_id),
+            session_id: None,
+            turn_id: None,
+            message_id: None,
+            detail: json!({}),
+            occurred_at: None,
+        })
+        .unwrap()
+        .incident;
+    assert_eq!(recurred.escalation, IncidentEscalation::User);
+    assert_eq!(
+        recurred.escalation_reason,
+        Some(IncidentEscalationReason::RemediesExhausted)
+    );
+    let for_user = list_incidents(&harness.app, json!({"escalation": "user"})).await;
+    assert_eq!(for_user.len(), 1);
+    assert_eq!(for_user[0]["id"], incident.id.to_string());
+    assert_eq!(for_user[0]["escalationReason"], "remedies-exhausted");
+}
+
+#[tokio::test]
+async fn an_unremedied_window_reaches_the_user_on_the_sweep_and_nothing_else_changes() {
+    use chrono::{TimeDelta, Utc};
+    use lazoo_protocol::{IncidentEscalation, TaskState};
+
+    let (_temporary, harness) = tool_harness(AuthorityMode::SelfDecision);
+    let (root_task_id, child_id) = delegate_without_waiting(&harness).await;
+    let incident = promote_child_incident(&harness, "stall", "LZ-SESSION-STALLED", child_id);
+    harness.app.deliver_pending_notices_once().await.unwrap();
+    let turns = harness.backend.turns.load(Ordering::SeqCst);
+    let events_before = harness.store.list_events(0, 10_000).unwrap().len();
+
+    harness.app.escalate_due_incidents_once(Utc::now()).unwrap();
+    assert_eq!(
+        harness.store.get_incident(incident.id).unwrap().escalation,
+        IncidentEscalation::Lead,
+        "the window is still open"
+    );
+    assert_eq!(
+        harness.store.list_events(0, 10_000).unwrap().len(),
+        events_before
+    );
+
+    harness
+        .app
+        .escalate_due_incidents_once(Utc::now() + TimeDelta::seconds(301))
+        .unwrap();
+    let escalated = list_incidents(&harness.app, json!({"escalation": "user"})).await;
+    assert_eq!(escalated.len(), 1);
+    assert_eq!(escalated[0]["id"], incident.id.to_string());
+    assert_eq!(escalated[0]["escalationReason"], "no-remedy");
+    assert_eq!(
+        escalated[0]["state"], "open",
+        "only the user resolves an incident"
+    );
+    assert!(
+        incident_event_types(&harness.store).contains(&"incident.escalated-to-user".to_owned())
+    );
+    // Escalation is a notification, not an action: no turn, no session, no task change.
+    assert_eq!(harness.backend.turns.load(Ordering::SeqCst), turns);
+    assert_eq!(harness.backend.starts.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        harness.store.get_task(child_id).unwrap().task.state,
+        TaskState::Accepted
+    );
+    assert_eq!(
+        harness.store.get_task(root_task_id).unwrap().task.state,
+        TaskState::Running
+    );
+}
+
+#[test]
+fn lead_remediation_acceptance_contract_is_deterministic_and_backend_only() {
+    let repository = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let script_path = repository.join("scripts/acceptance/lead-remediation.ps1");
+    let script = std::fs::read_to_string(&script_path).expect("lead remediation acceptance script");
+
+    for required in [
+        "remediation_escalates_unless_a_remedy_holds_through_the_window",
+        "incident_notice_states_the_code_title_action_and_boundary",
+        "a_promoted_child_incident_gives_the_lead_two_remedies_inside_its_window",
+        "the_sweep_escalates_an_unremedied_window_and_keeps_a_remedy_that_held",
+        "incidents_with_no_lead_to_remediate_go_to_the_user_at_promotion",
+        "version_eleven_priority_incidents_upgrade_straight_to_the_user",
+        "incident_cli_maps_list_show_acknowledge_and_resolve",
+        "a_lead_remedies_a_promoted_child_incident_in_its_notice_turn_within_the_bound",
+        "an_unremedied_window_reaches_the_user_on_the_sweep_and_nothing_else_changes",
+        "lead_turn_lists_employees_delegates_and_waits_through_collaboration_tools",
+        "store_enables_wal_foreign_keys_and_schema_version",
+        "twoRemediesPerIncident",
+        "refusedRemedyConsumesNoAttempt",
+        "unremediedWindowEscalatesToUser",
+        "providerSmokeAbsent",
+        "externalModelUseAbsent",
+        "uiChangesAbsent",
+        "deterministic-fake-transport",
+        "schemaVersion = 12",
     ] {
         assert!(
             script.contains(required),

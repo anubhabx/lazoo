@@ -19,8 +19,9 @@ pub use conversation::{
     TurnMutationResult, TurnReconcileResult, TurnShowParams, TurnState,
 };
 pub use incident::{
-    AcknowledgeIncidentParams, INCIDENT_CONTRACT_V1, IncidentListParams, IncidentMutationResult,
-    IncidentPriority, IncidentRecord, IncidentShowParams, IncidentSource, IncidentState,
+    AcknowledgeIncidentParams, INCIDENT_CONTRACT_V1, IncidentEscalation, IncidentEscalationReason,
+    IncidentListParams, IncidentMutationResult, IncidentPriority, IncidentRecord,
+    IncidentRemedyKind, IncidentRemedyRecord, IncidentShowParams, IncidentSource, IncidentState,
     ResolveIncidentParams,
 };
 pub use message::{

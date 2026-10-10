@@ -5,6 +5,7 @@
 //! one row per code, employee, and project so operators and employees read a concise problem
 //! instead of a flood of raw failure codes.
 
+use chrono::{DateTime, Utc};
 use lazoo_protocol::{
     AcknowledgeIncidentParams, ConversationTurnRecord, EmployeeSessionRecord, IncidentListParams,
     IncidentShowParams, IncidentSource, JsonRpcRequest, MessageRecord, ResolveIncidentParams,
@@ -217,9 +218,35 @@ impl App {
                 code: params.code,
                 employee_id: params.employee_id,
                 project_id: params.project_id,
+                escalation: params.escalation,
             })
             .map(to_value)
             .map_err(incident_store_error)
+    }
+
+    /// Closes every lead remediation window that passed by `now`: what the lead's remedy held
+    /// becomes `remediated`, everything else unresolved becomes a priority notification for the
+    /// user. Nothing here retries, restarts, or cancels anything.
+    #[doc(hidden)]
+    pub fn escalate_due_incidents_once(&self, now: DateTime<Utc>) -> Result<(), RpcError> {
+        let changed = self
+            .store
+            .escalate_due_incidents(now)
+            .map_err(incident_store_error)?;
+        for incident in &changed {
+            tracing::warn!(
+                incident_id = %incident.id,
+                code = %incident.code,
+                escalation = ?incident.escalation,
+                reason = ?incident.escalation_reason,
+                "lead remediation window closed"
+            );
+        }
+        if changed.is_empty() {
+            Ok(())
+        } else {
+            self.publish_events()
+        }
     }
 
     pub(super) fn incident_show(&self, value: &Value) -> Result<Value, RpcError> {
