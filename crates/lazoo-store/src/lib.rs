@@ -46,8 +46,8 @@ pub use message::{
     RetryMessageInput, SendMessageInput,
 };
 pub use session::{
-    BeginSessionInput, BeginSessionStopInput, FailSessionInput, FinishSessionStopInput,
-    MarkSessionReadyInput,
+    BeginIdleSessionStopInput, BeginSessionInput, BeginSessionStopInput, FailSessionInput,
+    FinishSessionStopInput, MarkSessionReadyInput,
 };
 pub use task::{
     AcceptTaskInput, CancelTaskInput, ClaimTaskDispatchInput, DeferTaskDispatchInput,

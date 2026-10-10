@@ -25,6 +25,7 @@ fn employee(name: &str) -> CreateEmployeeInput {
         authority_mode: AuthorityMode::Ask,
         checkout_policy: EmployeeCheckoutPolicy::Isolated,
         activation_policy: lazoo_protocol::ActivationPolicy::Manual,
+        idle_timeout_seconds: 0,
         enabled: true,
         provider_observation: None,
     }

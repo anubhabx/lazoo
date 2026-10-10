@@ -263,6 +263,7 @@ fn employee_with(
         authority_mode,
         checkout_policy: EmployeeCheckoutPolicy::Isolated,
         activation_policy: lazoo_protocol::ActivationPolicy::Manual,
+        idle_timeout_seconds: 0,
         enabled,
         provider_observation: route_ready.then(|| ProviderObservation {
             provider: "codex".to_owned(),

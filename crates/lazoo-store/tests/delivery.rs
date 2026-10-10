@@ -1129,6 +1129,7 @@ fn employee(name: &str, authority_mode: AuthorityMode) -> CreateEmployeeInput {
         authority_mode,
         checkout_policy: EmployeeCheckoutPolicy::Isolated,
         activation_policy: lazoo_protocol::ActivationPolicy::Manual,
+        idle_timeout_seconds: 0,
         enabled: true,
         provider_observation: Some(ProviderObservation {
             provider: "codex".to_owned(),

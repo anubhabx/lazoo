@@ -195,6 +195,9 @@ pub enum EmployeeCommand {
         checkout_policy: EmployeeCheckoutPolicy,
         #[arg(long, default_value = "manual", value_parser = parse_employee_activation_policy)]
         activation_policy: ActivationPolicy,
+        /// Suspend an idle session after this many quiet seconds (60-86400); 0 never does.
+        #[arg(long, default_value_t = 0)]
+        idle_timeout_seconds: u32,
         #[arg(long)]
         disabled: bool,
         #[arg(long)]
@@ -228,6 +231,9 @@ pub enum EmployeeCommand {
         checkout_policy: Option<EmployeeCheckoutPolicy>,
         #[arg(long, value_parser = parse_employee_activation_policy)]
         activation_policy: Option<ActivationPolicy>,
+        /// Suspend an idle session after this many quiet seconds (60-86400); 0 never does.
+        #[arg(long)]
+        idle_timeout_seconds: Option<u32>,
         #[arg(long, action = clap::ArgAction::Set)]
         enabled: Option<bool>,
         #[arg(long)]
@@ -1287,6 +1293,7 @@ fn employee_request(command: &EmployeeCommand) -> (&'static str, Value, bool) {
             authority_mode,
             checkout_policy,
             activation_policy,
+            idle_timeout_seconds,
             disabled,
             idempotency_key,
         } => (
@@ -1302,6 +1309,7 @@ fn employee_request(command: &EmployeeCommand) -> (&'static str, Value, bool) {
                 "authorityMode": authority_mode,
                 "checkoutPolicy": checkout_policy,
                 "activationPolicy": activation_policy,
+                "idleTimeoutSeconds": idle_timeout_seconds,
                 "enabled": !disabled,
                 "idempotencyKey": idempotency_key.clone().unwrap_or_else(|| Uuid::new_v4().to_string()),
             }),
@@ -1322,6 +1330,7 @@ fn employee_request(command: &EmployeeCommand) -> (&'static str, Value, bool) {
             authority_mode,
             checkout_policy,
             activation_policy,
+            idle_timeout_seconds,
             enabled,
             idempotency_key,
         } => (
@@ -1339,6 +1348,7 @@ fn employee_request(command: &EmployeeCommand) -> (&'static str, Value, bool) {
                 "authorityMode": authority_mode,
                 "checkoutPolicy": checkout_policy,
                 "activationPolicy": activation_policy,
+                "idleTimeoutSeconds": idle_timeout_seconds,
                 "enabled": enabled,
                 "idempotencyKey": idempotency_key.clone().unwrap_or_else(|| Uuid::new_v4().to_string()),
             }),

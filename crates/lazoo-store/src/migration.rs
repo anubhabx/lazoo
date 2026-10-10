@@ -38,6 +38,10 @@ const MIGRATIONS: &[(u32, &str)] = &[
         10,
         include_str!("../../../migrations/0010_activation_policy.sql"),
     ),
+    (
+        11,
+        include_str!("../../../migrations/0011_idle_suspension.sql"),
+    ),
 ];
 
 pub fn apply_migrations(connection: &mut Connection) -> Result<(), StoreError> {

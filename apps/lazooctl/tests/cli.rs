@@ -402,6 +402,10 @@ fn employee_cli_maps_mutations_and_roster_refresh() {
     assert_eq!(method, "employee.create");
     assert_eq!(params["nativeSettings"], json!({}));
     assert_eq!(params["activationPolicy"], "manual");
+    assert_eq!(
+        params["idleTimeoutSeconds"], 0,
+        "a new employee never idles out"
+    );
     assert!(!follows);
 
     let employee_id = "00000000-0000-4000-8000-000000000001";
@@ -416,11 +420,29 @@ fn employee_cli_maps_mutations_and_roster_refresh() {
         "Lead",
         "--activation-policy",
         "notice-turns",
+        "--idle-timeout-seconds",
+        "900",
     ])
     .unwrap();
     let (method, params, _) = command_request(&update.command);
     assert_eq!(method, "employee.update");
     assert_eq!(params["activationPolicy"], "notice-turns");
+    assert_eq!(params["idleTimeoutSeconds"], 900);
+    let unchanged = Cli::try_parse_from([
+        "lazooctl",
+        "employee",
+        "update",
+        employee_id,
+        "--expected-revision",
+        "2",
+        "--role",
+        "Lead",
+    ])
+    .unwrap();
+    assert!(
+        command_request(&unchanged.command).1["idleTimeoutSeconds"].is_null(),
+        "an update without the flag keeps the timeout"
+    );
 
     let disable = Cli::try_parse_from([
         "lazooctl",

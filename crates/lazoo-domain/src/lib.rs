@@ -28,7 +28,8 @@ pub use delivery::{
     validate_peer_message_content,
 };
 pub use employee::{
-    EmployeeValidationError, validate_employee_name, validate_employee_text_fields,
+    EmployeeValidationError, MAX_IDLE_TIMEOUT_SECONDS, MIN_IDLE_TIMEOUT_SECONDS, idle_session_due,
+    validate_employee_name, validate_employee_text_fields, validate_idle_timeout,
     validate_native_settings,
 };
 pub use incident::{

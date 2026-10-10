@@ -313,13 +313,14 @@ impl App {
                 turn.id,
             ));
         }
-        let current_session_id = turn.recipient.session_id.or_else(|| {
-            roster_entry.session.as_ref().and_then(|session| {
-                (session.state == SessionLifecycleState::Idle
-                    && session.owner_boot_id == Some(self.boot_id)
-                    && session.employee_configuration_revision == employee.configuration_revision)
-                    .then_some(session.id)
-            })
+        // Deliver on the recipient's current idle session. A turn names the session that was
+        // active when it was recorded, and that session may have stopped since (idle
+        // suspension, a user stop); the turn must not be stranded on it.
+        let current_session_id = roster_entry.session.as_ref().and_then(|session| {
+            (session.state == SessionLifecycleState::Idle
+                && session.owner_boot_id == Some(self.boot_id)
+                && session.employee_configuration_revision == employee.configuration_revision)
+                .then_some(session.id)
         });
         Ok(DeliveryTarget {
             employee,

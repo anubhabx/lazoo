@@ -6,6 +6,9 @@ const MAX_ROLE_CHARS: usize = 120;
 const MAX_INSTRUCTIONS_BYTES: usize = 32 * 1024;
 const MAX_NATIVE_SETTINGS_BYTES: usize = 32 * 1024;
 const MAX_PROVIDER_SETTING_BYTES: usize = 256;
+/// Shortest and longest idle timeouts an employee may set; 0 means never suspend.
+pub const MIN_IDLE_TIMEOUT_SECONDS: u32 = 60;
+pub const MAX_IDLE_TIMEOUT_SECONDS: u32 = 86_400;
 
 #[derive(Clone, Debug, Eq, Error, PartialEq)]
 pub enum EmployeeValidationError {
@@ -27,6 +30,8 @@ pub enum EmployeeValidationError {
     NativeSettingsTooLarge,
     #[error("provider-native settings cannot contain credential-like keys")]
     NativeSettingsSecretKey,
+    #[error("idle timeout must be 0 (never) or between 60 and 86400 seconds")]
+    IdleTimeoutOutOfRange,
 }
 
 impl EmployeeValidationError {
@@ -42,6 +47,7 @@ impl EmployeeValidationError {
             Self::NativeSettingsNotObject => "native-settings-not-object",
             Self::NativeSettingsTooLarge => "native-settings-too-large",
             Self::NativeSettingsSecretKey => "native-settings-secret-key",
+            Self::IdleTimeoutOutOfRange => "idle-timeout-out-of-range",
         }
     }
 }
@@ -76,6 +82,22 @@ pub fn validate_employee_text_fields(
         return Err(EmployeeValidationError::ReasoningEffortTooLong);
     }
     Ok(())
+}
+
+pub const fn validate_idle_timeout(seconds: u32) -> Result<(), EmployeeValidationError> {
+    if seconds == 0 || (seconds >= MIN_IDLE_TIMEOUT_SECONDS && seconds <= MAX_IDLE_TIMEOUT_SECONDS)
+    {
+        Ok(())
+    } else {
+        Err(EmployeeValidationError::IdleTimeoutOutOfRange)
+    }
+}
+
+/// An idle session is due for suspension once it has been quiet for its employee's whole idle
+/// timeout. A timeout of 0 never suspends, so a session the user warmed stays up until stopped.
+#[must_use]
+pub fn idle_session_due(idle_timeout_seconds: u32, quiet_seconds: i64) -> bool {
+    idle_timeout_seconds != 0 && quiet_seconds >= i64::from(idle_timeout_seconds)
 }
 
 pub fn validate_native_settings(value: &Value) -> Result<(), EmployeeValidationError> {

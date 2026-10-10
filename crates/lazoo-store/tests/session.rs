@@ -1,10 +1,12 @@
+use chrono::{TimeDelta, Utc};
 use lazoo_protocol::{
     AuthorityMode, EmployeeAvailability, EmployeeCheckoutPolicy, ProviderObservation,
     SessionLifecycleState,
 };
 use lazoo_store::{
-    BeginSessionInput, BeginSessionStopInput, CreateEmployeeInput, FailSessionInput,
-    FinishSessionStopInput, MarkSessionReadyInput, Store, StoreError, UpdateEmployeeInput,
+    BeginIdleSessionStopInput, BeginSessionInput, BeginSessionStopInput, CreateEmployeeInput,
+    FailSessionInput, FinishSessionStopInput, MarkSessionReadyInput, Store, StoreError,
+    UpdateEmployeeInput,
 };
 use serde_json::json;
 use tempfile::tempdir;
@@ -24,6 +26,7 @@ fn employee() -> CreateEmployeeInput {
         authority_mode: AuthorityMode::Ask,
         checkout_policy: EmployeeCheckoutPolicy::Isolated,
         activation_policy: lazoo_protocol::ActivationPolicy::Manual,
+        idle_timeout_seconds: 0,
         enabled: true,
         provider_observation: Some(ProviderObservation {
             provider: "codex".to_owned(),
@@ -46,6 +49,110 @@ fn begin(employee_id: Uuid, owner_boot_id: Uuid, key: &str) -> BeginSessionInput
         expected_employee_revision: 1,
         owner_boot_id,
     }
+}
+
+fn ready_session(store: &Store, employee_id: Uuid, owner: Uuid, key: &str) -> Uuid {
+    let starting = store
+        .begin_session(&begin(employee_id, owner, key))
+        .unwrap();
+    store
+        .mark_session_ready(&MarkSessionReadyInput {
+            session_id: starting.session.id,
+            expected_revision: starting.session.revision,
+            owner_boot_id: owner,
+            native_session_id: format!("thread-{key}"),
+            native_host_pid: 4242,
+        })
+        .unwrap()
+        .session
+        .id
+}
+
+#[test]
+fn idle_sessions_are_due_only_after_their_employee_timeout_and_stop_once_under_their_own_key() {
+    let temporary = tempdir().unwrap();
+    let store = Store::open_path(temporary.path().join("lazoo.db")).unwrap();
+    let mut timed = employee();
+    timed.idle_timeout_seconds = 600;
+    let timed = store.create_employee(&timed).unwrap().employee;
+    let mut never = employee();
+    "create-mira".clone_into(&mut never.idempotency_key);
+    "Mira".clone_into(&mut never.name);
+    let never = store.create_employee(&never).unwrap().employee;
+    let owner = Uuid::new_v4();
+    let session_id = ready_session(&store, timed.id, owner, "warm-rhea");
+    let never_session_id = ready_session(&store, never.id, owner, "warm-mira");
+    let now = Utc::now();
+    let due_ids = |at| -> Vec<Uuid> {
+        store
+            .idle_sessions_due(owner, at)
+            .unwrap()
+            .into_iter()
+            .map(|session| session.id)
+            .collect()
+    };
+
+    assert!(
+        due_ids(now).is_empty(),
+        "a session that just started is busy enough"
+    );
+    assert!(due_ids(now + TimeDelta::seconds(590)).is_empty());
+    assert_eq!(due_ids(now + TimeDelta::seconds(601)), vec![session_id]);
+    assert!(
+        due_ids(now + TimeDelta::days(30))
+            .iter()
+            .all(|id| *id != never_session_id),
+        "an employee whose timeout is 0 is never suspended"
+    );
+    assert!(
+        store
+            .idle_sessions_due(Uuid::new_v4(), now + TimeDelta::days(30))
+            .unwrap()
+            .is_empty(),
+        "another boot's sessions are not this daemon's to suspend"
+    );
+
+    let early = BeginIdleSessionStopInput {
+        session_id,
+        owner_boot_id: owner,
+        now: now + TimeDelta::seconds(10),
+    };
+    assert!(store.begin_idle_session_stop(&early).unwrap().is_none());
+    assert_eq!(
+        store.get_session(session_id).unwrap().state,
+        SessionLifecycleState::Idle
+    );
+
+    let due = BeginIdleSessionStopInput {
+        now: now + TimeDelta::seconds(601),
+        ..early
+    };
+    let stopping = store.begin_idle_session_stop(&due).unwrap().unwrap();
+    assert_eq!(stopping.session.state, SessionLifecycleState::Stopping);
+    assert!(stopping.event_sequence.is_some());
+    let replay = store.begin_idle_session_stop(&due).unwrap().unwrap();
+    assert_eq!(replay.session.id, session_id);
+    assert!(replay.event_sequence.is_none(), "one stop per session");
+    assert!(due_ids(now + TimeDelta::days(30)).is_empty());
+
+    // The idle stop is an ordinary session.stop command: a user stop with the same key replays
+    // it instead of stopping anything.
+    let user_replay = store
+        .begin_session_stop(&BeginSessionStopInput {
+            request_id: "user-stop".to_owned(),
+            idempotency_key: format!("idle-suspend:{session_id}"),
+            session_id,
+            expected_revision: 1,
+        })
+        .unwrap();
+    assert!(user_replay.event_sequence.is_none());
+    let suspended = store
+        .finish_session_stop(&FinishSessionStopInput {
+            session_id,
+            expected_revision: stopping.session.revision,
+        })
+        .unwrap();
+    assert_eq!(suspended.session.state, SessionLifecycleState::Suspended);
 }
 
 #[test]
@@ -270,6 +377,7 @@ fn warm_requires_route_ready_provider_and_active_sessions_lock_employee_configur
             authority_mode: None,
             checkout_policy: None,
             activation_policy: None,
+            idle_timeout_seconds: None,
             enabled: None,
             provider_observation: None,
         })

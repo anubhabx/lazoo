@@ -22,6 +22,8 @@ pub async fn run() -> Result<(), DaemonError> {
     let dispatcher = tokio::spawn(async move { dispatcher_app.run_task_dispatcher().await });
     let notices_app = app.clone();
     let notices = tokio::spawn(async move { notices_app.run_notice_delivery().await });
+    let idle_app = app.clone();
+    let idle = tokio::spawn(async move { idle_app.run_idle_suspension().await });
     let owner = OwnerSecurity::current()?;
     let mut server = PipeServer::bind(&installation, &owner)?;
     let mut shutdown = app.shutdown_receiver();
@@ -43,6 +45,10 @@ pub async fn run() -> Result<(), DaemonError> {
     })
     .await;
     clients.abort_all();
+    // The sweep must not race shutdown for the same session; an interrupted stop is recorded
+    // by shutdown_live_sessions like any other interrupted transition.
+    idle.abort();
+    let _ = idle.await;
     app.shutdown_live_sessions().await;
     dispatcher.abort();
     let _ = dispatcher.await;

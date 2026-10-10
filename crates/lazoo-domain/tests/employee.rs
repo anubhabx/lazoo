@@ -1,7 +1,31 @@
 use lazoo_domain::{
-    validate_employee_name, validate_employee_text_fields, validate_native_settings,
+    idle_session_due, validate_employee_name, validate_employee_text_fields, validate_idle_timeout,
+    validate_native_settings,
 };
 use serde_json::json;
+
+#[test]
+fn idle_timeouts_are_never_or_a_minute_to_a_day_and_due_only_after_the_whole_timeout() {
+    for valid in [0, 60, 900, 86_400] {
+        assert_eq!(validate_idle_timeout(valid), Ok(()), "{valid}");
+    }
+    for invalid in [1, 59, 86_401, u32::MAX] {
+        assert_eq!(
+            validate_idle_timeout(invalid).unwrap_err().code(),
+            "idle-timeout-out-of-range",
+            "{invalid}"
+        );
+    }
+
+    assert!(!idle_session_due(0, i64::MAX), "0 never suspends");
+    assert!(!idle_session_due(900, 899));
+    assert!(idle_session_due(900, 900));
+    assert!(idle_session_due(900, 86_400));
+    assert!(
+        !idle_session_due(900, -5),
+        "a clock that went backwards is not quiet time"
+    );
+}
 
 #[test]
 fn employee_name_is_trimmed_bounded_and_nonempty() {

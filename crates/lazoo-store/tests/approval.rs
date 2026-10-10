@@ -36,6 +36,7 @@ fn approval_fixture(authority: AuthorityMode) -> (tempfile::TempDir, Fixture) {
             authority_mode: authority,
             checkout_policy: EmployeeCheckoutPolicy::Isolated,
             activation_policy: lazoo_protocol::ActivationPolicy::Manual,
+            idle_timeout_seconds: 0,
             enabled: true,
             provider_observation: Some(ProviderObservation {
                 provider: "codex".to_owned(),

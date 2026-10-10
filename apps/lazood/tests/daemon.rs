@@ -346,6 +346,7 @@ fn configured_employee_named(
             authority_mode: AuthorityMode::Ask,
             checkout_policy: EmployeeCheckoutPolicy::Isolated,
             activation_policy: lazoo_protocol::ActivationPolicy::Manual,
+            idle_timeout_seconds: 0,
             enabled: true,
             provider_observation: Some(ProviderObservation {
                 provider: "codex".to_owned(),
@@ -427,6 +428,7 @@ async fn accepted_projectless_child_dispatches_automatically_through_the_canonic
         authority_mode: AuthorityMode::FullAutonomy,
         checkout_policy: EmployeeCheckoutPolicy::Isolated,
         activation_policy: lazoo_protocol::ActivationPolicy::Manual,
+        idle_timeout_seconds: 0,
         enabled: true,
         provider_observation: Some(ProviderObservation {
             provider: "codex".to_owned(),
@@ -648,6 +650,7 @@ async fn automatic_dispatch_configuration_drift_terminalizes_before_provider_io(
         authority_mode: AuthorityMode::FullAutonomy,
         checkout_policy: EmployeeCheckoutPolicy::Isolated,
         activation_policy: lazoo_protocol::ActivationPolicy::Manual,
+        idle_timeout_seconds: 0,
         enabled: true,
         provider_observation: Some(ProviderObservation {
             provider: provider.to_owned(),
@@ -784,6 +787,7 @@ async fn automatic_dispatch_configuration_drift_terminalizes_before_provider_io(
             authority_mode: None,
             checkout_policy: None,
             activation_policy: None,
+            idle_timeout_seconds: None,
             enabled: None,
             provider_observation: None,
         })
@@ -1145,6 +1149,7 @@ async fn project_task_dispatch_uses_an_isolated_worktree_and_preserves_dirty_use
         authority_mode: AuthorityMode::FullAutonomy,
         checkout_policy: EmployeeCheckoutPolicy::Isolated,
         activation_policy: lazoo_protocol::ActivationPolicy::Manual,
+        idle_timeout_seconds: 0,
         enabled: true,
         provider_observation: Some(ProviderObservation {
             provider: "codex".to_owned(),
@@ -1666,6 +1671,7 @@ async fn task_authority_narrows_the_permission_mode_for_the_provider_turn() {
             authority_mode: AuthorityMode::FullAutonomy,
             checkout_policy: EmployeeCheckoutPolicy::Isolated,
             activation_policy: lazoo_protocol::ActivationPolicy::Manual,
+            idle_timeout_seconds: 0,
             enabled: true,
             provider_observation: Some(ProviderObservation {
                 provider: "codex".to_owned(),
@@ -2230,6 +2236,7 @@ async fn task_turn_rejects_a_provider_without_authority_override_support_before_
             authority_mode: AuthorityMode::Ask,
             checkout_policy: EmployeeCheckoutPolicy::Isolated,
             activation_policy: lazoo_protocol::ActivationPolicy::Manual,
+            idle_timeout_seconds: 0,
             enabled: true,
             provider_observation: Some(ProviderObservation {
                 provider: "claude".to_owned(),
@@ -3553,7 +3560,7 @@ async fn status_reports_protocol_store_and_boot_identity() {
     let result = response.result.unwrap();
 
     assert_eq!(result["protocolVersion"], 1);
-    assert_eq!(result["schemaVersion"], 10);
+    assert_eq!(result["schemaVersion"], 11);
     assert_eq!(result["journalMode"], "wal");
     assert!(
         result["bootId"]
@@ -4297,7 +4304,7 @@ fn employee_roster_acceptance_contract_is_backend_only() {
         "roster', 'refresh",
         "LZ-EMPLOYEE-STALE",
         "restartDurability",
-        "schemaVersion 10",
+        "schemaVersion 11",
         "providerSmokeAbsent",
     ] {
         assert!(
@@ -4335,7 +4342,7 @@ fn native_session_acceptance_contract_covers_containment_and_owner_loss() {
         "completeTreeTerminated",
         "nativeHostPid",
         "providerSmokeAbsent",
-        "schemaVersion 10",
+        "schemaVersion 11",
     ] {
         assert!(
             script.contains(required),
@@ -4365,7 +4372,7 @@ fn collaboration_bus_acceptance_contract_is_backend_only() {
         "deadLetterEvidence",
         "restartDurability",
         "auditOutboxEvidence",
-        "schemaVersion 10",
+        "schemaVersion 11",
         "providerSmokeAbsent",
         "desktopCapabilityExpansionAbsent",
     ] {
@@ -4501,7 +4508,7 @@ fn task_graph_acceptance_executes_backend_only_contract() {
     )
     .unwrap();
     assert_eq!(manifest["status"], "PASS");
-    assert_eq!(manifest["schemaVersion"], 10);
+    assert_eq!(manifest["schemaVersion"], 11);
     assert_eq!(manifest["mode"], "deterministic-fixture");
     for field in [
         "rootIdentity",
@@ -4604,6 +4611,7 @@ fn approval_harness(
             authority_mode: authority,
             checkout_policy: EmployeeCheckoutPolicy::Isolated,
             activation_policy: lazoo_protocol::ActivationPolicy::Manual,
+            idle_timeout_seconds: 0,
             enabled: true,
             provider_observation: Some(ProviderObservation {
                 provider: "codex".to_owned(),
@@ -5160,6 +5168,16 @@ fn tool_harness_with(
     authority: AuthorityMode,
     activation: lazoo_protocol::ActivationPolicy,
 ) -> (tempfile::TempDir, ToolHarness) {
+    tool_harness_idle(authority, activation, 0)
+}
+
+/// The tool harness with the lead and worker under one activation policy and one idle
+/// timeout; 0 (never suspend) is the default every other scenario relies on.
+fn tool_harness_idle(
+    authority: AuthorityMode,
+    activation: lazoo_protocol::ActivationPolicy,
+    idle_timeout_seconds: u32,
+) -> (tempfile::TempDir, ToolHarness) {
     let temporary = tempdir().unwrap();
     let root = DataRoot::from_path(temporary.path().join("data"));
     root.ensure().unwrap();
@@ -5177,6 +5195,7 @@ fn tool_harness_with(
         authority_mode: authority,
         checkout_policy: EmployeeCheckoutPolicy::Isolated,
         activation_policy: activation,
+        idle_timeout_seconds,
         enabled: true,
         provider_observation: Some(ProviderObservation {
             provider: "codex".to_owned(),
@@ -5667,7 +5686,7 @@ fn collaboration_tools_acceptance_contract_is_deterministic_and_backend_only() {
         "worker_turn_reports_failure_through_task_report_before_native_completion",
         "collaboration-tools-manifest.json",
         "deterministic-fake-transport",
-        "schemaVersion = 10",
+        "schemaVersion = 11",
     ] {
         assert!(
             script.contains(required),
@@ -6089,6 +6108,7 @@ async fn dead_letters_and_dispatch_failures_raise_incidents_with_their_scope() {
             authority_mode: None,
             checkout_policy: None,
             activation_policy: None,
+            idle_timeout_seconds: None,
             enabled: None,
             provider_observation: None,
         })
@@ -6199,7 +6219,7 @@ async fn restart_owner_loss_and_emergency_spool_fold_into_startup_incidents_once
         .await
         .result
         .unwrap();
-    assert_eq!(status["schemaVersion"], 10);
+    assert_eq!(status["schemaVersion"], 11);
     assert_eq!(status["emergencyIncidentCount"], 1);
 }
 
@@ -6302,7 +6322,7 @@ fn minimum_incidents_acceptance_contract_is_deterministic_and_backend_only() {
         "incident_errors_use_exit_code_fifteen",
         "minimum-incidents-manifest.json",
         "deterministic-fake-transport",
-        "schemaVersion = 10",
+        "schemaVersion = 11",
     ] {
         assert!(
             script.contains(required),
@@ -6772,7 +6792,7 @@ fn result_delivery_acceptance_contract_is_deterministic_and_backend_only() {
         "externalModelUseAbsent",
         "uiChangesAbsent",
         "deterministic-fake-transport",
-        "schemaVersion = 10",
+        "schemaVersion = 11",
     ] {
         assert!(
             script.contains(required),
@@ -7279,7 +7299,7 @@ fn peer_messaging_acceptance_contract_is_deterministic_and_backend_only() {
         "externalModelUseAbsent",
         "uiChangesAbsent",
         "deterministic-fake-transport",
-        "schemaVersion = 10",
+        "schemaVersion = 11",
     ] {
         assert!(
             script.contains(required),
@@ -7402,7 +7422,7 @@ fn coalesced_notices_acceptance_contract_is_deterministic_and_backend_only() {
         "externalModelUseAbsent",
         "uiChangesAbsent",
         "deterministic-fake-transport",
-        "schemaVersion = 10",
+        "schemaVersion = 11",
     ] {
         assert!(
             script.contains(required),
@@ -7641,7 +7661,374 @@ fn activation_policy_acceptance_contract_is_deterministic_and_backend_only() {
         "externalModelUseAbsent",
         "uiChangesAbsent",
         "deterministic-fake-transport",
-        "schemaVersion = 10",
+        "schemaVersion = 11",
+    ] {
+        assert!(
+            script.contains(required),
+            "acceptance script must contain {required}"
+        );
+    }
+    for forbidden in [
+        "provider', 'smoke",
+        "apps\\lazoo-desktop\\src",
+        "LivePrompt",
+    ] {
+        assert!(
+            !script.contains(forbidden),
+            "acceptance script must not contain {forbidden}"
+        );
+    }
+}
+
+// ---------------------------------------------------------------------------------------------
+// Idle suspension: a session quiet for its employee's whole idle timeout is stopped by the
+// daemon, never while a turn on it is unfinished, and never when the timeout is 0.
+
+fn lead_sessions(
+    harness: &ToolHarness,
+    state: lazoo_protocol::SessionLifecycleState,
+) -> Vec<lazoo_protocol::EmployeeSessionRecord> {
+    harness
+        .store
+        .list_sessions()
+        .unwrap()
+        .into_iter()
+        .filter(|session| session.employee_id == harness.lead.id && session.state == state)
+        .collect()
+}
+
+#[tokio::test]
+async fn an_idle_session_suspends_after_its_employee_timeout_and_the_next_user_turn_starts_fresh() {
+    use chrono::{TimeDelta, Utc};
+    use lazoo_protocol::{ActivationPolicy, EmployeeAvailability, SessionLifecycleState};
+
+    let (_temporary, harness) =
+        tool_harness_idle(AuthorityMode::SelfDecision, ActivationPolicy::Manual, 900);
+    warm_tool_lead(&harness).await;
+    let submitted = submit_lead_turn(&harness, "self-decision").await;
+    assert_eq!(submitted["turn"]["state"], "completed");
+    let session = lead_sessions(&harness, SessionLifecycleState::Idle).remove(0);
+
+    harness
+        .app
+        .suspend_idle_sessions_once(Utc::now() + TimeDelta::seconds(890))
+        .await
+        .unwrap();
+    assert_eq!(
+        harness.backend.stops.load(Ordering::SeqCst),
+        0,
+        "a session quiet for less than its timeout stays up"
+    );
+
+    harness
+        .app
+        .suspend_idle_sessions_once(Utc::now() + TimeDelta::seconds(901))
+        .await
+        .unwrap();
+    assert_eq!(harness.backend.stops.load(Ordering::SeqCst), 1);
+    let suspended = harness.store.get_session(session.id).unwrap();
+    assert_eq!(suspended.state, SessionLifecycleState::Suspended);
+    assert!(suspended.failure_code.is_none());
+    let roster = harness.store.roster_snapshot().unwrap();
+    let lead_entry = roster
+        .entries
+        .iter()
+        .find(|entry| entry.employee.id == harness.lead.id)
+        .unwrap();
+    assert_eq!(lead_entry.availability, EmployeeAvailability::Suspended);
+    let events = harness.store.list_events(0, 1024).unwrap();
+    for event_type in ["session.stopping", "session.suspended"] {
+        assert!(
+            events.iter().any(|event| event.event_type == event_type
+                && event.payload["session"]["id"] == session.id.to_string()),
+            "{event_type} is on the event ledger"
+        );
+    }
+
+    // Nothing is left to suspend, and a dormant employee is never started by the sweep.
+    harness
+        .app
+        .suspend_idle_sessions_once(Utc::now() + TimeDelta::days(1))
+        .await
+        .unwrap();
+    assert_eq!(harness.backend.stops.load(Ordering::SeqCst), 1);
+    assert_eq!(harness.backend.starts.load(Ordering::SeqCst), 1);
+
+    // The next user turn activates the lead exactly as for any dormant employee: a fresh
+    // session, never a resumed thread.
+    let resumed = harness
+        .app
+        .handle(request(
+            "resume-after-idle",
+            "turn.submit",
+            json!({
+                "conversationId": harness.conversation_id,
+                "author": {"kind": "user"},
+                "recipient": null,
+                "authorityMode": "self-decision",
+                "text": "Pick the parser fix back up",
+                "activateIfNeeded": true,
+                "maxAttempts": 3,
+                "idempotencyKey": "resume-after-idle"
+            }),
+        ))
+        .await
+        .result
+        .unwrap();
+    assert_eq!(resumed["turn"]["state"], "completed");
+    assert_eq!(harness.backend.starts.load(Ordering::SeqCst), 2);
+    let fresh = lead_sessions(&harness, SessionLifecycleState::Idle);
+    assert_eq!(fresh.len(), 1);
+    assert_ne!(fresh[0].id, session.id);
+}
+
+#[tokio::test]
+async fn idle_suspension_waits_for_an_unfinished_turn_and_never_touches_a_zero_timeout() {
+    use chrono::{TimeDelta, Utc};
+    use lazoo_protocol::{ActivationPolicy, SessionLifecycleState};
+
+    // A timeout of 0, the default, keeps a warmed session up however long it stays quiet.
+    let (_never_temporary, never) = tool_harness(AuthorityMode::SelfDecision);
+    warm_tool_lead(&never).await;
+    never
+        .app
+        .suspend_idle_sessions_once(Utc::now() + TimeDelta::days(30))
+        .await
+        .unwrap();
+    assert_eq!(never.backend.stops.load(Ordering::SeqCst), 0);
+    assert_eq!(lead_sessions(&never, SessionLifecycleState::Idle).len(), 1);
+
+    // A session with a turn still in flight is not idle, whatever the clock says.
+    let (_temporary, harness) =
+        tool_harness_idle(AuthorityMode::SelfDecision, ActivationPolicy::Manual, 900);
+    warm_tool_lead(&harness).await;
+    harness.backend.gate_events.store(true, Ordering::SeqCst);
+    let pending = tokio::spawn({
+        let app = harness.app.clone();
+        let conversation_id = harness.conversation_id;
+        async move {
+            app.handle(request(
+                "long-turn",
+                "turn.submit",
+                json!({
+                    "conversationId": conversation_id,
+                    "author": {"kind": "user"},
+                    "recipient": null,
+                    "authorityMode": "self-decision",
+                    "text": "Take your time",
+                    "activateIfNeeded": false,
+                    "maxAttempts": 3,
+                    "idempotencyKey": "long-turn"
+                }),
+            ))
+            .await
+        }
+    });
+    wait_until(|| harness.backend.turns.load(Ordering::SeqCst) == 1).await;
+    harness
+        .app
+        .suspend_idle_sessions_once(Utc::now() + TimeDelta::days(1))
+        .await
+        .unwrap();
+    assert_eq!(
+        harness.backend.stops.load(Ordering::SeqCst),
+        0,
+        "an unfinished turn keeps its session"
+    );
+
+    harness.backend.event_permits.add_permits(2);
+    let finished = timeout(Duration::from_secs(5), pending)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(finished.result.unwrap()["turn"]["state"], "completed");
+
+    // Quiet time counts from the end of the turn, not from the session start.
+    harness
+        .app
+        .suspend_idle_sessions_once(Utc::now() + TimeDelta::seconds(600))
+        .await
+        .unwrap();
+    assert_eq!(harness.backend.stops.load(Ordering::SeqCst), 0);
+    harness
+        .app
+        .suspend_idle_sessions_once(Utc::now() + TimeDelta::seconds(901))
+        .await
+        .unwrap();
+    assert_eq!(harness.backend.stops.load(Ordering::SeqCst), 1);
+    assert!(lead_sessions(&harness, SessionLifecycleState::Idle).is_empty());
+}
+
+#[tokio::test]
+async fn a_turn_recorded_on_a_since_stopped_session_is_delivered_on_the_current_session() {
+    use chrono::{TimeDelta, Utc};
+    use lazoo_protocol::{
+        ActivationPolicy, MessageSender, SessionLifecycleState, UserMessageEndpoint,
+    };
+    use lazoo_store::RecordTurnInput;
+
+    let (_temporary, harness) =
+        tool_harness_idle(AuthorityMode::SelfDecision, ActivationPolicy::Manual, 900);
+    warm_tool_lead(&harness).await;
+    let first = lead_sessions(&harness, SessionLifecycleState::Idle).remove(0);
+    let recorded = harness
+        .store
+        .record_turn(&RecordTurnInput {
+            request_id: "pinned-turn-request".to_owned(),
+            idempotency_key: "pinned-turn".to_owned(),
+            conversation_id: harness.conversation_id,
+            author: MessageSender::User(UserMessageEndpoint {
+                kind: lazoo_protocol::UserMessageKind::User,
+            }),
+            recipient: None,
+            task_id: None,
+            authority_mode: AuthorityMode::SelfDecision,
+            text: "Recorded while the first session was up".to_owned(),
+            activate_if_needed: false,
+            max_attempts: 3,
+        })
+        .unwrap();
+    assert_eq!(recorded.turn.recipient.session_id, Some(first.id));
+
+    // A turn left recorded does not hold its session up forever: the session stops for
+    // idleness before the turn is delivered, and the user warms a new one.
+    harness
+        .app
+        .suspend_idle_sessions_once(Utc::now() + TimeDelta::seconds(901))
+        .await
+        .unwrap();
+    assert_eq!(
+        harness.store.get_session(first.id).unwrap().state,
+        SessionLifecycleState::Suspended
+    );
+    harness
+        .app
+        .handle(request(
+            "warm-second",
+            "session.warm",
+            json!({
+                "employeeId": harness.lead.id,
+                "expectedEmployeeRevision": harness.lead.configuration_revision,
+                "idempotencyKey": "warm-second"
+            }),
+        ))
+        .await
+        .result
+        .unwrap();
+    let second = lead_sessions(&harness, SessionLifecycleState::Idle).remove(0);
+
+    let delivered = harness
+        .app
+        .handle(request(
+            "pinned-turn-replay",
+            "turn.submit",
+            json!({
+                "conversationId": harness.conversation_id,
+                "author": {"kind": "user"},
+                "recipient": null,
+                "authorityMode": "self-decision",
+                "text": "Recorded while the first session was up",
+                "activateIfNeeded": false,
+                "maxAttempts": 3,
+                "idempotencyKey": "pinned-turn"
+            }),
+        ))
+        .await
+        .result
+        .expect("the recorded turn is not stranded on the stopped session");
+    assert_eq!(delivered["turn"]["id"], recorded.turn.id.to_string());
+    assert_eq!(delivered["turn"]["state"], "completed");
+    assert_eq!(
+        harness
+            .store
+            .get_turn(recorded.turn.id)
+            .unwrap()
+            .recipient
+            .session_id,
+        Some(second.id)
+    );
+    assert_eq!(harness.backend.turns.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn a_notice_turns_lead_suspended_for_idleness_is_woken_once_by_its_childs_result() {
+    use chrono::{TimeDelta, Utc};
+    use lazoo_protocol::{ActivationPolicy, MessageKind, SessionLifecycleState, TaskState};
+
+    let (_temporary, harness) = tool_harness_idle(
+        AuthorityMode::SelfDecision,
+        ActivationPolicy::NoticeTurns,
+        900,
+    );
+    let (root_task_id, child_id) = delegate_without_waiting(&harness).await;
+    harness.app.dispatch_pending_tasks_once().await.unwrap();
+    assert_eq!(
+        harness.store.get_task(child_id).unwrap().task.state,
+        TaskState::Completed
+    );
+    assert_eq!(harness.backend.starts.load(Ordering::SeqCst), 2);
+    let stops_before = harness.backend.stops.load(Ordering::SeqCst);
+
+    // Nobody stops the lead: its own idle timeout does, once the delegation turn has ended.
+    harness
+        .app
+        .suspend_idle_sessions_once(Utc::now() + TimeDelta::seconds(901))
+        .await
+        .unwrap();
+    assert_eq!(
+        harness.backend.stops.load(Ordering::SeqCst),
+        stops_before + 1
+    );
+    assert!(lead_sessions(&harness, SessionLifecycleState::Idle).is_empty());
+
+    // The child's result then wakes the lead once by policy, and that session stops with it.
+    harness.app.deliver_pending_notices_once().await.unwrap();
+    assert_eq!(harness.backend.starts.load(Ordering::SeqCst), 3);
+    assert!(last_prompt(&harness.backend).contains(&child_id.to_string()));
+    assert_eq!(
+        lead_messages(&harness.store, MessageKind::Result)[0].state,
+        MessageDeliveryState::Acknowledged
+    );
+    assert_eq!(
+        harness.store.get_task(root_task_id).unwrap().task.state,
+        TaskState::Completed
+    );
+    assert_eq!(
+        harness.backend.stops.load(Ordering::SeqCst),
+        stops_before + 2
+    );
+    assert_eq!(
+        lead_sessions(&harness, SessionLifecycleState::Suspended).len(),
+        2,
+        "the idle-suspended session and the one policy activation"
+    );
+}
+
+#[test]
+fn idle_suspension_acceptance_contract_is_deterministic_and_backend_only() {
+    let repository = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let script_path = repository.join("scripts/acceptance/idle-suspension.ps1");
+    let script = std::fs::read_to_string(&script_path).expect("idle suspension acceptance script");
+
+    for required in [
+        "idle_timeouts_default_to_never_on_create_and_stay_unchanged_when_an_update_omits_them",
+        "idle_timeouts_are_never_or_a_minute_to_a_day_and_due_only_after_the_whole_timeout",
+        "idle_timeout_defaults_to_never_and_a_change_bumps_the_configuration_revision",
+        "idle_sessions_are_due_only_after_their_employee_timeout_and_stop_once_under_their_own_key",
+        "employee_cli_maps_mutations_and_roster_refresh",
+        "an_idle_session_suspends_after_its_employee_timeout_and_the_next_user_turn_starts_fresh",
+        "idle_suspension_waits_for_an_unfinished_turn_and_never_touches_a_zero_timeout",
+        "a_turn_recorded_on_a_since_stopped_session_is_delivered_on_the_current_session",
+        "a_notice_turns_lead_suspended_for_idleness_is_woken_once_by_its_childs_result",
+        "store_enables_wal_foreign_keys_and_schema_version",
+        "zeroTimeoutNeverSuspends",
+        "unfinishedTurnKeepsSession",
+        "recordedTurnNotStranded",
+        "providerSmokeAbsent",
+        "externalModelUseAbsent",
+        "uiChangesAbsent",
+        "deterministic-fake-transport",
+        "schemaVersion = 11",
     ] {
         assert!(
             script.contains(required),

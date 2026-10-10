@@ -1,5 +1,6 @@
 mod approval;
 mod delivery;
+mod idle;
 mod incident;
 mod task;
 mod tools;
@@ -21,7 +22,7 @@ use std::{
 use chrono::{SecondsFormat, Utc};
 use lazoo_domain::{
     inspect_git_repository, validate_employee_name, validate_employee_text_fields,
-    validate_native_settings,
+    validate_idle_timeout, validate_native_settings,
 };
 use lazoo_protocol::{
     AcknowledgeMessageParams, AuthorityMode, CancelMessageParams, ClaimMessageParams,
@@ -578,6 +579,8 @@ impl App {
         .map_err(|error| employee_validation_error(&error))?;
         validate_native_settings(&params.native_settings)
             .map_err(|error| employee_validation_error(&error))?;
+        validate_idle_timeout(params.idle_timeout_seconds)
+            .map_err(|error| employee_validation_error(&error))?;
         let provider = employee_provider(&params.provider)?;
         let observation = self.observe_provider(provider).await;
         let result = self
@@ -595,6 +598,7 @@ impl App {
                 authority_mode: params.authority_mode,
                 checkout_policy: params.checkout_policy,
                 activation_policy: params.activation_policy,
+                idle_timeout_seconds: params.idle_timeout_seconds,
                 enabled: params.enabled,
                 provider_observation: Some(observation),
             })
@@ -662,6 +666,9 @@ impl App {
             validate_native_settings(native_settings)
                 .map_err(|error| employee_validation_error(&error))?;
         }
+        if let Some(seconds) = params.idle_timeout_seconds {
+            validate_idle_timeout(seconds).map_err(|error| employee_validation_error(&error))?;
+        }
         let should_probe = provider.is_some_and(|value| value.to_string() != current.provider)
             || params.enabled == Some(true) && !current.enabled;
         let provider_observation = if should_probe {
@@ -690,6 +697,7 @@ impl App {
                 authority_mode: params.authority_mode,
                 checkout_policy: params.checkout_policy,
                 activation_policy: params.activation_policy,
+                idle_timeout_seconds: params.idle_timeout_seconds,
                 enabled: params.enabled,
                 provider_observation,
             })
@@ -937,12 +945,22 @@ impl App {
                 expected_revision,
             })
             .map_err(session_store_error)?;
+        self.finish_session_stop_command(stopping).await
+    }
+
+    /// Stops the native session behind a session the store has just marked `stopping`, or
+    /// returns a replayed stop unchanged.
+    async fn finish_session_stop_command(
+        &self,
+        stopping: lazoo_protocol::SessionMutationResult,
+    ) -> Result<lazoo_protocol::SessionMutationResult, RpcError> {
         self.publish_events()?;
         if stopping.event_sequence.is_none() {
             self.task_dispatch_notify.notify_one();
             return Ok(stopping);
         }
 
+        let session_id = stopping.session.id;
         let session = self.live_sessions.lock().await.remove(&session_id);
         let Some(session) = session else {
             self.record_session_failure(

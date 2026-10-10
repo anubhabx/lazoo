@@ -1,5 +1,5 @@
-use chrono::Utc;
-use lazoo_domain::derive_availability;
+use chrono::{DateTime, Utc};
+use lazoo_domain::{derive_availability, idle_session_due};
 use lazoo_protocol::{
     EmployeeAvailability, EmployeeSessionRecord, SessionLifecycleState, SessionMutationResult,
     SessionReconcileResult,
@@ -34,6 +34,13 @@ pub struct BeginSessionStopInput {
     pub idempotency_key: String,
     pub session_id: Uuid,
     pub expected_revision: u64,
+}
+
+#[derive(Clone, Debug)]
+pub struct BeginIdleSessionStopInput {
+    pub session_id: Uuid,
+    pub owner_boot_id: Uuid,
+    pub now: DateTime<Utc>,
 }
 
 #[derive(Clone, Debug)]
@@ -198,36 +205,70 @@ impl Store {
         let current = required_session(&transaction, input.session_id)?;
         require_session_revision(&current, input.expected_revision)?;
         require_state(&current, SessionLifecycleState::Idle, "idle")?;
-        let now = Utc::now().to_rfc3339();
-        transaction.execute(
-            "UPDATE employee_sessions
-             SET state = 'stopping', revision = revision + 1, updated_at = ?2
-             WHERE id = ?1",
-            params![current.id.to_string(), now],
-        )?;
-        insert_session_command(
+        let result = mark_stopping(
             &transaction,
-            "session.stop",
+            current.id,
             &input.idempotency_key,
             &input.request_id,
-            current.id,
-            &now,
         )?;
-        let session = required_session(&transaction, current.id)?;
-        let roster_revision = employee::roster_revision(&transaction)?;
-        let event_sequence = employee::insert_event(
-            &transaction,
-            "session.stopping",
-            &json!({"session": session, "rosterRevision": roster_revision}),
-            &now,
-        )?;
-        let result = SessionMutationResult {
-            session,
-            roster_revision,
-            event_sequence: Some(event_sequence),
-        };
         transaction.commit()?;
         Ok(result)
+    }
+
+    /// Idle sessions owned by `owner_boot_id` that `begin_idle_session_stop` would stop at `now`.
+    pub fn idle_sessions_due(
+        &self,
+        owner_boot_id: Uuid,
+        now: DateTime<Utc>,
+    ) -> Result<Vec<EmployeeSessionRecord>, StoreError> {
+        let connection = self.lock()?;
+        let mut statement = connection.prepare(
+            "SELECT id, employee_id, employee_configuration_revision, provider, state, revision,
+                    owner_boot_id, native_session_id, native_host_pid, failure_code,
+                    failure_message, created_at, updated_at, started_at, stopped_at
+             FROM employee_sessions WHERE state = 'idle' AND owner_boot_id = ?1
+             ORDER BY created_at, id",
+        )?;
+        let idle = statement
+            .query_map([owner_boot_id.to_string()], raw_session)?
+            .map(|row| session_from_raw(row?))
+            .collect::<Result<Vec<_>, StoreError>>()?;
+        let mut due = Vec::new();
+        for session in idle {
+            if session_idle_due(&connection, &session, owner_boot_id, now)? {
+                due.push(session);
+            }
+        }
+        Ok(due)
+    }
+
+    /// Begins stopping an idle session for idle suspension, keyed `idle-suspend:<sessionId>` so
+    /// the session ledger names why it stopped. Due-ness is re-checked in the same transaction
+    /// that marks the session `stopping`, so a turn that reached the session first keeps it, and
+    /// a turn that comes later finds it no longer idle. `None` means the session is not due.
+    pub fn begin_idle_session_stop(
+        &self,
+        input: &BeginIdleSessionStopInput,
+    ) -> Result<Option<SessionMutationResult>, StoreError> {
+        let mut connection = self.lock()?;
+        let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let key = format!("idle-suspend:{}", input.session_id);
+        if let Some(session) = session_for_command(&transaction, "session.stop", &key)? {
+            let result = SessionMutationResult {
+                session,
+                roster_revision: employee::roster_revision(&transaction)?,
+                event_sequence: None,
+            };
+            transaction.commit()?;
+            return Ok(Some(result));
+        }
+        let current = required_session(&transaction, input.session_id)?;
+        if !session_idle_due(&transaction, &current, input.owner_boot_id, input.now)? {
+            return Ok(None);
+        }
+        let result = mark_stopping(&transaction, current.id, &key, &key)?;
+        transaction.commit()?;
+        Ok(Some(result))
     }
 
     pub fn finish_session_stop(
@@ -388,6 +429,100 @@ pub(crate) fn active_session_id_for_employee(
     employee_id: Uuid,
 ) -> Result<Option<Uuid>, StoreError> {
     Ok(active_session_for_employee(connection, employee_id)?.map(|session| session.id))
+}
+
+fn mark_stopping(
+    transaction: &Transaction<'_>,
+    session_id: Uuid,
+    idempotency_key: &str,
+    request_id: &str,
+) -> Result<SessionMutationResult, StoreError> {
+    let now = Utc::now().to_rfc3339();
+    transaction.execute(
+        "UPDATE employee_sessions
+         SET state = 'stopping', revision = revision + 1, updated_at = ?2
+         WHERE id = ?1",
+        params![session_id.to_string(), now],
+    )?;
+    insert_session_command(
+        transaction,
+        "session.stop",
+        idempotency_key,
+        request_id,
+        session_id,
+        &now,
+    )?;
+    let session = required_session(transaction, session_id)?;
+    let roster_revision = employee::roster_revision(transaction)?;
+    let event_sequence = employee::insert_event(
+        transaction,
+        "session.stopping",
+        &json!({"session": session, "rosterRevision": roster_revision}),
+        &now,
+    )?;
+    Ok(SessionMutationResult {
+        session,
+        roster_revision,
+        event_sequence: Some(event_sequence),
+    })
+}
+
+/// An idle session owned by this boot is due once its employee's idle timeout has passed since
+/// the session started or a turn on it last changed, and no turn on it is in flight. A turn
+/// still `recorded` resets that clock but does not hold the session: delivery finds the
+/// recipient's current session, and a turn left `recorded` must not keep a process up forever.
+// ponytail: scans the turns of each idle session without an index; add one on
+// recipient_session_id if the turn ledger ever makes the sweep measurable.
+fn session_idle_due(
+    connection: &Connection,
+    session: &EmployeeSessionRecord,
+    owner_boot_id: Uuid,
+    now: DateTime<Utc>,
+) -> Result<bool, StoreError> {
+    if session.state != SessionLifecycleState::Idle || session.owner_boot_id != Some(owner_boot_id)
+    {
+        return Ok(false);
+    }
+    let idle_timeout_seconds: i64 = connection.query_row(
+        "SELECT idle_timeout_seconds FROM employees WHERE id = ?1",
+        [session.employee_id.to_string()],
+        |row| row.get(0),
+    )?;
+    let idle_timeout_seconds =
+        u32::try_from(idle_timeout_seconds).map_err(|_| StoreError::NegativeSequence)?;
+    if idle_timeout_seconds == 0 {
+        return Ok(false);
+    }
+    let (unfinished, last_turn_change): (i64, Option<String>) = connection.query_row(
+        "SELECT COUNT(*) FILTER (WHERE state IN ('submitting', 'accepted')),
+                MAX(updated_at)
+         FROM conversation_turns WHERE recipient_session_id = ?1",
+        [session.id.to_string()],
+        |row| Ok((row.get(0)?, row.get(1)?)),
+    )?;
+    if unfinished > 0 {
+        return Ok(false);
+    }
+    let mut quiet_since = parse_time(
+        session.started_at.as_deref().unwrap_or(&session.updated_at),
+        "employee_sessions.started_at",
+    )?;
+    if let Some(changed) = last_turn_change {
+        quiet_since = quiet_since.max(parse_time(&changed, "conversation_turns.updated_at")?);
+    }
+    Ok(idle_session_due(
+        idle_timeout_seconds,
+        (now - quiet_since).num_seconds(),
+    ))
+}
+
+fn parse_time(value: &str, field: &'static str) -> Result<DateTime<Utc>, StoreError> {
+    DateTime::parse_from_rfc3339(value)
+        .map(|time| time.with_timezone(&Utc))
+        .map_err(|error| StoreError::InvalidRecord {
+            field,
+            message: error.to_string(),
+        })
 }
 
 fn transition_with_roster_event(
