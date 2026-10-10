@@ -19,6 +19,24 @@ use uuid::Uuid;
 use super::{App, to_value, truncate_utf8};
 
 const MAX_PROVIDER_ERROR_BYTES: usize = 1024;
+/// Bytes of incident text carried into one desktop notification; `incident show` has the rest.
+const MAX_NOTIFICATION_TEXT_BYTES: usize = 240;
+/// Incidents announced per pass; more wait for the next pass instead of flooding the desktop.
+const NOTIFICATION_PASS_LIMIT: u32 = 64;
+
+/// Shows one desktop notification to the local user. The daemon's default is the Windows toast
+/// the keeper already uses; tests substitute a recorder.
+pub trait UserNotifier: Send + Sync {
+    /// # Errors
+    /// Returns a description when the notification could not be shown.
+    fn notify(&self, title: &str, message: &str) -> Result<(), String>;
+}
+
+impl UserNotifier for lazoo_runtime::NativeNotifier {
+    fn notify(&self, title: &str, message: &str) -> Result<(), String> {
+        Self::notify(self, title, message).map_err(|error| error.to_string())
+    }
+}
 
 #[derive(Clone, Debug, Default)]
 pub(super) struct IncidentScope {
@@ -247,6 +265,50 @@ impl App {
         } else {
             self.publish_events()
         }
+    }
+
+    /// Announces every user-escalated incident not yet announced with one desktop notification:
+    /// the incident itself when it is alone, otherwise a count, so a burst or an upgrade never
+    /// floods the desktop. Claims commit first, so each incident is announced at most once, and
+    /// a notification that cannot be shown is recorded as `failed` and never retried.
+    #[doc(hidden)]
+    pub fn notify_user_escalations_once(&self, now: DateTime<Utc>) -> Result<(), RpcError> {
+        let claimed = self
+            .store
+            .claim_user_notifications(now, NOTIFICATION_PASS_LIMIT)
+            .map_err(incident_store_error)?;
+        self.publish_events()?;
+        let Some(first) = claimed.first() else {
+            return Ok(());
+        };
+        let (title, mut message) = if claimed.len() == 1 {
+            (
+                format!("Lazoo needs you: {}", first.title),
+                format!("{} {}", first.explanation, first.next_action),
+            )
+        } else {
+            (
+                format!("Lazoo: {} incidents need you", claimed.len()),
+                claimed
+                    .iter()
+                    .map(|incident| incident.title.as_str())
+                    .collect::<Vec<_>>()
+                    .join("; "),
+            )
+        };
+        truncate_utf8(&mut message, MAX_NOTIFICATION_TEXT_BYTES);
+        let shown = match self.user_notifier.notify(&title, &message) {
+            Ok(()) => true,
+            Err(error) => {
+                tracing::warn!(%error, count = claimed.len(), "incident notification was not shown");
+                false
+            }
+        };
+        let ids: Vec<Uuid> = claimed.iter().map(|incident| incident.id).collect();
+        self.store
+            .settle_user_notifications(&ids, shown)
+            .map_err(incident_store_error)?;
+        self.publish_events()
     }
 
     pub(super) fn incident_show(&self, value: &Value) -> Result<Value, RpcError> {

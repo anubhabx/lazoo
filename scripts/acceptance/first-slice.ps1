@@ -136,7 +136,7 @@ try {
     $keeper = Start-Keeper $dataRoot (Join-Path $runRoot 'keeper-real-1')
     $statusBefore = Wait-Status
     Assert-Equal $statusBefore.protocolVersion 1 'protocol version'
-    Assert-Equal $statusBefore.schemaVersion 12 'schema version'
+    Assert-Equal $statusBefore.schemaVersion 13 'schema version'
     Assert-Equal $statusBefore.journalMode 'wal' 'SQLite journal mode'
     $gates.controlPlaneReady = 'PASS'
 

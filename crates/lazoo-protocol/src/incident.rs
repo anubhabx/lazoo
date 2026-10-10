@@ -54,6 +54,19 @@ pub enum IncidentEscalationReason {
     SchemaUpgrade,
 }
 
+/// How a user-escalated incident was announced on the desktop, at most once.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum IncidentUserNotification {
+    /// Claimed for a notification whose outcome was never recorded (the daemon stopped).
+    Claimed,
+    Shown,
+    /// The notification could not be shown; it is not retried.
+    Failed,
+    /// The keeper already showed its own notification for this record.
+    Keeper,
+}
+
 /// The fixed set of remedies a lead may apply to an incident on its own task tree.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "kebab-case")]
@@ -127,6 +140,10 @@ pub struct IncidentRecord {
     pub escalation_reason: Option<IncidentEscalationReason>,
     #[serde(default)]
     pub remedies: Vec<IncidentRemedyRecord>,
+    #[serde(default)]
+    pub user_notified_at: Option<String>,
+    #[serde(default)]
+    pub user_notification: Option<IncidentUserNotification>,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]

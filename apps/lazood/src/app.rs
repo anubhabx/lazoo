@@ -6,6 +6,8 @@ mod task;
 mod tools;
 mod turn;
 
+pub use incident::UserNotifier;
+
 use std::{
     collections::{BTreeMap, BTreeSet},
     fs,
@@ -207,6 +209,7 @@ pub struct App {
     task_dispatch_notify: Arc<Notify>,
     approval_notify: Arc<Notify>,
     approval_timeout: Duration,
+    user_notifier: Arc<dyn UserNotifier>,
 }
 
 /// How long a provider waits for the local user before a pending approval expires and is
@@ -293,6 +296,7 @@ impl App {
             task_dispatch_notify: Arc::new(Notify::new()),
             approval_notify: Arc::new(Notify::new()),
             approval_timeout: DEFAULT_APPROVAL_TIMEOUT,
+            user_notifier: Arc::new(lazoo_runtime::NativeNotifier),
         };
         app.note_startup_incidents(&sessions.sessions, &messages.messages, &turns.turns, &tasks);
         Ok(app)
@@ -302,6 +306,13 @@ impl App {
     #[must_use]
     pub fn with_approval_timeout(mut self, timeout: Duration) -> Self {
         self.approval_timeout = timeout;
+        self
+    }
+
+    #[doc(hidden)]
+    #[must_use]
+    pub fn with_user_notifier(mut self, notifier: Arc<dyn UserNotifier>) -> Self {
+        self.user_notifier = notifier;
         self
     }
 

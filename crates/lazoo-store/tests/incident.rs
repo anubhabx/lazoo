@@ -307,7 +307,7 @@ fn emergency_spool_records_fold_into_keeper_incidents_exactly_once() {
     )
     .unwrap();
     let store = Store::open_path(root.state_db()).unwrap();
-    assert_eq!(store.status().unwrap().schema_version, 12);
+    assert_eq!(store.status().unwrap().schema_version, 13);
     assert_eq!(store.import_pending_incidents(&root).unwrap(), 2);
 
     let raised = store.reconcile_emergency_incidents().unwrap();
@@ -398,4 +398,102 @@ fn stalls_and_crashes_promote_at_once_and_a_second_unexpected_exit_promotes() {
             "incident.recurred",
         ]
     );
+}
+
+#[test]
+fn user_escalations_are_claimed_once_and_their_outcome_is_never_rewritten() {
+    use chrono::Utc;
+    use lazoo_protocol::{IncidentEscalation, IncidentUserNotification};
+
+    let (_temporary, store, employee) = store_with_employee();
+    // Two user escalations (a stall and a crash the keeper already announced), one normal
+    // incident, and one user escalation the user has already acknowledged.
+    let stall = store
+        .raise_incident(&raise("stall", "LZ-SESSION-STALLED", Some(employee)))
+        .unwrap()
+        .incident;
+    let crash = store
+        .raise_incident(&RaiseIncidentInput {
+            source: IncidentSource::Keeper,
+            ..raise("crash", "LZ-DAEMON-UNAVAILABLE", None)
+        })
+        .unwrap()
+        .incident;
+    let normal = store
+        .raise_incident(&raise("timeout", "LZ-MESSAGE-TIMEOUT", Some(employee)))
+        .unwrap()
+        .incident;
+    let seen = store
+        .raise_incident(&raise("seen", "LZ-SESSION-STALLED", None))
+        .unwrap()
+        .incident;
+    store
+        .acknowledge_incident(&settle("ack-seen", seen.id, seen.revision))
+        .unwrap();
+    for incident in [&stall, &crash, &seen] {
+        assert_eq!(incident.escalation, IncidentEscalation::User);
+        assert!(incident.user_notified_at.is_none());
+    }
+
+    let now = Utc::now();
+    let claimed = store.claim_user_notifications(now, 64).unwrap();
+    assert_eq!(
+        claimed
+            .iter()
+            .map(|incident| incident.id)
+            .collect::<Vec<_>>(),
+        vec![stall.id],
+        "the keeper's record, the normal incident, and the acknowledged one are not announced"
+    );
+    assert_eq!(
+        claimed[0].user_notification,
+        Some(IncidentUserNotification::Claimed)
+    );
+    assert_eq!(claimed[0].user_notified_at, Some(now.to_rfc3339()));
+    assert_eq!(claimed[0].revision, stall.revision + 1);
+    let crash = store.get_incident(crash.id).unwrap();
+    assert_eq!(
+        crash.user_notification,
+        Some(IncidentUserNotification::Keeper)
+    );
+    assert!(
+        store
+            .get_incident(normal.id)
+            .unwrap()
+            .user_notification
+            .is_none()
+    );
+    assert!(
+        store
+            .get_incident(seen.id)
+            .unwrap()
+            .user_notification
+            .is_none()
+    );
+    assert!(
+        store.claim_user_notifications(now, 64).unwrap().is_empty(),
+        "a claim is never repeated"
+    );
+
+    let settled = store.settle_user_notifications(&[stall.id], false).unwrap();
+    assert_eq!(
+        settled[0].user_notification,
+        Some(IncidentUserNotification::Failed)
+    );
+    assert!(
+        store
+            .settle_user_notifications(&[stall.id, crash.id], true)
+            .unwrap()
+            .is_empty(),
+        "a settled outcome, and a keeper record, are never rewritten"
+    );
+    assert_eq!(
+        store.get_incident(stall.id).unwrap().user_notification,
+        Some(IncidentUserNotification::Failed)
+    );
+    let notified = incident_event_types(&store)
+        .into_iter()
+        .filter(|kind| kind == "incident.user-notified")
+        .count();
+    assert_eq!(notified, 2, "the keeper settlement and the failed outcome");
 }

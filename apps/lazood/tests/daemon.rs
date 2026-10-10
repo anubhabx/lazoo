@@ -3560,7 +3560,7 @@ async fn status_reports_protocol_store_and_boot_identity() {
     let result = response.result.unwrap();
 
     assert_eq!(result["protocolVersion"], 1);
-    assert_eq!(result["schemaVersion"], 12);
+    assert_eq!(result["schemaVersion"], 13);
     assert_eq!(result["journalMode"], "wal");
     assert!(
         result["bootId"]
@@ -4304,7 +4304,7 @@ fn employee_roster_acceptance_contract_is_backend_only() {
         "roster', 'refresh",
         "LZ-EMPLOYEE-STALE",
         "restartDurability",
-        "schemaVersion 12",
+        "schemaVersion 13",
         "providerSmokeAbsent",
     ] {
         assert!(
@@ -4342,7 +4342,7 @@ fn native_session_acceptance_contract_covers_containment_and_owner_loss() {
         "completeTreeTerminated",
         "nativeHostPid",
         "providerSmokeAbsent",
-        "schemaVersion 12",
+        "schemaVersion 13",
     ] {
         assert!(
             script.contains(required),
@@ -4372,7 +4372,7 @@ fn collaboration_bus_acceptance_contract_is_backend_only() {
         "deadLetterEvidence",
         "restartDurability",
         "auditOutboxEvidence",
-        "schemaVersion 12",
+        "schemaVersion 13",
         "providerSmokeAbsent",
         "desktopCapabilityExpansionAbsent",
     ] {
@@ -4508,7 +4508,7 @@ fn task_graph_acceptance_executes_backend_only_contract() {
     )
     .unwrap();
     assert_eq!(manifest["status"], "PASS");
-    assert_eq!(manifest["schemaVersion"], 12);
+    assert_eq!(manifest["schemaVersion"], 13);
     assert_eq!(manifest["mode"], "deterministic-fixture");
     for field in [
         "rootIdentity",
@@ -5687,7 +5687,7 @@ fn collaboration_tools_acceptance_contract_is_deterministic_and_backend_only() {
         "worker_turn_reports_failure_through_task_report_before_native_completion",
         "collaboration-tools-manifest.json",
         "deterministic-fake-transport",
-        "schemaVersion = 12",
+        "schemaVersion = 13",
     ] {
         assert!(
             script.contains(required),
@@ -6224,7 +6224,7 @@ async fn restart_owner_loss_and_emergency_spool_fold_into_startup_incidents_once
         .await
         .result
         .unwrap();
-    assert_eq!(status["schemaVersion"], 12);
+    assert_eq!(status["schemaVersion"], 13);
     assert_eq!(status["emergencyIncidentCount"], 1);
 }
 
@@ -6327,7 +6327,7 @@ fn minimum_incidents_acceptance_contract_is_deterministic_and_backend_only() {
         "incident_errors_use_exit_code_fifteen",
         "minimum-incidents-manifest.json",
         "deterministic-fake-transport",
-        "schemaVersion = 12",
+        "schemaVersion = 13",
     ] {
         assert!(
             script.contains(required),
@@ -6797,7 +6797,7 @@ fn result_delivery_acceptance_contract_is_deterministic_and_backend_only() {
         "externalModelUseAbsent",
         "uiChangesAbsent",
         "deterministic-fake-transport",
-        "schemaVersion = 12",
+        "schemaVersion = 13",
     ] {
         assert!(
             script.contains(required),
@@ -7304,7 +7304,7 @@ fn peer_messaging_acceptance_contract_is_deterministic_and_backend_only() {
         "externalModelUseAbsent",
         "uiChangesAbsent",
         "deterministic-fake-transport",
-        "schemaVersion = 12",
+        "schemaVersion = 13",
     ] {
         assert!(
             script.contains(required),
@@ -7427,7 +7427,7 @@ fn coalesced_notices_acceptance_contract_is_deterministic_and_backend_only() {
         "externalModelUseAbsent",
         "uiChangesAbsent",
         "deterministic-fake-transport",
-        "schemaVersion = 12",
+        "schemaVersion = 13",
     ] {
         assert!(
             script.contains(required),
@@ -7666,7 +7666,7 @@ fn activation_policy_acceptance_contract_is_deterministic_and_backend_only() {
         "externalModelUseAbsent",
         "uiChangesAbsent",
         "deterministic-fake-transport",
-        "schemaVersion = 12",
+        "schemaVersion = 13",
     ] {
         assert!(
             script.contains(required),
@@ -8033,7 +8033,7 @@ fn idle_suspension_acceptance_contract_is_deterministic_and_backend_only() {
         "externalModelUseAbsent",
         "uiChangesAbsent",
         "deterministic-fake-transport",
-        "schemaVersion = 12",
+        "schemaVersion = 13",
     ] {
         assert!(
             script.contains(required),
@@ -8317,7 +8317,7 @@ fn lead_remediation_acceptance_contract_is_deterministic_and_backend_only() {
         "externalModelUseAbsent",
         "uiChangesAbsent",
         "deterministic-fake-transport",
-        "schemaVersion = 12",
+        "schemaVersion = 13",
     ] {
         assert!(
             script.contains(required),
@@ -8359,7 +8359,7 @@ fn incident_thresholds_acceptance_contract_is_deterministic_and_backend_only() {
         "externalModelUseAbsent",
         "uiChangesAbsent",
         "deterministic-fake-transport",
-        "schemaVersion = 12",
+        "schemaVersion = 13",
     ] {
         assert!(
             script.contains(required),
@@ -8371,6 +8371,211 @@ fn incident_thresholds_acceptance_contract_is_deterministic_and_backend_only() {
         "apps\\lazoo-desktop\\src",
         "LivePrompt",
     ] {
+        assert!(
+            !script.contains(forbidden),
+            "acceptance script must not contain {forbidden}"
+        );
+    }
+}
+
+/// Records each desktop notification instead of showing it; `fail` refuses every one.
+#[derive(Default)]
+struct RecordingNotifier {
+    shown: Mutex<Vec<(String, String)>>,
+    fail: bool,
+}
+
+impl lazood::UserNotifier for RecordingNotifier {
+    fn notify(&self, title: &str, message: &str) -> Result<(), String> {
+        if self.fail {
+            return Err("no desktop session".to_owned());
+        }
+        self.shown
+            .lock()
+            .unwrap()
+            .push((title.to_owned(), message.to_owned()));
+        Ok(())
+    }
+}
+
+fn raise_scoped(
+    harness: &ToolHarness,
+    key: &str,
+    code: &str,
+    source: lazoo_protocol::IncidentSource,
+    employee: Option<uuid::Uuid>,
+) -> lazoo_protocol::IncidentRecord {
+    harness
+        .store
+        .raise_incident(&lazoo_store::RaiseIncidentInput {
+            request_id: format!("request-{key}"),
+            idempotency_key: key.to_owned(),
+            code: code.to_owned(),
+            source,
+            title: None,
+            explanation: None,
+            project_id: None,
+            employee_id: employee,
+            provider: None,
+            task_id: None,
+            session_id: None,
+            turn_id: None,
+            message_id: None,
+            detail: json!({}),
+            occurred_at: None,
+        })
+        .unwrap()
+        .incident
+}
+
+#[tokio::test]
+#[allow(clippy::too_many_lines)] // One desktop, from a single escalation to a coalesced burst.
+async fn user_escalations_reach_the_desktop_once_coalesced_and_never_retried() {
+    use chrono::{TimeDelta, Utc};
+    use lazoo_protocol::IncidentSource;
+
+    let (_temporary, harness) = tool_harness(AuthorityMode::SelfDecision);
+    let (_root_task_id, child_id) = delegate_without_waiting(&harness).await;
+    let recorder = Arc::new(RecordingNotifier::default());
+    let app = harness.app.clone().with_user_notifier(recorder.clone());
+
+    // A stall with no lead is the user's at once and is announced on its own.
+    let stall = raise_scoped(
+        &harness,
+        "stall",
+        "LZ-SESSION-STALLED",
+        IncidentSource::Daemon,
+        Some(harness.worker.id),
+    );
+    app.notify_user_escalations_once(Utc::now()).unwrap();
+    {
+        let shown = recorder.shown.lock().unwrap();
+        assert_eq!(shown.len(), 1);
+        assert_eq!(
+            shown[0].0,
+            "Lazoo needs you: Session accepted work but produced no progress"
+        );
+        assert!(shown[0].1.contains("never retries"), "{}", shown[0].1);
+        assert!(shown[0].1.len() <= 240);
+    }
+    let shown_stall = app
+        .handle(request(
+            "show-stall",
+            "incident.show",
+            json!({"id": stall.id}),
+        ))
+        .await
+        .result
+        .unwrap();
+    assert_eq!(shown_stall["userNotification"], "shown");
+    assert!(shown_stall["userNotifiedAt"].is_string());
+
+    // A lead window is not the user's yet; the keeper's own record is never announced twice.
+    let windowed = promote_child_incident(&harness, "timeout", "LZ-MESSAGE-TIMEOUT", child_id);
+    raise_scoped(
+        &harness,
+        "crash",
+        "LZ-DAEMON-UNAVAILABLE",
+        IncidentSource::Keeper,
+        None,
+    );
+    app.notify_user_escalations_once(Utc::now()).unwrap();
+    assert_eq!(recorder.shown.lock().unwrap().len(), 1);
+    let keeper = list_incidents(&app, json!({"code": "LZ-DAEMON-UNAVAILABLE"})).await;
+    assert_eq!(keeper[0]["userNotification"], "keeper");
+
+    // The window closes unremedied while another failure reaches the user: one notification
+    // names both.
+    let later = Utc::now() + TimeDelta::seconds(301);
+    app.escalate_due_incidents_once(later).unwrap();
+    raise_scoped(
+        &harness,
+        "lead-exit-1",
+        "LZ-PROCESS-EXIT",
+        IncidentSource::Daemon,
+        Some(harness.lead.id),
+    );
+    let second_exit = raise_scoped(
+        &harness,
+        "lead-exit-2",
+        "LZ-PROCESS-EXIT",
+        IncidentSource::Daemon,
+        Some(harness.lead.id),
+    );
+    app.notify_user_escalations_once(later).unwrap();
+    {
+        let shown = recorder.shown.lock().unwrap();
+        assert_eq!(shown.len(), 2);
+        assert_eq!(shown[1].0, "Lazoo: 2 incidents need you");
+        assert!(shown[1].1.contains(&windowed.title), "{}", shown[1].1);
+        assert!(shown[1].1.contains(&second_exit.title), "{}", shown[1].1);
+    }
+    app.notify_user_escalations_once(later).unwrap();
+    assert_eq!(
+        recorder.shown.lock().unwrap().len(),
+        2,
+        "nothing is announced twice"
+    );
+
+    // A notification the desktop refuses is recorded as failed and never retried.
+    let refusing = harness
+        .app
+        .clone()
+        .with_user_notifier(Arc::new(RecordingNotifier {
+            fail: true,
+            ..RecordingNotifier::default()
+        }));
+    let lost = raise_scoped(
+        &harness,
+        "lost",
+        "LZ-SESSION-STALLED",
+        IncidentSource::Daemon,
+        Some(harness.lead.id),
+    );
+    refusing.notify_user_escalations_once(Utc::now()).unwrap();
+    app.notify_user_escalations_once(Utc::now()).unwrap();
+    assert_eq!(recorder.shown.lock().unwrap().len(), 2);
+    let lost = harness.store.get_incident(lost.id).unwrap();
+    assert_eq!(
+        lost.user_notification,
+        Some(lazoo_protocol::IncidentUserNotification::Failed)
+    );
+    // Nothing about the work changed.
+    assert_eq!(
+        harness.store.get_task(child_id).unwrap().task.state,
+        lazoo_protocol::TaskState::Accepted
+    );
+}
+
+#[test]
+fn user_notifications_acceptance_contract_is_deterministic_and_backend_only() {
+    let repository = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let script_path = repository.join("scripts/acceptance/user-notifications.ps1");
+    let script =
+        std::fs::read_to_string(&script_path).expect("user notifications acceptance script");
+
+    for required in [
+        "incident_record_round_trips_with_camel_case_keys",
+        "user_escalations_are_claimed_once_and_their_outcome_is_never_rewritten",
+        "user_escalations_reach_the_desktop_once_coalesced_and_never_retried",
+        "version_eleven_priority_incidents_upgrade_straight_to_the_user",
+        "store_enables_wal_foreign_keys_and_schema_version",
+        "announcedAtMostOnce",
+        "burstCoalescedIntoOneNotification",
+        "keeperRecordsNotAnnouncedTwice",
+        "failedNotificationNeverRetried",
+        "providerSmokeAbsent",
+        "externalModelUseAbsent",
+        "uiChangesAbsent",
+        "deterministic-fake-transport",
+        "schemaVersion = 13",
+    ] {
+        assert!(
+            script.contains(required),
+            "acceptance script must contain {required}"
+        );
+    }
+    for forbidden in ["provider', 'smoke", "LivePrompt"] {
         assert!(
             !script.contains(forbidden),
             "acceptance script must not contain {forbidden}"

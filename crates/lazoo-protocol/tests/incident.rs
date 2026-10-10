@@ -1,7 +1,7 @@
 use lazoo_protocol::{
     AcknowledgeIncidentParams, INCIDENT_CONTRACT_V1, IncidentEscalation, IncidentEscalationReason,
     IncidentListParams, IncidentPriority, IncidentRecord, IncidentRemedyKind, IncidentRemedyRecord,
-    IncidentSource, IncidentState, ResolveIncidentParams,
+    IncidentSource, IncidentState, IncidentUserNotification, ResolveIncidentParams,
 };
 use serde_json::json;
 use uuid::Uuid;
@@ -55,6 +55,8 @@ fn incident_record() -> IncidentRecord {
             note: "try another worker".to_owned(),
             created_at: "2026-09-23T00:03:00Z".to_owned(),
         }],
+        user_notified_at: Some("2026-09-23T00:07:15Z".to_owned()),
+        user_notification: Some(IncidentUserNotification::Shown),
     }
 }
 
@@ -88,6 +90,10 @@ fn incident_enums_use_stable_kebab_case_wire_values() {
         serde_json::to_string(&IncidentRemedyKind::CancelTask).unwrap(),
         r#""cancel-task""#
     );
+    assert_eq!(
+        serde_json::to_string(&IncidentUserNotification::Keeper).unwrap(),
+        r#""keeper""#
+    );
 }
 
 #[test]
@@ -102,6 +108,7 @@ fn incident_record_round_trips_with_camel_case_keys() {
     assert_eq!(value["remediationDeadlineAt"], "2026-09-23T00:07:00Z");
     assert_eq!(value["remedies"][0]["kind"], "redelegate-task");
     assert_eq!(value["remedies"][0]["occurrencesAtRemedy"], 3);
+    assert_eq!(value["userNotification"], "shown");
     let parsed: IncidentRecord = serde_json::from_value(value.clone()).unwrap();
     assert_eq!(parsed, record);
 
@@ -113,12 +120,15 @@ fn incident_record_round_trips_with_camel_case_keys() {
         "escalatedAt",
         "escalationReason",
         "remedies",
+        "userNotifiedAt",
+        "userNotification",
     ] {
         legacy.as_object_mut().unwrap().remove(field);
     }
     let legacy: IncidentRecord = serde_json::from_value(legacy).unwrap();
     assert_eq!(legacy.escalation, IncidentEscalation::None);
     assert!(legacy.remedies.is_empty());
+    assert!(legacy.user_notification.is_none());
 }
 
 #[test]

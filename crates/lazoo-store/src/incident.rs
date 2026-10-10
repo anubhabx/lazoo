@@ -23,7 +23,7 @@ const INCIDENT_COLUMNS: &str = "sequence, contract_version, id, code, fingerprin
     message_id, source, detail_json, occurrences, window_occurrences, first_occurred_at,
     last_occurred_at, window_started_at, priority, state, revision, created_at, updated_at,
     acknowledged_at, resolved_at, escalation, remediation_deadline_at, escalated_at,
-    escalation_reason";
+    escalation_reason, user_notified_at, user_notification";
 const REMEDY_COLUMNS: &str = "id, incident_id, attempt, kind, lead_employee_id, lead_task_id,
     turn_id, target_task_id, result_task_id, occurrences_at_remedy, note, created_at";
 
@@ -511,6 +511,94 @@ impl Store {
         }
         transaction.commit()?;
         Ok(changed)
+    }
+
+    /// Claims every open, user-escalated incident not yet announced, oldest first, in one
+    /// transaction, so each is announced at most once. Keeper records are settled as `keeper`
+    /// here (the keeper already raised its own notification); the rest are marked `claimed`
+    /// and returned for the daemon to announce and then settle.
+    pub fn claim_user_notifications(
+        &self,
+        now: DateTime<Utc>,
+        limit: u32,
+    ) -> Result<Vec<IncidentRecord>, StoreError> {
+        let mut connection = self.lock()?;
+        let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let ids = {
+            let mut statement = transaction.prepare(
+                "SELECT id, source FROM incidents
+                 WHERE escalation = 'user' AND state = 'open' AND user_notified_at IS NULL
+                 ORDER BY sequence LIMIT ?1",
+            )?;
+            statement
+                .query_map([i64::from(limit)], |row| {
+                    Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+                })?
+                .collect::<Result<Vec<_>, _>>()?
+        };
+        let stamp = now.to_rfc3339();
+        let mut claimed = Vec::new();
+        for (id, source) in ids {
+            let keeper = source == "keeper";
+            transaction.execute(
+                "UPDATE incidents SET user_notified_at = ?2, user_notification = ?3,
+                        revision = revision + 1, updated_at = ?2
+                 WHERE id = ?1",
+                params![id, stamp, if keeper { "keeper" } else { "claimed" }],
+            )?;
+            let record =
+                required_incident(&transaction, employee::parse_uuid(&id, "incidents.id")?)?;
+            if keeper {
+                employee::insert_event(
+                    &transaction,
+                    "incident.user-notified",
+                    &json!({"incident": &record}),
+                    &stamp,
+                )?;
+            } else {
+                claimed.push(record);
+            }
+        }
+        transaction.commit()?;
+        Ok(claimed)
+    }
+
+    /// Records whether the notification for claimed incidents was shown. Only `claimed` rows
+    /// change, so a settled outcome is never rewritten.
+    pub fn settle_user_notifications(
+        &self,
+        incident_ids: &[Uuid],
+        shown: bool,
+    ) -> Result<Vec<IncidentRecord>, StoreError> {
+        let mut connection = self.lock()?;
+        let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let now = Utc::now().to_rfc3339();
+        let mut settled = Vec::new();
+        for incident_id in incident_ids {
+            let changed = transaction.execute(
+                "UPDATE incidents SET user_notification = ?2, revision = revision + 1,
+                        updated_at = ?3
+                 WHERE id = ?1 AND user_notification = 'claimed'",
+                params![
+                    incident_id.to_string(),
+                    if shown { "shown" } else { "failed" },
+                    now
+                ],
+            )?;
+            if changed == 0 {
+                continue;
+            }
+            let record = required_incident(&transaction, *incident_id)?;
+            employee::insert_event(
+                &transaction,
+                "incident.user-notified",
+                &json!({"incident": &record}),
+                &now,
+            )?;
+            settled.push(record);
+        }
+        transaction.commit()?;
+        Ok(settled)
     }
 
     /// Applies one remedy for the lead whose turn is `turn_id`. The remedy row, the action it
@@ -1075,6 +1163,8 @@ struct RawIncident {
     remediation_deadline_at: Option<String>,
     escalated_at: Option<String>,
     escalation_reason: Option<String>,
+    user_notified_at: Option<String>,
+    user_notification: Option<String>,
 }
 
 fn raw_incident(row: &rusqlite::Row<'_>) -> rusqlite::Result<RawIncident> {
@@ -1112,6 +1202,8 @@ fn raw_incident(row: &rusqlite::Row<'_>) -> rusqlite::Result<RawIncident> {
         remediation_deadline_at: row.get(30)?,
         escalated_at: row.get(31)?,
         escalation_reason: row.get(32)?,
+        user_notified_at: row.get(33)?,
+        user_notification: row.get(34)?,
     })
 }
 
@@ -1154,6 +1246,11 @@ fn incident_from_raw(raw: RawIncident) -> Result<IncidentRecord, StoreError> {
             .map(|reason| serde_json::from_value(Value::String(reason)))
             .transpose()?,
         remedies: Vec::new(),
+        user_notified_at: raw.user_notified_at,
+        user_notification: raw
+            .user_notification
+            .map(|value| serde_json::from_value(Value::String(value)))
+            .transpose()?,
     })
 }
 

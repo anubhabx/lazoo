@@ -1,10 +1,10 @@
-# Next session: post-incident-thresholds backend boundary
+# Next session: post-user-notifications backend boundary
 
 ## Current owner boundary
 
 Backend orchestration remains the active scope. UI implementation is owned separately. Do not change the desktop frontend, Tauri command surface, `desktop.snapshot`, or UI capabilities without a separate reviewed desktop contract.
 
-This handoff does not authorize ConPTY, terminal I/O, session-wide approval grants, per-capability policy, managed memory, resource governance, scheduling, other-provider task delivery, approval bridging, or tool surfaces, any activation trigger other than a recorded notice turn for an employee the user set to `notice-turns`, any suspension trigger other than the employee's own idle timeout, any remedy other than `cancel-task` and `redelegate-task` on a direct child of the lead's root task, user notification channels beyond the incident ledger and event stream, cross-tree or user-to-employee messaging through the tools, provider smoke, or a live model turn.
+This handoff does not authorize ConPTY, terminal I/O, session-wide approval grants, per-capability policy, managed memory, resource governance, scheduling, other-provider task delivery, approval bridging, or tool surfaces, any activation trigger other than a recorded notice turn for an employee the user set to `notice-turns`, any suspension trigger other than the employee's own idle timeout, any remedy other than `cancel-task` and `redelegate-task` on a direct child of the lead's root task, any notification other than the one Windows notification per user escalation, cross-tree or user-to-employee messaging through the tools, provider smoke, or a live model turn.
 
 ## Completed backend baseline
 
@@ -13,17 +13,18 @@ This handoff does not authorize ConPTY, terminal I/O, session-wide approval gran
 - `remediation_verdict` in `lazoo-domain` is the whole rule. The daemon's timed sweep (`run_timed_sweeps`, every 15 seconds beside idle suspension) closes passed windows: no recurrence since the lead's last remedy makes the incident `remediated`; anything else unresolved becomes `escalation: user` with `no-remedy` or `recurred-after-remedy`. A recurrence after the second remedy, or after a remediated window, reaches the user in the transaction that records it. Escalation never acknowledges, resolves, retries, restarts, or reassigns anything.
 - `lazooctl incident list --escalation user` lists the priority notifications; `incident show` includes the remedies.
 - Section 14.2's default thresholds apply per code (no schema change): `LZ-SESSION-STALLED`, `LZ-DAEMON-UNAVAILABLE`, and an `LZ-PROCESS-EXIT` tied to a task are promoted by their first occurrence (the incident is born `priority` with its escalation, and its event is `incident.escalated`), any other `LZ-PROCESS-EXIT` by its second, and every other code by three inside five minutes. The dead-lettered priority message threshold waits for a message priority field.
+- Schema 13 announces each open incident that reaches `escalation: user` on the Windows desktop at most once, through `UserNotifier` (default `NativeNotifier`, the keeper's toast) from the timed sweep: claimed before it is shown, one notification per pass (a count when several arrive together), recorded as `shown` or `failed` and never retried, and settled as `keeper` without a second notification for a keeper record.
 - The idle-suspension (`4d2ff45`, pull request #2), activation-policy (`c8b9c8f`), coalesced-notices (`2c28a0e`), peer-messaging (`176979c`), result-delivery (`b320946`), minimum-incidents (`762aec2`, `24a851a`), and collaboration-tools (`d72de10`) slices underneath are unchanged apart from the shared `cancel_task_tx`, `delegate_task_tx`, `cancel_dispatch_turn`, and `incident_lead_root` helpers they now route through. Every acceptance script asserts schema 12.
 - The desktop snapshot and every file under `apps/lazoo-desktop` remain unchanged.
-- The repository lives at `github.com/anubhabx/lazoo`; every slice lands as a pull request. Lead remediation is pull request #3, stacked on #2; incident thresholds are pull request #4, stacked on #3. Merge in that order; each retargets when its base merges.
+- The repository lives at `github.com/anubhabx/lazoo`; every slice lands as a pull request. Lead remediation is pull request #3, stacked on #2; incident thresholds are pull request #4, stacked on #3; user notifications are pull request #5, stacked on #4. Merge in that order; each retargets when its base merges.
 
 ## Deterministic acceptance
 
-`scripts/acceptance/lead-remediation.ps1` runs focused domain, store, CLI, and daemon fake-backend proofs and writes `artifacts/acceptance/lead-remediation-manifest.json`; `scripts/acceptance/incident-thresholds.ps1` does the same for the thresholds and writes `artifacts/acceptance/incident-thresholds-manifest.json`.
+`scripts/acceptance/lead-remediation.ps1` runs focused domain, store, CLI, and daemon fake-backend proofs and writes `artifacts/acceptance/lead-remediation-manifest.json`; `scripts/acceptance/incident-thresholds.ps1` does the same for the thresholds and writes `artifacts/acceptance/incident-thresholds-manifest.json`; `scripts/acceptance/user-notifications.ps1` proves the notification with a recording notifier and writes `artifacts/acceptance/user-notifications-manifest.json`.
 
 No provider smoke or live model turn is part of this slice. A live Codex gate (a real model calling the nine tools, asking a sibling a question through `message_send`, receiving several results as one notice turn after its turn ended, applying a remedy to a promoted incident, being suspended by its idle timeout, and being woken once by policy for that turn) remains the natural next authorized live proof and must be run explicitly.
 
-See `docs/verification/2026-10-10-lead-remediation.md` and `docs/verification/2026-10-10-incident-thresholds.md`.
+See `docs/verification/2026-10-10-lead-remediation.md`, `docs/verification/2026-10-10-incident-thresholds.md`, and `docs/verification/2026-10-10-user-notifications.md`.
 
 ## Next backend objective
 
@@ -31,9 +32,9 @@ Choose and design one separately reviewed slice:
 
 - **Message-arrival notification**: replace the 250 ms polls inside `task_wait` and `message_send` with a store-change notify, keeping the same bounded waits and evidence.
 - **Live Codex gate**: one explicitly authorized model turn proving the nine tools, one peer exchange, one coalesced result turn, one remedy, one idle suspension, and one policy activation end to end through the real app-server.
-- **User notification channel**: a native Windows notification for each incident that reaches `escalation: user`, through the keeper's existing emergency path, so the user hears about it without reading the CLI.
+- **Typed desktop Inbox contract**: a reviewed, typed read model for tasks, approvals, incidents (with escalation, remedies, and notification state), notices, and messages, so the separately owned UI can bind to it; design only until the UI owner agrees.
 
-Do not combine these boundaries implicitly. Configurable thresholds, a message priority field with its dead-letter threshold, typed desktop Inbox binding (tasks, approvals, incidents, notices, messages), cross-tree and user-to-employee messaging, remedies that start a provider process, ConPTY, a deadline-driven sweep, and ACP approval bridging remain available candidates behind those.
+Do not combine these boundaries implicitly. Configurable thresholds, a message priority field with its dead-letter threshold, notification actions and quiet hours (tasks, approvals, incidents, notices, messages), cross-tree and user-to-employee messaging, remedies that start a provider process, ConPTY, a deadline-driven sweep, and ACP approval bridging remain available candidates behind those.
 
 Do not emit `UI BACKEND CONTRACT: GO` yet. Approval, dispatch, task, tool, incident, escalation, remedy, notice, message, activation-policy, and idle-timeout read models exist in the daemon, but the typed desktop-facing contract has not been separately reviewed.
 
