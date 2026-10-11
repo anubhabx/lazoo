@@ -41,7 +41,7 @@ All commands were run from `C:\workspace\Orchestrator` on branch `feat/message-a
 | `cargo test --workspace --locked` | 0 | One invocation, 353 passed, 0 failed, 11 ignored (explicit live-provider tests). New: `lazood` 2 (the paused-clock wake test and the acceptance-script contract; 93 daemon tests). |
 | Paused-clock test against the previous polling code | 101 | Expected failure: "the waits slept 500ms of virtual time instead of waking on the write", which proves the test detects polling. |
 | `cargo build --workspace --release --locked` | 0 | Locked release build. |
-| `scripts\acceptance\message-arrival.ps1` | 0 | PASS schema-13 manifest, `deterministic-fake-transport`, 5 commands, every evidence flag true. |
+| `scripts\acceptance\message-arrival.ps1` | 0 | PASS schema-13 manifest, `deterministic-fake-transport`, 6 commands, every evidence flag true. |
 | `user-notifications`, `incident-thresholds`, `lead-remediation`, `idle-suspension`, `activation-policy`, `coalesced-notices`, `peer-messaging`, `result-delivery`, `minimum-incidents`, `collaboration-tools`, `approval-gate`, `automatic-task-dispatch` | 0 | PASS schema-13 manifests. |
 | `first-slice`, `employee-roster`, `collaboration-bus`, `conversation-delivery`, `task-delegation-graph`, each with `-SkipBuild` | 0 | PASS manifests against the real release binaries, with the store-change wakeup running in the real daemon. |
 | `scripts\acceptance\native-session-ownership.ps1 -SkipBuild -Provider codex` | 0 | PASS manifest; real Codex CLI, non-model session contract only. |
