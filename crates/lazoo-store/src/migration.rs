@@ -54,6 +54,10 @@ const MIGRATIONS: &[(u32, &str)] = &[
         14,
         include_str!("../../../migrations/0014_message_priority.sql"),
     ),
+    (
+        15,
+        include_str!("../../../migrations/0015_incident_thresholds.sql"),
+    ),
 ];
 
 pub fn apply_migrations(connection: &mut Connection) -> Result<(), StoreError> {

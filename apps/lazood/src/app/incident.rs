@@ -8,13 +8,14 @@
 use chrono::{DateTime, Utc};
 use lazoo_protocol::{
     AcknowledgeIncidentParams, ConversationTurnRecord, EmployeeSessionRecord, IncidentListParams,
-    IncidentShowParams, IncidentSource, JsonRpcRequest, MessageRecord, ResolveIncidentParams,
-    RpcError, TaskRecord,
+    IncidentShowParams, IncidentSource, JsonRpcRequest, MessageRecord,
+    ResetIncidentThresholdParams, ResolveIncidentParams, RpcError, SetIncidentThresholdParams,
+    TaskRecord,
 };
 use lazoo_providers::ProviderError;
 use lazoo_store::{
-    ListIncidentsInput, RaiseIncidentInput, SettleIncidentInput, StoreError,
-    dead_letter_incident_key,
+    ListIncidentsInput, RaiseIncidentInput, SetIncidentThresholdInput, SettleIncidentInput,
+    StoreError, dead_letter_incident_key,
 };
 use serde_json::{Value, json};
 use uuid::Uuid;
@@ -272,6 +273,40 @@ impl App {
         if let Err(error) = self.note_priority_dead_letters_once() {
             tracing::warn!(code = %error.code, message = %error.message, "dead-letter incidents failed");
         }
+    }
+
+    /// Every described or configured code with its effective threshold. Only the local user
+    /// reads and sets thresholds; no collaboration tool can.
+    pub(super) fn incident_threshold_list(&self, value: &Value) -> Result<Value, RpcError> {
+        super::require_empty_params(value, "incident.threshold.list")?;
+        self.store
+            .list_incident_thresholds()
+            .map(to_value)
+            .map_err(incident_store_error)
+    }
+
+    pub(super) fn set_incident_threshold(&self, value: &Value) -> Result<Value, RpcError> {
+        let params: SetIncidentThresholdParams = incident_params(value)?;
+        let result = self
+            .store
+            .set_incident_threshold(&SetIncidentThresholdInput {
+                code: params.code,
+                occurrences: params.occurrences,
+                window_seconds: params.window_seconds,
+            })
+            .map_err(incident_store_error)?;
+        self.publish_events()?;
+        Ok(to_value(result))
+    }
+
+    pub(super) fn reset_incident_threshold(&self, value: &Value) -> Result<Value, RpcError> {
+        let params: ResetIncidentThresholdParams = incident_params(value)?;
+        let result = self
+            .store
+            .reset_incident_threshold(&params.code)
+            .map_err(incident_store_error)?;
+        self.publish_events()?;
+        Ok(to_value(result))
     }
 
     pub(super) fn incident_list(&self, value: &Value) -> Result<Value, RpcError> {

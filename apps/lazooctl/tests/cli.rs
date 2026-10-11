@@ -1184,3 +1184,58 @@ fn incident_errors_use_exit_code_fifteen() {
         );
     }
 }
+
+#[test]
+fn incident_cli_maps_threshold_list_set_and_reset() {
+    let request = |args: &[&str]| {
+        let mut argv = vec!["lazooctl", "incident", "threshold"];
+        argv.extend_from_slice(args);
+        command_request(&Cli::try_parse_from(argv).unwrap().command)
+    };
+    assert_eq!(
+        request(&["list"]),
+        ("incident.threshold.list", json!({}), false)
+    );
+    assert_eq!(
+        request(&["set", "LZ-SESSION-STALLED", "--occurrences", "2"]),
+        (
+            "incident.threshold.set",
+            json!({"code": "LZ-SESSION-STALLED", "occurrences": 2, "windowSeconds": 300}),
+            false
+        )
+    );
+    assert_eq!(
+        request(&[
+            "set",
+            "LZ-MESSAGE-TIMEOUT",
+            "--occurrences",
+            "5",
+            "--window-seconds",
+            "900"
+        ]),
+        (
+            "incident.threshold.set",
+            json!({"code": "LZ-MESSAGE-TIMEOUT", "occurrences": 5, "windowSeconds": 900}),
+            false
+        )
+    );
+    assert_eq!(
+        request(&["reset", "LZ-SESSION-STALLED"]),
+        (
+            "incident.threshold.reset",
+            json!({"code": "LZ-SESSION-STALLED"}),
+            false
+        )
+    );
+    assert!(
+        Cli::try_parse_from([
+            "lazooctl",
+            "incident",
+            "threshold",
+            "set",
+            "LZ-SESSION-STALLED"
+        ])
+        .is_err(),
+        "--occurrences is required"
+    );
+}

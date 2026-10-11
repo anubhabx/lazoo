@@ -205,6 +205,54 @@ pub struct ResolveIncidentParams {
     pub idempotency_key: String,
 }
 
+/// Whether a code's threshold is section 14.2's default or the local user's override.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum IncidentThresholdSource {
+    Default,
+    Configured,
+}
+
+/// The persistent-failure threshold for one code: `occurrences` equivalent failures inside
+/// `windowSeconds` promote its incident. A death under assigned work and a dead-lettered
+/// priority message promote at once whatever is configured.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct IncidentThresholdRecord {
+    pub code: String,
+    pub occurrences: u64,
+    pub window_seconds: u64,
+    pub source: IncidentThresholdSource,
+    pub updated_at: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct IncidentThresholdMutationResult {
+    pub threshold: IncidentThresholdRecord,
+    /// `None` when the threshold already had this value.
+    pub event_sequence: Option<u64>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct SetIncidentThresholdParams {
+    pub code: String,
+    pub occurrences: u64,
+    #[serde(default = "default_threshold_window_seconds")]
+    pub window_seconds: u64,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct ResetIncidentThresholdParams {
+    pub code: String,
+}
+
 const fn default_list_limit() -> u32 {
     100
+}
+
+const fn default_threshold_window_seconds() -> u64 {
+    5 * 60
 }

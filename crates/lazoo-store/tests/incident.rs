@@ -307,7 +307,7 @@ fn emergency_spool_records_fold_into_keeper_incidents_exactly_once() {
     )
     .unwrap();
     let store = Store::open_path(root.state_db()).unwrap();
-    assert_eq!(store.status().unwrap().schema_version, 14);
+    assert_eq!(store.status().unwrap().schema_version, 15);
     assert_eq!(store.import_pending_incidents(&root).unwrap(), 2);
 
     let raised = store.reconcile_emergency_incidents().unwrap();
@@ -660,4 +660,165 @@ fn one_dead_lettered_priority_message_is_a_priority_incident_raised_once() {
         .unwrap()
         .incident;
     assert_eq!(timeout.priority, IncidentPriority::Normal);
+}
+
+fn threshold(
+    code: &str,
+    occurrences: u64,
+    window_seconds: u64,
+) -> lazoo_store::SetIncidentThresholdInput {
+    lazoo_store::SetIncidentThresholdInput {
+        code: code.to_owned(),
+        occurrences,
+        window_seconds,
+    }
+}
+
+#[test]
+#[allow(clippy::too_many_lines)] // One override's life: set, applied, windowed, lowered, reset.
+fn configured_thresholds_apply_from_the_next_occurrence_and_reset_to_the_default() {
+    use lazoo_domain::IncidentValidationError;
+    use lazoo_protocol::IncidentThresholdSource;
+
+    let (_temporary, store, employee_id) = store_with_employee();
+    let defaults = store.list_incident_thresholds().unwrap();
+    assert!(defaults.windows(2).all(|pair| pair[0].code < pair[1].code));
+    let stall = defaults
+        .iter()
+        .find(|row| row.code == "LZ-SESSION-STALLED")
+        .unwrap();
+    assert_eq!(stall.occurrences, 1);
+    assert_eq!(stall.window_seconds, 300);
+    assert_eq!(stall.source, IncidentThresholdSource::Default);
+    assert!(stall.updated_at.is_none());
+
+    // Stalls on a slow model: promote only the second inside ten minutes.
+    let set = store
+        .set_incident_threshold(&threshold("LZ-SESSION-STALLED", 2, 600))
+        .unwrap();
+    assert_eq!(set.threshold.source, IncidentThresholdSource::Configured);
+    assert_eq!(set.threshold.occurrences, 2);
+    assert!(set.threshold.updated_at.is_some());
+    assert!(set.event_sequence.is_some());
+    let unchanged = store
+        .set_incident_threshold(&threshold("LZ-SESSION-STALLED", 2, 600))
+        .unwrap();
+    assert!(
+        unchanged.event_sequence.is_none(),
+        "the same value is no change"
+    );
+    let first = store
+        .raise_incident(&raise("stall-1", "LZ-SESSION-STALLED", Some(employee_id)))
+        .unwrap()
+        .incident;
+    assert_eq!(first.priority, IncidentPriority::Normal);
+    let second = store
+        .raise_incident(&raise("stall-2", "LZ-SESSION-STALLED", Some(employee_id)))
+        .unwrap()
+        .incident;
+    assert_eq!(second.priority, IncidentPriority::Priority);
+
+    // A configured window counts occurrences further apart than the default five minutes.
+    store
+        .set_incident_threshold(&threshold("LZ-WORKTREE-CONFLICT", 2, 600))
+        .unwrap();
+    for (key, at) in [
+        ("conflict-1", "2026-10-11T00:00:00+00:00"),
+        ("conflict-2", "2026-10-11T00:06:40+00:00"),
+    ] {
+        store
+            .raise_incident(&RaiseIncidentInput {
+                occurred_at: Some(at.to_owned()),
+                ..raise(key, "LZ-WORKTREE-CONFLICT", Some(employee_id))
+            })
+            .unwrap();
+    }
+    let conflicts = store
+        .list_incidents(&ListIncidentsInput {
+            limit: 10,
+            code: Some("LZ-WORKTREE-CONFLICT".to_owned()),
+            ..ListIncidentsInput::default()
+        })
+        .unwrap();
+    assert_eq!(conflicts[0].priority, IncidentPriority::Priority);
+
+    // Lowered: one timeout is enough. An override for a code not yet described is kept.
+    store
+        .set_incident_threshold(&threshold("LZ-MESSAGE-TIMEOUT", 1, 300))
+        .unwrap();
+    let timeout = store
+        .raise_incident(&raise("timeout-1", "LZ-MESSAGE-TIMEOUT", Some(employee_id)))
+        .unwrap()
+        .incident;
+    assert_eq!(timeout.priority, IncidentPriority::Priority);
+    store
+        .set_incident_threshold(&threshold("LZ-RATE-LIMIT", 4, 900))
+        .unwrap();
+    let listed = store.list_incident_thresholds().unwrap();
+    let rate = listed
+        .iter()
+        .find(|row| row.code == "LZ-RATE-LIMIT")
+        .unwrap();
+    assert_eq!((rate.occurrences, rate.window_seconds), (4, 900));
+    assert_eq!(rate.source, IncidentThresholdSource::Configured);
+    assert_eq!(listed.len(), defaults.len() + 1);
+
+    // Reset returns the default; a promoted incident is never demoted.
+    let reset = store
+        .reset_incident_threshold("LZ-SESSION-STALLED")
+        .unwrap();
+    assert_eq!(reset.threshold.source, IncidentThresholdSource::Default);
+    assert_eq!(reset.threshold.occurrences, 1);
+    assert!(reset.event_sequence.is_some());
+    assert!(
+        store
+            .reset_incident_threshold("LZ-SESSION-STALLED")
+            .unwrap()
+            .event_sequence
+            .is_none()
+    );
+    assert_eq!(
+        store.get_incident(second.id).unwrap().priority,
+        IncidentPriority::Priority
+    );
+    let fresh = store
+        .raise_incident(&raise("stall-fresh", "LZ-SESSION-STALLED", None))
+        .unwrap()
+        .incident;
+    assert_eq!(fresh.priority, IncidentPriority::Priority);
+
+    for (input, expected) in [
+        (
+            threshold("LZ-MESSAGE-TIMEOUT", 0, 300),
+            IncidentValidationError::ThresholdRange,
+        ),
+        (
+            threshold("LZ-MESSAGE-TIMEOUT", 3, 30),
+            IncidentValidationError::ThresholdRange,
+        ),
+        (
+            threshold("not-a-code", 3, 300),
+            IncidentValidationError::CodeInvalid,
+        ),
+    ] {
+        assert!(matches!(
+            store.set_incident_threshold(&input),
+            Err(StoreError::IncidentValidation(error)) if error == expected
+        ));
+    }
+    let events = incident_event_types(&store);
+    assert_eq!(
+        events
+            .iter()
+            .filter(|kind| *kind == "incident.threshold-set")
+            .count(),
+        4
+    );
+    assert_eq!(
+        events
+            .iter()
+            .filter(|kind| *kind == "incident.threshold-reset")
+            .count(),
+        1
+    );
 }

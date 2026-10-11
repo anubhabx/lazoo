@@ -22,7 +22,9 @@ pub use incident::{
     AcknowledgeIncidentParams, INCIDENT_CONTRACT_V1, IncidentEscalation, IncidentEscalationReason,
     IncidentListParams, IncidentMutationResult, IncidentPriority, IncidentRecord,
     IncidentRemedyKind, IncidentRemedyRecord, IncidentShowParams, IncidentSource, IncidentState,
-    IncidentUserNotification, ResolveIncidentParams,
+    IncidentThresholdMutationResult, IncidentThresholdRecord, IncidentThresholdSource,
+    IncidentUserNotification, ResetIncidentThresholdParams, ResolveIncidentParams,
+    SetIncidentThresholdParams,
 };
 pub use message::{
     AcknowledgeMessageParams, CancelMessageParams, ClaimMessageParams, FailMessageParams,

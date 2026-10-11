@@ -42,7 +42,7 @@ pub use employee::{
 };
 pub use incident::{
     ApplyIncidentRemedyInput, IncidentRemedyAction, IncidentRemedyResult, ListIncidentsInput,
-    RaiseIncidentInput, SettleIncidentInput, dead_letter_incident_key,
+    RaiseIncidentInput, SetIncidentThresholdInput, SettleIncidentInput, dead_letter_incident_key,
 };
 pub use message::{
     AcknowledgeMessageInput, CancelMessageInput, ClaimMessageInput, FailMessageInput,

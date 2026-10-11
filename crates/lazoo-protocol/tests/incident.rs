@@ -157,3 +157,47 @@ fn incident_params_have_defaults_and_reject_unknown_fields() {
         "resolution must cite the revision it is bound to"
     );
 }
+
+#[test]
+fn incident_threshold_contracts_are_strict_and_default_to_five_minutes() {
+    use lazoo_protocol::{
+        IncidentThresholdRecord, IncidentThresholdSource, ResetIncidentThresholdParams,
+        SetIncidentThresholdParams,
+    };
+
+    let set: SetIncidentThresholdParams = serde_json::from_value(json!({
+        "code": "LZ-SESSION-STALLED",
+        "occurrences": 2
+    }))
+    .unwrap();
+    assert_eq!(set.window_seconds, 300);
+    assert!(
+        serde_json::from_value::<SetIncidentThresholdParams>(json!({
+            "code": "LZ-SESSION-STALLED",
+            "occurrences": 2,
+            "unexpected": true
+        }))
+        .is_err()
+    );
+    let reset: ResetIncidentThresholdParams =
+        serde_json::from_value(json!({"code": "LZ-SESSION-STALLED"})).unwrap();
+    assert_eq!(reset.code, "LZ-SESSION-STALLED");
+
+    let record = IncidentThresholdRecord {
+        code: "LZ-SESSION-STALLED".to_owned(),
+        occurrences: 2,
+        window_seconds: 600,
+        source: IncidentThresholdSource::Configured,
+        updated_at: Some("2026-10-11T00:00:00Z".to_owned()),
+    };
+    assert_eq!(
+        serde_json::to_value(&record).unwrap(),
+        json!({
+            "code": "LZ-SESSION-STALLED",
+            "occurrences": 2,
+            "windowSeconds": 600,
+            "source": "configured",
+            "updatedAt": "2026-10-11T00:00:00Z"
+        })
+    );
+}

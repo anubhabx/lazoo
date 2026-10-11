@@ -30,6 +30,8 @@ pub enum IncidentValidationError {
     DetailTooLarge,
     #[error("incident list limit must be between 1 and 1024")]
     ListLimit,
+    #[error("incident threshold must be 1 to 100 occurrences inside 60 to 86400 seconds")]
+    ThresholdRange,
 }
 
 /// Human-readable text for one incident code. Employees and operators read this before any raw
@@ -207,11 +209,15 @@ pub fn incident_fingerprint(
     hex
 }
 
-/// Advances the threshold window for one more occurrence. Returns whether the window restarted
-/// and the occurrence count inside the current window.
+/// Advances a `window_seconds` threshold window for one more occurrence. Returns whether the
+/// window restarted and the occurrence count inside the current window.
 #[must_use]
-pub const fn incident_window(elapsed_seconds: i64, window_occurrences: u64) -> (bool, u64) {
-    if elapsed_seconds < 0 || elapsed_seconds > INCIDENT_THRESHOLD_WINDOW_SECONDS {
+pub const fn incident_window(
+    elapsed_seconds: i64,
+    window_occurrences: u64,
+    window_seconds: i64,
+) -> (bool, u64) {
+    if elapsed_seconds < 0 || elapsed_seconds > window_seconds {
         (true, 1)
     } else {
         (false, window_occurrences + 1)
@@ -227,31 +233,93 @@ pub struct IncidentFacts {
     pub priority_message: bool,
 }
 
-/// The persistent-failure threshold for one incident code (brief section 14.2): how many
-/// equivalent occurrences inside one window promote the incident to `priority`.
-#[must_use]
-pub fn incident_threshold(code: &str, facts: IncidentFacts) -> u64 {
-    match code {
-        // Missed progress evidence past the adapter's deadline, and a daemon crash.
-        "LZ-SESSION-STALLED" | "LZ-DAEMON-UNAVAILABLE" => 1,
-        // An employee process that dies while it holds assigned work...
-        "LZ-PROCESS-EXIT" if facts.names_task => 1,
-        // ...or exits unexpectedly twice.
-        "LZ-PROCESS-EXIT" => 2,
-        // One dead-lettered priority message.
-        "LZ-MESSAGE-DEADLETTER" if facts.priority_message => 1,
-        _ => INCIDENT_THRESHOLD_OCCURRENCES,
+/// How many equivalent occurrences inside how long a window promote an incident to `priority`.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct IncidentThreshold {
+    pub occurrences: u64,
+    pub window_seconds: i64,
+}
+
+impl IncidentThreshold {
+    #[must_use]
+    pub const fn crossed(self, window_occurrences: u64) -> bool {
+        window_occurrences >= self.occurrences
     }
 }
 
+/// Section 14.2's default threshold for one code, which the local user may override.
 #[must_use]
-pub fn incident_threshold_crossed(
+pub fn default_incident_threshold(code: &str) -> IncidentThreshold {
+    let occurrences = match code {
+        // Missed progress evidence past the adapter's deadline, and a daemon crash.
+        "LZ-SESSION-STALLED" | "LZ-DAEMON-UNAVAILABLE" => 1,
+        // An employee process that exits unexpectedly twice.
+        "LZ-PROCESS-EXIT" => 2,
+        _ => INCIDENT_THRESHOLD_OCCURRENCES,
+    };
+    IncidentThreshold {
+        occurrences,
+        window_seconds: INCIDENT_THRESHOLD_WINDOW_SECONDS,
+    }
+}
+
+/// The threshold one failure is judged against (brief section 14.2): the user's override for
+/// its code when there is one, otherwise the default. Two failures are about what was lost, not
+/// how often, and promote at once whatever is configured: an employee process that dies while it
+/// holds assigned work, and a dead-lettered priority message.
+#[must_use]
+pub fn incident_threshold(
     code: &str,
     facts: IncidentFacts,
-    window_occurrences: u64,
-) -> bool {
-    window_occurrences >= incident_threshold(code, facts)
+    configured: Option<IncidentThreshold>,
+) -> IncidentThreshold {
+    let threshold = configured.unwrap_or_else(|| default_incident_threshold(code));
+    let lost = (code == "LZ-PROCESS-EXIT" && facts.names_task)
+        || (code == "LZ-MESSAGE-DEADLETTER" && facts.priority_message);
+    if lost {
+        IncidentThreshold {
+            occurrences: 1,
+            ..threshold
+        }
+    } else {
+        threshold
+    }
 }
+
+/// A threshold the local user may configure: 1 to 100 occurrences inside one minute to one day.
+pub fn validate_incident_threshold(
+    occurrences: u64,
+    window_seconds: u64,
+) -> Result<IncidentThreshold, IncidentValidationError> {
+    if !(1..=100).contains(&occurrences) || !(60..=86_400).contains(&window_seconds) {
+        return Err(IncidentValidationError::ThresholdRange);
+    }
+    Ok(IncidentThreshold {
+        occurrences,
+        window_seconds: i64::try_from(window_seconds)
+            .map_err(|_| IncidentValidationError::ThresholdRange)?,
+    })
+}
+
+/// Every code Lazoo describes in its own words; `incident threshold list` shows each of them.
+pub const DESCRIBED_INCIDENT_CODES: &[&str] = &[
+    "LZ-PROVIDER-AUTH",
+    "LZ-PROVIDER-INCOMPATIBLE",
+    "LZ-PROCESS-EXIT",
+    "LZ-SESSION-STALLED",
+    "LZ-MESSAGE-TIMEOUT",
+    "LZ-MESSAGE-DEADLETTER",
+    "LZ-WORKTREE-CONFLICT",
+    "LZ-CONFIG-INCOMPATIBLE",
+    "LZ-DAEMON-UNAVAILABLE",
+    "LZ-SESSION-START-FAILED",
+    "LZ-SESSION-OWNER-LOST",
+    "LZ-MESSAGE-OWNER-LOST",
+    "LZ-TURN-OWNER-LOST",
+    "LZ-TASK-DISPATCH-OWNER-LOST",
+    "LZ-TURN-PROVIDER",
+    "LZ-EMPLOYEE-REPORTED",
+];
 
 /// A lead may apply at most this many remedies to one promoted incident...
 pub const MAX_INCIDENT_REMEDIES: u32 = 2;

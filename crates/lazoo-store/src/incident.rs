@@ -1,15 +1,19 @@
+use std::collections::BTreeMap;
+
 use chrono::{DateTime, TimeDelta, Utc};
 use lazoo_domain::{
-    INCIDENT_REMEDIATION_WINDOW_SECONDS, IncidentFacts, MAX_INCIDENT_REMEDIES, RemediationVerdict,
-    describe_incident, incident_fingerprint, incident_threshold_crossed, incident_window,
+    DESCRIBED_INCIDENT_CODES, INCIDENT_REMEDIATION_WINDOW_SECONDS, IncidentFacts,
+    IncidentThreshold, MAX_INCIDENT_REMEDIES, RemediationVerdict, default_incident_threshold,
+    describe_incident, incident_fingerprint, incident_threshold, incident_window,
     remediation_verdict, validate_incident_code, validate_incident_detail,
-    validate_incident_list_limit, validate_incident_text, validate_incident_title,
-    validate_message_command_key,
+    validate_incident_list_limit, validate_incident_text, validate_incident_threshold,
+    validate_incident_title, validate_message_command_key,
 };
 use lazoo_protocol::{
     AuthorityMode, INCIDENT_CONTRACT_V1, IncidentEscalation, IncidentEscalationReason,
     IncidentMutationResult, IncidentPriority, IncidentRecord, IncidentRemedyKind,
-    IncidentRemedyRecord, IncidentSource, IncidentState, MessageRecord, MessageReference,
+    IncidentRemedyRecord, IncidentSource, IncidentState, IncidentThresholdMutationResult,
+    IncidentThresholdRecord, IncidentThresholdSource, MessageRecord, MessageReference,
     MessageSender, TaskRecord, TaskState,
 };
 use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, params};
@@ -164,27 +168,33 @@ impl Store {
         let occurred_at = input.occurred_at.clone().unwrap_or_else(|| now.clone());
         let fingerprint = incident_fingerprint(&input.code, input.employee_id, input.project_id);
         let priority_message = priority_dead_letter(&transaction, &input.code, input.message_id)?;
+        let configured = configured_threshold(&transaction, &input.code)?;
         let source = serialized_name(input.source)?;
         let detail_json = serde_json::to_string(&input.detail)?;
         let (incident_id, event_type) = if let Some(current) =
             query_open_by_fingerprint(&transaction, &fingerprint)?
         {
+            let threshold = incident_threshold(
+                &input.code,
+                IncidentFacts {
+                    names_task: input.task_id.or(current.task_id).is_some(),
+                    priority_message,
+                },
+                configured,
+            );
             let elapsed = elapsed_seconds(&current.window_started_at, &occurred_at);
-            let (reset, window_occurrences) = incident_window(elapsed, current.window_occurrences);
+            let (reset, window_occurrences) = incident_window(
+                elapsed,
+                current.window_occurrences,
+                threshold.window_seconds,
+            );
             let window_started_at = if reset {
                 occurred_at.clone()
             } else {
                 current.window_started_at.clone()
             };
             let escalate = current.priority == IncidentPriority::Normal
-                && incident_threshold_crossed(
-                    &input.code,
-                    IncidentFacts {
-                        names_task: input.task_id.or(current.task_id).is_some(),
-                        priority_message,
-                    },
-                    window_occurrences,
-                );
+                && threshold.crossed(window_occurrences);
             let priority = if escalate || current.priority == IncidentPriority::Priority {
                 "priority"
             } else {
@@ -249,16 +259,17 @@ impl Store {
         } else {
             let text = describe_incident(&input.code);
             let id = Uuid::new_v4();
-            // A code whose threshold is one (a stall, a crash, a death under assigned work, a
-            // dead-lettered priority message) is promoted by its first occurrence.
-            let born_priority = incident_threshold_crossed(
+            // A threshold of one (by default a stall, a crash, a death under assigned work, a
+            // dead-lettered priority message) is crossed by the first occurrence.
+            let born_priority = incident_threshold(
                 &input.code,
                 IncidentFacts {
                     names_task: input.task_id.is_some(),
                     priority_message,
                 },
-                1,
-            );
+                configured,
+            )
+            .crossed(1);
             transaction.execute(
                 "INSERT INTO incidents (
                             id, contract_version, code, fingerprint, title, explanation,
@@ -879,6 +890,200 @@ impl Store {
                 message::required_message(&connection, employee::parse_uuid(id, "messages.id")?)
             })
             .collect()
+    }
+}
+
+/// The local user's override of one code's threshold, set through `incident.threshold.set`.
+#[derive(Clone, Debug)]
+pub struct SetIncidentThresholdInput {
+    pub code: String,
+    pub occurrences: u64,
+    pub window_seconds: u64,
+}
+
+impl Store {
+    /// Every described code and every configured one, sorted by code, with its effective
+    /// threshold for an ordinary occurrence and whether the user configured it.
+    pub fn list_incident_thresholds(&self) -> Result<Vec<IncidentThresholdRecord>, StoreError> {
+        let connection = self.lock()?;
+        let mut configured = BTreeMap::new();
+        let mut statement = connection.prepare(
+            "SELECT code, occurrences, window_seconds, updated_at FROM incident_thresholds",
+        )?;
+        for row in statement.query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, i64>(1)?,
+                row.get::<_, i64>(2)?,
+                row.get::<_, String>(3)?,
+            ))
+        })? {
+            let (code, occurrences, window_seconds, updated_at) = row?;
+            configured.insert(
+                code.clone(),
+                threshold_record(code, occurrences, window_seconds, Some(updated_at))?,
+            );
+        }
+        for code in DESCRIBED_INCIDENT_CODES {
+            configured
+                .entry((*code).to_owned())
+                .or_insert_with(|| default_threshold_record(code));
+        }
+        Ok(configured.into_values().collect())
+    }
+
+    /// Overrides one code's threshold. Writing the value it already has changes nothing and
+    /// emits no event.
+    pub fn set_incident_threshold(
+        &self,
+        input: &SetIncidentThresholdInput,
+    ) -> Result<IncidentThresholdMutationResult, StoreError> {
+        validate_incident_code(&input.code)?;
+        let threshold = validate_incident_threshold(input.occurrences, input.window_seconds)?;
+        let mut connection = self.lock()?;
+        let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        if configured_threshold(&transaction, &input.code)? == Some(threshold) {
+            let record = current_threshold_record(&transaction, &input.code)?;
+            transaction.commit()?;
+            return Ok(IncidentThresholdMutationResult {
+                threshold: record,
+                event_sequence: None,
+            });
+        }
+        let now = Utc::now().to_rfc3339();
+        transaction.execute(
+            "INSERT INTO incident_thresholds (code, occurrences, window_seconds, updated_at)
+             VALUES (?1, ?2, ?3, ?4)
+             ON CONFLICT(code) DO UPDATE SET
+                occurrences = excluded.occurrences,
+                window_seconds = excluded.window_seconds,
+                updated_at = excluded.updated_at",
+            params![
+                input.code,
+                to_i64(threshold.occurrences)?,
+                threshold.window_seconds,
+                now
+            ],
+        )?;
+        threshold_change(transaction, &input.code, "incident.threshold-set", &now)
+    }
+
+    /// Returns one code to section 14.2's default. Resetting a default changes nothing.
+    pub fn reset_incident_threshold(
+        &self,
+        code: &str,
+    ) -> Result<IncidentThresholdMutationResult, StoreError> {
+        validate_incident_code(code)?;
+        let mut connection = self.lock()?;
+        let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let removed =
+            transaction.execute("DELETE FROM incident_thresholds WHERE code = ?1", [code])?;
+        if removed == 0 {
+            transaction.commit()?;
+            return Ok(IncidentThresholdMutationResult {
+                threshold: default_threshold_record(code),
+                event_sequence: None,
+            });
+        }
+        let now = Utc::now().to_rfc3339();
+        threshold_change(transaction, code, "incident.threshold-reset", &now)
+    }
+}
+
+fn threshold_change(
+    transaction: Transaction<'_>,
+    code: &str,
+    event_type: &str,
+    now: &str,
+) -> Result<IncidentThresholdMutationResult, StoreError> {
+    let record = current_threshold_record(&transaction, code)?;
+    let event_sequence = employee::insert_event(
+        &transaction,
+        event_type,
+        &json!({"threshold": &record}),
+        now,
+    )?;
+    transaction.commit()?;
+    Ok(IncidentThresholdMutationResult {
+        threshold: record,
+        event_sequence: Some(event_sequence),
+    })
+}
+
+fn configured_threshold(
+    connection: &Connection,
+    code: &str,
+) -> Result<Option<IncidentThreshold>, StoreError> {
+    connection
+        .query_row(
+            "SELECT occurrences, window_seconds FROM incident_thresholds WHERE code = ?1",
+            [code],
+            |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)),
+        )
+        .optional()?
+        .map(|(occurrences, window_seconds)| {
+            Ok(IncidentThreshold {
+                occurrences: unsigned(occurrences)?,
+                window_seconds,
+            })
+        })
+        .transpose()
+}
+
+fn current_threshold_record(
+    connection: &Connection,
+    code: &str,
+) -> Result<IncidentThresholdRecord, StoreError> {
+    connection
+        .query_row(
+            "SELECT occurrences, window_seconds, updated_at FROM incident_thresholds
+             WHERE code = ?1",
+            [code],
+            |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, i64>(1)?,
+                    row.get::<_, String>(2)?,
+                ))
+            },
+        )
+        .optional()?
+        .map_or_else(
+            || Ok(default_threshold_record(code)),
+            |(occurrences, window_seconds, updated_at)| {
+                threshold_record(
+                    code.to_owned(),
+                    occurrences,
+                    window_seconds,
+                    Some(updated_at),
+                )
+            },
+        )
+}
+
+fn threshold_record(
+    code: String,
+    occurrences: i64,
+    window_seconds: i64,
+    updated_at: Option<String>,
+) -> Result<IncidentThresholdRecord, StoreError> {
+    Ok(IncidentThresholdRecord {
+        code,
+        occurrences: unsigned(occurrences)?,
+        window_seconds: unsigned(window_seconds)?,
+        source: IncidentThresholdSource::Configured,
+        updated_at,
+    })
+}
+
+fn default_threshold_record(code: &str) -> IncidentThresholdRecord {
+    let threshold = default_incident_threshold(code);
+    IncidentThresholdRecord {
+        code: code.to_owned(),
+        occurrences: threshold.occurrences,
+        window_seconds: threshold.window_seconds.unsigned_abs(),
+        source: IncidentThresholdSource::Default,
+        updated_at: None,
     }
 }
 

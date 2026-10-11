@@ -1,9 +1,10 @@
 use lazoo_domain::{
-    INCIDENT_THRESHOLD_OCCURRENCES, INCIDENT_THRESHOLD_WINDOW_SECONDS, IncidentFacts,
-    IncidentValidationError, MAX_INCIDENT_TITLE_BYTES, RemediationVerdict, describe_incident,
-    incident_fingerprint, incident_threshold, incident_threshold_crossed, incident_window,
-    remediation_verdict, validate_incident_code, validate_incident_detail,
-    validate_incident_list_limit, validate_incident_text, validate_incident_title,
+    DESCRIBED_INCIDENT_CODES, INCIDENT_THRESHOLD_OCCURRENCES, INCIDENT_THRESHOLD_WINDOW_SECONDS,
+    IncidentFacts, IncidentThreshold, IncidentValidationError, MAX_INCIDENT_TITLE_BYTES,
+    RemediationVerdict, default_incident_threshold, describe_incident, incident_fingerprint,
+    incident_threshold, incident_window, remediation_verdict, validate_incident_code,
+    validate_incident_detail, validate_incident_list_limit, validate_incident_text,
+    validate_incident_threshold, validate_incident_title,
 };
 use lazoo_protocol::IncidentEscalationReason;
 use serde_json::json;
@@ -45,19 +46,25 @@ fn known_codes_describe_the_situation_and_the_next_safe_action() {
 fn threshold_window_promotes_three_equivalent_failures_inside_five_minutes() {
     assert_eq!(INCIDENT_THRESHOLD_OCCURRENCES, 3);
     assert_eq!(INCIDENT_THRESHOLD_WINDOW_SECONDS, 300);
-    assert_eq!(incident_window(10, 1), (false, 2));
-    assert_eq!(incident_window(299, 2), (false, 3));
+    assert_eq!(incident_window(10, 1, 300), (false, 2));
+    assert_eq!(incident_window(299, 2, 300), (false, 3));
     let task = IncidentFacts {
         names_task: true,
         ..IncidentFacts::default()
     };
-    assert!(incident_threshold_crossed("LZ-MESSAGE-TIMEOUT", task, 3));
-    assert!(!incident_threshold_crossed("LZ-MESSAGE-TIMEOUT", task, 2));
-    assert_eq!(incident_window(301, 2), (true, 1));
+    let timeout = incident_threshold("LZ-MESSAGE-TIMEOUT", task, None);
+    assert!(timeout.crossed(3));
+    assert!(!timeout.crossed(2));
+    assert_eq!(incident_window(301, 2, 300), (true, 1));
     assert_eq!(
-        incident_window(-5, 2),
+        incident_window(-5, 2, 300),
         (true, 1),
         "clock skew restarts the window"
+    );
+    assert_eq!(
+        incident_window(301, 2, 600),
+        (false, 3),
+        "a longer window keeps counting"
     );
 }
 
@@ -108,13 +115,106 @@ fn section_fourteen_two_thresholds_promote_stalls_crashes_and_deaths_at_once() {
             names_task,
             priority_message,
         };
+        let effective = incident_threshold(code, facts, None);
+        assert_eq!(effective.occurrences, threshold, "{code} {facts:?}");
+        assert_eq!(effective.window_seconds, INCIDENT_THRESHOLD_WINDOW_SECONDS);
+        assert!(effective.crossed(threshold));
+        assert!(!effective.crossed(threshold - 1));
+    }
+}
+
+#[test]
+fn a_configured_threshold_replaces_the_default_but_never_delays_a_loss() {
+    let five_in_ten_minutes = IncidentThreshold {
+        occurrences: 5,
+        window_seconds: 600,
+    };
+    let none = IncidentFacts::default();
+    // An override replaces counts, including the first-occurrence defaults.
+    for code in [
+        "LZ-SESSION-STALLED",
+        "LZ-DAEMON-UNAVAILABLE",
+        "LZ-PROCESS-EXIT",
+        "LZ-MESSAGE-TIMEOUT",
+        "LZ-MESSAGE-DEADLETTER",
+    ] {
         assert_eq!(
-            incident_threshold(code, facts),
-            threshold,
-            "{code} {facts:?}"
+            incident_threshold(code, none, Some(five_in_ten_minutes)),
+            five_in_ten_minutes,
+            "{code}"
         );
-        assert!(incident_threshold_crossed(code, facts, threshold));
-        assert!(!incident_threshold_crossed(code, facts, threshold - 1));
+    }
+    let one = IncidentThreshold {
+        occurrences: 1,
+        window_seconds: 600,
+    };
+    assert_eq!(
+        incident_threshold("LZ-MESSAGE-TIMEOUT", none, Some(one)),
+        one,
+        "a threshold may also be lowered"
+    );
+    // A death under assigned work and a dead-lettered priority message promote at once whatever
+    // is configured; the configured window still applies.
+    for (code, facts) in [
+        (
+            "LZ-PROCESS-EXIT",
+            IncidentFacts {
+                names_task: true,
+                priority_message: false,
+            },
+        ),
+        (
+            "LZ-MESSAGE-DEADLETTER",
+            IncidentFacts {
+                names_task: false,
+                priority_message: true,
+            },
+        ),
+    ] {
+        assert_eq!(
+            incident_threshold(code, facts, Some(five_in_ten_minutes)),
+            one,
+            "{code}"
+        );
+    }
+    assert_eq!(
+        default_incident_threshold("LZ-PROCESS-EXIT"),
+        IncidentThreshold {
+            occurrences: 2,
+            window_seconds: 300,
+        }
+    );
+
+    assert_eq!(validate_incident_threshold(1, 60), Ok(one_minute(1)));
+    assert_eq!(
+        validate_incident_threshold(100, 86_400)
+            .unwrap()
+            .occurrences,
+        100
+    );
+    for (occurrences, window_seconds) in [(0, 300), (101, 300), (3, 59), (3, 86_401)] {
+        assert_eq!(
+            validate_incident_threshold(occurrences, window_seconds),
+            Err(IncidentValidationError::ThresholdRange),
+            "{occurrences} in {window_seconds}"
+        );
+    }
+    // Every code `incident threshold list` shows has words of its own.
+    for code in DESCRIBED_INCIDENT_CODES {
+        validate_incident_code(code).unwrap();
+        assert!(
+            !describe_incident(code)
+                .title
+                .starts_with("Operational failure"),
+            "{code}"
+        );
+    }
+}
+
+const fn one_minute(occurrences: u64) -> IncidentThreshold {
+    IncidentThreshold {
+        occurrences,
+        window_seconds: 60,
     }
 }
 

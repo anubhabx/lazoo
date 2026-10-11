@@ -91,6 +91,26 @@ pub enum IncidentCommand {
         #[arg(long)]
         idempotency_key: Option<String>,
     },
+    /// The persistent-failure thresholds that promote an incident, and your overrides of them.
+    #[command(subcommand)]
+    Threshold(IncidentThresholdCommand),
+}
+
+#[derive(Debug, Subcommand)]
+pub enum IncidentThresholdCommand {
+    List,
+    /// Promote CODE's incident once OCCURRENCES equivalent failures land inside the window.
+    Set {
+        code: String,
+        #[arg(long)]
+        occurrences: u64,
+        #[arg(long, default_value_t = 300)]
+        window_seconds: u64,
+    },
+    /// Return CODE to its default threshold.
+    Reset {
+        code: String,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -725,6 +745,25 @@ fn incident_request(command: &IncidentCommand) -> (&'static str, Value, bool) {
             }),
             false,
         ),
+        IncidentCommand::Threshold(IncidentThresholdCommand::List) => {
+            ("incident.threshold.list", json!({}), false)
+        }
+        IncidentCommand::Threshold(IncidentThresholdCommand::Set {
+            code,
+            occurrences,
+            window_seconds,
+        }) => (
+            "incident.threshold.set",
+            json!({
+                "code": code,
+                "occurrences": occurrences,
+                "windowSeconds": window_seconds,
+            }),
+            false,
+        ),
+        IncidentCommand::Threshold(IncidentThresholdCommand::Reset { code }) => {
+            ("incident.threshold.reset", json!({"code": code}), false)
+        }
     }
 }
 

@@ -3560,7 +3560,7 @@ async fn status_reports_protocol_store_and_boot_identity() {
     let result = response.result.unwrap();
 
     assert_eq!(result["protocolVersion"], 1);
-    assert_eq!(result["schemaVersion"], 14);
+    assert_eq!(result["schemaVersion"], 15);
     assert_eq!(result["journalMode"], "wal");
     assert!(
         result["bootId"]
@@ -4304,7 +4304,7 @@ fn employee_roster_acceptance_contract_is_backend_only() {
         "roster', 'refresh",
         "LZ-EMPLOYEE-STALE",
         "restartDurability",
-        "schemaVersion 14",
+        "schemaVersion 15",
         "providerSmokeAbsent",
     ] {
         assert!(
@@ -4342,7 +4342,7 @@ fn native_session_acceptance_contract_covers_containment_and_owner_loss() {
         "completeTreeTerminated",
         "nativeHostPid",
         "providerSmokeAbsent",
-        "schemaVersion 14",
+        "schemaVersion 15",
     ] {
         assert!(
             script.contains(required),
@@ -4372,7 +4372,7 @@ fn collaboration_bus_acceptance_contract_is_backend_only() {
         "deadLetterEvidence",
         "restartDurability",
         "auditOutboxEvidence",
-        "schemaVersion 14",
+        "schemaVersion 15",
         "providerSmokeAbsent",
         "desktopCapabilityExpansionAbsent",
     ] {
@@ -4508,7 +4508,7 @@ fn task_graph_acceptance_executes_backend_only_contract() {
     )
     .unwrap();
     assert_eq!(manifest["status"], "PASS");
-    assert_eq!(manifest["schemaVersion"], 14);
+    assert_eq!(manifest["schemaVersion"], 15);
     assert_eq!(manifest["mode"], "deterministic-fixture");
     for field in [
         "rootIdentity",
@@ -5687,7 +5687,7 @@ fn collaboration_tools_acceptance_contract_is_deterministic_and_backend_only() {
         "worker_turn_reports_failure_through_task_report_before_native_completion",
         "collaboration-tools-manifest.json",
         "deterministic-fake-transport",
-        "schemaVersion = 14",
+        "schemaVersion = 15",
     ] {
         assert!(
             script.contains(required),
@@ -6224,7 +6224,7 @@ async fn restart_owner_loss_and_emergency_spool_fold_into_startup_incidents_once
         .await
         .result
         .unwrap();
-    assert_eq!(status["schemaVersion"], 14);
+    assert_eq!(status["schemaVersion"], 15);
     assert_eq!(status["emergencyIncidentCount"], 1);
 }
 
@@ -6327,7 +6327,7 @@ fn minimum_incidents_acceptance_contract_is_deterministic_and_backend_only() {
         "incident_errors_use_exit_code_fifteen",
         "minimum-incidents-manifest.json",
         "deterministic-fake-transport",
-        "schemaVersion = 14",
+        "schemaVersion = 15",
     ] {
         assert!(
             script.contains(required),
@@ -6797,7 +6797,7 @@ fn result_delivery_acceptance_contract_is_deterministic_and_backend_only() {
         "externalModelUseAbsent",
         "uiChangesAbsent",
         "deterministic-fake-transport",
-        "schemaVersion = 14",
+        "schemaVersion = 15",
     ] {
         assert!(
             script.contains(required),
@@ -7304,7 +7304,7 @@ fn peer_messaging_acceptance_contract_is_deterministic_and_backend_only() {
         "externalModelUseAbsent",
         "uiChangesAbsent",
         "deterministic-fake-transport",
-        "schemaVersion = 14",
+        "schemaVersion = 15",
     ] {
         assert!(
             script.contains(required),
@@ -7427,7 +7427,7 @@ fn coalesced_notices_acceptance_contract_is_deterministic_and_backend_only() {
         "externalModelUseAbsent",
         "uiChangesAbsent",
         "deterministic-fake-transport",
-        "schemaVersion = 14",
+        "schemaVersion = 15",
     ] {
         assert!(
             script.contains(required),
@@ -7666,7 +7666,7 @@ fn activation_policy_acceptance_contract_is_deterministic_and_backend_only() {
         "externalModelUseAbsent",
         "uiChangesAbsent",
         "deterministic-fake-transport",
-        "schemaVersion = 14",
+        "schemaVersion = 15",
     ] {
         assert!(
             script.contains(required),
@@ -8033,7 +8033,7 @@ fn idle_suspension_acceptance_contract_is_deterministic_and_backend_only() {
         "externalModelUseAbsent",
         "uiChangesAbsent",
         "deterministic-fake-transport",
-        "schemaVersion = 14",
+        "schemaVersion = 15",
     ] {
         assert!(
             script.contains(required),
@@ -8317,7 +8317,7 @@ fn lead_remediation_acceptance_contract_is_deterministic_and_backend_only() {
         "externalModelUseAbsent",
         "uiChangesAbsent",
         "deterministic-fake-transport",
-        "schemaVersion = 14",
+        "schemaVersion = 15",
     ] {
         assert!(
             script.contains(required),
@@ -8359,7 +8359,7 @@ fn incident_thresholds_acceptance_contract_is_deterministic_and_backend_only() {
         "externalModelUseAbsent",
         "uiChangesAbsent",
         "deterministic-fake-transport",
-        "schemaVersion = 14",
+        "schemaVersion = 15",
     ] {
         assert!(
             script.contains(required),
@@ -8568,7 +8568,7 @@ fn user_notifications_acceptance_contract_is_deterministic_and_backend_only() {
         "externalModelUseAbsent",
         "uiChangesAbsent",
         "deterministic-fake-transport",
-        "schemaVersion = 14",
+        "schemaVersion = 15",
     ] {
         assert!(
             script.contains(required),
@@ -8662,7 +8662,7 @@ fn message_arrival_acceptance_contract_is_deterministic_and_backend_only() {
         "externalModelUseAbsent",
         "uiChangesAbsent",
         "deterministic-fake-transport",
-        "schemaVersion = 14",
+        "schemaVersion = 15",
     ] {
         assert!(
             script.contains(required),
@@ -8884,7 +8884,196 @@ fn message_priority_acceptance_contract_is_deterministic_and_backend_only() {
         "externalModelUseAbsent",
         "uiChangesAbsent",
         "deterministic-fake-transport",
-        "schemaVersion = 14",
+        "schemaVersion = 15",
+    ] {
+        assert!(
+            script.contains(required),
+            "acceptance script must contain {required}"
+        );
+    }
+    for forbidden in ["provider', 'smoke", "LivePrompt"] {
+        assert!(
+            !script.contains(forbidden),
+            "acceptance script must not contain {forbidden}"
+        );
+    }
+}
+
+/// The local user tunes a threshold through the daemon: a stall stops paging at the first
+/// occurrence, a reset restores the default, and a death under assigned work still promotes
+/// at once whatever is configured. No collaboration tool can see or change thresholds.
+#[tokio::test]
+#[allow(clippy::too_many_lines)] // One user session: list, set, apply, a loss, reset, events.
+async fn the_user_configures_incident_thresholds_through_the_daemon() {
+    use lazoo_protocol::{IncidentPriority, IncidentSource};
+
+    let (_temporary, harness) = tool_harness(AuthorityMode::SelfDecision);
+    let (_root_task_id, child_id) = delegate_without_waiting(&harness).await;
+    let call = |id: &str, method: &str, params: serde_json::Value| {
+        harness.app.handle(request(id, method, params))
+    };
+
+    let defaults = call("list", "incident.threshold.list", json!({}))
+        .await
+        .result
+        .unwrap();
+    let stall = defaults
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["code"] == "LZ-SESSION-STALLED")
+        .unwrap()
+        .clone();
+    assert_eq!(
+        stall,
+        json!({
+            "code": "LZ-SESSION-STALLED",
+            "occurrences": 1,
+            "windowSeconds": 300,
+            "source": "default",
+            "updatedAt": null
+        })
+    );
+    let refused = call(
+        "list-params",
+        "incident.threshold.list",
+        json!({"code": "LZ-SESSION-STALLED"}),
+    )
+    .await
+    .error
+    .unwrap();
+    assert_eq!(refused.code, "LZ-INVALID-PARAMS");
+
+    let set = call(
+        "set",
+        "incident.threshold.set",
+        json!({"code": "LZ-SESSION-STALLED", "occurrences": 2, "windowSeconds": 600}),
+    )
+    .await
+    .result
+    .unwrap();
+    assert_eq!(set["threshold"]["source"], "configured");
+    assert_eq!(set["threshold"]["windowSeconds"], 600);
+    assert!(set["eventSequence"].is_number());
+    let invalid = call(
+        "set-invalid",
+        "incident.threshold.set",
+        json!({"code": "LZ-SESSION-STALLED", "occurrences": 0}),
+    )
+    .await
+    .error
+    .unwrap();
+    assert_eq!(invalid.code, "LZ-INCIDENT-INVALID");
+
+    let first = raise_scoped(
+        &harness,
+        "stall-1",
+        "LZ-SESSION-STALLED",
+        IncidentSource::Daemon,
+        Some(harness.worker.id),
+    );
+    assert_eq!(first.priority, IncidentPriority::Normal);
+    let second = raise_scoped(
+        &harness,
+        "stall-2",
+        "LZ-SESSION-STALLED",
+        IncidentSource::Daemon,
+        Some(harness.worker.id),
+    );
+    assert_eq!(second.priority, IncidentPriority::Priority);
+
+    // Exits are configured to five, but a death under assigned work is still promoted at once.
+    call(
+        "set-exit",
+        "incident.threshold.set",
+        json!({"code": "LZ-PROCESS-EXIT", "occurrences": 5}),
+    )
+    .await
+    .result
+    .unwrap();
+    let death = harness
+        .store
+        .raise_incident(&lazoo_store::RaiseIncidentInput {
+            request_id: "request-death".to_owned(),
+            idempotency_key: "death".to_owned(),
+            code: "LZ-PROCESS-EXIT".to_owned(),
+            source: IncidentSource::Daemon,
+            title: None,
+            explanation: None,
+            project_id: None,
+            employee_id: Some(harness.worker.id),
+            provider: Some("codex".to_owned()),
+            task_id: Some(child_id),
+            session_id: None,
+            turn_id: None,
+            message_id: None,
+            detail: json!({}),
+            occurred_at: None,
+        })
+        .unwrap()
+        .incident;
+    assert_eq!(death.priority, IncidentPriority::Priority);
+
+    let reset = call(
+        "reset",
+        "incident.threshold.reset",
+        json!({"code": "LZ-SESSION-STALLED"}),
+    )
+    .await
+    .result
+    .unwrap();
+    assert_eq!(reset["threshold"]["source"], "default");
+    assert_eq!(reset["threshold"]["occurrences"], 1);
+    let events: Vec<String> = harness
+        .store
+        .list_events(0, 1000)
+        .unwrap()
+        .into_iter()
+        .map(|event| event.event_type)
+        .filter(|kind| kind.starts_with("incident.threshold"))
+        .collect();
+    assert_eq!(
+        events,
+        [
+            "incident.threshold-set",
+            "incident.threshold-set",
+            "incident.threshold-reset"
+        ]
+    );
+
+    // No tool in the catalog reads or sets a threshold.
+    let tools = harness.backend.session_tools.lock().unwrap().clone();
+    assert!(!tools.is_empty());
+    assert!(
+        tools
+            .iter()
+            .flatten()
+            .all(|name| !name.contains("threshold"))
+    );
+}
+
+#[test]
+fn configurable_thresholds_acceptance_contract_is_deterministic_and_backend_only() {
+    let repository = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let script_path = repository.join("scripts/acceptance/configurable-thresholds.ps1");
+    let script =
+        std::fs::read_to_string(&script_path).expect("configurable thresholds acceptance script");
+
+    for required in [
+        "incident_threshold_contracts_are_strict_and_default_to_five_minutes",
+        "a_configured_threshold_replaces_the_default_but_never_delays_a_loss",
+        "configured_thresholds_apply_from_the_next_occurrence_and_reset_to_the_default",
+        "incident_cli_maps_threshold_list_set_and_reset",
+        "the_user_configures_incident_thresholds_through_the_daemon",
+        "store_enables_wal_foreign_keys_and_schema_version",
+        "overrideAppliesFromNextOccurrence",
+        "lossesPromoteWhateverIsConfigured",
+        "toolsCannotSeeThresholds",
+        "providerSmokeAbsent",
+        "externalModelUseAbsent",
+        "uiChangesAbsent",
+        "deterministic-fake-transport",
+        "schemaVersion = 15",
     ] {
         assert!(
             script.contains(required),

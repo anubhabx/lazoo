@@ -1,0 +1,73 @@
+﻿{
+    "status":  "PASS",
+    "schemaVersion":  15,
+    "mode":  "deterministic-fake-transport",
+    "startedAt":  "2026-10-11T17:02:01.5323135Z",
+    "durationMs":  14227,
+    "commands":  [
+                     {
+                         "command":  "cargo test -p lazoo-protocol --test incident incident_threshold_contracts_are_strict_and_default_to_five_minutes --locked -- --exact",
+                         "exitCode":  0,
+                         "durationMs":  407
+                     },
+                     {
+                         "command":  "cargo test -p lazoo-domain --test incident a_configured_threshold_replaces_the_default_but_never_delays_a_loss --locked -- --exact",
+                         "exitCode":  0,
+                         "durationMs":  398
+                     },
+                     {
+                         "command":  "cargo test -p lazoo-store --test incident configured_thresholds_apply_from_the_next_occurrence_and_reset_to_the_default --locked -- --exact",
+                         "exitCode":  0,
+                         "durationMs":  2380
+                     },
+                     {
+                         "command":  "cargo test -p lazooctl --test cli incident_cli_maps_threshold_list_set_and_reset --locked -- --exact",
+                         "exitCode":  0,
+                         "durationMs":  1497
+                     },
+                     {
+                         "command":  "cargo test -p lazood --test daemon the_user_configures_incident_thresholds_through_the_daemon --locked -- --exact",
+                         "exitCode":  0,
+                         "durationMs":  7407
+                     },
+                     {
+                         "command":  "cargo test -p lazoo-store --test store store_enables_wal_foreign_keys_and_schema_version --locked -- --exact",
+                         "exitCode":  0,
+                         "durationMs":  2022
+                     },
+                     {
+                         "command":  "git diff --quiet and git diff --cached --quiet -- apps/lazoo-desktop",
+                         "exitCode":  0,
+                         "durationMs":  null
+                     }
+                 ],
+    "evidence":  {
+                     "thresholdContractsStrict":  true,
+                     "overrideReplacesDefault":  true,
+                     "lossesPromoteWhateverIsConfigured":  true,
+                     "configuredWindowApplies":  true,
+                     "overrideAppliesFromNextOccurrence":  true,
+                     "resetRestoresDefault":  true,
+                     "promotedIncidentsNeverDemoted":  true,
+                     "unchangedValueEmitsNoEvent":  true,
+                     "rangesValidated":  true,
+                     "cliMapsThresholdCommands":  true,
+                     "daemonServesThresholds":  true,
+                     "toolsCannotSeeThresholds":  true,
+                     "schemaFifteen":  true,
+                     "providerSmokeAbsent":  true,
+                     "externalModelUseAbsent":  true,
+                     "uiChangesAbsent":  true
+                 },
+    "boundaries":  {
+                       "providerSmoke":  "NOT_RUN",
+                       "externalModelUse":  "NOT_RUN",
+                       "desktopUi":  "UNCHANGED",
+                       "schemaMigration":  "0015_incident_thresholds",
+                       "thresholdWriter":  "LOCAL_USER_THROUGH_DAEMON_AND_CLI",
+                       "toolAccess":  "NONE",
+                       "occurrencesRange":  "1..100",
+                       "windowSecondsRange":  "60..86400",
+                       "lossRules":  "ALWAYS_ONE"
+                   }
+}
