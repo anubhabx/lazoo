@@ -29,8 +29,6 @@ const MAX_WAIT_SECONDS: u64 = 600;
 const DEFAULT_WAIT_SECONDS: u64 = 60;
 const MAX_WAIT_TASKS: usize = 64;
 const MAX_OUTPUT_BYTES: usize = 16 * 1024;
-// ponytail: task_wait polls the store; switch to a task-change notify if leads wait at scale.
-const WAIT_POLL_INTERVAL: Duration = Duration::from_millis(250);
 
 /// The versioned tool catalog declared to every daemon-managed Codex session.
 #[allow(clippy::too_many_lines)] // The catalog is one declaration, read top to bottom.
@@ -417,6 +415,8 @@ impl App {
         }
         let deadline = Instant::now() + timeout;
         loop {
+            // Registered before the reads, so a write landing between them still wakes the wait.
+            let changed = self.store_changed.notified();
             let mut details = Vec::with_capacity(task_ids.len());
             for id in &task_ids {
                 let detail = self.store.get_task(*id).map_err(task_store_error)?;
@@ -471,17 +471,26 @@ impl App {
                     "messages": messages,
                 }));
             }
-            let turn = self.store.get_turn(turn_id).map_err(task_store_error)?;
-            if turn.cancel_requested_at.is_some()
-                || !matches!(turn.state, TurnState::Submitting | TurnState::Accepted)
-            {
-                return Err(tool_error(
-                    "LZ-TOOL-TURN-CANCELLED",
-                    "the calling turn ended while waiting",
-                ));
+            self.ensure_turn_still_waiting(turn_id)?;
+            tokio::select! {
+                () = changed => {}
+                () = sleep(deadline - now) => {}
             }
-            sleep(WAIT_POLL_INTERVAL.min(deadline - now)).await;
         }
+    }
+
+    /// A wait ends with an error once its calling turn was cancelled or finished.
+    fn ensure_turn_still_waiting(&self, turn_id: Uuid) -> Result<(), RpcError> {
+        let turn = self.store.get_turn(turn_id).map_err(task_store_error)?;
+        if turn.cancel_requested_at.is_some()
+            || !matches!(turn.state, TurnState::Submitting | TurnState::Accepted)
+        {
+            return Err(tool_error(
+                "LZ-TOOL-TURN-CANCELLED",
+                "the calling turn ended while waiting",
+            ));
+        }
+        Ok(())
     }
 
     fn task_outcome(&self, detail: &TaskDetail) -> Value {
@@ -597,6 +606,7 @@ impl App {
         );
         let deadline = Instant::now() + wait;
         loop {
+            let changed = self.store_changed.notified();
             let current = self
                 .store
                 .get_message(message_id)
@@ -631,16 +641,11 @@ impl App {
                     "messages": messages,
                 }));
             }
-            let turn = self.store.get_turn(turn_id).map_err(task_store_error)?;
-            if turn.cancel_requested_at.is_some()
-                || !matches!(turn.state, TurnState::Submitting | TurnState::Accepted)
-            {
-                return Err(tool_error(
-                    "LZ-TOOL-TURN-CANCELLED",
-                    "the calling turn ended while waiting",
-                ));
+            self.ensure_turn_still_waiting(turn_id)?;
+            tokio::select! {
+                () = changed => {}
+                () = sleep(deadline - now) => {}
             }
-            sleep(WAIT_POLL_INTERVAL.min(deadline - now)).await;
         }
     }
 

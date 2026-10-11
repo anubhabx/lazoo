@@ -2,33 +2,33 @@
     "status":  "PASS",
     "schemaVersion":  13,
     "mode":  "deterministic-fake-transport",
-    "startedAt":  "2026-10-10T15:46:28.1697824Z",
-    "durationMs":  32521,
+    "startedAt":  "2026-10-11T16:14:10.4239788Z",
+    "durationMs":  3073,
     "commands":  [
                      {
                          "command":  "cargo test -p lazoo-protocol --test incident incident_record_round_trips_with_camel_case_keys --locked -- --exact",
                          "exitCode":  0,
-                         "durationMs":  4316
+                         "durationMs":  552
                      },
                      {
                          "command":  "cargo test -p lazoo-store --test incident user_escalations_are_claimed_once_and_their_outcome_is_never_rewritten --locked -- --exact",
                          "exitCode":  0,
-                         "durationMs":  8043
+                         "durationMs":  609
                      },
                      {
                          "command":  "cargo test -p lazood --test daemon user_escalations_reach_the_desktop_once_coalesced_and_never_retried --locked -- --exact",
                          "exitCode":  0,
-                         "durationMs":  17766
+                         "durationMs":  524
                      },
                      {
                          "command":  "cargo test -p lazoo-store --test store version_eleven_priority_incidents_upgrade_straight_to_the_user --locked -- --exact",
                          "exitCode":  0,
-                         "durationMs":  1930
+                         "durationMs":  801
                      },
                      {
                          "command":  "cargo test -p lazoo-store --test store store_enables_wal_foreign_keys_and_schema_version --locked -- --exact",
                          "exitCode":  0,
-                         "durationMs":  372
+                         "durationMs":  478
                      },
                      {
                          "command":  "git diff --quiet and git diff --cached --quiet -- apps/lazoo-desktop",

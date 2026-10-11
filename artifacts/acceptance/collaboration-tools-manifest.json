@@ -2,48 +2,48 @@
     "status":  "PASS",
     "schemaVersion":  13,
     "mode":  "deterministic-fake-transport",
-    "startedAt":  "2026-10-10T15:47:52.6245048Z",
-    "durationMs":  11398,
+    "startedAt":  "2026-10-11T16:14:56.4816575Z",
+    "durationMs":  11873,
     "commands":  [
                      {
                          "command":  "cargo test -p lazoo-providers --test contract observer_tool_calls_fail_closed_without_an_attached_control_plane --locked -- --exact",
                          "exitCode":  0,
-                         "durationMs":  442
+                         "durationMs":  653
                      },
                      {
                          "command":  "cargo test -p lazoo-providers --test codex codex_tool_calls_normalize_with_the_active_turn_fallback --locked -- --exact",
                          "exitCode":  0,
-                         "durationMs":  436
+                         "durationMs":  537
                      },
                      {
                          "command":  "cargo test -p lazoo-providers --test codex observed_codex_tool_calls_are_answered_with_the_lazoo_result --locked -- --exact",
                          "exitCode":  0,
-                         "durationMs":  5266
+                         "durationMs":  5371
                      },
                      {
                          "command":  "cargo test -p lazoo-providers --test codex codex_sessions_without_tools_stay_stable_and_resume_with_tools_fails_closed --locked -- --exact",
                          "exitCode":  0,
-                         "durationMs":  3099
+                         "durationMs":  3237
                      },
                      {
                          "command":  "cargo test -p lazood --test daemon lead_turn_lists_employees_delegates_and_waits_through_collaboration_tools --locked -- --exact",
                          "exitCode":  0,
-                         "durationMs":  729
+                         "durationMs":  524
                      },
                      {
                          "command":  "cargo test -p lazood --test daemon ask_lead_delegation_through_tools_is_proposed_and_refusals_never_end_the_turn --locked -- --exact",
                          "exitCode":  0,
-                         "durationMs":  486
+                         "durationMs":  528
                      },
                      {
                          "command":  "cargo test -p lazood --test daemon worker_turn_reports_failure_through_task_report_before_native_completion --locked -- --exact",
                          "exitCode":  0,
-                         "durationMs":  487
+                         "durationMs":  529
                      },
                      {
                          "command":  "cargo test -p lazoo-store --test store store_enables_wal_foreign_keys_and_schema_version --locked -- --exact",
                          "exitCode":  0,
-                         "durationMs":  362
+                         "durationMs":  396
                      },
                      {
                          "command":  "git diff --quiet and git diff --cached --quiet -- apps/lazoo-desktop",

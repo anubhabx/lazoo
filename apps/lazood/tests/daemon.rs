@@ -8582,3 +8582,97 @@ fn user_notifications_acceptance_contract_is_deterministic_and_backend_only() {
         );
     }
 }
+
+/// The paused clock moves only when every task is parked on a timer, so the virtual time the
+/// lead's turn takes is exactly what its waits slept: a store poll would cost at least one
+/// 250 ms interval, and a missed wakeup would run to the 10 second deadline and time out.
+#[tokio::test(start_paused = true)]
+async fn tool_waits_wake_on_the_store_write_instead_of_polling() {
+    let (_temporary, harness) = tool_harness(AuthorityMode::SelfDecision);
+    warm_tool_lead(&harness).await;
+    let roster_revision = harness.store.roster_snapshot().unwrap().revision;
+    harness.backend.tool_calls.lock().unwrap().extend([
+        tool_call(
+            "call-1",
+            "task_delegate",
+            json!({
+                "employeeId": harness.worker.id,
+                "objective": "Implement the parser fix",
+                "rosterRevision": roster_revision,
+                "requestedAuthority": "self-decision"
+            }),
+        ),
+        tool_call("call-2", "task_wait", json!({"timeoutSeconds": 10})),
+        tool_call(
+            "call-3",
+            "message_reply",
+            json!({"messageId": "$message-id", "text": "space-4"}),
+        ),
+        tool_call("call-4", "task_wait", json!({"timeoutSeconds": 10})),
+        session_tool_call(
+            "native-2",
+            "call-w1",
+            "message_send",
+            json!({
+                "employeeId": harness.lead.id,
+                "text": "Which token?",
+                "waitForReplySeconds": 10
+            }),
+        ),
+    ]);
+    let dispatcher_app = harness.app.clone();
+    let dispatcher = tokio::spawn(async move { dispatcher_app.run_task_dispatcher().await });
+    let started = tokio::time::Instant::now();
+    let submitted = submit_lead_turn(&harness, "self-decision").await;
+    let elapsed = started.elapsed();
+    dispatcher.abort();
+    let _ = dispatcher.await;
+
+    assert_eq!(submitted["turn"]["state"], "completed");
+    let results = harness.backend.tool_results.lock().unwrap().clone();
+    assert_eq!(results.len(), 5, "{results:?}");
+    // task_wait woke for the peer question, message_send for the reply, and the second
+    // task_wait for the child's completion; none of them reached its deadline.
+    assert_eq!(results[1].content["messages"][0]["text"], "Which token?");
+    assert_eq!(results[1].content["timedOut"], false);
+    assert_eq!(results[3].content["reply"]["text"], "space-4");
+    assert_eq!(results[3].content["timedOut"], false);
+    assert_eq!(results[4].content["tasks"][0]["state"], "completed");
+    assert_eq!(results[4].content["timedOut"], false);
+    assert!(
+        elapsed < Duration::from_millis(250),
+        "the waits slept {elapsed:?} of virtual time instead of waking on the write"
+    );
+}
+
+#[test]
+fn message_arrival_acceptance_contract_is_deterministic_and_backend_only() {
+    let repository = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let script_path = repository.join("scripts/acceptance/message-arrival.ps1");
+    let script = std::fs::read_to_string(&script_path).expect("message arrival acceptance script");
+
+    for required in [
+        "tool_waits_wake_on_the_store_write_instead_of_polling",
+        "task_wait_returns_early_with_a_peer_question_so_the_lead_answers_in_turn",
+        "task_wait_consumes_child_results_so_no_notice_turn_follows",
+        "store_enables_wal_foreign_keys_and_schema_version",
+        "wakesOnStoreWrite",
+        "pollIntervalAbsent",
+        "providerSmokeAbsent",
+        "externalModelUseAbsent",
+        "uiChangesAbsent",
+        "deterministic-fake-transport",
+        "schemaVersion = 13",
+    ] {
+        assert!(
+            script.contains(required),
+            "acceptance script must contain {required}"
+        );
+    }
+    for forbidden in ["provider', 'smoke", "LivePrompt"] {
+        assert!(
+            !script.contains(forbidden),
+            "acceptance script must not contain {forbidden}"
+        );
+    }
+}

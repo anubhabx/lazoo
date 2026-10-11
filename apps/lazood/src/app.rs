@@ -208,6 +208,9 @@ pub struct App {
     live_turns: Arc<Mutex<BTreeMap<Uuid, Arc<LiveTurn>>>>,
     task_dispatch_notify: Arc<Notify>,
     approval_notify: Arc<Notify>,
+    /// Woken by `publish_events`, which follows every store write, so a tool wait re-reads the
+    /// store when something changed instead of polling it.
+    store_changed: Arc<Notify>,
     approval_timeout: Duration,
     user_notifier: Arc<dyn UserNotifier>,
 }
@@ -295,6 +298,7 @@ impl App {
             live_turns: Arc::new(Mutex::new(BTreeMap::new())),
             task_dispatch_notify: Arc::new(Notify::new()),
             approval_notify: Arc::new(Notify::new()),
+            store_changed: Arc::new(Notify::new()),
             approval_timeout: DEFAULT_APPROVAL_TIMEOUT,
             user_notifier: Arc::new(lazoo_runtime::NativeNotifier),
         };
@@ -474,9 +478,7 @@ impl App {
                 checkout_mode: params.checkout_mode,
             })
             .map_err(store_error)?;
-        for event in self.store.publish_pending_outbox().map_err(store_error)? {
-            let _ = self.events.send(event);
-        }
+        self.publish_events()?;
         Ok(to_value(result))
     }
 
@@ -1255,6 +1257,7 @@ impl App {
         for event in self.store.publish_pending_outbox().map_err(store_error)? {
             let _ = self.events.send(event);
         }
+        self.store_changed.notify_waiters();
         Ok(())
     }
 }
