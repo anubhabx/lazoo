@@ -33,7 +33,7 @@ See `docs/verification/2026-10-10-lead-remediation.md`, `docs/verification/2026-
 Choose and design one separately reviewed slice:
 
 - **Live Codex gate**: one explicitly authorized model turn proving the nine tools, one peer exchange, one coalesced result turn, one remedy, one idle suspension, and one policy activation end to end through the real app-server.
-- **Typed desktop Inbox contract**: a reviewed, typed read model for tasks, approvals, incidents (with escalation, remedies, and notification state), notices, and messages, so the separately owned UI can bind to it; design only until the UI owner agrees.
+- **Typed desktop Inbox contract**: `docs/superpowers/specs/2026-10-11-desktop-inbox-contract-design.md` proposes the read model (`inbox.list` and `inbox.counts` over pending approvals, task proposals, uncertain tasks, and user and lead incidents; the badge rule; event-driven re-reads; actions as existing RPCs; phase 1 read-only). It is design only: get the owner's and the UI owner's answers to its section 9 questions, then write the implementation plan. Do not implement it, or change the desktop, before that agreement.
 
 Do not combine these boundaries implicitly. Per-project or per-employee thresholds, priority-ordered delivery and backpressure (section 11.3), message expiry, notification actions and quiet hours (tasks, approvals, incidents, notices, messages), cross-tree and user-to-employee messaging, remedies that start a provider process, ConPTY, a deadline-driven sweep, and ACP approval bridging remain available candidates behind those.
 
