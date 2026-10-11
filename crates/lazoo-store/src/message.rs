@@ -6,8 +6,8 @@ use lazoo_domain::{
 use lazoo_protocol::{
     MESSAGE_ENVELOPE_V1, MessageActivationIntent, MessageDeadLetter, MessageDelivery,
     MessageDeliveryAttempt, MessageDeliveryState, MessageEndpoint, MessageEnvelope, MessageKind,
-    MessageMutationResult, MessageReconcileResult, MessageRecord, MessageReference, MessageSender,
-    MessageSummary, UserMessageEndpoint, UserMessageKind,
+    MessageMutationResult, MessagePriority, MessageReconcileResult, MessageRecord,
+    MessageReference, MessageSender, MessageSummary, UserMessageEndpoint, UserMessageKind,
 };
 use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, params};
 use serde::Serialize;
@@ -28,6 +28,7 @@ pub struct SendMessageInput {
     pub correlation_id: Option<Uuid>,
     pub causation_id: Option<Uuid>,
     pub kind: MessageKind,
+    pub priority: MessagePriority,
     pub body: Value,
     pub references: Vec<MessageReference>,
     pub max_attempts: u32,
@@ -106,6 +107,7 @@ impl Store {
                 body: input.body.clone(),
                 references: input.references.clone(),
                 max_attempts: input.max_attempts,
+                priority: input.priority,
             },
         )?;
         transaction.commit()?;
@@ -585,7 +587,7 @@ fn message_select() -> &'static str {
         m.conversation_id, m.task_id, m.kind, m.body_json, m.references_json,
         m.created_at, d.state, d.revision, d.attempt_count, d.max_attempts,
         d.next_attempt_at, d.last_failure_code, d.last_failure_message,
-        d.acknowledged_at, d.terminal_at, d.updated_at
+        d.acknowledged_at, d.terminal_at, d.updated_at, m.priority
      FROM messages m
      JOIN message_deliveries d ON d.message_id = m.id"
 }
@@ -620,6 +622,7 @@ struct RawMessage {
     acknowledged_at: Option<String>,
     terminal_at: Option<String>,
     updated_at: String,
+    priority: String,
 }
 
 fn raw_message(row: &rusqlite::Row<'_>) -> rusqlite::Result<RawMessage> {
@@ -652,6 +655,7 @@ fn raw_message(row: &rusqlite::Row<'_>) -> rusqlite::Result<RawMessage> {
         acknowledged_at: row.get(25)?,
         terminal_at: row.get(26)?,
         updated_at: row.get(27)?,
+        priority: row.get(28)?,
     })
 }
 
@@ -686,6 +690,7 @@ fn message_from_raw(connection: &Connection, raw: RawMessage) -> Result<MessageR
             )?,
             task_id: optional_uuid(raw.task_id.as_deref(), "messages.task_id")?,
             kind: serde_json::from_value(Value::String(raw.kind))?,
+            priority: serde_json::from_value(Value::String(raw.priority))?,
             body: serde_json::from_str(&raw.body_json)?,
             references: serde_json::from_str(&raw.references_json)?,
             created_at: raw.created_at,
@@ -719,6 +724,7 @@ fn message_summary_from_raw(raw: RawMessage) -> Result<MessageSummary, StoreErro
         conversation_id: optional_uuid(raw.conversation_id.as_deref(), "messages.conversation_id")?,
         task_id: optional_uuid(raw.task_id.as_deref(), "messages.task_id")?,
         kind: serde_json::from_value(Value::String(raw.kind))?,
+        priority: serde_json::from_value(Value::String(raw.priority))?,
         state: serde_json::from_value(Value::String(raw.state))?,
         revision: unsigned(raw.revision)?,
         attempt_count: unsigned32(raw.attempt_count)?,
@@ -748,6 +754,7 @@ pub(crate) struct InsertMessageInput {
     pub body: Value,
     pub references: Vec<MessageReference>,
     pub max_attempts: u32,
+    pub priority: MessagePriority,
 }
 
 #[allow(clippy::too_many_lines)] // Keep validation and the complete record-first transaction together.
@@ -808,9 +815,9 @@ pub(crate) fn insert_message_tx(
             id, envelope_version, idempotency_key, correlation_id, causation_id,
             sender_kind, sender_employee_id, sender_session_id, recipient_employee_id,
             recipient_session_id, project_id, conversation_id, task_id, kind,
-            body_json, references_json, created_at
+            body_json, references_json, created_at, priority
          ) VALUES (
-            ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17
+            ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18
          )",
         params![
             message_id.to_string(),
@@ -830,6 +837,7 @@ pub(crate) fn insert_message_tx(
             serde_json::to_string(&input.body)?,
             serde_json::to_string(&input.references)?,
             now,
+            serialized_name(input.priority)?,
         ],
     )?;
     transaction.execute(

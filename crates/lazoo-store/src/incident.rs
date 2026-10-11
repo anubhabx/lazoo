@@ -1,6 +1,6 @@
 use chrono::{DateTime, TimeDelta, Utc};
 use lazoo_domain::{
-    INCIDENT_REMEDIATION_WINDOW_SECONDS, MAX_INCIDENT_REMEDIES, RemediationVerdict,
+    INCIDENT_REMEDIATION_WINDOW_SECONDS, IncidentFacts, MAX_INCIDENT_REMEDIES, RemediationVerdict,
     describe_incident, incident_fingerprint, incident_threshold_crossed, incident_window,
     remediation_verdict, validate_incident_code, validate_incident_detail,
     validate_incident_list_limit, validate_incident_text, validate_incident_title,
@@ -9,14 +9,14 @@ use lazoo_domain::{
 use lazoo_protocol::{
     AuthorityMode, INCIDENT_CONTRACT_V1, IncidentEscalation, IncidentEscalationReason,
     IncidentMutationResult, IncidentPriority, IncidentRecord, IncidentRemedyKind,
-    IncidentRemedyRecord, IncidentSource, IncidentState, MessageReference, MessageSender,
-    TaskRecord, TaskState,
+    IncidentRemedyRecord, IncidentSource, IncidentState, MessageRecord, MessageReference,
+    MessageSender, TaskRecord, TaskState,
 };
 use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, params};
 use serde_json::{Value, json};
 use uuid::Uuid;
 
-use crate::{Store, StoreError, conversation, employee, task, task::DelegateTaskInput};
+use crate::{Store, StoreError, conversation, employee, message, task, task::DelegateTaskInput};
 
 const INCIDENT_COLUMNS: &str = "sequence, contract_version, id, code, fingerprint, title,
     explanation, next_action, project_id, employee_id, provider, task_id, session_id, turn_id,
@@ -163,6 +163,7 @@ impl Store {
         let now = clock.to_rfc3339();
         let occurred_at = input.occurred_at.clone().unwrap_or_else(|| now.clone());
         let fingerprint = incident_fingerprint(&input.code, input.employee_id, input.project_id);
+        let priority_message = priority_dead_letter(&transaction, &input.code, input.message_id)?;
         let source = serialized_name(input.source)?;
         let detail_json = serde_json::to_string(&input.detail)?;
         let (incident_id, event_type) = if let Some(current) =
@@ -178,7 +179,10 @@ impl Store {
             let escalate = current.priority == IncidentPriority::Normal
                 && incident_threshold_crossed(
                     &input.code,
-                    input.task_id.or(current.task_id).is_some(),
+                    IncidentFacts {
+                        names_task: input.task_id.or(current.task_id).is_some(),
+                        priority_message,
+                    },
                     window_occurrences,
                 );
             let priority = if escalate || current.priority == IncidentPriority::Priority {
@@ -245,9 +249,16 @@ impl Store {
         } else {
             let text = describe_incident(&input.code);
             let id = Uuid::new_v4();
-            // A code whose threshold is one (a stall, a crash, a death under assigned work) is
-            // promoted by its first occurrence.
-            let born_priority = incident_threshold_crossed(&input.code, input.task_id.is_some(), 1);
+            // A code whose threshold is one (a stall, a crash, a death under assigned work, a
+            // dead-lettered priority message) is promoted by its first occurrence.
+            let born_priority = incident_threshold_crossed(
+                &input.code,
+                IncidentFacts {
+                    names_task: input.task_id.is_some(),
+                    priority_message,
+                },
+                1,
+            );
             transaction.execute(
                 "INSERT INTO incidents (
                             id, contract_version, code, fingerprint, title, explanation,
@@ -830,6 +841,67 @@ impl Store {
         }
         Ok(raised)
     }
+}
+
+/// The idempotency key of the `LZ-MESSAGE-DEADLETTER` incident for one dead letter. Every path
+/// that raises it uses this key, so each dead letter is reported once.
+#[must_use]
+pub fn dead_letter_incident_key(message_id: Uuid, attempt_id: Uuid) -> String {
+    format!("dead-letter:{message_id}:{attempt_id}")
+}
+
+impl Store {
+    /// Dead-lettered priority messages whose `LZ-MESSAGE-DEADLETTER` incident has not been raised
+    /// yet, oldest first. Whatever exhausted the message committed its dead letter first; the
+    /// daemon raises the incident from this list, so a crash in between is caught up later.
+    pub fn unnoted_priority_dead_letters(
+        &self,
+        limit: u32,
+    ) -> Result<Vec<MessageRecord>, StoreError> {
+        let connection = self.lock()?;
+        let mut statement = connection.prepare(
+            "SELECT m.id FROM message_dead_letters d
+             JOIN messages m ON m.id = d.message_id
+             WHERE m.priority = 'priority'
+               AND NOT EXISTS (
+                   SELECT 1 FROM incident_commands c
+                   WHERE c.scope = 'incident.raise'
+                     AND c.idempotency_key = 'dead-letter:' || d.message_id || ':' || d.attempt_id
+               )
+             ORDER BY m.sequence
+             LIMIT ?1",
+        )?;
+        let ids = statement
+            .query_map([i64::from(limit)], |row| row.get::<_, String>(0))?
+            .collect::<Result<Vec<_>, _>>()?;
+        ids.iter()
+            .map(|id| {
+                message::required_message(&connection, employee::parse_uuid(id, "messages.id")?)
+            })
+            .collect()
+    }
+}
+
+/// Whether this failure dead-lettered a priority message. It is read from the message and its
+/// dead letter, never taken from the caller.
+fn priority_dead_letter(
+    transaction: &Transaction<'_>,
+    code: &str,
+    message_id: Option<Uuid>,
+) -> Result<bool, StoreError> {
+    let Some(message_id) = message_id.filter(|_| code == "LZ-MESSAGE-DEADLETTER") else {
+        return Ok(false);
+    };
+    let priority: Option<String> = transaction
+        .query_row(
+            "SELECT m.priority FROM messages m
+             JOIN message_dead_letters d ON d.message_id = m.id
+             WHERE m.id = ?1",
+            [message_id.to_string()],
+            |row| row.get(0),
+        )
+        .optional()?;
+    Ok(priority.as_deref() == Some("priority"))
 }
 
 fn elapsed_seconds(window_started_at: &str, occurred_at: &str) -> i64 {

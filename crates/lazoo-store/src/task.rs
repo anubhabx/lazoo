@@ -5,11 +5,12 @@ use lazoo_domain::{
 };
 use lazoo_protocol::{
     AuthorityMode, CONVERSATION_CONTRACT_V1, EmployeeAvailability, MESSAGE_ENVELOPE_V1,
-    MessageDeliveryState, MessageEndpoint, MessageKind, MessageRecord, MessageReference,
-    MessageSender, SessionLifecycleState, TASK_CONTRACT_V1, TaskDetail, TaskDispatchFailureResult,
-    TaskDispatchRecord, TaskEvidence, TaskEvidenceKind, TaskMutationResult, TaskReconcileResult,
-    TaskRecord, TaskReportKind, TaskResolution, TaskRole, TaskState, TaskSummary,
-    TaskWorkspaceKind, TurnMutationResult, TurnState, UserMessageEndpoint, UserMessageKind,
+    MessageDeliveryState, MessageEndpoint, MessageKind, MessagePriority, MessageRecord,
+    MessageReference, MessageSender, SessionLifecycleState, TASK_CONTRACT_V1, TaskDetail,
+    TaskDispatchFailureResult, TaskDispatchRecord, TaskEvidence, TaskEvidenceKind,
+    TaskMutationResult, TaskReconcileResult, TaskRecord, TaskReportKind, TaskResolution, TaskRole,
+    TaskState, TaskSummary, TaskWorkspaceKind, TurnMutationResult, TurnState, UserMessageEndpoint,
+    UserMessageKind,
 };
 use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, params};
 use serde_json::{Value, json};
@@ -1737,6 +1738,7 @@ fn insert_delegation_message_tx(
             body: json!({"objective": objective}),
             references: references.to_vec(),
             max_attempts: 3,
+            priority: MessagePriority::Normal,
         },
     )?;
     Ok(result.message)

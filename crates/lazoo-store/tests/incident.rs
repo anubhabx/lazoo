@@ -307,7 +307,7 @@ fn emergency_spool_records_fold_into_keeper_incidents_exactly_once() {
     )
     .unwrap();
     let store = Store::open_path(root.state_db()).unwrap();
-    assert_eq!(store.status().unwrap().schema_version, 13);
+    assert_eq!(store.status().unwrap().schema_version, 14);
     assert_eq!(store.import_pending_incidents(&root).unwrap(), 2);
 
     let raised = store.reconcile_emergency_incidents().unwrap();
@@ -496,4 +496,168 @@ fn user_escalations_are_claimed_once_and_their_outcome_is_never_rewritten() {
         .filter(|kind| kind == "incident.user-notified")
         .count();
     assert_eq!(notified, 2, "the keeper settlement and the failed outcome");
+}
+
+/// Sends one message from and to `employee_id`, claims it, and fails it for good, so it is
+/// dead-lettered; returns its record.
+fn dead_letter(
+    store: &Store,
+    key: &str,
+    employee_id: Uuid,
+    priority: lazoo_protocol::MessagePriority,
+) -> lazoo_protocol::MessageRecord {
+    use lazoo_protocol::{MessageEndpoint, MessageKind};
+    use lazoo_store::{ClaimMessageInput, FailMessageInput, SendMessageInput};
+
+    let endpoint = MessageEndpoint {
+        employee_id,
+        session_id: None,
+    };
+    let sent = store
+        .send_message(&SendMessageInput {
+            request_id: format!("send-{key}"),
+            idempotency_key: format!("send-{key}"),
+            sender: endpoint,
+            recipient: endpoint,
+            project_id: None,
+            conversation_id: None,
+            task_id: None,
+            correlation_id: None,
+            causation_id: None,
+            kind: MessageKind::Status,
+            priority,
+            body: json!({"text": key}),
+            references: Vec::new(),
+            max_attempts: 3,
+        })
+        .unwrap()
+        .message;
+    let claimed = store
+        .claim_message(&ClaimMessageInput {
+            request_id: format!("claim-{key}"),
+            idempotency_key: format!("claim-{key}"),
+            message_id: sent.envelope.id,
+            expected_revision: sent.delivery.revision,
+        })
+        .unwrap()
+        .message;
+    store
+        .fail_message(&FailMessageInput {
+            request_id: format!("fail-{key}"),
+            idempotency_key: format!("fail-{key}"),
+            message_id: sent.envelope.id,
+            expected_revision: claimed.delivery.revision,
+            attempt_id: claimed.attempts[0].id,
+            retryable: false,
+            failure_code: "LZ-TURN-PROVIDER".to_owned(),
+            failure_message: "the provider refused the delivery".to_owned(),
+        })
+        .unwrap()
+        .message
+}
+
+fn dead_letter_raise(key: &str, message: &lazoo_protocol::MessageRecord) -> RaiseIncidentInput {
+    let attempt_id = message
+        .dead_letter
+        .as_ref()
+        .map_or_else(Uuid::new_v4, |dead| dead.attempt_id);
+    RaiseIncidentInput {
+        idempotency_key: lazoo_store::dead_letter_incident_key(message.envelope.id, attempt_id),
+        employee_id: Some(message.envelope.recipient.employee_id),
+        message_id: Some(message.envelope.id),
+        ..raise(key, "LZ-MESSAGE-DEADLETTER", None)
+    }
+}
+
+#[test]
+fn one_dead_lettered_priority_message_is_a_priority_incident_raised_once() {
+    use lazoo_protocol::{IncidentEscalation, IncidentEscalationReason, MessagePriority};
+
+    let (_temporary, store, employee_id) = store_with_employee();
+    let normal = dead_letter(&store, "normal", employee_id, MessagePriority::Normal);
+    let urgent = dead_letter(&store, "urgent", employee_id, MessagePriority::Priority);
+    assert_eq!(urgent.envelope.priority, MessagePriority::Priority);
+    assert_eq!(normal.envelope.priority, MessagePriority::Normal);
+    assert!(urgent.dead_letter.is_some() && normal.dead_letter.is_some());
+    let summaries = store.list_messages(0, 10).unwrap();
+    assert_eq!(summaries[0].priority, MessagePriority::Normal);
+    assert_eq!(summaries[1].priority, MessagePriority::Priority);
+
+    // Only the priority dead letter waits for its incident.
+    let unnoted = store.unnoted_priority_dead_letters(10).unwrap();
+    assert_eq!(unnoted.len(), 1);
+    assert_eq!(unnoted[0].envelope.id, urgent.envelope.id);
+
+    // A normal dead letter still needs three inside the window.
+    let folded = store
+        .raise_incident(&dead_letter_raise("normal", &normal))
+        .unwrap()
+        .incident;
+    assert_eq!(folded.priority, IncidentPriority::Normal);
+
+    // One priority dead letter promotes the incident it folds into, and with no lead to
+    // remediate it, it is the user's.
+    let promoted = store
+        .raise_incident(&dead_letter_raise("urgent", &urgent))
+        .unwrap()
+        .incident;
+    assert_eq!(promoted.id, folded.id);
+    assert_eq!(promoted.occurrences, 2);
+    assert_eq!(promoted.priority, IncidentPriority::Priority);
+    assert_eq!(promoted.escalation, IncidentEscalation::User);
+    assert_eq!(
+        promoted.escalation_reason,
+        Some(IncidentEscalationReason::NoLead)
+    );
+    assert_eq!(promoted.message_id, Some(urgent.envelope.id));
+    assert!(store.unnoted_priority_dead_letters(10).unwrap().is_empty());
+    let replay = store
+        .raise_incident(&dead_letter_raise("urgent", &urgent))
+        .unwrap();
+    assert!(
+        replay.event_sequence.is_none(),
+        "one incident per dead letter"
+    );
+
+    // Priority is read from the dead letter itself: naming a priority message that was never
+    // dead-lettered, or using another code, promotes nothing.
+    let (_other_temporary, other, other_employee) = store_with_employee();
+    let live = dead_letter(&other, "live", other_employee, MessagePriority::Priority);
+    let endpoint = live.envelope.recipient;
+    let pending = other
+        .send_message(&lazoo_store::SendMessageInput {
+            request_id: "send-pending".to_owned(),
+            idempotency_key: "send-pending".to_owned(),
+            sender: endpoint,
+            recipient: endpoint,
+            project_id: None,
+            conversation_id: None,
+            task_id: None,
+            correlation_id: None,
+            causation_id: None,
+            kind: lazoo_protocol::MessageKind::Status,
+            priority: MessagePriority::Priority,
+            body: json!({"text": "still queued"}),
+            references: Vec::new(),
+            max_attempts: 3,
+        })
+        .unwrap()
+        .message;
+    let asserted = other
+        .raise_incident(&RaiseIncidentInput {
+            message_id: Some(pending.envelope.id),
+            employee_id: Some(other_employee),
+            ..raise("asserted", "LZ-MESSAGE-DEADLETTER", None)
+        })
+        .unwrap()
+        .incident;
+    assert_eq!(asserted.priority, IncidentPriority::Normal);
+    let timeout = other
+        .raise_incident(&RaiseIncidentInput {
+            message_id: Some(live.envelope.id),
+            ..raise("timeout", "LZ-MESSAGE-TIMEOUT", Some(other_employee))
+        })
+        .unwrap()
+        .incident;
+    assert_eq!(timeout.priority, IncidentPriority::Normal);
 }

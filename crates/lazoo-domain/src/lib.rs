@@ -34,7 +34,7 @@ pub use employee::{
 };
 pub use incident::{
     INCIDENT_REMEDIATION_WINDOW_SECONDS, INCIDENT_THRESHOLD_OCCURRENCES,
-    INCIDENT_THRESHOLD_WINDOW_SECONDS, IncidentText, IncidentValidationError,
+    INCIDENT_THRESHOLD_WINDOW_SECONDS, IncidentFacts, IncidentText, IncidentValidationError,
     MAX_INCIDENT_CODE_BYTES, MAX_INCIDENT_DETAIL_BYTES, MAX_INCIDENT_REMEDIES,
     MAX_INCIDENT_TEXT_BYTES, MAX_INCIDENT_TITLE_BYTES, RemediationVerdict, describe_incident,
     incident_fingerprint, incident_threshold, incident_threshold_crossed, incident_window,

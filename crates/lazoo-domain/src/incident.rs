@@ -218,25 +218,39 @@ pub const fn incident_window(elapsed_seconds: i64, window_occurrences: u64) -> (
     }
 }
 
+/// What one failure was about, beyond its code.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct IncidentFacts {
+    /// The failure was tied to assigned work.
+    pub names_task: bool,
+    /// The failure dead-lettered a `priority` message.
+    pub priority_message: bool,
+}
+
 /// The persistent-failure threshold for one incident code (brief section 14.2): how many
-/// equivalent occurrences inside one window promote the incident to `priority`. `names_task`
-/// says whether the failure was tied to assigned work.
+/// equivalent occurrences inside one window promote the incident to `priority`.
 #[must_use]
-pub fn incident_threshold(code: &str, names_task: bool) -> u64 {
+pub fn incident_threshold(code: &str, facts: IncidentFacts) -> u64 {
     match code {
         // Missed progress evidence past the adapter's deadline, and a daemon crash.
         "LZ-SESSION-STALLED" | "LZ-DAEMON-UNAVAILABLE" => 1,
         // An employee process that dies while it holds assigned work...
-        "LZ-PROCESS-EXIT" if names_task => 1,
+        "LZ-PROCESS-EXIT" if facts.names_task => 1,
         // ...or exits unexpectedly twice.
         "LZ-PROCESS-EXIT" => 2,
+        // One dead-lettered priority message.
+        "LZ-MESSAGE-DEADLETTER" if facts.priority_message => 1,
         _ => INCIDENT_THRESHOLD_OCCURRENCES,
     }
 }
 
 #[must_use]
-pub fn incident_threshold_crossed(code: &str, names_task: bool, window_occurrences: u64) -> bool {
-    window_occurrences >= incident_threshold(code, names_task)
+pub fn incident_threshold_crossed(
+    code: &str,
+    facts: IncidentFacts,
+    window_occurrences: u64,
+) -> bool {
+    window_occurrences >= incident_threshold(code, facts)
 }
 
 /// A lead may apply at most this many remedies to one promoted incident...

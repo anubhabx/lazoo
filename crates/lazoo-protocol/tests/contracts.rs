@@ -397,3 +397,54 @@ fn idle_timeouts_default_to_never_on_create_and_stay_unchanged_when_an_update_om
         Some(0)
     );
 }
+
+#[test]
+fn message_priority_is_kebab_case_and_defaults_to_normal_for_older_records() {
+    use lazoo_protocol::{MessageEnvelope, MessagePriority};
+
+    let sender = Uuid::new_v4();
+    let params: SendMessageParams = serde_json::from_value(json!({
+        "sender": {"employeeId": sender},
+        "recipient": {"employeeId": sender},
+        "kind": "status",
+        "body": {"text": "Deploy is blocked."},
+        "idempotencyKey": "message-1"
+    }))
+    .unwrap();
+    assert_eq!(params.priority, MessagePriority::Normal);
+    let urgent: SendMessageParams = serde_json::from_value(json!({
+        "sender": {"employeeId": sender},
+        "recipient": {"employeeId": sender},
+        "kind": "status",
+        "priority": "priority",
+        "body": {"text": "Deploy is blocked."},
+        "idempotencyKey": "message-2"
+    }))
+    .unwrap();
+    assert_eq!(urgent.priority, MessagePriority::Priority);
+    assert_eq!(
+        serde_json::to_string(&MessagePriority::Priority).unwrap(),
+        r#""priority""#
+    );
+
+    let id = Uuid::new_v4();
+    let older: MessageEnvelope = serde_json::from_value(json!({
+        "version": 1,
+        "id": id,
+        "idempotencyKey": "older",
+        "correlationId": id,
+        "causationId": null,
+        "sender": {"employeeId": sender, "sessionId": null},
+        "recipient": {"employeeId": sender, "sessionId": null},
+        "projectId": null,
+        "conversationId": null,
+        "taskId": null,
+        "kind": "peer",
+        "body": {"text": "hello"},
+        "references": [],
+        "createdAt": "2026-10-11T00:00:00Z"
+    }))
+    .unwrap();
+    assert_eq!(older.priority, MessagePriority::Normal);
+    assert_eq!(serde_json::to_value(&older).unwrap()["priority"], "normal");
+}

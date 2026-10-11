@@ -708,6 +708,7 @@ fn canonical_messages_reject_missing_or_cross_scope_tasks_without_writes() {
         correlation_id: None,
         causation_id: None,
         kind: MessageKind::Peer,
+        priority: lazoo_protocol::MessagePriority::Normal,
         body: json!({"text": "missing"}),
         references: Vec::new(),
         max_attempts: 3,

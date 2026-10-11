@@ -1,6 +1,6 @@
 use lazoo_protocol::{
     AuthorityMode, EmployeeCheckoutPolicy, MessageDeliveryState, MessageEndpoint, MessageKind,
-    MessageSender,
+    MessagePriority, MessageSender,
 };
 use lazoo_store::{
     AcknowledgeMessageInput, CancelMessageInput, ClaimMessageInput, FailMessageInput,
@@ -49,6 +49,7 @@ fn send(key: &str, sender: Uuid, recipient: Uuid, causation_id: Option<Uuid>) ->
         correlation_id: None,
         causation_id,
         kind: MessageKind::Peer,
+        priority: MessagePriority::Normal,
         body: json!({"text": key}),
         references: Vec::new(),
         max_attempts: 3,

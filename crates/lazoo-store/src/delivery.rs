@@ -19,8 +19,8 @@ use lazoo_domain::{
 use lazoo_protocol::{
     CONVERSATION_CONTRACT_V1, ConversationTurnRecord, IncidentEscalation, IncidentPriority,
     MESSAGE_ENVELOPE_V1, MessageDeliveryState, MessageEndpoint, MessageKind, MessageMutationResult,
-    MessageRecord, MessageReference, MessageSender, TaskRecord, TaskState, TurnMutationResult,
-    TurnState,
+    MessagePriority, MessageRecord, MessageReference, MessageSender, TaskRecord, TaskState,
+    TurnMutationResult, TurnState,
 };
 use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, params};
 use serde_json::{Value, json};
@@ -512,6 +512,7 @@ fn queue_task_result_tx(
                 metadata: json!({}),
             }],
             max_attempts: NOTICE_MAX_ATTEMPTS,
+            priority: MessagePriority::Normal,
         },
     )
 }
@@ -609,6 +610,9 @@ fn queue_incident_notice_tx(
                 },
             ],
             max_attempts: NOTICE_MAX_ATTEMPTS,
+            // A lead that never reads this notice cannot remediate the incident, so losing it is
+            // itself a priority incident.
+            priority: MessagePriority::Priority,
         },
     )
 }
@@ -1017,6 +1021,7 @@ fn insert_peer_message_tx(
             }),
             references: all_references,
             max_attempts: NOTICE_MAX_ATTEMPTS,
+            priority: MessagePriority::Normal,
         },
     )
 }

@@ -19,8 +19,9 @@ use super::{App, session_store_error};
 const IDLE_SWEEP_INTERVAL: Duration = Duration::from_secs(15);
 
 impl App {
-    /// Runs the timed sweeps until shutdown: idle suspension, closing lead remediation
-    /// windows (`escalate_due_incidents_once`), and announcing user escalations
+    /// Runs the timed sweeps until shutdown: idle suspension, raising incidents for priority
+    /// dead letters (`note_priority_dead_letters_once`), closing lead remediation windows
+    /// (`escalate_due_incidents_once`), and announcing user escalations
     /// (`notify_user_escalations_once`), which share this cadence and its slack.
     pub async fn run_timed_sweeps(&self) {
         let mut shutdown = self.shutdown_receiver();
@@ -31,6 +32,9 @@ impl App {
             let now = Utc::now();
             if let Err(error) = self.suspend_idle_sessions_once(now).await {
                 tracing::warn!(code = %error.code, message = %error.message, "idle suspension failed");
+            }
+            if let Err(error) = self.note_priority_dead_letters_once() {
+                tracing::warn!(code = %error.code, message = %error.message, "dead-letter incidents failed");
             }
             if let Err(error) = self.escalate_due_incidents_once(now) {
                 tracing::warn!(code = %error.code, message = %error.message, "incident escalation failed");

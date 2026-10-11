@@ -12,7 +12,10 @@ use lazoo_protocol::{
     RpcError, TaskRecord,
 };
 use lazoo_providers::ProviderError;
-use lazoo_store::{ListIncidentsInput, RaiseIncidentInput, SettleIncidentInput, StoreError};
+use lazoo_store::{
+    ListIncidentsInput, RaiseIncidentInput, SettleIncidentInput, StoreError,
+    dead_letter_incident_key,
+};
 use serde_json::{Value, json};
 use uuid::Uuid;
 
@@ -23,6 +26,8 @@ const MAX_PROVIDER_ERROR_BYTES: usize = 1024;
 const MAX_NOTIFICATION_TEXT_BYTES: usize = 240;
 /// Incidents announced per pass; more wait for the next pass instead of flooding the desktop.
 const NOTIFICATION_PASS_LIMIT: u32 = 64;
+/// Priority dead letters raised per pass; the rest follow on the next.
+const DEAD_LETTER_PASS_LIMIT: u32 = 64;
 
 /// Shows one desktop notification to the local user. The daemon's default is the Windows toast
 /// the keeper already uses; tests substitute a recorder.
@@ -80,6 +85,47 @@ impl App {
             }
             Err(error) => tracing::warn!(code, %error, "incident could not be recorded"),
         }
+    }
+
+    /// Raises `LZ-MESSAGE-DEADLETTER` for a dead-lettered message, once per dead letter. The
+    /// store promotes it at once when the message is `priority`.
+    pub(super) fn note_dead_letter(&self, message: &MessageRecord) {
+        let Some(dead_letter) = &message.dead_letter else {
+            return;
+        };
+        self.note_incident(
+            &dead_letter_incident_key(message.envelope.id, dead_letter.attempt_id),
+            "LZ-MESSAGE-DEADLETTER",
+            IncidentScope {
+                project_id: message.envelope.project_id,
+                employee_id: Some(message.envelope.recipient.employee_id),
+                task_id: message.envelope.task_id,
+                message_id: Some(message.envelope.id),
+                ..IncidentScope::default()
+            },
+            json!({
+                "failureCode": dead_letter.failure_code,
+                "failureMessage": dead_letter.failure_message,
+                "attempts": message.delivery.attempt_count,
+                "priority": message.envelope.priority,
+            }),
+        );
+    }
+
+    /// Raises the dead-letter incident for every dead-lettered priority message that has none
+    /// yet, whichever path exhausted it: a failed notice or user turn, a failed dispatch, or
+    /// restart reconciliation (`message.fail` raises its own at once). Runs at startup and at the
+    /// head of the timed sweep, so the promotion is escalated and announced in the same sweep.
+    #[doc(hidden)]
+    pub fn note_priority_dead_letters_once(&self) -> Result<(), RpcError> {
+        for message in self
+            .store
+            .unnoted_priority_dead_letters(DEAD_LETTER_PASS_LIMIT)
+            .map_err(incident_store_error)?
+        {
+            self.note_dead_letter(&message);
+        }
+        Ok(())
     }
 
     pub(super) fn turn_scope(&self, turn: &ConversationTurnRecord) -> IncidentScope {
@@ -222,6 +268,9 @@ impl App {
                 }
             }
             Err(error) => tracing::warn!(%error, "emergency incidents could not be folded"),
+        }
+        if let Err(error) = self.note_priority_dead_letters_once() {
+            tracing::warn!(code = %error.code, message = %error.message, "dead-letter incidents failed");
         }
     }
 

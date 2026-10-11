@@ -135,11 +135,32 @@ fn message_cli_maps_send_envelope() {
                 "body": {"text": "Need the spacing token."},
                 "references": [{"kind": "file", "target": "tokens.css", "metadata": {}}],
                 "maxAttempts": 2,
+                "priority": "normal",
                 "idempotencyKey": "send-message"
             }),
             false
         )
     );
+
+    let priority = Cli::try_parse_from([
+        "lazooctl",
+        "message",
+        "send",
+        SENDER_ID,
+        RECIPIENT_ID,
+        "--kind",
+        "status",
+        "--body",
+        r#"{"text":"Deploy is blocked."}"#,
+        "--priority",
+        "--idempotency-key",
+        "send-priority",
+    ])
+    .unwrap();
+    let (method, params, _) = command_request(&priority.command);
+    assert_eq!(method, "message.send");
+    assert_eq!(params["priority"], "priority");
+    assert_eq!(params["kind"], "status");
 }
 
 #[test]

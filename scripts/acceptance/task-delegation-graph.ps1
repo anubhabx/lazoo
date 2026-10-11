@@ -293,7 +293,7 @@ try {
 
     $daemon = Start-Daemon
     $status = Wait-Status
-    Assert-Equal $status.schemaVersion 13 'schema 13'
+    Assert-Equal $status.schemaVersion 14 'schema 14'
     Assert-Equal $status.journalMode 'wal' 'SQLite journal mode'
     $gates.schema8 = 'PASS'
 
@@ -694,7 +694,7 @@ try {
         }
     })
     $manifest = [ordered]@{
-        schemaVersion = 13
+        schemaVersion = 14
         acceptance = 'task-delegation-graph'
         mode = 'deterministic-fixture'
         status = $manifestStatus

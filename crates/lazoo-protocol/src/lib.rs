@@ -28,9 +28,9 @@ pub use message::{
     AcknowledgeMessageParams, CancelMessageParams, ClaimMessageParams, FailMessageParams,
     MESSAGE_ENVELOPE_V1, MESSAGE_ENVELOPE_V2, MessageActivationIntent, MessageDeadLetter,
     MessageDelivery, MessageDeliveryAttempt, MessageDeliveryState, MessageEndpoint,
-    MessageEnvelope, MessageKind, MessageListParams, MessageMutationResult, MessageReconcileResult,
-    MessageRecord, MessageReference, MessageSender, MessageShowParams, MessageSummary,
-    RetryMessageParams, SendMessageParams, UserMessageEndpoint, UserMessageKind,
+    MessageEnvelope, MessageKind, MessageListParams, MessageMutationResult, MessagePriority,
+    MessageReconcileResult, MessageRecord, MessageReference, MessageSender, MessageShowParams,
+    MessageSummary, RetryMessageParams, SendMessageParams, UserMessageEndpoint, UserMessageKind,
 };
 pub use rpc::{JsonRpcRequest, JsonRpcResponse, RpcError};
 pub use task::{

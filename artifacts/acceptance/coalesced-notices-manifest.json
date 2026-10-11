@@ -1,14 +1,14 @@
 ﻿{
     "status":  "PASS",
-    "schemaVersion":  13,
+    "schemaVersion":  14,
     "mode":  "deterministic-fake-transport",
-    "startedAt":  "2026-10-11T16:14:35.0567119Z",
-    "durationMs":  4278,
+    "startedAt":  "2026-10-11T16:30:42.7339409Z",
+    "durationMs":  4337,
     "commands":  [
                      {
                          "command":  "cargo test -p lazoo-domain --test delivery coalesced_notice_text_lists_every_notice_oldest_first_and_passes_one_through --locked -- --exact",
                          "exitCode":  0,
-                         "durationMs":  265
+                         "durationMs":  272
                      },
                      {
                          "command":  "cargo test -p lazoo-store --test delivery queued_notices_for_one_recipient_coalesce_into_one_turn_with_evidence_for_each --locked -- --exact",
@@ -18,37 +18,37 @@
                      {
                          "command":  "cargo test -p lazoo-store --test delivery a_notice_read_inside_another_turn_releases_its_batch_for_a_fresh_turn --locked -- --exact",
                          "exitCode":  0,
-                         "durationMs":  417
+                         "durationMs":  432
                      },
                      {
                          "command":  "cargo test -p lazoo-store --test delivery a_coalesced_turn_stays_within_the_turn_text_limit --locked -- --exact",
                          "exitCode":  0,
-                         "durationMs":  608
+                         "durationMs":  620
                      },
                      {
                          "command":  "cargo test -p lazoo-store --test delivery peer_turns_never_complete_the_recipient_task --locked -- --exact",
                          "exitCode":  0,
-                         "durationMs":  421
+                         "durationMs":  414
                      },
                      {
                          "command":  "cargo test -p lazood --test daemon queued_notices_reach_an_idle_lead_as_one_turn --locked -- --exact",
                          "exitCode":  0,
-                         "durationMs":  593
+                         "durationMs":  579
                      },
                      {
                          "command":  "cargo test -p lazood --test daemon child_results_reach_an_idle_lead_as_a_notice_turn_after_its_turn_ended --locked -- --exact",
                          "exitCode":  0,
-                         "durationMs":  528
+                         "durationMs":  560
                      },
                      {
                          "command":  "cargo test -p lazood --test daemon peer_messages_never_activate_a_dormant_recipient_and_refusals_never_end_the_turn --locked -- --exact",
                          "exitCode":  0,
-                         "durationMs":  564
+                         "durationMs":  565
                      },
                      {
                          "command":  "cargo test -p lazoo-store --test store store_enables_wal_foreign_keys_and_schema_version --locked -- --exact",
                          "exitCode":  0,
-                         "durationMs":  381
+                         "durationMs":  391
                      },
                      {
                          "command":  "git diff --quiet and git diff --cached --quiet -- apps/lazoo-desktop",

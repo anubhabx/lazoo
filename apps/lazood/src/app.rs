@@ -1054,6 +1054,7 @@ impl App {
                 correlation_id: params.correlation_id,
                 causation_id: params.causation_id,
                 kind: params.kind,
+                priority: params.priority,
                 body: params.body,
                 references: params.references,
                 max_attempts: params.max_attempts,
@@ -1118,28 +1119,8 @@ impl App {
             })
             .map_err(message_store_error)?;
         self.publish_events()?;
-        if result.event_sequence.is_some()
-            && let Some(dead_letter) = &result.message.dead_letter
-        {
-            self.note_incident(
-                &format!(
-                    "dead-letter:{}:{}",
-                    result.message.envelope.id, dead_letter.attempt_id
-                ),
-                "LZ-MESSAGE-DEADLETTER",
-                incident::IncidentScope {
-                    project_id: result.message.envelope.project_id,
-                    employee_id: Some(result.message.envelope.recipient.employee_id),
-                    task_id: result.message.envelope.task_id,
-                    message_id: Some(result.message.envelope.id),
-                    ..incident::IncidentScope::default()
-                },
-                json!({
-                    "failureCode": dead_letter.failure_code,
-                    "failureMessage": dead_letter.failure_message,
-                    "attempts": result.message.delivery.attempt_count,
-                }),
-            );
+        if result.event_sequence.is_some() {
+            self.note_dead_letter(&result.message);
         }
         Ok(to_value(result))
     }

@@ -3560,7 +3560,7 @@ async fn status_reports_protocol_store_and_boot_identity() {
     let result = response.result.unwrap();
 
     assert_eq!(result["protocolVersion"], 1);
-    assert_eq!(result["schemaVersion"], 13);
+    assert_eq!(result["schemaVersion"], 14);
     assert_eq!(result["journalMode"], "wal");
     assert!(
         result["bootId"]
@@ -4304,7 +4304,7 @@ fn employee_roster_acceptance_contract_is_backend_only() {
         "roster', 'refresh",
         "LZ-EMPLOYEE-STALE",
         "restartDurability",
-        "schemaVersion 13",
+        "schemaVersion 14",
         "providerSmokeAbsent",
     ] {
         assert!(
@@ -4342,7 +4342,7 @@ fn native_session_acceptance_contract_covers_containment_and_owner_loss() {
         "completeTreeTerminated",
         "nativeHostPid",
         "providerSmokeAbsent",
-        "schemaVersion 13",
+        "schemaVersion 14",
     ] {
         assert!(
             script.contains(required),
@@ -4372,7 +4372,7 @@ fn collaboration_bus_acceptance_contract_is_backend_only() {
         "deadLetterEvidence",
         "restartDurability",
         "auditOutboxEvidence",
-        "schemaVersion 13",
+        "schemaVersion 14",
         "providerSmokeAbsent",
         "desktopCapabilityExpansionAbsent",
     ] {
@@ -4508,7 +4508,7 @@ fn task_graph_acceptance_executes_backend_only_contract() {
     )
     .unwrap();
     assert_eq!(manifest["status"], "PASS");
-    assert_eq!(manifest["schemaVersion"], 13);
+    assert_eq!(manifest["schemaVersion"], 14);
     assert_eq!(manifest["mode"], "deterministic-fixture");
     for field in [
         "rootIdentity",
@@ -5687,7 +5687,7 @@ fn collaboration_tools_acceptance_contract_is_deterministic_and_backend_only() {
         "worker_turn_reports_failure_through_task_report_before_native_completion",
         "collaboration-tools-manifest.json",
         "deterministic-fake-transport",
-        "schemaVersion = 13",
+        "schemaVersion = 14",
     ] {
         assert!(
             script.contains(required),
@@ -6224,7 +6224,7 @@ async fn restart_owner_loss_and_emergency_spool_fold_into_startup_incidents_once
         .await
         .result
         .unwrap();
-    assert_eq!(status["schemaVersion"], 13);
+    assert_eq!(status["schemaVersion"], 14);
     assert_eq!(status["emergencyIncidentCount"], 1);
 }
 
@@ -6327,7 +6327,7 @@ fn minimum_incidents_acceptance_contract_is_deterministic_and_backend_only() {
         "incident_errors_use_exit_code_fifteen",
         "minimum-incidents-manifest.json",
         "deterministic-fake-transport",
-        "schemaVersion = 13",
+        "schemaVersion = 14",
     ] {
         assert!(
             script.contains(required),
@@ -6797,7 +6797,7 @@ fn result_delivery_acceptance_contract_is_deterministic_and_backend_only() {
         "externalModelUseAbsent",
         "uiChangesAbsent",
         "deterministic-fake-transport",
-        "schemaVersion = 13",
+        "schemaVersion = 14",
     ] {
         assert!(
             script.contains(required),
@@ -7304,7 +7304,7 @@ fn peer_messaging_acceptance_contract_is_deterministic_and_backend_only() {
         "externalModelUseAbsent",
         "uiChangesAbsent",
         "deterministic-fake-transport",
-        "schemaVersion = 13",
+        "schemaVersion = 14",
     ] {
         assert!(
             script.contains(required),
@@ -7427,7 +7427,7 @@ fn coalesced_notices_acceptance_contract_is_deterministic_and_backend_only() {
         "externalModelUseAbsent",
         "uiChangesAbsent",
         "deterministic-fake-transport",
-        "schemaVersion = 13",
+        "schemaVersion = 14",
     ] {
         assert!(
             script.contains(required),
@@ -7666,7 +7666,7 @@ fn activation_policy_acceptance_contract_is_deterministic_and_backend_only() {
         "externalModelUseAbsent",
         "uiChangesAbsent",
         "deterministic-fake-transport",
-        "schemaVersion = 13",
+        "schemaVersion = 14",
     ] {
         assert!(
             script.contains(required),
@@ -8033,7 +8033,7 @@ fn idle_suspension_acceptance_contract_is_deterministic_and_backend_only() {
         "externalModelUseAbsent",
         "uiChangesAbsent",
         "deterministic-fake-transport",
-        "schemaVersion = 13",
+        "schemaVersion = 14",
     ] {
         assert!(
             script.contains(required),
@@ -8317,7 +8317,7 @@ fn lead_remediation_acceptance_contract_is_deterministic_and_backend_only() {
         "externalModelUseAbsent",
         "uiChangesAbsent",
         "deterministic-fake-transport",
-        "schemaVersion = 13",
+        "schemaVersion = 14",
     ] {
         assert!(
             script.contains(required),
@@ -8359,7 +8359,7 @@ fn incident_thresholds_acceptance_contract_is_deterministic_and_backend_only() {
         "externalModelUseAbsent",
         "uiChangesAbsent",
         "deterministic-fake-transport",
-        "schemaVersion = 13",
+        "schemaVersion = 14",
     ] {
         assert!(
             script.contains(required),
@@ -8568,7 +8568,7 @@ fn user_notifications_acceptance_contract_is_deterministic_and_backend_only() {
         "externalModelUseAbsent",
         "uiChangesAbsent",
         "deterministic-fake-transport",
-        "schemaVersion = 13",
+        "schemaVersion = 14",
     ] {
         assert!(
             script.contains(required),
@@ -8662,7 +8662,229 @@ fn message_arrival_acceptance_contract_is_deterministic_and_backend_only() {
         "externalModelUseAbsent",
         "uiChangesAbsent",
         "deterministic-fake-transport",
-        "schemaVersion = 13",
+        "schemaVersion = 14",
+    ] {
+        assert!(
+            script.contains(required),
+            "acceptance script must contain {required}"
+        );
+    }
+    for forbidden in ["provider', 'smoke", "LivePrompt"] {
+        assert!(
+            !script.contains(forbidden),
+            "acceptance script must not contain {forbidden}"
+        );
+    }
+}
+
+fn dead_letter_incidents(store: &Store) -> Vec<lazoo_protocol::IncidentRecord> {
+    store
+        .list_incidents(&lazoo_store::ListIncidentsInput {
+            limit: 100,
+            code: Some("LZ-MESSAGE-DEADLETTER".to_owned()),
+            ..lazoo_store::ListIncidentsInput::default()
+        })
+        .unwrap()
+}
+
+/// A lead's incident notice is a priority message. When its notice turn fails for good, nothing
+/// else reports the lost notice, so the sweep raises its dead letter as a priority incident; it
+/// is about the lead itself, so it goes to the user and is announced by the same sweep.
+#[tokio::test]
+async fn a_dead_lettered_incident_notice_reaches_the_user_in_one_sweep() {
+    use chrono::Utc;
+    use lazoo_protocol::{
+        IncidentEscalation, IncidentEscalationReason, IncidentPriority, IncidentSource,
+        MessageKind, MessagePriority,
+    };
+
+    let (_temporary, harness) = tool_harness(AuthorityMode::SelfDecision);
+    let (root_task_id, child_id) = delegate_without_waiting(&harness).await;
+    let stall = harness
+        .store
+        .raise_incident(&lazoo_store::RaiseIncidentInput {
+            request_id: "request-stall".to_owned(),
+            idempotency_key: "stall".to_owned(),
+            code: "LZ-SESSION-STALLED".to_owned(),
+            source: IncidentSource::Daemon,
+            title: None,
+            explanation: None,
+            project_id: None,
+            employee_id: Some(harness.worker.id),
+            provider: Some("codex".to_owned()),
+            task_id: Some(child_id),
+            session_id: None,
+            turn_id: None,
+            message_id: None,
+            detail: json!({}),
+            occurred_at: None,
+        })
+        .unwrap()
+        .incident;
+    assert_eq!(stall.escalation, IncidentEscalation::Lead);
+    *harness.backend.turn_failure.lock().unwrap() = Some("notice refused".to_owned());
+    let _ = harness.app.deliver_pending_notices_once().await;
+
+    let notices = lead_messages(&harness.store, MessageKind::Status);
+    assert_eq!(notices.len(), 1);
+    assert_eq!(notices[0].priority, MessagePriority::Priority);
+    assert_eq!(notices[0].task_id, Some(root_task_id));
+    assert_eq!(notices[0].state, MessageDeliveryState::TerminalFailed);
+    assert!(
+        harness
+            .store
+            .get_message(notices[0].id)
+            .unwrap()
+            .dead_letter
+            .is_some()
+    );
+    assert!(
+        dead_letter_incidents(&harness.store).is_empty(),
+        "the failed notice turn reports only its own provider failure"
+    );
+
+    let recorder = Arc::new(RecordingNotifier::default());
+    let app = harness.app.clone().with_user_notifier(recorder.clone());
+    let now = Utc::now();
+    app.note_priority_dead_letters_once().unwrap();
+    app.escalate_due_incidents_once(now).unwrap();
+    app.notify_user_escalations_once(now).unwrap();
+    let raised = dead_letter_incidents(&harness.store);
+    assert_eq!(raised.len(), 1);
+    assert_eq!(raised[0].priority, IncidentPriority::Priority);
+    assert_eq!(raised[0].occurrences, 1);
+    assert_eq!(raised[0].employee_id, Some(harness.lead.id));
+    assert_eq!(raised[0].message_id, Some(notices[0].id));
+    assert_eq!(raised[0].escalation, IncidentEscalation::User);
+    assert_eq!(
+        raised[0].escalation_reason,
+        Some(IncidentEscalationReason::NoLead)
+    );
+    assert_eq!(raised[0].detail["priority"], "priority");
+    {
+        let shown = recorder.shown.lock().unwrap();
+        assert_eq!(shown.len(), 1);
+        assert_eq!(
+            shown[0].0,
+            "Lazoo needs you: Message exhausted safe delivery attempts"
+        );
+    }
+
+    // The next sweep raises nothing new and announces nothing again; no work changed.
+    app.note_priority_dead_letters_once().unwrap();
+    app.notify_user_escalations_once(Utc::now()).unwrap();
+    assert_eq!(dead_letter_incidents(&harness.store)[0].occurrences, 1);
+    assert_eq!(recorder.shown.lock().unwrap().len(), 1);
+    assert_eq!(
+        harness.store.get_task(child_id).unwrap().task.state,
+        lazoo_protocol::TaskState::Accepted
+    );
+}
+
+/// The user's own `message.send` may be priority; `message.fail` raises its dead letter at once,
+/// promoted for a priority message and folded for a normal one, and the sweep never raises it
+/// twice.
+#[tokio::test]
+async fn message_fail_promotes_a_priority_dead_letter_at_once_and_only_once() {
+    use lazoo_protocol::IncidentPriority;
+
+    let (_temporary, _root, store, app, sender, recipient) = message_test_app();
+    let mut dead_letters = Vec::new();
+    for (key, priority) in [("normal", "normal"), ("urgent", "priority")] {
+        let sent = app
+            .handle(request(
+                &format!("send-{key}"),
+                "message.send",
+                json!({
+                    "sender": {"employeeId": sender},
+                    "recipient": {"employeeId": recipient},
+                    "kind": "status",
+                    "priority": priority,
+                    "body": {"text": key},
+                    "idempotencyKey": format!("send-{key}")
+                }),
+            ))
+            .await
+            .result
+            .unwrap();
+        assert_eq!(sent["message"]["envelope"]["priority"], priority);
+        let message_id = sent["message"]["envelope"]["id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let claimed = app
+            .handle(request(
+                &format!("claim-{key}"),
+                "message.claim",
+                json!({"id": message_id, "expectedRevision": 1, "idempotencyKey": format!("claim-{key}")}),
+            ))
+            .await
+            .result
+            .unwrap();
+        let failed = app
+            .handle(request(
+                &format!("fail-{key}"),
+                "message.fail",
+                json!({
+                    "id": message_id,
+                    "expectedRevision": 2,
+                    "attemptId": claimed["message"]["attempts"][0]["id"],
+                    "retryable": false,
+                    "failureCode": "LZ-TURN-PROVIDER",
+                    "failureMessage": "the adapter could not deliver it",
+                    "idempotencyKey": format!("fail-{key}")
+                }),
+            ))
+            .await
+            .result
+            .unwrap();
+        assert!(failed["message"]["deadLetter"].is_object());
+        dead_letters.push(dead_letter_incidents(&store));
+    }
+    assert_eq!(dead_letters[0].len(), 1);
+    assert_eq!(dead_letters[0][0].priority, IncidentPriority::Normal);
+    assert_eq!(dead_letters[1].len(), 1, "both fold into one incident");
+    assert_eq!(dead_letters[1][0].occurrences, 2);
+    assert_eq!(dead_letters[1][0].priority, IncidentPriority::Priority);
+
+    app.note_priority_dead_letters_once().unwrap();
+    assert_eq!(dead_letter_incidents(&store)[0].occurrences, 2);
+    let listed = app
+        .handle(request(
+            "list",
+            "message.list",
+            json!({"afterSequence": 0, "limit": 10}),
+        ))
+        .await
+        .result
+        .unwrap();
+    assert_eq!(listed[0]["priority"], "normal");
+    assert_eq!(listed[1]["priority"], "priority");
+}
+
+#[test]
+fn message_priority_acceptance_contract_is_deterministic_and_backend_only() {
+    let repository = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let script_path = repository.join("scripts/acceptance/message-priority.ps1");
+    let script = std::fs::read_to_string(&script_path).expect("message priority acceptance script");
+
+    for required in [
+        "message_priority_is_kebab_case_and_defaults_to_normal_for_older_records",
+        "section_fourteen_two_thresholds_promote_stalls_crashes_and_deaths_at_once",
+        "one_dead_lettered_priority_message_is_a_priority_incident_raised_once",
+        "version_thirteen_incident_notices_upgrade_as_priority_messages",
+        "message_cli_maps_send_envelope",
+        "a_dead_lettered_incident_notice_reaches_the_user_in_one_sweep",
+        "message_fail_promotes_a_priority_dead_letter_at_once_and_only_once",
+        "store_enables_wal_foreign_keys_and_schema_version",
+        "priorityDeadLetterPromotedAtOnce",
+        "incidentNoticesArePriority",
+        "toolsCannotSetPriority",
+        "providerSmokeAbsent",
+        "externalModelUseAbsent",
+        "uiChangesAbsent",
+        "deterministic-fake-transport",
+        "schemaVersion = 14",
     ] {
         assert!(
             script.contains(required),

@@ -5,8 +5,8 @@ use lazoo_ipc::{IpcError, PipeClient};
 use lazoo_protocol::{
     ActivationPolicy, ApprovalDecision, ApprovalState, AuthorityMode, CheckoutMode,
     EmployeeCheckoutPolicy, IncidentEscalation, IncidentPriority, IncidentState, JsonRpcRequest,
-    JsonRpcResponse, MessageEndpoint, MessageKind, MessageSender, RpcError, TaskReportKind,
-    TaskResolution, TaskState, UserMessageEndpoint, UserMessageKind,
+    JsonRpcResponse, MessageEndpoint, MessageKind, MessagePriority, MessageSender, RpcError,
+    TaskReportKind, TaskResolution, TaskState, UserMessageEndpoint, UserMessageKind,
 };
 use lazoo_runtime::{DataRoot, Installation, RuntimeError};
 use serde_json::{Value, json};
@@ -309,6 +309,9 @@ pub enum MessageCommand {
         references: Value,
         #[arg(long, default_value_t = 3)]
         max_attempts: u32,
+        /// Mark the message `priority`: one dead letter of it is a priority incident.
+        #[arg(long)]
+        priority: bool,
         #[arg(long)]
         idempotency_key: Option<String>,
     },
@@ -1202,6 +1205,7 @@ fn message_send_request(command: &MessageCommand) -> (&'static str, Value, bool)
         body,
         references,
         max_attempts,
+        priority,
         idempotency_key,
     } = command
     else {
@@ -1228,6 +1232,7 @@ fn message_send_request(command: &MessageCommand) -> (&'static str, Value, bool)
             "body": body,
             "references": references,
             "maxAttempts": max_attempts,
+            "priority": if *priority { MessagePriority::Priority } else { MessagePriority::Normal },
             "idempotencyKey": idempotency_key.clone().unwrap_or_else(|| Uuid::new_v4().to_string()),
         }),
         false,

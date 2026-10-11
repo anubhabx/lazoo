@@ -1,9 +1,9 @@
 use lazoo_domain::{
-    INCIDENT_THRESHOLD_OCCURRENCES, INCIDENT_THRESHOLD_WINDOW_SECONDS, IncidentValidationError,
-    MAX_INCIDENT_TITLE_BYTES, RemediationVerdict, describe_incident, incident_fingerprint,
-    incident_threshold, incident_threshold_crossed, incident_window, remediation_verdict,
-    validate_incident_code, validate_incident_detail, validate_incident_list_limit,
-    validate_incident_text, validate_incident_title,
+    INCIDENT_THRESHOLD_OCCURRENCES, INCIDENT_THRESHOLD_WINDOW_SECONDS, IncidentFacts,
+    IncidentValidationError, MAX_INCIDENT_TITLE_BYTES, RemediationVerdict, describe_incident,
+    incident_fingerprint, incident_threshold, incident_threshold_crossed, incident_window,
+    remediation_verdict, validate_incident_code, validate_incident_detail,
+    validate_incident_list_limit, validate_incident_text, validate_incident_title,
 };
 use lazoo_protocol::IncidentEscalationReason;
 use serde_json::json;
@@ -47,8 +47,12 @@ fn threshold_window_promotes_three_equivalent_failures_inside_five_minutes() {
     assert_eq!(INCIDENT_THRESHOLD_WINDOW_SECONDS, 300);
     assert_eq!(incident_window(10, 1), (false, 2));
     assert_eq!(incident_window(299, 2), (false, 3));
-    assert!(incident_threshold_crossed("LZ-MESSAGE-TIMEOUT", true, 3));
-    assert!(!incident_threshold_crossed("LZ-MESSAGE-TIMEOUT", true, 2));
+    let task = IncidentFacts {
+        names_task: true,
+        ..IncidentFacts::default()
+    };
+    assert!(incident_threshold_crossed("LZ-MESSAGE-TIMEOUT", task, 3));
+    assert!(!incident_threshold_crossed("LZ-MESSAGE-TIMEOUT", task, 2));
     assert_eq!(incident_window(301, 2), (true, 1));
     assert_eq!(
         incident_window(-5, 2),
@@ -59,33 +63,58 @@ fn threshold_window_promotes_three_equivalent_failures_inside_five_minutes() {
 
 #[test]
 fn section_fourteen_two_thresholds_promote_stalls_crashes_and_deaths_at_once() {
-    // (code, tied to assigned work) -> occurrences that promote
-    for (code, names_task, threshold) in [
-        ("LZ-SESSION-STALLED", true, 1),
-        ("LZ-SESSION-STALLED", false, 1),
-        ("LZ-DAEMON-UNAVAILABLE", false, 1),
-        ("LZ-PROCESS-EXIT", true, 1),
-        ("LZ-PROCESS-EXIT", false, 2),
-        ("LZ-MESSAGE-TIMEOUT", true, INCIDENT_THRESHOLD_OCCURRENCES),
+    // (code, tied to assigned work, dead-lettered a priority message) -> occurrences that promote
+    for (code, names_task, priority_message, threshold) in [
+        ("LZ-SESSION-STALLED", true, false, 1),
+        ("LZ-SESSION-STALLED", false, false, 1),
+        ("LZ-DAEMON-UNAVAILABLE", false, false, 1),
+        ("LZ-PROCESS-EXIT", true, false, 1),
+        ("LZ-PROCESS-EXIT", false, false, 2),
+        ("LZ-MESSAGE-DEADLETTER", true, true, 1),
+        ("LZ-MESSAGE-DEADLETTER", false, true, 1),
         (
             "LZ-MESSAGE-DEADLETTER",
+            true,
+            false,
+            INCIDENT_THRESHOLD_OCCURRENCES,
+        ),
+        (
+            "LZ-MESSAGE-TIMEOUT",
+            true,
+            false,
+            INCIDENT_THRESHOLD_OCCURRENCES,
+        ),
+        // Only a dead letter reads the message's priority.
+        (
+            "LZ-MESSAGE-TIMEOUT",
+            false,
             true,
             INCIDENT_THRESHOLD_OCCURRENCES,
         ),
         (
             "LZ-WORKTREE-CONFLICT",
             false,
+            false,
             INCIDENT_THRESHOLD_OCCURRENCES,
         ),
-        ("LZ-SOMETHING-NEW", false, INCIDENT_THRESHOLD_OCCURRENCES),
+        (
+            "LZ-SOMETHING-NEW",
+            false,
+            false,
+            INCIDENT_THRESHOLD_OCCURRENCES,
+        ),
     ] {
+        let facts = IncidentFacts {
+            names_task,
+            priority_message,
+        };
         assert_eq!(
-            incident_threshold(code, names_task),
+            incident_threshold(code, facts),
             threshold,
-            "{code} names_task={names_task}"
+            "{code} {facts:?}"
         );
-        assert!(incident_threshold_crossed(code, names_task, threshold));
-        assert!(!incident_threshold_crossed(code, names_task, threshold - 1));
+        assert!(incident_threshold_crossed(code, facts, threshold));
+        assert!(!incident_threshold_crossed(code, facts, threshold - 1));
     }
 }
 

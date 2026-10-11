@@ -35,7 +35,7 @@ fn store_enables_wal_foreign_keys_and_schema_version() {
 
     let status = store.status().unwrap();
 
-    assert_eq!(status.schema_version, 13);
+    assert_eq!(status.schema_version, 14);
     assert_eq!(status.journal_mode.to_lowercase(), "wal");
     assert!(status.foreign_keys);
     assert_no_foreign_key_violations(&temporary.path().join("lazoo.db"));
@@ -75,7 +75,7 @@ fn version_one_database_upgrades_to_version_eight_without_rewriting_version_one(
 
     let store = Store::open_path(&database).unwrap();
 
-    assert_eq!(store.status().unwrap().schema_version, 13);
+    assert_eq!(store.status().unwrap().schema_version, 14);
     store
         .execute_for_test(
             "INSERT INTO employees (
@@ -136,7 +136,7 @@ fn version_two_database_upgrades_to_version_seven_with_session_tables() {
 
     let store = Store::open_path(&database).unwrap();
 
-    assert_eq!(store.status().unwrap().schema_version, 13);
+    assert_eq!(store.status().unwrap().schema_version, 14);
     store
         .execute_for_test(
             "INSERT INTO employees (
@@ -210,7 +210,7 @@ fn version_three_database_upgrades_to_version_seven_with_message_tables() {
 
     let store = Store::open_path(&database).unwrap();
 
-    assert_eq!(store.status().unwrap().schema_version, 13);
+    assert_eq!(store.status().unwrap().schema_version, 14);
     store
         .execute_for_test(
             "INSERT INTO employees (
@@ -344,7 +344,7 @@ fn version_four_database_upgrades_to_version_seven_without_losing_message_histor
     drop(connection);
 
     let store = Store::open_path(&database).unwrap();
-    assert_eq!(store.status().unwrap().schema_version, 13);
+    assert_eq!(store.status().unwrap().schema_version, 14);
 
     let message = store.get_message(message_id).unwrap();
     assert_eq!(message.envelope.version, 1);
@@ -526,7 +526,7 @@ fn version_five_turns_backfill_conservative_task_identity_and_state() {
     drop(connection);
 
     let store = Store::open_path(&database).unwrap();
-    assert_eq!(store.status().unwrap().schema_version, 13);
+    assert_eq!(store.status().unwrap().schema_version, 14);
     drop(store);
 
     let connection = Connection::open(&database).unwrap();
@@ -675,28 +675,16 @@ fn emergency_segments_import_exactly_once_and_reconcile() {
     assert!(root.spool_reconciled().join("incident-1.ndjson").exists());
 }
 
-#[test]
-fn version_eleven_priority_incidents_upgrade_straight_to_the_user() {
-    use lazoo_protocol::{IncidentEscalation, IncidentEscalationReason};
-    use rusqlite::{Connection, params};
+/// A database with exactly these migrations applied and recorded, as an older Lazoo left it.
+fn database_at(
+    migrations: &[&str],
+) -> (tempfile::TempDir, std::path::PathBuf, rusqlite::Connection) {
+    use rusqlite::params;
     use sha2::{Digest, Sha256};
 
-    let migrations = [
-        include_str!("../../../migrations/0001_control_plane.sql"),
-        include_str!("../../../migrations/0002_employee_roster.sql"),
-        include_str!("../../../migrations/0003_employee_sessions.sql"),
-        include_str!("../../../migrations/0004_collaboration_bus.sql"),
-        include_str!("../../../migrations/0005_conversations.sql"),
-        include_str!("../../../migrations/0006_task_graph.sql"),
-        include_str!("../../../migrations/0007_task_dispatch.sql"),
-        include_str!("../../../migrations/0008_approvals.sql"),
-        include_str!("../../../migrations/0009_incidents.sql"),
-        include_str!("../../../migrations/0010_activation_policy.sql"),
-        include_str!("../../../migrations/0011_idle_suspension.sql"),
-    ];
     let temporary = tempdir().unwrap();
     let database = temporary.path().join("lazoo.db");
-    let connection = Connection::open(&database).unwrap();
+    let connection = rusqlite::Connection::open(&database).unwrap();
     connection
         .execute_batch(
             "CREATE TABLE schema_migrations (
@@ -720,6 +708,28 @@ fn version_eleven_priority_incidents_upgrade_straight_to_the_user() {
             )
             .unwrap();
     }
+    (temporary, database, connection)
+}
+
+#[test]
+fn version_eleven_priority_incidents_upgrade_straight_to_the_user() {
+    use lazoo_protocol::{IncidentEscalation, IncidentEscalationReason};
+    use rusqlite::params;
+
+    let migrations = [
+        include_str!("../../../migrations/0001_control_plane.sql"),
+        include_str!("../../../migrations/0002_employee_roster.sql"),
+        include_str!("../../../migrations/0003_employee_sessions.sql"),
+        include_str!("../../../migrations/0004_collaboration_bus.sql"),
+        include_str!("../../../migrations/0005_conversations.sql"),
+        include_str!("../../../migrations/0006_task_graph.sql"),
+        include_str!("../../../migrations/0007_task_dispatch.sql"),
+        include_str!("../../../migrations/0008_approvals.sql"),
+        include_str!("../../../migrations/0009_incidents.sql"),
+        include_str!("../../../migrations/0010_activation_policy.sql"),
+        include_str!("../../../migrations/0011_idle_suspension.sql"),
+    ];
+    let (_temporary, database, connection) = database_at(&migrations);
     for (id, priority, state) in [
         (1, "priority", "open"),
         (2, "priority", "resolved"),
@@ -749,7 +759,7 @@ fn version_eleven_priority_incidents_upgrade_straight_to_the_user() {
     drop(connection);
 
     let store = Store::open_path(&database).unwrap();
-    assert_eq!(store.status().unwrap().schema_version, 13);
+    assert_eq!(store.status().unwrap().schema_version, 14);
     let open_priority = store.get_incident(uuid::Uuid::from_u128(1)).unwrap();
     assert_eq!(open_priority.escalation, IncidentEscalation::User);
     assert_eq!(
@@ -769,6 +779,93 @@ fn version_eleven_priority_incidents_upgrade_straight_to_the_user() {
             .unwrap();
         assert_eq!(incident.escalation, IncidentEscalation::None);
         assert!(incident.escalation_reason.is_none());
+    }
+    drop(store);
+    assert_no_foreign_key_violations(&database);
+}
+
+#[test]
+fn version_thirteen_incident_notices_upgrade_as_priority_messages() {
+    use lazoo_protocol::MessagePriority;
+    use rusqlite::params;
+
+    let migrations = [
+        include_str!("../../../migrations/0001_control_plane.sql"),
+        include_str!("../../../migrations/0002_employee_roster.sql"),
+        include_str!("../../../migrations/0003_employee_sessions.sql"),
+        include_str!("../../../migrations/0004_collaboration_bus.sql"),
+        include_str!("../../../migrations/0005_conversations.sql"),
+        include_str!("../../../migrations/0006_task_graph.sql"),
+        include_str!("../../../migrations/0007_task_dispatch.sql"),
+        include_str!("../../../migrations/0008_approvals.sql"),
+        include_str!("../../../migrations/0009_incidents.sql"),
+        include_str!("../../../migrations/0010_activation_policy.sql"),
+        include_str!("../../../migrations/0011_idle_suspension.sql"),
+        include_str!("../../../migrations/0012_lead_remediation.sql"),
+        include_str!("../../../migrations/0013_user_notifications.sql"),
+    ];
+    let (_temporary, database, connection) = database_at(&migrations);
+    connection
+        .execute(
+            "INSERT INTO employees (
+                id, name, provider, role, instructions, native_settings_json,
+                authority_mode, checkout_policy, enabled, configuration_revision,
+                created_at, updated_at
+             ) VALUES (?1, 'Rhea', 'codex', '', '', '{}', 'ask', 'isolated', 1, 1, ?2, ?2)",
+            params![uuid::Uuid::from_u128(1).to_string(), "2026-10-11T00:00:00Z"],
+        )
+        .unwrap();
+    // An incident notice, a result notice, and a peer message written before schema 14.
+    for (id, kind, body) in [
+        (
+            2,
+            "status",
+            r#"{"kind":"incident-notice","text":"Priority incident"}"#,
+        ),
+        (3, "result", r#"{"kind":"task-result","text":"Done"}"#),
+        (
+            4,
+            "peer",
+            r#"{"kind":"peer-message","text":"Which token?"}"#,
+        ),
+    ] {
+        let message_id = uuid::Uuid::from_u128(id).to_string();
+        connection
+            .execute(
+                "INSERT INTO messages (
+                    id, envelope_version, idempotency_key, correlation_id, sender_kind,
+                    sender_employee_id, recipient_employee_id, kind, body_json,
+                    references_json, created_at
+                 ) VALUES (?1, 1, ?1, ?1, 'employee', ?2, ?2, ?3, ?4, '[]', ?5)",
+                params![
+                    message_id,
+                    uuid::Uuid::from_u128(1).to_string(),
+                    kind,
+                    body,
+                    "2026-10-11T00:00:00Z"
+                ],
+            )
+            .unwrap();
+        connection
+            .execute(
+                "INSERT INTO message_deliveries (
+                    message_id, state, revision, attempt_count, max_attempts, updated_at
+                 ) VALUES (?1, 'queued', 1, 0, 3, ?2)",
+                params![message_id, "2026-10-11T00:00:00Z"],
+            )
+            .unwrap();
+    }
+    drop(connection);
+
+    let store = Store::open_path(&database).unwrap();
+    assert_eq!(store.status().unwrap().schema_version, 14);
+    for (id, priority) in [
+        (2, MessagePriority::Priority),
+        (3, MessagePriority::Normal),
+        (4, MessagePriority::Normal),
+    ] {
+        let message = store.get_message(uuid::Uuid::from_u128(id)).unwrap();
+        assert_eq!(message.envelope.priority, priority, "message {id}");
     }
     drop(store);
     assert_no_foreign_key_violations(&database);
