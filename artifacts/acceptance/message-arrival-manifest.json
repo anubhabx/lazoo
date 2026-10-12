@@ -2,23 +2,23 @@
     "status":  "PASS",
     "schemaVersion":  15,
     "mode":  "deterministic-fake-transport",
-    "startedAt":  "2026-10-12T20:16:17.7086670Z",
-    "durationMs":  2389,
+    "startedAt":  "2026-10-12T20:34:54.3359843Z",
+    "durationMs":  2882,
     "commands":  [
                      {
                          "command":  "cargo test -p lazood --test daemon tool_waits_wake_on_the_store_write_instead_of_polling --locked -- --exact",
                          "exitCode":  0,
-                         "durationMs":  660
+                         "durationMs":  712
                      },
                      {
                          "command":  "cargo test -p lazood --test daemon task_wait_returns_early_with_a_peer_question_so_the_lead_answers_in_turn --locked -- --exact",
                          "exitCode":  0,
-                         "durationMs":  657
+                         "durationMs":  736
                      },
                      {
                          "command":  "cargo test -p lazood --test daemon task_wait_consumes_child_results_so_no_notice_turn_follows --locked -- --exact",
                          "exitCode":  0,
-                         "durationMs":  593
+                         "durationMs":  733
                      },
                      {
                          "command":  "Select-String WAIT_POLL_INTERVAL apps/lazood/src/app/tools.rs",
@@ -28,7 +28,7 @@
                      {
                          "command":  "cargo test -p lazoo-store --test store store_enables_wal_foreign_keys_and_schema_version --locked -- --exact",
                          "exitCode":  0,
-                         "durationMs":  405
+                         "durationMs":  591
                      },
                      {
                          "command":  "git diff --quiet and git diff --cached --quiet -- apps/lazoo-desktop",

@@ -941,6 +941,8 @@ Current Stage 4 status: the Antigravity adapter is implemented and passed fresh 
 - MCP/plugin/skill compatibility model;
 - preview, backup, apply, and rollback.
 
+Current Stage 5 status: read-only provider configuration discovery is implemented for MCP servers (`provider.config`): Codex, Claude Code, and OpenCode configuration files are parsed, secrets are redacted to key names, integrations are hashed to one identity, and duplicates, conflicts, and unsupported entries are named; nothing is written. Transcript archives, the typed memory ledger, summarization, context selection, the compatibility model, and preview/backup/apply/rollback remain unimplemented.
+
 ### Stage 6: connectors
 
 - provider-native connector registry;

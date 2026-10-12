@@ -10013,3 +10013,116 @@ fn conversation_rename_acceptance_contract_is_deterministic_and_backend_only() {
         );
     }
 }
+
+/// `provider.config` is read-only discovery: the daemon reports what each provider has
+/// configured, with secrets redacted, and the desktop snapshot is unchanged.
+#[tokio::test]
+async fn provider_config_reports_redacted_integrations_without_changing_the_desktop_snapshot() {
+    let temporary = tempdir().unwrap();
+    let root = DataRoot::from_path(temporary.path().join("data"));
+    root.ensure().unwrap();
+    let home = temporary.path().join("home");
+    std::fs::create_dir_all(home.join(".codex")).unwrap();
+    std::fs::write(
+        home.join(".codex").join("config.toml"),
+        "[mcp_servers.context7]\nurl = \"https://mcp.context7.com/mcp\"\n[mcp_servers.context7.http_headers]\nCONTEXT7_API_KEY = \"ctx7sk-SECRET\"\n",
+    )
+    .unwrap();
+    std::fs::write(
+        home.join(".claude.json"),
+        r#"{"mcpServers": {"context7": {"type": "http", "url": "https://mcp.context7.com/mcp"}}}"#,
+    )
+    .unwrap();
+    let store = Store::open_path(root.state_db()).unwrap();
+    let app = App::new_with_provider_environment(
+        store,
+        root,
+        DiscoveryEnvironment::empty().with_config_home(&home),
+    )
+    .unwrap();
+
+    let report = app
+        .handle(request("config", "provider.config", json!({})))
+        .await
+        .result
+        .unwrap();
+    assert_eq!(report["version"], 1);
+    assert_eq!(report["integrations"].as_array().unwrap().len(), 2);
+    assert_eq!(report["integrations"][0]["provider"], "codex");
+    assert_eq!(report["integrations"][0]["kind"], "mcp-server");
+    assert_eq!(report["integrations"][0]["transport"], "http");
+    assert_eq!(
+        report["integrations"][0]["secretKeys"],
+        json!(["CONTEXT7_API_KEY"])
+    );
+    assert_eq!(
+        report["duplicates"],
+        json!([["claude-code/context7", "codex/context7"]])
+    );
+    assert_eq!(report["conflicts"], json!([]));
+    assert!(!report.to_string().contains("SECRET"));
+    let files = report["files"].as_array().unwrap();
+    assert_eq!(files.len(), 3);
+    assert_eq!(files[0]["provider"], "codex");
+    assert_eq!(files[0]["parsed"], true);
+    assert!(report["unsupported"].as_array().unwrap().len() >= 2);
+
+    let refused = app
+        .handle(request(
+            "config-params",
+            "provider.config",
+            json!({"provider": "codex"}),
+        ))
+        .await
+        .error
+        .unwrap();
+    assert_eq!(refused.code, "LZ-INVALID-PARAMS");
+    let snapshot = app
+        .handle(request("desktop", "desktop.snapshot", json!({})))
+        .await
+        .result
+        .unwrap();
+    assert!(snapshot.get("integrations").is_none());
+    assert!(snapshot.get("configuration").is_none());
+    assert!(
+        home.join(".codex").join("config.toml").is_file(),
+        "nothing was written or moved"
+    );
+}
+
+#[test]
+fn provider_config_acceptance_contract_is_read_only_and_backend_only() {
+    let repository = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let script_path = repository.join("scripts/acceptance/provider-config-discovery.ps1");
+    let script =
+        std::fs::read_to_string(&script_path).expect("provider config discovery acceptance script");
+
+    for required in [
+        "provider_configuration_is_parsed_from_known_formats_redacted_hashed_and_compared",
+        "missing_and_malformed_configuration_is_reported_without_quoting_it_or_failing",
+        "provider_cli_maps_config",
+        "provider_config_reports_redacted_integrations_without_changing_the_desktop_snapshot",
+        "store_enables_wal_foreign_keys_and_schema_version",
+        "knownFormatsParsed",
+        "secretsRedacted",
+        "duplicatesAndConflictsNamed",
+        "malformedFilesReportedNotQuoted",
+        "nothingWritten",
+        "providerSmokeAbsent",
+        "externalModelUseAbsent",
+        "uiChangesAbsent",
+        "deterministic-fake-transport",
+        "schemaVersion = 15",
+    ] {
+        assert!(
+            script.contains(required),
+            "acceptance script must contain {required}"
+        );
+    }
+    for forbidden in ["provider', 'smoke", "LivePrompt"] {
+        assert!(
+            !script.contains(forbidden),
+            "acceptance script must not contain {forbidden}"
+        );
+    }
+}

@@ -1346,3 +1346,12 @@ fn conversation_cli_maps_rename_with_and_without_a_title() {
         "--expected-revision is required"
     );
 }
+
+#[test]
+fn provider_cli_maps_config() {
+    let cli = Cli::try_parse_from(["lazooctl", "provider", "config"]).unwrap();
+    assert_eq!(
+        command_request(&cli.command),
+        ("provider.config", json!({}), false)
+    );
+}

@@ -350,6 +350,7 @@ impl App {
             "events.list" => self.list_events(request.params),
             "desktop.snapshot" => self.desktop_snapshot(&request.params),
             "provider.list" => self.provider_list(&request.params),
+            "provider.config" => self.provider_config(&request.params),
             "provider.probe" => self.provider_probe(request.params).await,
             "provider.smoke" => self.provider_smoke(request.params).await,
             "employee.create" => self.create_employee(&request).await,
@@ -548,6 +549,15 @@ impl App {
             })
             .collect::<Vec<_>>();
         Ok(to_value(providers))
+    }
+
+    /// Read-only configuration discovery (brief section 16.1): known files parsed, secrets
+    /// redacted, integrations hashed, duplicates and conflicts named. Nothing is written.
+    fn provider_config(&self, params: &Value) -> Result<Value, RpcError> {
+        require_empty_params(params, "provider.config")?;
+        Ok(to_value(lazoo_providers::discover_provider_configuration(
+            &self.provider_environment,
+        )))
     }
 
     async fn provider_probe(&self, value: Value) -> Result<Value, RpcError> {

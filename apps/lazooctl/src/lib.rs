@@ -208,6 +208,9 @@ pub enum SystemCommand {
 #[derive(Debug, Subcommand)]
 pub enum ProviderCommand {
     List,
+    /// Read every known provider configuration file, with secrets redacted, and name
+    /// duplicate and conflicting integrations across providers. Writes nothing.
+    Config,
     Probe {
         provider: String,
     },
@@ -699,6 +702,7 @@ pub fn command_request(command: &Command) -> (&'static str, Value, bool) {
             true,
         ),
         Command::Provider(ProviderCommand::List) => ("provider.list", json!({}), false),
+        Command::Provider(ProviderCommand::Config) => ("provider.config", json!({}), false),
         Command::Provider(ProviderCommand::Probe { provider }) => {
             ("provider.probe", json!({"provider": provider}), false)
         }
