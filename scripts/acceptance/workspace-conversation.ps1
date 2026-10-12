@@ -30,6 +30,7 @@ $evidence = [ordered]@{
     headerCarriesAuthorityAndSession = $false
     attentionIsEmbedded = $false
     turnsAreBounded = $false
+    marksResumeWithoutLoss = $false
     workspaceStoresNothing = $false
     snapshotUnchanged = $false
     schemaFifteen = $false
@@ -69,6 +70,8 @@ try {
     $evidence.headerCarriesAuthorityAndSession = $true
     $evidence.attentionIsEmbedded = $true
     $evidence.turnsAreBounded = $true
+    Invoke-Test 'lazood' 'daemon' 'the_desktop_resumes_every_read_model_from_its_event_high_water_without_loss'
+    $evidence.marksResumeWithoutLoss = $true
     $evidence.workspaceStoresNothing = $true
     $evidence.snapshotUnchanged = $true
 

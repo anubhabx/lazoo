@@ -2,28 +2,28 @@
   "status": "PASS",
   "schemaVersion": 15,
   "mode": "deterministic-fake-transport",
-  "startedAt": "2026-10-12T23:09:10.0871319Z",
-  "durationMs": 1978,
+  "startedAt": "2026-10-12T23:17:44.4726027Z",
+  "durationMs": 1780,
   "commands": [
     {
       "command": "cargo test -p lazoo-store --test conversation conversation_rename_is_revisioned_naturally_idempotent_and_validated --locked -- --exact",
       "exitCode": 0,
-      "durationMs": 651
+      "durationMs": 440
     },
     {
       "command": "cargo test -p lazooctl --test cli conversation_cli_maps_rename_with_and_without_a_title --locked -- --exact",
       "exitCode": 0,
-      "durationMs": 303
+      "durationMs": 304
     },
     {
       "command": "cargo test -p lazood --test daemon the_user_renames_a_conversation_through_the_daemon --locked -- --exact",
       "exitCode": 0,
-      "durationMs": 521
+      "durationMs": 516
     },
     {
       "command": "cargo test -p lazoo-store --test store store_enables_wal_foreign_keys_and_schema_version --locked -- --exact",
       "exitCode": 0,
-      "durationMs": 413
+      "durationMs": 429
     },
     {
       "command": "git diff --quiet and git diff --cached --quiet -- apps/lazoo-desktop",

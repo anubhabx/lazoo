@@ -11347,8 +11347,10 @@ fn workspace_conversation_acceptance_contract_is_deterministic_and_backend_only(
         "worker_cards_take_the_first_state_that_holds_with_lazoo_words",
         "workspace_cli_maps_show",
         "the_user_opens_the_conversation_header_and_worker_dock_through_the_daemon",
+        "the_desktop_resumes_every_read_model_from_its_event_high_water_without_loss",
         "store_enables_wal_foreign_keys_and_schema_version",
         "lifecycleFollowsTheSession",
+        "marksResumeWithoutLoss",
         "workerCardsFollowTheRows",
         "attentionIsEmbedded",
         "workspaceStoresNothing",
@@ -11671,4 +11673,216 @@ fn provider_migration_preview_acceptance_contract_is_deterministic_and_backend_o
             "acceptance script must not contain {forbidden}"
         );
     }
+}
+
+/// The desktop's live-update contract (workspace contract section 5, Inbox contract): every
+/// read model reports an `eventHighWater` such that `events.list { after }` from it is empty
+/// right after the read and carries every later change, so a subscriber resuming from the
+/// mark loses nothing; after each change the re-read model reflects it and its new mark
+/// covers the events seen.
+#[tokio::test]
+#[allow(clippy::too_many_lines)] // One subscriber resuming four models across five changes.
+async fn the_desktop_resumes_every_read_model_from_its_event_high_water_without_loss() {
+    let (_temporary, harness) = tool_harness(AuthorityMode::Ask);
+    let call = |id: &str, method: &str, params: serde_json::Value| {
+        harness.app.handle(request(id, method, params))
+    };
+    let conversation_id = harness.conversation_id;
+    let models: [(&str, &str, serde_json::Value); 4] = [
+        ("inbox", "inbox.counts", json!({})),
+        ("conversations", "workspace.conversations", json!({})),
+        ("launcher", "workspace.launcher", json!({})),
+        (
+            "conversation",
+            "workspace.conversation",
+            json!({"id": conversation_id}),
+        ),
+    ];
+    let models = &models;
+    let read_marks = |label: &'static str| async move {
+        let mut marks = Vec::new();
+        for (name, method, params) in models {
+            let view = call(&format!("{label}-{name}"), method, params.clone())
+                .await
+                .result
+                .unwrap();
+            let mark = view["eventHighWater"].as_u64().unwrap();
+            // Nothing is pending right after a read: the mark is never ahead of the ledger.
+            let pending = call(
+                &format!("{label}-{name}-pending"),
+                "events.list",
+                json!({"after": mark, "limit": 100}),
+            )
+            .await
+            .result
+            .unwrap();
+            assert_eq!(pending, json!([]), "{label}: {name} mark {mark} is ahead");
+            marks.push((*name, mark));
+        }
+        marks
+    };
+    let events_after = |label: &'static str, mark: u64| async move {
+        call(label, "events.list", json!({"after": mark, "limit": 200}))
+            .await
+            .result
+            .unwrap()
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|event| {
+                (
+                    event["sequence"].as_u64().unwrap(),
+                    event["eventType"].as_str().unwrap().to_owned(),
+                )
+            })
+            .collect::<Vec<_>>()
+    };
+
+    // Change 1: the lead warms (session and roster events reach the launcher and the header).
+    let marks = read_marks("before-warm").await;
+    warm_tool_lead(&harness).await;
+    for (name, mark) in &marks {
+        let seen = events_after("after-warm", *mark).await;
+        assert!(
+            seen.iter().any(|(_, kind)| kind.starts_with("session.")),
+            "{name}: {seen:?}"
+        );
+    }
+    let view = call(
+        "warmed",
+        "workspace.conversation",
+        json!({"id": conversation_id}),
+    )
+    .await
+    .result
+    .unwrap();
+    assert_eq!(view["lead"]["lifecycle"], "idle");
+    let launcher = call("warmed-launcher", "workspace.launcher", json!({}))
+        .await
+        .result
+        .unwrap();
+    assert_eq!(launcher["leads"][1]["availability"], "idle");
+
+    // Change 2: the lead's turn delegates under ask (turn and task events reach every model,
+    // and the proposal reaches the Inbox count).
+    let marks = read_marks("before-turn").await;
+    let roster_revision = harness.store.roster_snapshot().unwrap().revision;
+    harness
+        .backend
+        .tool_calls
+        .lock()
+        .unwrap()
+        .extend([tool_call(
+            "call-1",
+            "task_delegate",
+            json!({
+                "employeeId": harness.worker.id,
+                "objective": "Implement the parser fix",
+                "rosterRevision": roster_revision
+            }),
+        )]);
+    assert_eq!(
+        submit_lead_turn(&harness, "ask").await["turn"]["state"],
+        "completed"
+    );
+    let child_id: uuid::Uuid = harness.backend.tool_results.lock().unwrap()[0].content["taskId"]
+        .as_str()
+        .unwrap()
+        .parse()
+        .unwrap();
+    for (name, mark) in &marks {
+        let seen = events_after("after-turn", *mark).await;
+        assert!(
+            seen.iter().any(|(_, kind)| kind.starts_with("turn."))
+                && seen.iter().any(|(_, kind)| kind.starts_with("task.")),
+            "{name}: {seen:?}"
+        );
+    }
+    let counts = call("counts-proposed", "inbox.counts", json!({}))
+        .await
+        .result
+        .unwrap();
+    assert_eq!(counts["counts"]["unresolved"], 1);
+    let rows = call("rows-proposed", "workspace.conversations", json!({}))
+        .await
+        .result
+        .unwrap();
+    assert_eq!(rows["conversations"][0]["marker"], "needs-attention");
+
+    // Change 3: the user accepts (a task event); change 4: renames (a conversation event);
+    // change 5: disables Mira (employee and roster events). Each model's re-read reflects
+    // every change and its new mark covers everything seen.
+    let marks = read_marks("before-actions").await;
+    call(
+        "accept",
+        "task.accept",
+        json!({"id": child_id, "expectedRevision": 1, "idempotencyKey": "resume-accept"}),
+    )
+    .await
+    .result
+    .unwrap();
+    call(
+        "rename",
+        "conversation.rename",
+        json!({"id": conversation_id, "expectedRevision": 1, "title": "Resumed"}),
+    )
+    .await
+    .result
+    .unwrap();
+    let mira = harness.store.get_employee(harness.worker.id).unwrap();
+    call(
+        "disable",
+        "employee.disable",
+        json!({
+            "id": mira.id,
+            "expectedRevision": mira.configuration_revision,
+            "idempotencyKey": "resume-disable"
+        }),
+    )
+    .await
+    .result
+    .unwrap();
+    for (name, mark) in &marks {
+        let seen = events_after("after-actions", *mark).await;
+        let kinds: Vec<&str> = seen.iter().map(|(_, kind)| kind.as_str()).collect();
+        assert!(
+            kinds.iter().any(|kind| kind.starts_with("task."))
+                && kinds.iter().any(|kind| kind.starts_with("conversation."))
+                && kinds.iter().any(|kind| kind.starts_with("employee.")),
+            "{name}: {kinds:?}"
+        );
+        let newest = seen.iter().map(|(sequence, _)| *sequence).max().unwrap();
+        let (method, params) = match *name {
+            "inbox" => ("inbox.counts", json!({})),
+            "conversations" => ("workspace.conversations", json!({})),
+            "launcher" => ("workspace.launcher", json!({})),
+            _ => ("workspace.conversation", json!({"id": conversation_id})),
+        };
+        let view = call(&format!("reread-{name}"), method, params)
+            .await
+            .result
+            .unwrap();
+        assert!(
+            view["eventHighWater"].as_u64().unwrap() >= newest,
+            "{name}: mark {} covers {newest}",
+            view["eventHighWater"]
+        );
+        match *name {
+            "inbox" => assert_eq!(view["counts"]["unresolved"], 0),
+            "conversations" => {
+                assert_eq!(view["conversations"][0]["title"], "Resumed");
+                assert_eq!(view["conversations"][0]["marker"], "active");
+            }
+            "launcher" => assert_eq!(view["leads"][0]["blockingReason"], "Mira is disabled"),
+            _ => {
+                assert_eq!(view["title"], "Resumed");
+                assert_eq!(view["workers"][0]["state"], "blocked");
+                assert_eq!(
+                    view["workers"][0]["stateReason"],
+                    "Blocked: Mira is disabled"
+                );
+            }
+        }
+    }
+    read_marks("settled").await;
 }
