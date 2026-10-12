@@ -2,19 +2,19 @@
   "schemaVersion": 1,
   "databaseSchemaVersion": 11,
   "status": "PASS",
-  "startedAt": "2026-10-12T23:00:08.5413377Z",
-  "completedAt": "2026-10-12T23:00:18.6763762Z",
-  "durationMs": 10131,
+  "startedAt": "2026-10-12T23:09:30.8758870Z",
+  "completedAt": "2026-10-12T23:09:41.0701724Z",
+  "durationMs": 10190,
   "platform": "Microsoft Windows NT 10.0.26200.0",
   "rustcVersion": "rustc 1.98.0 (88d9e12ae 2026-08-18)",
   "cargoVersion": "cargo 1.98.0 (797e8a9bc 2026-08-05)",
   "repositoryRoot": "C:\\workspace\\Orchestrator",
-  "isolatedDataRoot": "C:\\Users\\anubhab\\AppData\\Local\\Temp\\lazoo-acceptance-1b1ffb8e93714f098147d93c1f6184c1\\data",
-  "temporaryProject": "C:\\Users\\anubhab\\AppData\\Local\\Temp\\lazoo-acceptance-1b1ffb8e93714f098147d93c1f6184c1\\repository",
+  "isolatedDataRoot": "C:\\Users\\anubhab\\AppData\\Local\\Temp\\lazoo-acceptance-0fc91a3a27504cb7a699495903236e92\\data",
+  "temporaryProject": "C:\\Users\\anubhab\\AppData\\Local\\Temp\\lazoo-acceptance-0fc91a3a27504cb7a699495903236e92\\repository",
   "artifacts": {
     "manifest": "C:\\workspace\\Orchestrator\\artifacts\\acceptance\\first-slice-manifest.json",
-    "runLogs": "C:\\Users\\anubhab\\AppData\\Local\\Temp\\lazoo-acceptance-1b1ffb8e93714f098147d93c1f6184c1",
-    "database": "C:\\Users\\anubhab\\AppData\\Local\\Temp\\lazoo-acceptance-1b1ffb8e93714f098147d93c1f6184c1\\data\\state\\lazoo.db"
+    "runLogs": "C:\\Users\\anubhab\\AppData\\Local\\Temp\\lazoo-acceptance-0fc91a3a27504cb7a699495903236e92",
+    "database": "C:\\Users\\anubhab\\AppData\\Local\\Temp\\lazoo-acceptance-0fc91a3a27504cb7a699495903236e92\\data\\state\\lazoo.db"
   },
   "commands": [
     {
@@ -25,37 +25,37 @@
     {
       "command": "lazooctl --json status",
       "exitCode": 0,
-      "durationMs": 120
+      "durationMs": 117
     },
     {
-      "command": "lazooctl --json project register C:\\Users\\anubhab\\AppData\\Local\\Temp\\lazoo-acceptance-1b1ffb8e93714f098147d93c1f6184c1\\repository --idempotency-key acceptance-1b1ffb8e93714f098147d93c1f6184c1",
+      "command": "lazooctl --json project register C:\\Users\\anubhab\\AppData\\Local\\Temp\\lazoo-acceptance-0fc91a3a27504cb7a699495903236e92\\repository --idempotency-key acceptance-0fc91a3a27504cb7a699495903236e92",
       "exitCode": 0,
-      "durationMs": 84
+      "durationMs": 81
     },
     {
-      "command": "lazooctl --json project register C:\\Users\\anubhab\\AppData\\Local\\Temp\\lazoo-acceptance-1b1ffb8e93714f098147d93c1f6184c1\\repository --idempotency-key acceptance-1b1ffb8e93714f098147d93c1f6184c1",
+      "command": "lazooctl --json project register C:\\Users\\anubhab\\AppData\\Local\\Temp\\lazoo-acceptance-0fc91a3a27504cb7a699495903236e92\\repository --idempotency-key acceptance-0fc91a3a27504cb7a699495903236e92",
       "exitCode": 0,
-      "durationMs": 72
+      "durationMs": 69
     },
     {
       "command": "lazooctl --json project list",
       "exitCode": 0,
-      "durationMs": 16
+      "durationMs": 15
     },
     {
       "command": "lazooctl --json events list --after 0 --limit 100",
       "exitCode": 0,
-      "durationMs": 16
+      "durationMs": 15
     },
     {
       "command": "lazooctl --json status",
       "exitCode": 0,
-      "durationMs": 1079
+      "durationMs": 1052
     },
     {
       "command": "lazooctl --json project list",
       "exitCode": 0,
-      "durationMs": 14
+      "durationMs": 13
     },
     {
       "command": "lazooctl --json events list --after 0 --limit 100",
@@ -70,22 +70,22 @@
     {
       "command": "lazooctl --json status",
       "exitCode": 0,
-      "durationMs": 56
+      "durationMs": 84
     },
     {
       "command": "lazooctl --json system shutdown",
       "exitCode": 0,
-      "durationMs": 13
+      "durationMs": 14
     },
     {
       "command": "lazooctl --json status",
       "exitCode": 0,
-      "durationMs": 41
+      "durationMs": 52
     },
     {
       "command": "lazooctl --json system shutdown",
       "exitCode": 0,
-      "durationMs": 13
+      "durationMs": 14
     }
   ],
   "gates": {

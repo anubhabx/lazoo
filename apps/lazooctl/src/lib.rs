@@ -240,6 +240,10 @@ pub enum ProviderCommand {
     /// Read every known provider configuration file, with secrets redacted, and name
     /// duplicate and conflicting integrations across providers. Writes nothing.
     Config,
+    /// The migration preview over that discovery: per integration, whether Lazoo would manage
+    /// it as is, merge an exact duplicate across providers, or need your choice for a
+    /// same-name conflict. Selects and writes nothing.
+    Preview,
     Probe {
         provider: String,
     },
@@ -732,6 +736,9 @@ pub fn command_request(command: &Command) -> (&'static str, Value, bool) {
         ),
         Command::Provider(ProviderCommand::List) => ("provider.list", json!({}), false),
         Command::Provider(ProviderCommand::Config) => ("provider.config", json!({}), false),
+        Command::Provider(ProviderCommand::Preview) => {
+            ("provider.config.preview", json!({}), false)
+        }
         Command::Provider(ProviderCommand::Probe { provider }) => {
             ("provider.probe", json!({"provider": provider}), false)
         }

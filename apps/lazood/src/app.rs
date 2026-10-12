@@ -352,6 +352,7 @@ impl App {
             "desktop.snapshot" => self.desktop_snapshot(&request.params),
             "provider.list" => self.provider_list(&request.params),
             "provider.config" => self.provider_config(&request.params),
+            "provider.config.preview" => self.provider_config_preview(&request.params),
             "provider.probe" => self.provider_probe(request.params).await,
             "provider.smoke" => self.provider_smoke(request.params).await,
             "employee.create" => self.create_employee(&request).await,
@@ -561,6 +562,15 @@ impl App {
         require_empty_params(params, "provider.config")?;
         Ok(to_value(lazoo_providers::discover_provider_configuration(
             &self.provider_environment,
+        )))
+    }
+
+    /// Brief section 16.1 step 6: the migration preview over the discovery report, derived on
+    /// every call. Nothing is selected, written, or stored.
+    fn provider_config_preview(&self, params: &Value) -> Result<Value, RpcError> {
+        require_empty_params(params, "provider.config.preview")?;
+        Ok(to_value(lazoo_providers::migration_preview(
+            &lazoo_providers::discover_provider_configuration(&self.provider_environment),
         )))
     }
 

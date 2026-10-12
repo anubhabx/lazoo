@@ -11534,3 +11534,141 @@ fn workspace_actions_acceptance_contract_is_deterministic_and_backend_only() {
         );
     }
 }
+
+/// The migration preview through the daemon: over the same fixture profile the discovery
+/// reads, every candidate names what Lazoo would do and why, no secret value appears, the
+/// method takes no parameters, nothing is written, and the desktop snapshot is unchanged.
+#[tokio::test]
+async fn provider_config_preview_proposes_manage_merge_and_choose_without_writing() {
+    let temporary = tempdir().unwrap();
+    let root = DataRoot::from_path(temporary.path().join("data"));
+    root.ensure().unwrap();
+    let home = temporary.path().join("home");
+    std::fs::create_dir_all(home.join(".codex")).unwrap();
+    let codex = home.join(".codex").join("config.toml");
+    std::fs::write(
+        &codex,
+        "[mcp_servers.context7]\nurl = \"https://mcp.context7.com/mcp\"\n[mcp_servers.context7.http_headers]\nCONTEXT7_API_KEY = \"ctx7sk-SECRET\"\n[mcp_servers.paper]\nurl = \"http://127.0.0.1:29979/mcp\"\n",
+    )
+    .unwrap();
+    let claude = home.join(".claude.json");
+    std::fs::write(
+        &claude,
+        r#"{"mcpServers": {"context7": {"type": "http", "url": "https://mcp.context7.com/mcp"}, "paper": {"type": "http", "url": "http://127.0.0.1:31000/mcp"}, "obsidian": {"command": "npx", "args": ["obsidian-mcp"]}}}"#,
+    )
+    .unwrap();
+    let before = (
+        std::fs::read_to_string(&codex).unwrap(),
+        std::fs::read_to_string(&claude).unwrap(),
+    );
+    let store = Store::open_path(root.state_db()).unwrap();
+    let app = App::new_with_provider_environment(
+        store,
+        root,
+        DiscoveryEnvironment::empty().with_config_home(&home),
+    )
+    .unwrap();
+
+    let preview = app
+        .handle(request("preview", "provider.config.preview", json!({})))
+        .await
+        .result
+        .unwrap();
+    assert_eq!(preview["version"], 1);
+    assert_eq!(
+        preview["providers"],
+        json!(["codex", "opencode", "claude-code"])
+    );
+    let candidates = preview["candidates"].as_array().unwrap();
+    assert_eq!(
+        candidates
+            .iter()
+            .map(|candidate| (
+                candidate["name"].as_str().unwrap(),
+                candidate["proposal"].as_str().unwrap()
+            ))
+            .collect::<Vec<_>>(),
+        [
+            ("context7", "merge"),
+            ("obsidian", "manage"),
+            ("paper", "choose"),
+            ("paper", "choose")
+        ]
+    );
+    assert_eq!(candidates[0]["presentIn"], json!(["codex", "claude-code"]));
+    assert_eq!(candidates[0]["missingFrom"], json!(["opencode"]));
+    assert_eq!(candidates[0]["secretKeys"], json!(["CONTEXT7_API_KEY"]));
+    assert_eq!(candidates[0]["sources"].as_array().unwrap().len(), 2);
+    assert_eq!(candidates[1]["presentIn"], json!(["claude-code"]));
+    assert_eq!(candidates[2]["conflictsWith"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        preview["summary"],
+        json!({"manage": 1, "merge": 1, "choose": 2, "unsupported": 2})
+    );
+    assert!(!preview.to_string().contains("SECRET"));
+
+    let refused = app
+        .handle(request(
+            "preview-params",
+            "provider.config.preview",
+            json!({"provider": "codex"}),
+        ))
+        .await
+        .error
+        .unwrap();
+    assert_eq!(refused.code, "LZ-INVALID-PARAMS");
+
+    // Nothing was written or stored, and the snapshot is unchanged.
+    assert_eq!(std::fs::read_to_string(&codex).unwrap(), before.0);
+    assert_eq!(std::fs::read_to_string(&claude).unwrap(), before.1);
+    assert!(
+        app.handle(request("events", "events.list", json!({})))
+            .await
+            .result
+            .unwrap()
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+    let snapshot = app
+        .handle(request("desktop", "desktop.snapshot", json!({})))
+        .await
+        .result
+        .unwrap();
+    assert!(snapshot.get("preview").is_none());
+    assert!(snapshot.get("providerConfig").is_none());
+}
+
+#[test]
+fn provider_migration_preview_acceptance_contract_is_deterministic_and_backend_only() {
+    let repository = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let script_path = repository.join("scripts/acceptance/provider-migration-preview.ps1");
+    let script = std::fs::read_to_string(&script_path)
+        .expect("provider migration preview acceptance script");
+
+    for required in [
+        "the_preview_proposes_manage_merge_or_choose_per_identity_and_never_reads_a_secret",
+        "provider_cli_maps_preview",
+        "provider_config_preview_proposes_manage_merge_and_choose_without_writing",
+        "store_enables_wal_foreign_keys_and_schema_version",
+        "proposalsFollowIdentity",
+        "secretsNeverRead",
+        "nothingWritten",
+        "providerSmokeAbsent",
+        "externalModelUseAbsent",
+        "uiChangesAbsent",
+        "deterministic-fake-transport",
+        "schemaVersion = 15",
+    ] {
+        assert!(
+            script.contains(required),
+            "acceptance script must contain {required}"
+        );
+    }
+    for forbidden in ["provider', 'smoke", "LivePrompt"] {
+        assert!(
+            !script.contains(forbidden),
+            "acceptance script must not contain {forbidden}"
+        );
+    }
+}

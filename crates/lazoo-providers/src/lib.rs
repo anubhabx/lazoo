@@ -9,6 +9,7 @@ mod grok;
 mod json_rpc;
 mod ndjson;
 mod opencode;
+mod preview;
 mod redaction;
 mod registry;
 
@@ -34,5 +35,9 @@ pub use contract::{
 pub use discovery::{DiscoveryEnvironment, DiscoverySource, rank_candidates};
 pub use grok::{GrokAdapter, GrokSession};
 pub use opencode::{OpenCodeAdapter, OpenCodeSession};
+pub use preview::{
+    MigrationCandidate, MigrationPreview, MigrationProposal, MigrationSource, MigrationSummary,
+    PROVIDER_MIGRATION_PREVIEW_V1, migration_preview,
+};
 pub use redaction::redact_json;
 pub use registry::{ProviderDiscovery, ProviderRegistry, ProviderSessionHandle};

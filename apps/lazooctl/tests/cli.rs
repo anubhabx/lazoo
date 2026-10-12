@@ -1357,6 +1357,15 @@ fn provider_cli_maps_config() {
 }
 
 #[test]
+fn provider_cli_maps_preview() {
+    let cli = Cli::try_parse_from(["lazooctl", "provider", "preview"]).unwrap();
+    assert_eq!(
+        command_request(&cli.command),
+        ("provider.config.preview", json!({}), false)
+    );
+}
+
+#[test]
 fn workspace_cli_maps_conversations_and_launcher() {
     let request = |args: &[&str]| {
         let mut argv = vec!["lazooctl", "workspace"];
