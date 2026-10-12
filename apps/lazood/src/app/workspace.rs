@@ -116,7 +116,9 @@ impl App {
             project_id: params.project_id,
             conversations,
             remembered_lead_id,
-            event_high_water: event_high_water.max(sources.event_high_water),
+            // The lowest mark any read reflects: a redundant re-read is harmless, a missed one is
+            // not.
+            event_high_water: event_high_water.min(sources.event_high_water),
             truncated,
             next_before,
         }))
@@ -301,7 +303,7 @@ impl App {
             turns_truncated: workspace.turns_truncated,
             workers,
             attention,
-            event_high_water: workspace.event_high_water.max(sources.event_high_water),
+            event_high_water: workspace.event_high_water.min(sources.event_high_water),
         }))
     }
 
@@ -344,7 +346,18 @@ impl App {
                 &workspace.conversation,
                 entry.session.as_ref(),
                 workspace.latest_lead_turn,
-            ),
+            )
+            .into_iter()
+            // A retry is delivered on a session this daemon owns; one left by a prior boot
+            // is reconciled away, not retried on.
+            .filter(|action| {
+                action.action != "retry-turn"
+                    || entry
+                        .session
+                        .as_ref()
+                        .is_some_and(|session| session.owner_boot_id == Some(self.boot_id))
+            })
+            .collect(),
         }
     }
 }
@@ -419,7 +432,7 @@ fn worker_card(row: &WorkerRow, roster: &RosterSnapshot, sources: &InboxSources)
         created_at: task.created_at.clone(),
         updated_at: task.updated_at.clone(),
         terminal_at: task.terminal_at.clone(),
-        actions: worker_actions(task, pending_approval),
+        actions: worker_actions(task, pending_approval, row.active_descendants),
     }
 }
 

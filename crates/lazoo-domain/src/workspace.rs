@@ -4,11 +4,13 @@
 //! started as the lead right now, what the lead's lifecycle is, and which of the dock's eight
 //! states a worker is in.
 
+use std::collections::{BTreeMap, BTreeSet};
+
 use lazoo_protocol::{
     ApprovalRecord, ApprovalState, ConversationMarker, ConversationRecord, EmployeeAvailability,
     EmployeeSessionRecord, InboxAction, InboxKind, IncidentEscalation, IncidentRecord,
     LeadLifecycle, RosterEntry, SessionLifecycleState, TaskDispatchRecord, TaskDispatchState,
-    TaskRecord, TaskState, TurnState, WorkerCounts, WorkerState,
+    TaskRecord, TaskState, TaskSummary, TurnState, WorkerCounts, WorkerState,
 };
 use serde_json::json;
 use thiserror::Error;
@@ -326,11 +328,14 @@ pub fn worker_state(facts: &WorkerFacts<'_>) -> (WorkerState, String) {
 /// The actions a worker card offers now, as data naming an existing revision-checked RPC
 /// (contract section 6): accept or cancel a proposal, resolve an uncertain task, decide a
 /// pending approval, or cancel a task that is waiting or running. A terminal or already
-/// cancelling task offers none. The caller adds a fresh `idempotencyKey`.
+/// cancelling task offers none, and a task with active descendants offers neither `cancel`
+/// nor a completed or cancelled resolution, because the store refuses both while a child is
+/// unfinished. The caller adds a fresh `idempotencyKey`.
 #[must_use]
 pub fn worker_actions(
     task: &TaskRecord,
     pending_approval: Option<&ApprovalRecord>,
+    active_descendants: bool,
 ) -> Vec<InboxAction> {
     let mut actions = match task.state {
         TaskState::Proposed => task_actions(InboxKind::TaskProposal, task),
@@ -350,6 +355,14 @@ pub fn worker_actions(
         | TaskState::Failed
         | TaskState::Cancelled => Vec::new(),
     };
+    if active_descendants {
+        actions.retain(|action| {
+            !matches!(
+                action.action.as_str(),
+                "cancel" | "resolve-completed" | "resolve-cancelled"
+            )
+        });
+    }
     if let Some(approval) = pending_approval
         && approval.state == ApprovalState::Pending
     {
@@ -358,9 +371,36 @@ pub fn worker_actions(
     actions
 }
 
+/// The ids of every task that has a descendant which is not yet terminal, from one
+/// conversation's task summaries. `task.cancel` and a completed or cancelled `task.resolve`
+/// refuse such a task.
+#[must_use]
+pub fn active_descendant_ids(tasks: &[TaskSummary]) -> BTreeSet<Uuid> {
+    let parents: BTreeMap<Uuid, Option<Uuid>> = tasks
+        .iter()
+        .map(|task| (task.id, task.parent_task_id))
+        .collect();
+    let mut blocked = BTreeSet::new();
+    for task in tasks.iter().filter(|task| {
+        !matches!(
+            task.state,
+            TaskState::Completed | TaskState::Failed | TaskState::Cancelled
+        )
+    }) {
+        let mut parent = task.parent_task_id;
+        while let Some(id) = parent
+            && blocked.insert(id)
+        {
+            parent = parents.get(&id).copied().flatten();
+        }
+    }
+    blocked
+}
+
 /// The actions the conversation header offers now: rename (the caller sets `title`), cancel
-/// the lead's unfinished or retryable turn, retry a retryable turn, and stop the lead's idle
-/// session when no turn is unfinished.
+/// the lead's unfinished or retryable turn, retry a retryable turn while the lead's session is
+/// idle (the store delivers a retry only on an idle session), and stop the lead's idle session
+/// when no turn is unfinished.
 #[must_use]
 pub fn lead_actions(
     conversation: &ConversationRecord,
@@ -390,7 +430,9 @@ pub fn lead_actions(
         if turn_unfinished || state == TurnState::RetryableFailed {
             actions.push(turn("cancel", "Cancel the turn"));
         }
-        if state == TurnState::RetryableFailed {
+        if state == TurnState::RetryableFailed
+            && session.is_some_and(|session| session.state == SessionLifecycleState::Idle)
+        {
             actions.push(turn("retry", "Retry the turn"));
         }
     }

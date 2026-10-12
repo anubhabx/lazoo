@@ -3,6 +3,7 @@
 //! worker rows, each under one lock with the event high-water mark they reflect. Nothing is
 //! stored.
 
+use lazoo_domain::active_descendant_ids;
 use lazoo_protocol::{
     ConversationRecord, ConversationTurnSummary, SessionLifecycleState, TaskDispatchRecord,
     TaskRecord, TaskState, TaskSummary, TurnState, WorkerCounts,
@@ -160,6 +161,8 @@ pub struct WorkerRow {
     pub dispatch: Option<TaskDispatchRecord>,
     pub active_turn_state: Option<TurnState>,
     pub session_state: Option<SessionLifecycleState>,
+    /// A descendant of this task is not yet terminal.
+    pub active_descendants: bool,
 }
 
 /// One conversation with the rows its header, turns, and worker dock are derived from.
@@ -237,19 +240,7 @@ impl Store {
                 ))
             })
             .transpose()?;
-        let tasks = query_tasks(
-            &connection,
-            &ListTasksInput {
-                after_sequence: 0,
-                limit: 1024,
-                root_task_id: None,
-                parent_task_id: None,
-                conversation_id: Some(id),
-                project_id: None,
-                assigned_employee_id: None,
-                state: None,
-            },
-        )?;
+        let tasks = conversation_tasks(&connection, id)?;
         let root_task = tasks
             .iter()
             .rfind(|task| task.parent_task_id.is_none())
@@ -273,10 +264,41 @@ impl Store {
 }
 
 // ponytail: one small read per worker; the tree is bounded (fan-out 8, depth 4).
+/// Every task of one conversation, oldest first, however many there are.
+fn conversation_tasks(connection: &Connection, id: Uuid) -> Result<Vec<TaskSummary>, StoreError> {
+    const PAGE: u32 = 1024;
+    let mut tasks = Vec::new();
+    let mut after_sequence = 0;
+    loop {
+        let page = query_tasks(
+            connection,
+            &ListTasksInput {
+                after_sequence,
+                limit: PAGE,
+                root_task_id: None,
+                parent_task_id: None,
+                conversation_id: Some(id),
+                project_id: None,
+                assigned_employee_id: None,
+                state: None,
+            },
+        )?;
+        let short = page.len() < PAGE as usize;
+        if let Some(last) = page.last() {
+            after_sequence = last.sequence;
+        }
+        tasks.extend(page);
+        if short {
+            return Ok(tasks);
+        }
+    }
+}
+
 fn worker_rows(
     connection: &Connection,
     tasks: &[TaskSummary],
 ) -> Result<Vec<WorkerRow>, StoreError> {
+    let blocked = active_descendant_ids(tasks);
     tasks
         .iter()
         .filter(|task| task.parent_task_id.is_some())
@@ -306,6 +328,7 @@ fn worker_rows(
                 .transpose()?
                 .flatten();
             Ok(WorkerRow {
+                active_descendants: blocked.contains(&summary.id),
                 task,
                 dispatch,
                 active_turn_state,

@@ -1,8 +1,8 @@
 use lazoo_domain::{
     ConversationFacts, MAX_WORKER_LABEL_BYTES, UNTITLED_CONVERSATION, WorkerFacts,
-    WorkspaceValidationError, conversation_marker, conversation_title, lead_actions,
-    lead_lifecycle, lead_startability, turn_in_flight, validate_workspace_limit, worker_actions,
-    worker_label, worker_state,
+    WorkspaceValidationError, active_descendant_ids, conversation_marker, conversation_title,
+    lead_actions, lead_lifecycle, lead_startability, turn_in_flight, validate_workspace_limit,
+    worker_actions, worker_label, worker_state,
 };
 use lazoo_protocol::{
     ActivationPolicy, ApprovalKind, ApprovalRecord, ApprovalState, AuthorityMode,
@@ -10,7 +10,7 @@ use lazoo_protocol::{
     EmployeeRecord, EmployeeSessionRecord, InboxAction, IncidentEscalation, IncidentPriority,
     IncidentRecord, IncidentSource, IncidentState, LeadLifecycle, MessageEndpoint, MessageSender,
     RosterEntry, SessionLifecycleState, TaskDispatchRecord, TaskDispatchState, TaskRecord,
-    TaskRole, TaskState, TurnState, WorkerCounts, WorkerState,
+    TaskRole, TaskState, TaskSummary, TurnState, WorkerCounts, WorkerState,
 };
 use serde_json::json;
 use uuid::Uuid;
@@ -587,7 +587,7 @@ fn cards_and_the_header_offer_only_the_actions_their_rows_allow() {
     // Cards: a proposal, an uncertain task, a waiting or running task, a pending approval on
     // top, and nothing once terminal or already cancelling.
     let proposed = task(TaskState::Proposed);
-    let actions = worker_actions(&proposed, None);
+    let actions = worker_actions(&proposed, None, false);
     assert_eq!(
         names(&actions),
         ["accept=task.accept", "cancel=task.cancel"]
@@ -595,7 +595,7 @@ fn cards_and_the_header_offer_only_the_actions_their_rows_allow() {
     assert_eq!(actions[0].params["expectedRevision"], 1);
     assert_eq!(actions[1].params["actor"], json!({"kind": "user"}));
     assert_eq!(
-        names(&worker_actions(&task(TaskState::Uncertain), None)),
+        names(&worker_actions(&task(TaskState::Uncertain), None, false)),
         [
             "resolve-completed=task.resolve",
             "resolve-failed=task.resolve",
@@ -604,13 +604,17 @@ fn cards_and_the_header_offer_only_the_actions_their_rows_allow() {
     );
     for state in [TaskState::Accepted, TaskState::Running] {
         assert_eq!(
-            names(&worker_actions(&task(state), None)),
+            names(&worker_actions(&task(state), None, false)),
             ["cancel=task.cancel"]
         );
     }
     let pending = approval();
     assert_eq!(
-        names(&worker_actions(&task(TaskState::Running), Some(&pending))),
+        names(&worker_actions(
+            &task(TaskState::Running),
+            Some(&pending),
+            false
+        )),
         [
             "approve=approval.decide",
             "decline=approval.decide",
@@ -620,7 +624,11 @@ fn cards_and_the_header_offer_only_the_actions_their_rows_allow() {
     let mut decided = approval();
     decided.state = ApprovalState::Approved;
     assert_eq!(
-        names(&worker_actions(&task(TaskState::Running), Some(&decided))),
+        names(&worker_actions(
+            &task(TaskState::Running),
+            Some(&decided),
+            false
+        )),
         ["cancel=task.cancel"]
     );
     for state in [
@@ -629,8 +637,26 @@ fn cards_and_the_header_offer_only_the_actions_their_rows_allow() {
         TaskState::Failed,
         TaskState::Cancelled,
     ] {
-        assert!(worker_actions(&task(state), None).is_empty(), "{state:?}");
+        assert!(
+            worker_actions(&task(state), None, false).is_empty(),
+            "{state:?}"
+        );
     }
+    // Active descendants take away what the store would refuse: cancel, and the completed or
+    // cancelled resolutions; the approval's decisions and a failed resolution stay.
+    assert!(worker_actions(&task(TaskState::Running), None, true).is_empty());
+    assert_eq!(
+        names(&worker_actions(
+            &task(TaskState::Running),
+            Some(&pending),
+            true
+        )),
+        ["approve=approval.decide", "decline=approval.decide"]
+    );
+    assert_eq!(
+        names(&worker_actions(&task(TaskState::Uncertain), None, true)),
+        ["resolve-failed=task.resolve"]
+    );
 
     // The header: rename always; cancel an unfinished or retryable turn; retry a retryable
     // one; stop an idle session only when no turn is unfinished.
@@ -687,6 +713,18 @@ fn cards_and_the_header_offer_only_the_actions_their_rows_allow() {
             "stop-session=session.stop"
         ]
     );
+    // A retry needs an idle session to be delivered on; a suspended or absent one offers only
+    // the cancel.
+    for session in [None, Some(session(SessionLifecycleState::Suspended))] {
+        assert_eq!(
+            names(&lead_actions(
+                &conversation,
+                session.as_ref(),
+                Some((Uuid::from_u128(60), TurnState::RetryableFailed, 4))
+            )),
+            ["rename=conversation.rename", "cancel-turn=turn.cancel"]
+        );
+    }
     assert_eq!(
         names(&lead_actions(
             &conversation,
@@ -695,4 +733,42 @@ fn cards_and_the_header_offer_only_the_actions_their_rows_allow() {
         )),
         ["rename=conversation.rename"]
     );
+}
+
+#[test]
+fn active_descendants_are_found_through_every_ancestor() {
+    let summary = |id: u64, parent: Option<u64>, state: TaskState| TaskSummary {
+        sequence: id,
+        id: Uuid::from_u128(u128::from(id)),
+        root_task_id: Uuid::from_u128(1),
+        parent_task_id: parent.map(|parent| Uuid::from_u128(u128::from(parent))),
+        depth: u32::from(parent.is_some()),
+        project_id: None,
+        conversation_id: Uuid::from_u128(5),
+        assigned_employee_id: Uuid::from_u128(2),
+        role: TaskRole::Worker,
+        objective: String::new(),
+        requested_authority: AuthorityMode::Ask,
+        effective_authority: AuthorityMode::Ask,
+        state,
+        revision: 1,
+        created_at: "2026-10-13T00:00:00Z".to_owned(),
+        updated_at: "2026-10-13T00:00:00Z".to_owned(),
+        terminal_at: None,
+    };
+    // root 1 > 2 (running) > 3 (accepted); root 1 > 4 (running) > 5 (completed); root 6 alone.
+    let tasks = [
+        summary(1, None, TaskState::Running),
+        summary(2, Some(1), TaskState::Running),
+        summary(3, Some(2), TaskState::Accepted),
+        summary(4, Some(1), TaskState::Running),
+        summary(5, Some(4), TaskState::Completed),
+        summary(6, None, TaskState::Completed),
+    ];
+    let blocked = active_descendant_ids(&tasks);
+    assert_eq!(
+        blocked.into_iter().collect::<Vec<_>>(),
+        [Uuid::from_u128(1), Uuid::from_u128(2)]
+    );
+    assert!(active_descendant_ids(&[]).is_empty());
 }

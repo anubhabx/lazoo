@@ -2,38 +2,38 @@
   "status": "PASS",
   "schemaVersion": 15,
   "mode": "deterministic-fake-transport",
-  "startedAt": "2026-10-12T22:28:38.3406035Z",
-  "durationMs": 2443,
+  "startedAt": "2026-10-12T22:48:23.4560794Z",
+  "durationMs": 4597,
   "commands": [
     {
       "command": "cargo test -p lazoo-protocol --test incident incident_threshold_contracts_are_strict_and_default_to_five_minutes --locked -- --exact",
       "exitCode": 0,
-      "durationMs": 276
+      "durationMs": 363
     },
     {
       "command": "cargo test -p lazoo-domain --test incident a_configured_threshold_replaces_the_default_but_never_delays_a_loss --locked -- --exact",
       "exitCode": 0,
-      "durationMs": 259
+      "durationMs": 1024
     },
     {
       "command": "cargo test -p lazoo-store --test incident configured_thresholds_apply_from_the_next_occurrence_and_reset_to_the_default --locked -- --exact",
       "exitCode": 0,
-      "durationMs": 437
+      "durationMs": 1803
     },
     {
       "command": "cargo test -p lazooctl --test cli incident_cli_maps_threshold_list_set_and_reset --locked -- --exact",
       "exitCode": 0,
-      "durationMs": 315
+      "durationMs": 296
     },
     {
       "command": "cargo test -p lazood --test daemon the_user_configures_incident_thresholds_through_the_daemon --locked -- --exact",
       "exitCode": 0,
-      "durationMs": 598
+      "durationMs": 581
     },
     {
       "command": "cargo test -p lazoo-store --test store store_enables_wal_foreign_keys_and_schema_version --locked -- --exact",
       "exitCode": 0,
-      "durationMs": 456
+      "durationMs": 437
     },
     {
       "command": "git diff --quiet and git diff --cached --quiet -- apps/lazoo-desktop",
