@@ -10146,7 +10146,8 @@ fn provider_config_acceptance_contract_is_read_only_and_backend_only() {
 async fn the_core_scenario_runs_end_to_end_on_the_deterministic_provider() {
     use chrono::{TimeDelta, Utc};
     use lazoo_protocol::{
-        IncidentEscalation, IncidentPriority, SessionLifecycleState, TaskState, TaskWorkspaceKind,
+        IncidentEscalation, IncidentPriority, SessionLifecycleState, TaskEvidenceKind, TaskState,
+        TaskWorkspaceKind,
     };
     use lazoo_store::ListIncidentsInput;
 
@@ -10309,7 +10310,26 @@ async fn the_core_scenario_runs_end_to_end_on_the_deterministic_provider() {
 
     // 6. The approved employee activates into independent native sessions and workspaces: each
     // accepted task runs to completion on a fresh session for Mira, which stops with its turn,
-    // and the next queued task wakes as soon as she is free.
+    // and the next queued task wakes as soon as she is free. The first worker reports its
+    // completion through `task_report` with commit and verification evidence before its
+    // native turn ends (step 12); sessions are numbered in start order, so hers is the second.
+    harness
+        .backend
+        .tool_calls
+        .lock()
+        .unwrap()
+        .push(session_tool_call(
+            "native-2",
+            "call-w1",
+            "task_report",
+            json!({
+                "kind": "completed",
+                "evidence": {
+                    "commits": [{"sha": "0123abcd", "message": "Fix the parser"}],
+                    "verification": [{"command": "cargo test -p parser", "exitCode": 0}]
+                }
+            }),
+        ));
     harness.app.dispatch_pending_tasks_once().await.unwrap();
     assert_eq!(
         harness.backend.starts.load(Ordering::SeqCst),
@@ -10341,6 +10361,37 @@ async fn the_core_scenario_runs_end_to_end_on_the_deterministic_provider() {
         harness.store.pending_task_results(10).unwrap().len(),
         2,
         "both results wait to reach Rhea"
+    );
+
+    // 12. The reported commits and verification are the task's durable evidence, readable
+    // through `task.show`; the result notice below links the task; incidents and messages are
+    // ledgers of their own. Memory records wait for Stage 5.
+    let reported = harness.store.get_task(children[0]).unwrap();
+    let completed = reported
+        .evidence
+        .iter()
+        .find(|evidence| {
+            evidence.kind == TaskEvidenceKind::Completed && evidence.detail.get("commits").is_some()
+        })
+        .expect("the worker's completed report with its evidence");
+    assert_eq!(completed.detail["commits"][0]["sha"], "0123abcd");
+    assert_eq!(completed.detail["verification"][0]["exitCode"], 0);
+    assert_eq!(
+        completed.session_id,
+        reported.dispatch.as_ref().unwrap().session_id,
+        "the evidence names the worker's own session"
+    );
+    let shown = call("show-reported", "task.show", json!({"id": children[0]}))
+        .await
+        .result
+        .unwrap();
+    assert!(
+        shown["evidence"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|evidence| evidence["detail"]["commits"][0]["sha"] == "0123abcd"),
+        "{shown}"
     );
     harness.app.deliver_pending_notices_once().await.unwrap();
     let prompt = last_prompt(&harness.backend);
@@ -10391,9 +10442,9 @@ async fn the_core_scenario_runs_end_to_end_on_the_deterministic_provider() {
     .unwrap();
     assert_eq!(follow_up["turn"]["state"], "completed");
     let results = harness.backend.tool_results.lock().unwrap().clone();
-    assert_eq!(results.len(), 5, "{results:?}");
-    assert!(results[4].success, "{:?}", results[4]);
-    let third: uuid::Uuid = results[4].content["taskId"]
+    assert_eq!(results.len(), 6, "{results:?}");
+    assert!(results[5].success, "{:?}", results[5]);
+    let third: uuid::Uuid = results[5].content["taskId"]
         .as_str()
         .unwrap()
         .parse()
@@ -10689,7 +10740,7 @@ fn core_scenario_acceptance_contract_maps_every_step_to_evidence() {
         "step13",
         "step14",
         "step15",
-        "NOT_COVERED",
+        "PARTIAL",
         "providerSmokeAbsent",
         "externalModelUseAbsent",
         "uiChangesAbsent",

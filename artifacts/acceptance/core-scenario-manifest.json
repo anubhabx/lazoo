@@ -2,28 +2,28 @@
   "status": "PASS",
   "schemaVersion": 15,
   "mode": "deterministic-fake-transport",
-  "startedAt": "2026-10-12T23:17:46.6709573Z",
-  "durationMs": 3370,
+  "startedAt": "2026-10-12T23:27:35.5042130Z",
+  "durationMs": 3383,
   "commands": [
     {
       "command": "cargo test -p lazood --test daemon the_core_scenario_runs_end_to_end_on_the_deterministic_provider --locked -- --exact",
       "exitCode": 0,
-      "durationMs": 1032
+      "durationMs": 1038
     },
     {
       "command": "cargo test -p lazood --test daemon project_task_dispatch_uses_an_isolated_worktree_and_preserves_dirty_user_files --locked -- --exact",
       "exitCode": 0,
-      "durationMs": 1155
+      "durationMs": 1219
     },
     {
       "command": "cargo test -p lazood --test daemon message_restart_reconciles_an_uncertain_attempt --locked -- --exact",
       "exitCode": 0,
-      "durationMs": 612
+      "durationMs": 565
     },
     {
       "command": "cargo test -p lazoo-store --test store store_enables_wal_foreign_keys_and_schema_version --locked -- --exact",
       "exitCode": 0,
-      "durationMs": 469
+      "durationMs": 463
     },
     {
       "command": "git diff --quiet and git diff --cached --quiet -- apps/lazoo-desktop",
@@ -89,8 +89,8 @@
     },
     "step12": {
       "text": "Results include commits, verification, task links, messages, incidents, and concise memory records",
-      "status": "NOT_COVERED",
-      "evidence": "task links, messages, and incidents are result-delivery.ps1; commits and verification evidence need the worker to report them; memory records need Stage 5"
+      "status": "PARTIAL",
+      "evidence": "core scenario story: the first worker reports completion through task_report with commit and verification evidence, which is the task's durable evidence through task.show, and the result notice links the task; messages and incidents are ledgers of their own (result-delivery.ps1, minimum-incidents.ps1); memory records need Stage 5"
     },
     "step13": {
       "text": "Integration follows configured authority and never overwrites dirty user work",
