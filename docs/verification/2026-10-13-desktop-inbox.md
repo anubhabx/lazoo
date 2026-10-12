@@ -41,12 +41,13 @@ All commands were run from `C:\workspace\Orchestrator` on branch `feat/desktop-i
 |---|---:|---|
 | `cargo fmt --all -- --check` | 0 | No formatting differences. |
 | `cargo clippy --workspace --all-targets --locked -- -D warnings` | 0 | Clean with the two story-test allowances. |
-| `cargo test --workspace --locked` | 0 | TODO_WORKSPACE_TOTALS |
+| `cargo test --workspace --locked` | 0 | One invocation, 376 passed, 0 failed, 11 ignored (explicit live-provider tests), 67 test binaries. New: `lazoo-protocol` 2, `lazoo-domain` 5, `lazooctl` 1, `lazood` 3 (the two Inbox stories and the acceptance-script contract; 101 daemon tests). |
 | `cargo build --workspace --release --locked` | 0 | Locked release build. |
 | `scripts\acceptance\desktop-inbox.ps1` | 0 | PASS schema-15 manifest, `deterministic-fake-transport`, 12 commands, every evidence flag true. |
 | `configurable-thresholds`, `message-priority`, `message-arrival`, `user-notifications`, `incident-thresholds`, `lead-remediation`, `idle-suspension`, `activation-policy`, `coalesced-notices`, `peer-messaging`, `result-delivery`, `minimum-incidents`, `collaboration-tools`, `approval-gate`, `automatic-task-dispatch` | 0 | PASS schema-15 manifests. |
 | `first-slice`, `employee-roster`, `collaboration-bus`, `conversation-delivery`, `task-delegation-graph`, each with `-SkipBuild` | 0 | PASS manifests against the real release binaries, with the schema-15 migration in the real daemon. |
-| `scripts\acceptance\native-session-ownership.ps1 -SkipBuild -Provider codex` | TODO_NATIVE_EXIT | TODO_NATIVE_EVIDENCE |
+| `scriptscceptance
+ative-session-ownership.ps1 -SkipBuild -Provider codex` | 0 | PASS manifest on the first run, straight after `task-delegation-graph`; real Codex CLI, non-model session contract only. |
 | `git diff --check` | 0 | No whitespace errors. |
 
 Not run, as in every prior backend slice: `provider-adapters.ps1 -Provider codex` (live model turn) and `desktop-shell.ps1` (unchanged, separately owned UI). `npm --prefix apps\lazoo-desktop\ui run check` was not run because the frontend is unchanged.
