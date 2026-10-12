@@ -2,7 +2,7 @@
 
 **Date:** 2026-10-11
 
-**Status:** Implemented on `feat/desktop-inbox` (pull request #10 against `main`) with deterministic acceptance, for owner and UI-owner review before merge. On 2026-10-13 the owner asked to finish as much of the application as possible, so section 9's proposed answers were adopted as defaults and the daemon side (`inbox.list`, `inbox.counts`, `lazooctl inbox`) landed; no schema, Tauri, or desktop change is part of it, and the desktop binding still waits for the UI owner. Implementation plan: `docs/superpowers/plans/2026-10-13-desktop-inbox.md`; verification: `docs/verification/2026-10-13-desktop-inbox.md`.
+**Status:** Implemented on `feat/desktop-inbox` (pull request #11 against `main`) with deterministic acceptance, for owner and UI-owner review before merge. On 2026-10-13 the owner asked to finish as much of the application as possible, so section 9's proposed answers were adopted as defaults and the daemon side (`inbox.list`, `inbox.counts`, `lazooctl inbox`) landed; no schema, Tauri, or desktop change is part of it, and the desktop binding still waits for the UI owner. Implementation plan: `docs/superpowers/plans/2026-10-13-desktop-inbox.md`; verification: `docs/verification/2026-10-13-desktop-inbox.md`.
 
 **Scope:** One typed, daemon-derived read model that the desktop's global Inbox (information architecture, section 9) can bind to, built only from ledgers that already exist at schema 15. It names the rows, the badge, the live-update path, and the actions, each mapped to an existing RPC method. The daemon and CLI side is implemented; the Tauri commands and the desktop work wait for the UI owner's agreement.
 
@@ -179,4 +179,4 @@ The desktop side (Tauri commands such as `load_inbox`, the event subscription in
 
 ## 10. Review gate
 
-Agreeing to this document authorized only an implementation plan for `inbox.list` and `inbox.counts` with the item kinds above, which is now implemented and under review as pull request #10. It does not authorize desktop or Tauri changes, a new mutation, or `UI BACKEND CONTRACT: GO`, which waits for the implemented contract's own review.
+Agreeing to this document authorized only an implementation plan for `inbox.list` and `inbox.counts` with the item kinds above, which is now implemented and under review as pull request #11. It does not authorize desktop or Tauri changes, a new mutation, or `UI BACKEND CONTRACT: GO`, which waits for the implemented contract's own review.
