@@ -2142,7 +2142,10 @@ fn require_no_active_descendants(connection: &Connection, task_id: Uuid) -> Resu
     }
 }
 
-fn has_active_descendants(connection: &Connection, task_id: Uuid) -> Result<bool, StoreError> {
+pub(crate) fn has_active_descendants(
+    connection: &Connection,
+    task_id: Uuid,
+) -> Result<bool, StoreError> {
     let active: i64 = connection.query_row(
         "WITH RECURSIVE descendants(id, state) AS (
             SELECT id, state FROM tasks WHERE parent_task_id = ?1

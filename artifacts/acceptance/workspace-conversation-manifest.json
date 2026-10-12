@@ -2,33 +2,33 @@
   "status": "PASS",
   "schemaVersion": 15,
   "mode": "deterministic-fake-transport",
-  "startedAt": "2026-10-12T22:51:52.8435271Z",
-  "durationMs": 2017,
+  "startedAt": "2026-10-12T23:02:51.1646009Z",
+  "durationMs": 1995,
   "commands": [
     {
       "command": "cargo test -p lazoo-domain --test workspace the_lead_lifecycle_follows_the_session_and_its_newest_turn --locked -- --exact",
       "exitCode": 0,
-      "durationMs": 265
+      "durationMs": 263
     },
     {
       "command": "cargo test -p lazoo-domain --test workspace worker_cards_take_the_first_state_that_holds_with_lazoo_words --locked -- --exact",
       "exitCode": 0,
-      "durationMs": 250
+      "durationMs": 243
     },
     {
       "command": "cargo test -p lazooctl --test cli workspace_cli_maps_show --locked -- --exact",
       "exitCode": 0,
-      "durationMs": 289
+      "durationMs": 276
     },
     {
       "command": "cargo test -p lazood --test daemon the_user_opens_the_conversation_header_and_worker_dock_through_the_daemon --locked -- --exact",
       "exitCode": 0,
-      "durationMs": 715
+      "durationMs": 710
     },
     {
       "command": "cargo test -p lazoo-store --test store store_enables_wal_foreign_keys_and_schema_version --locked -- --exact",
       "exitCode": 0,
-      "durationMs": 411
+      "durationMs": 415
     },
     {
       "command": "git diff --quiet and git diff --cached --quiet -- apps/lazoo-desktop",

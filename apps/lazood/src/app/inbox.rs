@@ -93,12 +93,14 @@ pub(super) fn unresolved_items(sources: &InboxSources) -> Vec<InboxItem> {
         .iter()
         .map(|approval| approval_inbox_item(approval, employees))
         .collect();
-    items.extend(
-        sources
-            .tasks
-            .iter()
-            .filter_map(|task| task_inbox_item(task, false, employees)),
-    );
+    items.extend(sources.tasks.iter().filter_map(|task| {
+        task_inbox_item(
+            task,
+            false,
+            sources.active_descendants.contains(&task.id),
+            employees,
+        )
+    }));
     items.extend(
         sources
             .incidents
@@ -118,12 +120,9 @@ fn archive_items(archive: &InboxArchive) -> Vec<InboxItem> {
         .iter()
         .map(|approval| approval_inbox_item(approval, employees))
         .collect();
-    items.extend(
-        archive
-            .tasks
-            .iter()
-            .filter_map(|(task, once_uncertain)| task_inbox_item(task, *once_uncertain, employees)),
-    );
+    items.extend(archive.tasks.iter().filter_map(|(task, once_uncertain)| {
+        task_inbox_item(task, *once_uncertain, false, employees)
+    }));
     items.extend(
         archive
             .incidents
