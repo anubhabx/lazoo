@@ -172,8 +172,8 @@ pub struct ConversationWorkspace {
     /// The newest `turn_limit` turns, oldest first.
     pub turns: Vec<ConversationTurnSummary>,
     pub turns_truncated: bool,
-    /// The lead's newest turn (id, state).
-    pub latest_lead_turn: Option<(Uuid, TurnState)>,
+    /// The lead's newest turn (id, state, revision).
+    pub latest_lead_turn: Option<(Uuid, TurnState, u64)>,
     /// Every task below a root, oldest first.
     pub workers: Vec<WorkerRow>,
     pub event_high_water: u64,
@@ -216,17 +216,24 @@ impl Store {
         turns.reverse();
         let latest_lead_turn = connection
             .query_row(
-                "SELECT id, state FROM conversation_turns
+                "SELECT id, state, revision FROM conversation_turns
                  WHERE conversation_id = ?1 AND recipient_employee_id = ?2
                  ORDER BY sequence DESC LIMIT 1",
                 params![key, conversation.lead_employee_id.to_string()],
-                |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, i64>(2)?,
+                    ))
+                },
             )
             .optional()?
-            .map(|(id, state)| {
+            .map(|(id, state, revision)| {
                 Ok::<_, StoreError>((
                     parse_uuid(&id, "conversation_turns.id")?,
                     serde_json::from_value::<TurnState>(Value::String(state))?,
+                    u64::try_from(revision).map_err(|_| StoreError::NegativeSequence)?,
                 ))
             })
             .transpose()?;

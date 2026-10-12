@@ -9,8 +9,8 @@ use std::collections::BTreeMap;
 
 use lazoo_domain::{
     ConversationFacts, InboxCursor, WorkerFacts, conversation_marker, conversation_title,
-    lead_lifecycle, lead_startability, turn_in_flight, validate_workspace_limit, worker_label,
-    worker_state,
+    lead_actions, lead_lifecycle, lead_startability, turn_in_flight, validate_workspace_limit,
+    worker_actions, worker_label, worker_state,
 };
 use lazoo_protocol::{
     AuthorityMode, ConversationRow, InboxAttention, IncidentEscalation, IncidentState,
@@ -334,12 +334,17 @@ impl App {
             }),
             lifecycle: lead_lifecycle(
                 entry.session.as_ref(),
-                workspace.latest_lead_turn.map(|(_, state)| state),
+                workspace.latest_lead_turn.map(|(_, state, _)| state),
             ),
             active_turn_id: workspace
                 .latest_lead_turn
-                .filter(|(_, state)| turn_in_flight(*state))
-                .map(|(id, _)| id),
+                .filter(|(_, state, _)| turn_in_flight(*state))
+                .map(|(id, _, _)| id),
+            actions: lead_actions(
+                &workspace.conversation,
+                entry.session.as_ref(),
+                workspace.latest_lead_turn,
+            ),
         }
     }
 }
@@ -414,6 +419,7 @@ fn worker_card(row: &WorkerRow, roster: &RosterSnapshot, sources: &InboxSources)
         created_at: task.created_at.clone(),
         updated_at: task.updated_at.clone(),
         terminal_at: task.terminal_at.clone(),
+        actions: worker_actions(task, pending_approval),
     }
 }
 

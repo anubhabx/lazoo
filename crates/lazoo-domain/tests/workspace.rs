@@ -1,15 +1,16 @@
 use lazoo_domain::{
     ConversationFacts, MAX_WORKER_LABEL_BYTES, UNTITLED_CONVERSATION, WorkerFacts,
-    WorkspaceValidationError, conversation_marker, conversation_title, lead_lifecycle,
-    lead_startability, turn_in_flight, validate_workspace_limit, worker_label, worker_state,
+    WorkspaceValidationError, conversation_marker, conversation_title, lead_actions,
+    lead_lifecycle, lead_startability, turn_in_flight, validate_workspace_limit, worker_actions,
+    worker_label, worker_state,
 };
 use lazoo_protocol::{
     ActivationPolicy, ApprovalKind, ApprovalRecord, ApprovalState, AuthorityMode,
-    ConversationMarker, EmployeeAvailability, EmployeeCheckoutPolicy, EmployeeRecord,
-    EmployeeSessionRecord, IncidentEscalation, IncidentPriority, IncidentRecord, IncidentSource,
-    IncidentState, LeadLifecycle, MessageEndpoint, MessageSender, RosterEntry,
-    SessionLifecycleState, TaskDispatchRecord, TaskDispatchState, TaskRecord, TaskRole, TaskState,
-    TurnState, WorkerCounts, WorkerState,
+    ConversationMarker, ConversationRecord, EmployeeAvailability, EmployeeCheckoutPolicy,
+    EmployeeRecord, EmployeeSessionRecord, InboxAction, IncidentEscalation, IncidentPriority,
+    IncidentRecord, IncidentSource, IncidentState, LeadLifecycle, MessageEndpoint, MessageSender,
+    RosterEntry, SessionLifecycleState, TaskDispatchRecord, TaskDispatchState, TaskRecord,
+    TaskRole, TaskState, TurnState, WorkerCounts, WorkerState,
 };
 use serde_json::json;
 use uuid::Uuid;
@@ -571,4 +572,127 @@ fn worker_cards_take_the_first_state_that_holds_with_lazoo_words() {
     );
     assert_eq!(worker_label(&"y".repeat(300)).len(), MAX_WORKER_LABEL_BYTES);
     assert_eq!(worker_label("  \n "), "");
+}
+
+#[test]
+#[allow(clippy::too_many_lines)] // Every card state and every header condition, in one table.
+fn cards_and_the_header_offer_only_the_actions_their_rows_allow() {
+    let names = |actions: &[InboxAction]| {
+        actions
+            .iter()
+            .map(|action| format!("{}={}", action.action, action.method))
+            .collect::<Vec<_>>()
+    };
+
+    // Cards: a proposal, an uncertain task, a waiting or running task, a pending approval on
+    // top, and nothing once terminal or already cancelling.
+    let proposed = task(TaskState::Proposed);
+    let actions = worker_actions(&proposed, None);
+    assert_eq!(
+        names(&actions),
+        ["accept=task.accept", "cancel=task.cancel"]
+    );
+    assert_eq!(actions[0].params["expectedRevision"], 1);
+    assert_eq!(actions[1].params["actor"], json!({"kind": "user"}));
+    assert_eq!(
+        names(&worker_actions(&task(TaskState::Uncertain), None)),
+        [
+            "resolve-completed=task.resolve",
+            "resolve-failed=task.resolve",
+            "resolve-cancelled=task.resolve"
+        ]
+    );
+    for state in [TaskState::Accepted, TaskState::Running] {
+        assert_eq!(
+            names(&worker_actions(&task(state), None)),
+            ["cancel=task.cancel"]
+        );
+    }
+    let pending = approval();
+    assert_eq!(
+        names(&worker_actions(&task(TaskState::Running), Some(&pending))),
+        [
+            "approve=approval.decide",
+            "decline=approval.decide",
+            "cancel=task.cancel"
+        ]
+    );
+    let mut decided = approval();
+    decided.state = ApprovalState::Approved;
+    assert_eq!(
+        names(&worker_actions(&task(TaskState::Running), Some(&decided))),
+        ["cancel=task.cancel"]
+    );
+    for state in [
+        TaskState::CancelRequested,
+        TaskState::Completed,
+        TaskState::Failed,
+        TaskState::Cancelled,
+    ] {
+        assert!(worker_actions(&task(state), None).is_empty(), "{state:?}");
+    }
+
+    // The header: rename always; cancel an unfinished or retryable turn; retry a retryable
+    // one; stop an idle session only when no turn is unfinished.
+    let conversation = ConversationRecord {
+        sequence: 1,
+        version: 1,
+        id: Uuid::from_u128(5),
+        project_id: None,
+        lead_employee_id: Uuid::from_u128(1),
+        lead_employee_configuration_revision: 1,
+        title: None,
+        revision: 3,
+        created_at: "2026-10-13T00:00:00Z".to_owned(),
+        updated_at: "2026-10-13T00:00:00Z".to_owned(),
+    };
+    let rename_only = lead_actions(&conversation, None, None);
+    assert_eq!(names(&rename_only), ["rename=conversation.rename"]);
+    assert_eq!(
+        rename_only[0].params,
+        json!({"id": conversation.id, "expectedRevision": 3, "title": null})
+    );
+    let idle = session(SessionLifecycleState::Idle);
+    assert_eq!(
+        names(&lead_actions(
+            &conversation,
+            Some(&idle),
+            Some((Uuid::from_u128(60), TurnState::Completed, 4))
+        )),
+        ["rename=conversation.rename", "stop-session=session.stop"]
+    );
+    let busy = lead_actions(
+        &conversation,
+        Some(&idle),
+        Some((Uuid::from_u128(60), TurnState::Accepted, 4)),
+    );
+    assert_eq!(
+        names(&busy),
+        ["rename=conversation.rename", "cancel-turn=turn.cancel"]
+    );
+    assert_eq!(
+        busy[1].params,
+        json!({"id": Uuid::from_u128(60), "expectedRevision": 4})
+    );
+    assert_eq!(
+        names(&lead_actions(
+            &conversation,
+            Some(&idle),
+            Some((Uuid::from_u128(60), TurnState::RetryableFailed, 4))
+        )),
+        [
+            "rename=conversation.rename",
+            "cancel-turn=turn.cancel",
+            "retry-turn=turn.retry",
+            "stop-session=session.stop"
+        ]
+    );
+    assert_eq!(
+        names(&lead_actions(
+            &conversation,
+            Some(&session(SessionLifecycleState::Suspended)),
+            None
+        )),
+        ["rename=conversation.rename"]
+    );
 }

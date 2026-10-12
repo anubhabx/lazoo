@@ -4,8 +4,8 @@ use uuid::Uuid;
 
 use crate::{
     AuthorityMode, CheckoutMode, ConversationRecord, ConversationTurnSummary, EmployeeAvailability,
-    EmployeeCheckoutPolicy, InboxItem, ProjectRecord, SessionLifecycleState, TaskState,
-    TaskSummary, TaskWorkspaceKind, TurnState,
+    EmployeeCheckoutPolicy, InboxAction, InboxItem, ProjectRecord, SessionLifecycleState,
+    TaskState, TaskSummary, TaskWorkspaceKind, TurnState,
 };
 
 pub const WORKSPACE_CONTRACT_V1: u32 = 1;
@@ -181,7 +181,7 @@ pub struct LeadSessionSummary {
 
 /// The terminal header's identity line: who leads, on what, under which authority, and the
 /// truthful lifecycle of the lead's session.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct LeadHeader {
     pub employee_id: Uuid,
@@ -198,6 +198,9 @@ pub struct LeadHeader {
     pub lifecycle: LeadLifecycle,
     /// The lead's newest turn while it is unfinished.
     pub active_turn_id: Option<Uuid>,
+    /// What the header offers now, as data naming an existing revision-checked RPC; the
+    /// caller adds a fresh `idempotencyKey` (and the new `title` for `rename`).
+    pub actions: Vec<InboxAction>,
 }
 
 /// Where the conversation lives: a registered project, or Home.
@@ -229,7 +232,7 @@ pub struct WorkerSessionSummary {
 
 /// One worker dock card: a task below a root with its state in the dock's words. Completed
 /// cards stay in the list; the desktop dismisses them locally.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct WorkerCard {
     pub task_id: Uuid,
@@ -256,6 +259,9 @@ pub struct WorkerCard {
     pub created_at: String,
     pub updated_at: String,
     pub terminal_at: Option<String>,
+    /// What the card offers now, as data naming an existing revision-checked RPC; the caller
+    /// adds a fresh `idempotencyKey`.
+    pub actions: Vec<InboxAction>,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]

@@ -65,6 +65,6 @@ pub use task::{
 pub use workspace::{
     ConversationFacts, MAX_DERIVED_TITLE_BYTES, MAX_WORKER_LABEL_BYTES, MAX_WORKSPACE_LIMIT,
     UNTITLED_CONVERSATION, WorkerFacts, WorkspaceValidationError, conversation_marker,
-    conversation_title, lead_lifecycle, lead_startability, turn_in_flight,
-    validate_workspace_limit, worker_label, worker_state,
+    conversation_title, lead_actions, lead_lifecycle, lead_startability, turn_in_flight,
+    validate_workspace_limit, worker_actions, worker_label, worker_state,
 };

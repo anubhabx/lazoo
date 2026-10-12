@@ -156,6 +156,10 @@ pub struct RenameConversationParams {
     pub id: Uuid,
     pub expected_revision: u64,
     pub title: Option<String>,
+    /// Accepted so every workspace action is sent the same way; a rename is naturally
+    /// idempotent, so the key is not recorded.
+    #[serde(default)]
+    pub idempotency_key: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]

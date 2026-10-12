@@ -11310,3 +11310,167 @@ fn workspace_conversation_acceptance_contract_is_deterministic_and_backend_only(
         );
     }
 }
+
+/// The header and each worker card name the actions their rows allow right now, as data for
+/// an existing revision-checked RPC, and sending one exactly as named (plus a fresh
+/// idempotency key) is accepted: accept a proposal from its card, rename from the header,
+/// and stop the idle lead from the header. Nothing is stored for the actions.
+#[tokio::test]
+#[allow(clippy::too_many_lines)] // One user session acting from the header and a card.
+async fn the_user_acts_through_the_actions_the_header_and_cards_name() {
+    let (_temporary, harness) = tool_harness(AuthorityMode::Ask);
+    let call = |id: &str, method: &str, params: serde_json::Value| {
+        harness.app.handle(request(id, method, params))
+    };
+    let show = |id: &'static str| async move {
+        call(
+            id,
+            "workspace.conversation",
+            json!({"id": harness.conversation_id}),
+        )
+        .await
+        .result
+        .unwrap()
+    };
+    let names = |actions: &serde_json::Value| {
+        actions
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|action| action["action"].as_str().unwrap().to_owned())
+            .collect::<Vec<_>>()
+    };
+    // Send an action exactly as the daemon named it, with the caller's idempotency key.
+    let send = |label: &str, action: serde_json::Value, extra: serde_json::Value| {
+        let mut params = action["params"].clone();
+        params["idempotencyKey"] = json!(format!("action-{label}"));
+        for (key, value) in extra.as_object().unwrap() {
+            params[key] = value.clone();
+        }
+        call(label, action["method"].as_str().unwrap(), params)
+    };
+
+    // A dormant lead offers only rename; a warmed one may also be stopped.
+    let view = show("fresh").await;
+    assert_eq!(names(&view["lead"]["actions"]), ["rename"]);
+    warm_tool_lead(&harness).await;
+    let view = show("warmed").await;
+    assert_eq!(names(&view["lead"]["actions"]), ["rename", "stop-session"]);
+
+    // A proposal's card offers accept and cancel; sending accept as named is accepted and the
+    // card then offers only cancel.
+    let roster_revision = harness.store.roster_snapshot().unwrap().revision;
+    harness
+        .backend
+        .tool_calls
+        .lock()
+        .unwrap()
+        .extend([tool_call(
+            "call-1",
+            "task_delegate",
+            json!({
+                "employeeId": harness.worker.id,
+                "objective": "Implement the parser fix",
+                "rosterRevision": roster_revision
+            }),
+        )]);
+    assert_eq!(
+        submit_lead_turn(&harness, "ask").await["turn"]["state"],
+        "completed"
+    );
+    let view = show("proposed").await;
+    assert_eq!(names(&view["lead"]["actions"]), ["rename", "stop-session"]);
+    let card = view["workers"][0].clone();
+    assert_eq!(names(&card["actions"]), ["accept", "cancel"]);
+    assert_eq!(card["actions"][0]["method"], "task.accept");
+    assert_eq!(card["actions"][0]["params"]["expectedRevision"], 1);
+    assert_eq!(
+        card["actions"][1]["params"]["actor"],
+        json!({"kind": "user"})
+    );
+    let accepted = send("accept", card["actions"][0].clone(), json!({}))
+        .await
+        .result
+        .unwrap();
+    assert_eq!(accepted["task"]["state"], "accepted");
+    let view = show("accepted").await;
+    assert_eq!(names(&view["workers"][0]["actions"]), ["cancel"]);
+    assert_eq!(
+        view["workers"][0]["actions"][0]["params"]["expectedRevision"],
+        2
+    );
+
+    // Rename from the header, with the caller's title; the next header cites the new revision.
+    let rename = view["lead"]["actions"][0].clone();
+    assert_eq!(rename["method"], "conversation.rename");
+    assert_eq!(rename["params"]["title"], serde_json::Value::Null);
+    send("rename", rename, json!({"title": "Dock"}))
+        .await
+        .result
+        .unwrap();
+    let view = show("renamed").await;
+    assert_eq!(view["title"], "Dock");
+    assert_eq!(view["titleDerived"], false);
+    assert_eq!(view["lead"]["actions"][0]["params"]["expectedRevision"], 2);
+
+    // A completed card offers nothing; stopping the lead from the header suspends it and
+    // leaves rename alone.
+    harness.app.dispatch_pending_tasks_once().await.unwrap();
+    harness.app.deliver_pending_notices_once().await.unwrap();
+    let view = show("done").await;
+    assert_eq!(view["workers"][0]["state"], "complete");
+    assert_eq!(view["workers"][0]["actions"], json!([]));
+    assert_eq!(view["rootTask"]["state"], "completed");
+    let stop = view["lead"]["actions"][1].clone();
+    assert_eq!(stop["action"], "stop-session");
+    assert_eq!(stop["method"], "session.stop");
+    assert_eq!(stop["params"]["id"], view["lead"]["session"]["id"]);
+    send("stop", stop, json!({})).await.result.unwrap();
+    let view = show("stopped").await;
+    assert_eq!(view["lead"]["lifecycle"], "suspended");
+    assert_eq!(names(&view["lead"]["actions"]), ["rename"]);
+
+    // The actions are derived: no event names the workspace.
+    assert!(
+        harness
+            .store
+            .list_events(0, 1000)
+            .unwrap()
+            .iter()
+            .all(|event| !event.event_type.starts_with("workspace"))
+    );
+}
+
+#[test]
+fn workspace_actions_acceptance_contract_is_deterministic_and_backend_only() {
+    let repository = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let script_path = repository.join("scripts/acceptance/workspace-actions.ps1");
+    let script =
+        std::fs::read_to_string(&script_path).expect("workspace actions acceptance script");
+
+    for required in [
+        "cards_and_the_header_offer_only_the_actions_their_rows_allow",
+        "the_user_acts_through_the_actions_the_header_and_cards_name",
+        "the_user_opens_the_conversation_header_and_worker_dock_through_the_daemon",
+        "store_enables_wal_foreign_keys_and_schema_version",
+        "actionsFollowTheRows",
+        "namedActionsAreAccepted",
+        "workspaceStoresNothing",
+        "providerSmokeAbsent",
+        "externalModelUseAbsent",
+        "uiChangesAbsent",
+        "deterministic-fake-transport",
+        "schemaVersion = 15",
+    ] {
+        assert!(
+            script.contains(required),
+            "acceptance script must contain {required}"
+        );
+    }
+    for forbidden in ["provider', 'smoke", "LivePrompt"] {
+        assert!(
+            !script.contains(forbidden),
+            "acceptance script must not contain {forbidden}"
+        );
+    }
+}

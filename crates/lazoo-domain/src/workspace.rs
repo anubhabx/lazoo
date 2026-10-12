@@ -5,14 +5,17 @@
 //! states a worker is in.
 
 use lazoo_protocol::{
-    ApprovalRecord, ConversationMarker, EmployeeAvailability, EmployeeSessionRecord,
-    IncidentEscalation, IncidentRecord, LeadLifecycle, RosterEntry, SessionLifecycleState,
-    TaskDispatchRecord, TaskDispatchState, TaskRecord, TaskState, TurnState, WorkerCounts,
-    WorkerState,
+    ApprovalRecord, ApprovalState, ConversationMarker, ConversationRecord, EmployeeAvailability,
+    EmployeeSessionRecord, InboxAction, InboxKind, IncidentEscalation, IncidentRecord,
+    LeadLifecycle, RosterEntry, SessionLifecycleState, TaskDispatchRecord, TaskDispatchState,
+    TaskRecord, TaskState, TurnState, WorkerCounts, WorkerState,
 };
+use serde_json::json;
 use thiserror::Error;
+use uuid::Uuid;
 
 use crate::delivery::truncate_utf8;
+use crate::inbox::{action, approval_actions, task_actions};
 
 pub const MAX_WORKSPACE_LIMIT: u32 = 500;
 pub const MAX_DERIVED_TITLE_BYTES: usize = 80;
@@ -318,4 +321,89 @@ pub fn worker_state(facts: &WorkerFacts<'_>) -> (WorkerState, String) {
         ) => "Waiting after an unfinished dispatch",
     };
     (WorkerState::Waiting, reason.to_owned())
+}
+
+/// The actions a worker card offers now, as data naming an existing revision-checked RPC
+/// (contract section 6): accept or cancel a proposal, resolve an uncertain task, decide a
+/// pending approval, or cancel a task that is waiting or running. A terminal or already
+/// cancelling task offers none. The caller adds a fresh `idempotencyKey`.
+#[must_use]
+pub fn worker_actions(
+    task: &TaskRecord,
+    pending_approval: Option<&ApprovalRecord>,
+) -> Vec<InboxAction> {
+    let mut actions = match task.state {
+        TaskState::Proposed => task_actions(InboxKind::TaskProposal, task),
+        TaskState::Uncertain => task_actions(InboxKind::TaskUncertain, task),
+        TaskState::Accepted | TaskState::Running => vec![action(
+            "cancel",
+            "Cancel",
+            "task.cancel",
+            json!({
+                "id": task.id,
+                "expectedRevision": task.revision,
+                "actor": {"kind": "user"},
+            }),
+        )],
+        TaskState::CancelRequested
+        | TaskState::Completed
+        | TaskState::Failed
+        | TaskState::Cancelled => Vec::new(),
+    };
+    if let Some(approval) = pending_approval
+        && approval.state == ApprovalState::Pending
+    {
+        actions.splice(0..0, approval_actions(approval));
+    }
+    actions
+}
+
+/// The actions the conversation header offers now: rename (the caller sets `title`), cancel
+/// the lead's unfinished or retryable turn, retry a retryable turn, and stop the lead's idle
+/// session when no turn is unfinished.
+#[must_use]
+pub fn lead_actions(
+    conversation: &ConversationRecord,
+    session: Option<&EmployeeSessionRecord>,
+    latest_lead_turn: Option<(Uuid, TurnState, u64)>,
+) -> Vec<InboxAction> {
+    let mut actions = vec![action(
+        "rename",
+        "Rename",
+        "conversation.rename",
+        json!({
+            "id": conversation.id,
+            "expectedRevision": conversation.revision,
+            "title": null,
+        }),
+    )];
+    let turn_unfinished = latest_lead_turn.is_some_and(|(_, state, _)| turn_in_flight(state));
+    if let Some((id, state, revision)) = latest_lead_turn {
+        let turn = |verb: &str, label: &str| {
+            action(
+                &format!("{verb}-turn"),
+                label,
+                &format!("turn.{verb}"),
+                json!({"id": id, "expectedRevision": revision}),
+            )
+        };
+        if turn_unfinished || state == TurnState::RetryableFailed {
+            actions.push(turn("cancel", "Cancel the turn"));
+        }
+        if state == TurnState::RetryableFailed {
+            actions.push(turn("retry", "Retry the turn"));
+        }
+    }
+    if let Some(session) = session
+        && session.state == SessionLifecycleState::Idle
+        && !turn_unfinished
+    {
+        actions.push(action(
+            "stop-session",
+            "Stop the session",
+            "session.stop",
+            json!({"id": session.id, "expectedRevision": session.revision}),
+        ));
+    }
+    actions
 }
