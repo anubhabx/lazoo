@@ -76,13 +76,35 @@ fn incident_notice_states_the_code_title_action_and_boundary() {
         occurrences: 3,
         task_id: Uuid::from_u128(1),
         employee_name: Some("Mira"),
+        remediation_deadline_at: None,
     });
     assert!(text.starts_with("[Lazoo incident] Priority incident LZ-MESSAGE-TIMEOUT on task"));
     assert!(text.contains(" for Mira: Delivery to Mira timed out"));
     assert!(text.contains("Occurrences: 3"));
     assert!(text.contains("Recommended next action: Check the provider session"));
     assert!(text.contains("will not retry, restart, or change authority"));
+    assert!(text.contains("delegate it elsewhere with task_delegate"));
     assert!(text.contains(&Uuid::from_u128(9).to_string()));
+
+    let windowed = render_incident_notice_text(&IncidentNotice {
+        remediation_deadline_at: Some("2026-10-10T15:05:00+00:00"),
+        ..IncidentNotice {
+            incident_id: Uuid::from_u128(9),
+            code: "LZ-MESSAGE-TIMEOUT",
+            title: "Delivery to Mira timed out",
+            explanation: "Three deliveries expired inside five minutes.",
+            next_action: "Check the provider session and retry the turn.",
+            priority: IncidentPriority::Priority,
+            occurrences: 3,
+            task_id: Uuid::from_u128(1),
+            employee_name: Some("Mira"),
+            remediation_deadline_at: None,
+        }
+    });
+    assert!(windowed.contains("at most 2 remedies with incident_remedy"));
+    assert!(windowed.contains("(cancel-task, redelegate-task) until 2026-10-10T15:05:00+00:00."));
+    assert!(windowed.contains("escalates it to the user"));
+    assert!(!windowed.contains("task_delegate"));
 }
 
 fn peer(reply_to: Option<Uuid>) -> PeerMessageNotice<'static> {
@@ -151,6 +173,7 @@ fn coalesced_notice_text_lists_every_notice_oldest_first_and_passes_one_through(
         occurrences: 3,
         task_id: Uuid::from_u128(1),
         employee_name: Some("Mira"),
+        remediation_deadline_at: None,
     });
     let question = render_peer_message_text(&peer(None));
 

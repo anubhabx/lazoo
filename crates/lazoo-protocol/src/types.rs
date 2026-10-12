@@ -97,6 +97,8 @@ pub struct EmployeeRecord {
     pub authority_mode: AuthorityMode,
     pub checkout_policy: EmployeeCheckoutPolicy,
     pub activation_policy: ActivationPolicy,
+    /// Seconds an idle session may stay quiet before the daemon suspends it; 0 never does.
+    pub idle_timeout_seconds: u32,
     pub enabled: bool,
     pub configuration_revision: u64,
     pub created_at: String,
@@ -169,6 +171,8 @@ pub struct CreateEmployeeParams {
     pub checkout_policy: EmployeeCheckoutPolicy,
     #[serde(default)]
     pub activation_policy: ActivationPolicy,
+    #[serde(default)]
+    pub idle_timeout_seconds: u32,
     #[serde(default = "default_enabled")]
     pub enabled: bool,
     pub idempotency_key: String,
@@ -189,6 +193,7 @@ pub struct UpdateEmployeeParams {
     pub authority_mode: Option<AuthorityMode>,
     pub checkout_policy: Option<EmployeeCheckoutPolicy>,
     pub activation_policy: Option<ActivationPolicy>,
+    pub idle_timeout_seconds: Option<u32>,
     pub enabled: Option<bool>,
     pub idempotency_key: String,
 }

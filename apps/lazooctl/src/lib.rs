@@ -4,9 +4,9 @@ use clap::{Parser, Subcommand};
 use lazoo_ipc::{IpcError, PipeClient};
 use lazoo_protocol::{
     ActivationPolicy, ApprovalDecision, ApprovalState, AuthorityMode, CheckoutMode,
-    EmployeeCheckoutPolicy, IncidentPriority, IncidentState, JsonRpcRequest, JsonRpcResponse,
-    MessageEndpoint, MessageKind, MessageSender, RpcError, TaskReportKind, TaskResolution,
-    TaskState, UserMessageEndpoint, UserMessageKind,
+    EmployeeCheckoutPolicy, IncidentEscalation, IncidentPriority, IncidentState, JsonRpcRequest,
+    JsonRpcResponse, MessageEndpoint, MessageKind, MessagePriority, MessageSender, RpcError,
+    TaskReportKind, TaskResolution, TaskState, UserMessageEndpoint, UserMessageKind,
 };
 use lazoo_runtime::{DataRoot, Installation, RuntimeError};
 use serde_json::{Value, json};
@@ -70,6 +70,9 @@ pub enum IncidentCommand {
         employee_id: Option<Uuid>,
         #[arg(long)]
         project_id: Option<Uuid>,
+        /// `user` lists the priority notifications: incidents no lead remedy settled.
+        #[arg(long, value_parser = parse_incident_escalation)]
+        escalation: Option<IncidentEscalation>,
     },
     Show {
         id: Uuid,
@@ -87,6 +90,26 @@ pub enum IncidentCommand {
         expected_revision: u64,
         #[arg(long)]
         idempotency_key: Option<String>,
+    },
+    /// The persistent-failure thresholds that promote an incident, and your overrides of them.
+    #[command(subcommand)]
+    Threshold(IncidentThresholdCommand),
+}
+
+#[derive(Debug, Subcommand)]
+pub enum IncidentThresholdCommand {
+    List,
+    /// Promote CODE's incident once OCCURRENCES equivalent failures land inside the window.
+    Set {
+        code: String,
+        #[arg(long)]
+        occurrences: u64,
+        #[arg(long, default_value_t = 300)]
+        window_seconds: u64,
+    },
+    /// Return CODE to its default threshold.
+    Reset {
+        code: String,
     },
 }
 
@@ -195,6 +218,9 @@ pub enum EmployeeCommand {
         checkout_policy: EmployeeCheckoutPolicy,
         #[arg(long, default_value = "manual", value_parser = parse_employee_activation_policy)]
         activation_policy: ActivationPolicy,
+        /// Suspend an idle session after this many quiet seconds (60-86400); 0 never does.
+        #[arg(long, default_value_t = 0)]
+        idle_timeout_seconds: u32,
         #[arg(long)]
         disabled: bool,
         #[arg(long)]
@@ -228,6 +254,9 @@ pub enum EmployeeCommand {
         checkout_policy: Option<EmployeeCheckoutPolicy>,
         #[arg(long, value_parser = parse_employee_activation_policy)]
         activation_policy: Option<ActivationPolicy>,
+        /// Suspend an idle session after this many quiet seconds (60-86400); 0 never does.
+        #[arg(long)]
+        idle_timeout_seconds: Option<u32>,
         #[arg(long, action = clap::ArgAction::Set)]
         enabled: Option<bool>,
         #[arg(long)]
@@ -300,6 +329,9 @@ pub enum MessageCommand {
         references: Value,
         #[arg(long, default_value_t = 3)]
         max_attempts: u32,
+        /// Mark the message `priority`: one dead letter of it is a priority incident.
+        #[arg(long)]
+        priority: bool,
         #[arg(long)]
         idempotency_key: Option<String>,
     },
@@ -671,6 +703,7 @@ fn incident_request(command: &IncidentCommand) -> (&'static str, Value, bool) {
             code,
             employee_id,
             project_id,
+            escalation,
         } => (
             "incident.list",
             json!({
@@ -681,6 +714,7 @@ fn incident_request(command: &IncidentCommand) -> (&'static str, Value, bool) {
                 "code": code,
                 "employeeId": employee_id,
                 "projectId": project_id,
+                "escalation": escalation,
             }),
             false,
         ),
@@ -711,6 +745,25 @@ fn incident_request(command: &IncidentCommand) -> (&'static str, Value, bool) {
             }),
             false,
         ),
+        IncidentCommand::Threshold(IncidentThresholdCommand::List) => {
+            ("incident.threshold.list", json!({}), false)
+        }
+        IncidentCommand::Threshold(IncidentThresholdCommand::Set {
+            code,
+            occurrences,
+            window_seconds,
+        }) => (
+            "incident.threshold.set",
+            json!({
+                "code": code,
+                "occurrences": occurrences,
+                "windowSeconds": window_seconds,
+            }),
+            false,
+        ),
+        IncidentCommand::Threshold(IncidentThresholdCommand::Reset { code }) => {
+            ("incident.threshold.reset", json!({"code": code}), false)
+        }
     }
 }
 
@@ -1191,6 +1244,7 @@ fn message_send_request(command: &MessageCommand) -> (&'static str, Value, bool)
         body,
         references,
         max_attempts,
+        priority,
         idempotency_key,
     } = command
     else {
@@ -1217,6 +1271,7 @@ fn message_send_request(command: &MessageCommand) -> (&'static str, Value, bool)
             "body": body,
             "references": references,
             "maxAttempts": max_attempts,
+            "priority": if *priority { MessagePriority::Priority } else { MessagePriority::Normal },
             "idempotencyKey": idempotency_key.clone().unwrap_or_else(|| Uuid::new_v4().to_string()),
         }),
         false,
@@ -1287,6 +1342,7 @@ fn employee_request(command: &EmployeeCommand) -> (&'static str, Value, bool) {
             authority_mode,
             checkout_policy,
             activation_policy,
+            idle_timeout_seconds,
             disabled,
             idempotency_key,
         } => (
@@ -1302,6 +1358,7 @@ fn employee_request(command: &EmployeeCommand) -> (&'static str, Value, bool) {
                 "authorityMode": authority_mode,
                 "checkoutPolicy": checkout_policy,
                 "activationPolicy": activation_policy,
+                "idleTimeoutSeconds": idle_timeout_seconds,
                 "enabled": !disabled,
                 "idempotencyKey": idempotency_key.clone().unwrap_or_else(|| Uuid::new_v4().to_string()),
             }),
@@ -1322,6 +1379,7 @@ fn employee_request(command: &EmployeeCommand) -> (&'static str, Value, bool) {
             authority_mode,
             checkout_policy,
             activation_policy,
+            idle_timeout_seconds,
             enabled,
             idempotency_key,
         } => (
@@ -1339,6 +1397,7 @@ fn employee_request(command: &EmployeeCommand) -> (&'static str, Value, bool) {
                 "authorityMode": authority_mode,
                 "checkoutPolicy": checkout_policy,
                 "activationPolicy": activation_policy,
+                "idleTimeoutSeconds": idle_timeout_seconds,
                 "enabled": enabled,
                 "idempotencyKey": idempotency_key.clone().unwrap_or_else(|| Uuid::new_v4().to_string()),
             }),
@@ -1403,6 +1462,16 @@ fn parse_incident_priority(value: &str) -> Result<IncidentPriority, String> {
         "normal" => Ok(IncidentPriority::Normal),
         "priority" => Ok(IncidentPriority::Priority),
         _ => Err("expected normal or priority".to_owned()),
+    }
+}
+
+fn parse_incident_escalation(value: &str) -> Result<IncidentEscalation, String> {
+    match value {
+        "none" => Ok(IncidentEscalation::None),
+        "lead" => Ok(IncidentEscalation::Lead),
+        "remediated" => Ok(IncidentEscalation::Remediated),
+        "user" => Ok(IncidentEscalation::User),
+        _ => Err("expected none, lead, remediated, or user".to_owned()),
     }
 }
 

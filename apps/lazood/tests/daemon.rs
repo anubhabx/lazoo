@@ -346,6 +346,7 @@ fn configured_employee_named(
             authority_mode: AuthorityMode::Ask,
             checkout_policy: EmployeeCheckoutPolicy::Isolated,
             activation_policy: lazoo_protocol::ActivationPolicy::Manual,
+            idle_timeout_seconds: 0,
             enabled: true,
             provider_observation: Some(ProviderObservation {
                 provider: "codex".to_owned(),
@@ -427,6 +428,7 @@ async fn accepted_projectless_child_dispatches_automatically_through_the_canonic
         authority_mode: AuthorityMode::FullAutonomy,
         checkout_policy: EmployeeCheckoutPolicy::Isolated,
         activation_policy: lazoo_protocol::ActivationPolicy::Manual,
+        idle_timeout_seconds: 0,
         enabled: true,
         provider_observation: Some(ProviderObservation {
             provider: "codex".to_owned(),
@@ -648,6 +650,7 @@ async fn automatic_dispatch_configuration_drift_terminalizes_before_provider_io(
         authority_mode: AuthorityMode::FullAutonomy,
         checkout_policy: EmployeeCheckoutPolicy::Isolated,
         activation_policy: lazoo_protocol::ActivationPolicy::Manual,
+        idle_timeout_seconds: 0,
         enabled: true,
         provider_observation: Some(ProviderObservation {
             provider: provider.to_owned(),
@@ -784,6 +787,7 @@ async fn automatic_dispatch_configuration_drift_terminalizes_before_provider_io(
             authority_mode: None,
             checkout_policy: None,
             activation_policy: None,
+            idle_timeout_seconds: None,
             enabled: None,
             provider_observation: None,
         })
@@ -1145,6 +1149,7 @@ async fn project_task_dispatch_uses_an_isolated_worktree_and_preserves_dirty_use
         authority_mode: AuthorityMode::FullAutonomy,
         checkout_policy: EmployeeCheckoutPolicy::Isolated,
         activation_policy: lazoo_protocol::ActivationPolicy::Manual,
+        idle_timeout_seconds: 0,
         enabled: true,
         provider_observation: Some(ProviderObservation {
             provider: "codex".to_owned(),
@@ -1666,6 +1671,7 @@ async fn task_authority_narrows_the_permission_mode_for_the_provider_turn() {
             authority_mode: AuthorityMode::FullAutonomy,
             checkout_policy: EmployeeCheckoutPolicy::Isolated,
             activation_policy: lazoo_protocol::ActivationPolicy::Manual,
+            idle_timeout_seconds: 0,
             enabled: true,
             provider_observation: Some(ProviderObservation {
                 provider: "codex".to_owned(),
@@ -2230,6 +2236,7 @@ async fn task_turn_rejects_a_provider_without_authority_override_support_before_
             authority_mode: AuthorityMode::Ask,
             checkout_policy: EmployeeCheckoutPolicy::Isolated,
             activation_policy: lazoo_protocol::ActivationPolicy::Manual,
+            idle_timeout_seconds: 0,
             enabled: true,
             provider_observation: Some(ProviderObservation {
                 provider: "claude".to_owned(),
@@ -3553,7 +3560,7 @@ async fn status_reports_protocol_store_and_boot_identity() {
     let result = response.result.unwrap();
 
     assert_eq!(result["protocolVersion"], 1);
-    assert_eq!(result["schemaVersion"], 10);
+    assert_eq!(result["schemaVersion"], 15);
     assert_eq!(result["journalMode"], "wal");
     assert!(
         result["bootId"]
@@ -4297,7 +4304,7 @@ fn employee_roster_acceptance_contract_is_backend_only() {
         "roster', 'refresh",
         "LZ-EMPLOYEE-STALE",
         "restartDurability",
-        "schemaVersion 10",
+        "schemaVersion 15",
         "providerSmokeAbsent",
     ] {
         assert!(
@@ -4335,7 +4342,7 @@ fn native_session_acceptance_contract_covers_containment_and_owner_loss() {
         "completeTreeTerminated",
         "nativeHostPid",
         "providerSmokeAbsent",
-        "schemaVersion 10",
+        "schemaVersion 15",
     ] {
         assert!(
             script.contains(required),
@@ -4365,7 +4372,7 @@ fn collaboration_bus_acceptance_contract_is_backend_only() {
         "deadLetterEvidence",
         "restartDurability",
         "auditOutboxEvidence",
-        "schemaVersion 10",
+        "schemaVersion 15",
         "providerSmokeAbsent",
         "desktopCapabilityExpansionAbsent",
     ] {
@@ -4501,7 +4508,7 @@ fn task_graph_acceptance_executes_backend_only_contract() {
     )
     .unwrap();
     assert_eq!(manifest["status"], "PASS");
-    assert_eq!(manifest["schemaVersion"], 10);
+    assert_eq!(manifest["schemaVersion"], 15);
     assert_eq!(manifest["mode"], "deterministic-fixture");
     for field in [
         "rootIdentity",
@@ -4604,6 +4611,7 @@ fn approval_harness(
             authority_mode: authority,
             checkout_policy: EmployeeCheckoutPolicy::Isolated,
             activation_policy: lazoo_protocol::ActivationPolicy::Manual,
+            idle_timeout_seconds: 0,
             enabled: true,
             provider_observation: Some(ProviderObservation {
                 provider: "codex".to_owned(),
@@ -5160,6 +5168,16 @@ fn tool_harness_with(
     authority: AuthorityMode,
     activation: lazoo_protocol::ActivationPolicy,
 ) -> (tempfile::TempDir, ToolHarness) {
+    tool_harness_idle(authority, activation, 0)
+}
+
+/// The tool harness with the lead and worker under one activation policy and one idle
+/// timeout; 0 (never suspend) is the default every other scenario relies on.
+fn tool_harness_idle(
+    authority: AuthorityMode,
+    activation: lazoo_protocol::ActivationPolicy,
+    idle_timeout_seconds: u32,
+) -> (tempfile::TempDir, ToolHarness) {
     let temporary = tempdir().unwrap();
     let root = DataRoot::from_path(temporary.path().join("data"));
     root.ensure().unwrap();
@@ -5177,6 +5195,7 @@ fn tool_harness_with(
         authority_mode: authority,
         checkout_policy: EmployeeCheckoutPolicy::Isolated,
         activation_policy: activation,
+        idle_timeout_seconds,
         enabled: true,
         provider_observation: Some(ProviderObservation {
             provider: "codex".to_owned(),
@@ -5336,6 +5355,7 @@ async fn lead_turn_lists_employees_delegates_and_waits_through_collaboration_too
             "task_report",
             "incident_report",
             "incident_list",
+            "incident_remedy",
             "message_send",
             "message_reply"
         ],
@@ -5667,7 +5687,7 @@ fn collaboration_tools_acceptance_contract_is_deterministic_and_backend_only() {
         "worker_turn_reports_failure_through_task_report_before_native_completion",
         "collaboration-tools-manifest.json",
         "deterministic-fake-transport",
-        "schemaVersion = 10",
+        "schemaVersion = 15",
     ] {
         assert!(
             script.contains(required),
@@ -6089,6 +6109,7 @@ async fn dead_letters_and_dispatch_failures_raise_incidents_with_their_scope() {
             authority_mode: None,
             checkout_policy: None,
             activation_policy: None,
+            idle_timeout_seconds: None,
             enabled: None,
             provider_observation: None,
         })
@@ -6183,6 +6204,10 @@ async fn restart_owner_loss_and_emergency_spool_fold_into_startup_incidents_once
     assert_eq!(keeper["source"], "keeper");
     assert_eq!(keeper["explanation"], "restart budget exhausted");
     assert_eq!(keeper["firstOccurredAt"], "2026-09-23T00:00:00Z");
+    // One daemon crash crosses its threshold on its own and is the user's at once.
+    assert_eq!(keeper["priority"], "priority");
+    assert_eq!(keeper["escalation"], "user");
+    assert_eq!(keeper["escalationReason"], "no-lead");
 
     let again =
         App::new_with_provider_environment(store.clone(), root, DiscoveryEnvironment::empty())
@@ -6199,7 +6224,7 @@ async fn restart_owner_loss_and_emergency_spool_fold_into_startup_incidents_once
         .await
         .result
         .unwrap();
-    assert_eq!(status["schemaVersion"], 10);
+    assert_eq!(status["schemaVersion"], 15);
     assert_eq!(status["emergencyIncidentCount"], 1);
 }
 
@@ -6302,7 +6327,7 @@ fn minimum_incidents_acceptance_contract_is_deterministic_and_backend_only() {
         "incident_errors_use_exit_code_fifteen",
         "minimum-incidents-manifest.json",
         "deterministic-fake-transport",
-        "schemaVersion = 10",
+        "schemaVersion = 15",
     ] {
         assert!(
             script.contains(required),
@@ -6772,7 +6797,7 @@ fn result_delivery_acceptance_contract_is_deterministic_and_backend_only() {
         "externalModelUseAbsent",
         "uiChangesAbsent",
         "deterministic-fake-transport",
-        "schemaVersion = 10",
+        "schemaVersion = 15",
     ] {
         assert!(
             script.contains(required),
@@ -7279,7 +7304,7 @@ fn peer_messaging_acceptance_contract_is_deterministic_and_backend_only() {
         "externalModelUseAbsent",
         "uiChangesAbsent",
         "deterministic-fake-transport",
-        "schemaVersion = 10",
+        "schemaVersion = 15",
     ] {
         assert!(
             script.contains(required),
@@ -7402,7 +7427,7 @@ fn coalesced_notices_acceptance_contract_is_deterministic_and_backend_only() {
         "externalModelUseAbsent",
         "uiChangesAbsent",
         "deterministic-fake-transport",
-        "schemaVersion = 10",
+        "schemaVersion = 15",
     ] {
         assert!(
             script.contains(required),
@@ -7641,7 +7666,7 @@ fn activation_policy_acceptance_contract_is_deterministic_and_backend_only() {
         "externalModelUseAbsent",
         "uiChangesAbsent",
         "deterministic-fake-transport",
-        "schemaVersion = 10",
+        "schemaVersion = 15",
     ] {
         assert!(
             script.contains(required),
@@ -7653,6 +7678,1409 @@ fn activation_policy_acceptance_contract_is_deterministic_and_backend_only() {
         "apps\\lazoo-desktop\\src",
         "LivePrompt",
     ] {
+        assert!(
+            !script.contains(forbidden),
+            "acceptance script must not contain {forbidden}"
+        );
+    }
+}
+
+// ---------------------------------------------------------------------------------------------
+// Idle suspension: a session quiet for its employee's whole idle timeout is stopped by the
+// daemon, never while a turn on it is unfinished, and never when the timeout is 0.
+
+fn lead_sessions(
+    harness: &ToolHarness,
+    state: lazoo_protocol::SessionLifecycleState,
+) -> Vec<lazoo_protocol::EmployeeSessionRecord> {
+    harness
+        .store
+        .list_sessions()
+        .unwrap()
+        .into_iter()
+        .filter(|session| session.employee_id == harness.lead.id && session.state == state)
+        .collect()
+}
+
+#[tokio::test]
+async fn an_idle_session_suspends_after_its_employee_timeout_and_the_next_user_turn_starts_fresh() {
+    use chrono::{TimeDelta, Utc};
+    use lazoo_protocol::{ActivationPolicy, EmployeeAvailability, SessionLifecycleState};
+
+    let (_temporary, harness) =
+        tool_harness_idle(AuthorityMode::SelfDecision, ActivationPolicy::Manual, 900);
+    warm_tool_lead(&harness).await;
+    let submitted = submit_lead_turn(&harness, "self-decision").await;
+    assert_eq!(submitted["turn"]["state"], "completed");
+    let session = lead_sessions(&harness, SessionLifecycleState::Idle).remove(0);
+
+    harness
+        .app
+        .suspend_idle_sessions_once(Utc::now() + TimeDelta::seconds(890))
+        .await
+        .unwrap();
+    assert_eq!(
+        harness.backend.stops.load(Ordering::SeqCst),
+        0,
+        "a session quiet for less than its timeout stays up"
+    );
+
+    harness
+        .app
+        .suspend_idle_sessions_once(Utc::now() + TimeDelta::seconds(901))
+        .await
+        .unwrap();
+    assert_eq!(harness.backend.stops.load(Ordering::SeqCst), 1);
+    let suspended = harness.store.get_session(session.id).unwrap();
+    assert_eq!(suspended.state, SessionLifecycleState::Suspended);
+    assert!(suspended.failure_code.is_none());
+    let roster = harness.store.roster_snapshot().unwrap();
+    let lead_entry = roster
+        .entries
+        .iter()
+        .find(|entry| entry.employee.id == harness.lead.id)
+        .unwrap();
+    assert_eq!(lead_entry.availability, EmployeeAvailability::Suspended);
+    let events = harness.store.list_events(0, 1024).unwrap();
+    for event_type in ["session.stopping", "session.suspended"] {
+        assert!(
+            events.iter().any(|event| event.event_type == event_type
+                && event.payload["session"]["id"] == session.id.to_string()),
+            "{event_type} is on the event ledger"
+        );
+    }
+
+    // Nothing is left to suspend, and a dormant employee is never started by the sweep.
+    harness
+        .app
+        .suspend_idle_sessions_once(Utc::now() + TimeDelta::days(1))
+        .await
+        .unwrap();
+    assert_eq!(harness.backend.stops.load(Ordering::SeqCst), 1);
+    assert_eq!(harness.backend.starts.load(Ordering::SeqCst), 1);
+
+    // The next user turn activates the lead exactly as for any dormant employee: a fresh
+    // session, never a resumed thread.
+    let resumed = harness
+        .app
+        .handle(request(
+            "resume-after-idle",
+            "turn.submit",
+            json!({
+                "conversationId": harness.conversation_id,
+                "author": {"kind": "user"},
+                "recipient": null,
+                "authorityMode": "self-decision",
+                "text": "Pick the parser fix back up",
+                "activateIfNeeded": true,
+                "maxAttempts": 3,
+                "idempotencyKey": "resume-after-idle"
+            }),
+        ))
+        .await
+        .result
+        .unwrap();
+    assert_eq!(resumed["turn"]["state"], "completed");
+    assert_eq!(harness.backend.starts.load(Ordering::SeqCst), 2);
+    let fresh = lead_sessions(&harness, SessionLifecycleState::Idle);
+    assert_eq!(fresh.len(), 1);
+    assert_ne!(fresh[0].id, session.id);
+}
+
+#[tokio::test]
+async fn idle_suspension_waits_for_an_unfinished_turn_and_never_touches_a_zero_timeout() {
+    use chrono::{TimeDelta, Utc};
+    use lazoo_protocol::{ActivationPolicy, SessionLifecycleState};
+
+    // A timeout of 0, the default, keeps a warmed session up however long it stays quiet.
+    let (_never_temporary, never) = tool_harness(AuthorityMode::SelfDecision);
+    warm_tool_lead(&never).await;
+    never
+        .app
+        .suspend_idle_sessions_once(Utc::now() + TimeDelta::days(30))
+        .await
+        .unwrap();
+    assert_eq!(never.backend.stops.load(Ordering::SeqCst), 0);
+    assert_eq!(lead_sessions(&never, SessionLifecycleState::Idle).len(), 1);
+
+    // A session with a turn still in flight is not idle, whatever the clock says.
+    let (_temporary, harness) =
+        tool_harness_idle(AuthorityMode::SelfDecision, ActivationPolicy::Manual, 900);
+    warm_tool_lead(&harness).await;
+    harness.backend.gate_events.store(true, Ordering::SeqCst);
+    let pending = tokio::spawn({
+        let app = harness.app.clone();
+        let conversation_id = harness.conversation_id;
+        async move {
+            app.handle(request(
+                "long-turn",
+                "turn.submit",
+                json!({
+                    "conversationId": conversation_id,
+                    "author": {"kind": "user"},
+                    "recipient": null,
+                    "authorityMode": "self-decision",
+                    "text": "Take your time",
+                    "activateIfNeeded": false,
+                    "maxAttempts": 3,
+                    "idempotencyKey": "long-turn"
+                }),
+            ))
+            .await
+        }
+    });
+    wait_until(|| harness.backend.turns.load(Ordering::SeqCst) == 1).await;
+    harness
+        .app
+        .suspend_idle_sessions_once(Utc::now() + TimeDelta::days(1))
+        .await
+        .unwrap();
+    assert_eq!(
+        harness.backend.stops.load(Ordering::SeqCst),
+        0,
+        "an unfinished turn keeps its session"
+    );
+
+    harness.backend.event_permits.add_permits(2);
+    let finished = timeout(Duration::from_secs(5), pending)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(finished.result.unwrap()["turn"]["state"], "completed");
+
+    // Quiet time counts from the end of the turn, not from the session start.
+    harness
+        .app
+        .suspend_idle_sessions_once(Utc::now() + TimeDelta::seconds(600))
+        .await
+        .unwrap();
+    assert_eq!(harness.backend.stops.load(Ordering::SeqCst), 0);
+    harness
+        .app
+        .suspend_idle_sessions_once(Utc::now() + TimeDelta::seconds(901))
+        .await
+        .unwrap();
+    assert_eq!(harness.backend.stops.load(Ordering::SeqCst), 1);
+    assert!(lead_sessions(&harness, SessionLifecycleState::Idle).is_empty());
+}
+
+#[tokio::test]
+async fn a_turn_recorded_on_a_since_stopped_session_is_delivered_on_the_current_session() {
+    use chrono::{TimeDelta, Utc};
+    use lazoo_protocol::{
+        ActivationPolicy, MessageSender, SessionLifecycleState, UserMessageEndpoint,
+    };
+    use lazoo_store::RecordTurnInput;
+
+    let (_temporary, harness) =
+        tool_harness_idle(AuthorityMode::SelfDecision, ActivationPolicy::Manual, 900);
+    warm_tool_lead(&harness).await;
+    let first = lead_sessions(&harness, SessionLifecycleState::Idle).remove(0);
+    let recorded = harness
+        .store
+        .record_turn(&RecordTurnInput {
+            request_id: "pinned-turn-request".to_owned(),
+            idempotency_key: "pinned-turn".to_owned(),
+            conversation_id: harness.conversation_id,
+            author: MessageSender::User(UserMessageEndpoint {
+                kind: lazoo_protocol::UserMessageKind::User,
+            }),
+            recipient: None,
+            task_id: None,
+            authority_mode: AuthorityMode::SelfDecision,
+            text: "Recorded while the first session was up".to_owned(),
+            activate_if_needed: false,
+            max_attempts: 3,
+        })
+        .unwrap();
+    assert_eq!(recorded.turn.recipient.session_id, Some(first.id));
+
+    // A turn left recorded does not hold its session up forever: the session stops for
+    // idleness before the turn is delivered, and the user warms a new one.
+    harness
+        .app
+        .suspend_idle_sessions_once(Utc::now() + TimeDelta::seconds(901))
+        .await
+        .unwrap();
+    assert_eq!(
+        harness.store.get_session(first.id).unwrap().state,
+        SessionLifecycleState::Suspended
+    );
+    harness
+        .app
+        .handle(request(
+            "warm-second",
+            "session.warm",
+            json!({
+                "employeeId": harness.lead.id,
+                "expectedEmployeeRevision": harness.lead.configuration_revision,
+                "idempotencyKey": "warm-second"
+            }),
+        ))
+        .await
+        .result
+        .unwrap();
+    let second = lead_sessions(&harness, SessionLifecycleState::Idle).remove(0);
+
+    let delivered = harness
+        .app
+        .handle(request(
+            "pinned-turn-replay",
+            "turn.submit",
+            json!({
+                "conversationId": harness.conversation_id,
+                "author": {"kind": "user"},
+                "recipient": null,
+                "authorityMode": "self-decision",
+                "text": "Recorded while the first session was up",
+                "activateIfNeeded": false,
+                "maxAttempts": 3,
+                "idempotencyKey": "pinned-turn"
+            }),
+        ))
+        .await
+        .result
+        .expect("the recorded turn is not stranded on the stopped session");
+    assert_eq!(delivered["turn"]["id"], recorded.turn.id.to_string());
+    assert_eq!(delivered["turn"]["state"], "completed");
+    assert_eq!(
+        harness
+            .store
+            .get_turn(recorded.turn.id)
+            .unwrap()
+            .recipient
+            .session_id,
+        Some(second.id)
+    );
+    assert_eq!(harness.backend.turns.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn a_notice_turns_lead_suspended_for_idleness_is_woken_once_by_its_childs_result() {
+    use chrono::{TimeDelta, Utc};
+    use lazoo_protocol::{ActivationPolicy, MessageKind, SessionLifecycleState, TaskState};
+
+    let (_temporary, harness) = tool_harness_idle(
+        AuthorityMode::SelfDecision,
+        ActivationPolicy::NoticeTurns,
+        900,
+    );
+    let (root_task_id, child_id) = delegate_without_waiting(&harness).await;
+    harness.app.dispatch_pending_tasks_once().await.unwrap();
+    assert_eq!(
+        harness.store.get_task(child_id).unwrap().task.state,
+        TaskState::Completed
+    );
+    assert_eq!(harness.backend.starts.load(Ordering::SeqCst), 2);
+    let stops_before = harness.backend.stops.load(Ordering::SeqCst);
+
+    // Nobody stops the lead: its own idle timeout does, once the delegation turn has ended.
+    harness
+        .app
+        .suspend_idle_sessions_once(Utc::now() + TimeDelta::seconds(901))
+        .await
+        .unwrap();
+    assert_eq!(
+        harness.backend.stops.load(Ordering::SeqCst),
+        stops_before + 1
+    );
+    assert!(lead_sessions(&harness, SessionLifecycleState::Idle).is_empty());
+
+    // The child's result then wakes the lead once by policy, and that session stops with it.
+    harness.app.deliver_pending_notices_once().await.unwrap();
+    assert_eq!(harness.backend.starts.load(Ordering::SeqCst), 3);
+    assert!(last_prompt(&harness.backend).contains(&child_id.to_string()));
+    assert_eq!(
+        lead_messages(&harness.store, MessageKind::Result)[0].state,
+        MessageDeliveryState::Acknowledged
+    );
+    assert_eq!(
+        harness.store.get_task(root_task_id).unwrap().task.state,
+        TaskState::Completed
+    );
+    assert_eq!(
+        harness.backend.stops.load(Ordering::SeqCst),
+        stops_before + 2
+    );
+    assert_eq!(
+        lead_sessions(&harness, SessionLifecycleState::Suspended).len(),
+        2,
+        "the idle-suspended session and the one policy activation"
+    );
+}
+
+#[test]
+fn idle_suspension_acceptance_contract_is_deterministic_and_backend_only() {
+    let repository = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let script_path = repository.join("scripts/acceptance/idle-suspension.ps1");
+    let script = std::fs::read_to_string(&script_path).expect("idle suspension acceptance script");
+
+    for required in [
+        "idle_timeouts_default_to_never_on_create_and_stay_unchanged_when_an_update_omits_them",
+        "idle_timeouts_are_never_or_a_minute_to_a_day_and_due_only_after_the_whole_timeout",
+        "idle_timeout_defaults_to_never_and_a_change_bumps_the_configuration_revision",
+        "idle_sessions_are_due_only_after_their_employee_timeout_and_stop_once_under_their_own_key",
+        "employee_cli_maps_mutations_and_roster_refresh",
+        "an_idle_session_suspends_after_its_employee_timeout_and_the_next_user_turn_starts_fresh",
+        "idle_suspension_waits_for_an_unfinished_turn_and_never_touches_a_zero_timeout",
+        "a_turn_recorded_on_a_since_stopped_session_is_delivered_on_the_current_session",
+        "a_notice_turns_lead_suspended_for_idleness_is_woken_once_by_its_childs_result",
+        "store_enables_wal_foreign_keys_and_schema_version",
+        "zeroTimeoutNeverSuspends",
+        "unfinishedTurnKeepsSession",
+        "recordedTurnNotStranded",
+        "providerSmokeAbsent",
+        "externalModelUseAbsent",
+        "uiChangesAbsent",
+        "deterministic-fake-transport",
+        "schemaVersion = 15",
+    ] {
+        assert!(
+            script.contains(required),
+            "acceptance script must contain {required}"
+        );
+    }
+    for forbidden in [
+        "provider', 'smoke",
+        "apps\\lazoo-desktop\\src",
+        "LivePrompt",
+    ] {
+        assert!(
+            !script.contains(forbidden),
+            "acceptance script must not contain {forbidden}"
+        );
+    }
+}
+
+/// Raises `code` three times for the worker on `task`, which promotes it to priority.
+fn promote_child_incident(
+    harness: &ToolHarness,
+    prefix: &str,
+    code: &str,
+    task: uuid::Uuid,
+) -> lazoo_protocol::IncidentRecord {
+    use lazoo_protocol::{IncidentPriority, IncidentSource};
+    use lazoo_store::RaiseIncidentInput;
+
+    let mut promoted = None;
+    for attempt in 1..=3 {
+        promoted = Some(
+            harness
+                .store
+                .raise_incident(&RaiseIncidentInput {
+                    request_id: format!("request-{prefix}-{attempt}"),
+                    idempotency_key: format!("{prefix}-{attempt}"),
+                    code: code.to_owned(),
+                    source: IncidentSource::Daemon,
+                    title: None,
+                    explanation: None,
+                    project_id: None,
+                    employee_id: Some(harness.worker.id),
+                    provider: Some("codex".to_owned()),
+                    task_id: Some(task),
+                    session_id: None,
+                    turn_id: None,
+                    message_id: None,
+                    detail: json!({"failureCode": code}),
+                    occurred_at: None,
+                })
+                .unwrap()
+                .incident,
+        );
+    }
+    let promoted = promoted.unwrap();
+    assert_eq!(promoted.priority, IncidentPriority::Priority);
+    promoted
+}
+
+#[tokio::test]
+#[allow(clippy::too_many_lines)] // One remediation window, from notice to user escalation.
+async fn a_lead_remedies_a_promoted_child_incident_in_its_notice_turn_within_the_bound() {
+    use lazoo_protocol::{IncidentEscalation, IncidentEscalationReason, TaskState};
+
+    let (_temporary, harness) = tool_harness(AuthorityMode::SelfDecision);
+    let (root_task_id, child_id) = delegate_without_waiting(&harness).await;
+    let incident = promote_child_incident(&harness, "timeout", "LZ-MESSAGE-TIMEOUT", child_id);
+    assert_eq!(incident.escalation, IncidentEscalation::Lead);
+    let roster_revision = harness.store.roster_snapshot().unwrap().revision;
+    // The model reading the notice: cancel the stuck child, send its objective out again, try
+    // a third remedy, and read the incident back.
+    harness.backend.tool_calls.lock().unwrap().extend([
+        tool_call(
+            "call-r1",
+            "incident_remedy",
+            json!({"incidentId": incident.id, "remedy": "cancel-task", "note": "stuck"}),
+        ),
+        tool_call(
+            "call-r2",
+            "incident_remedy",
+            json!({
+                "incidentId": incident.id,
+                "remedy": "redelegate-task",
+                "rosterRevision": roster_revision,
+                "note": "try again on a fresh dispatch"
+            }),
+        ),
+        tool_call(
+            "call-r3",
+            "incident_remedy",
+            json!({"incidentId": incident.id, "remedy": "cancel-task"}),
+        ),
+        tool_call(
+            "call-r4",
+            "incident_remedy",
+            json!({"incidentId": incident.id, "remedy": "cancel-task", "rosterRevision": 1}),
+        ),
+        tool_call("call-r5", "incident_list", json!({})),
+    ]);
+
+    harness.app.deliver_pending_notices_once().await.unwrap();
+
+    let prompt = last_prompt(&harness.backend);
+    assert!(prompt.starts_with("[Lazoo incident] Priority incident LZ-MESSAGE-TIMEOUT"));
+    assert!(
+        prompt.contains("incident_remedy (cancel-task, redelegate-task) until"),
+        "{prompt}"
+    );
+    let results = harness.backend.tool_results.lock().unwrap().clone();
+    assert_eq!(
+        results.len(),
+        6,
+        "one delegation, then five calls in the notice turn"
+    );
+    let cancelled = &results[1];
+    assert!(cancelled.success, "{cancelled:?}");
+    assert_eq!(cancelled.content["remedy"], "cancel-task");
+    assert_eq!(cancelled.content["attempt"], 1);
+    assert_eq!(cancelled.content["remediesRemaining"], 1);
+    assert_eq!(cancelled.content["taskId"], child_id.to_string());
+    assert_eq!(cancelled.content["state"], "cancelled");
+    let redelegated = &results[2];
+    assert!(redelegated.success, "{redelegated:?}");
+    assert_eq!(redelegated.content["attempt"], 2);
+    assert_eq!(redelegated.content["remediesRemaining"], 0);
+    assert_eq!(redelegated.content["state"], "accepted");
+    let retry_id: uuid::Uuid = redelegated.content["taskId"]
+        .as_str()
+        .unwrap()
+        .parse()
+        .unwrap();
+    assert_ne!(retry_id, child_id);
+    let third = &results[3];
+    assert!(!third.success);
+    assert_eq!(third.content["error"]["code"], "LZ-INCIDENT-REMEDY-CLOSED");
+    let malformed = &results[4];
+    assert!(!malformed.success);
+    assert_eq!(malformed.content["error"]["code"], "LZ-TOOL-INVALID");
+    let listed = results[5].content["incidents"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|listed| listed["id"] == incident.id.to_string())
+        .cloned()
+        .unwrap();
+    assert_eq!(listed["escalation"], "lead");
+    assert_eq!(listed["remediesApplied"], 2);
+
+    let child = harness.store.get_task(child_id).unwrap().task;
+    assert_eq!(child.state, TaskState::Cancelled);
+    let retry = harness.store.get_task(retry_id).unwrap().task;
+    assert_eq!(retry.parent_task_id, Some(root_task_id));
+    assert_eq!(retry.assigned_employee_id, harness.worker.id);
+    assert_eq!(retry.objective, child.objective);
+    assert_eq!(retry.effective_authority, AuthorityMode::SelfDecision);
+
+    let shown = harness
+        .app
+        .handle(request(
+            "show-remedied",
+            "incident.show",
+            json!({"id": incident.id}),
+        ))
+        .await
+        .result
+        .unwrap();
+    let remedies = shown["remedies"].as_array().unwrap();
+    assert_eq!(remedies.len(), 2);
+    assert_eq!(remedies[0]["kind"], "cancel-task");
+    assert_eq!(remedies[1]["kind"], "redelegate-task");
+    assert_eq!(remedies[1]["resultTaskId"], retry_id.to_string());
+    assert_eq!(remedies[0]["leadEmployeeId"], harness.lead.id.to_string());
+
+    // The failure comes back on the redelegated task: both remedies are spent, so the user
+    // gets it now rather than at the window's end.
+    let recurred = harness
+        .store
+        .raise_incident(&lazoo_store::RaiseIncidentInput {
+            request_id: "request-timeout-4".to_owned(),
+            idempotency_key: "timeout-4".to_owned(),
+            code: "LZ-MESSAGE-TIMEOUT".to_owned(),
+            source: lazoo_protocol::IncidentSource::Daemon,
+            title: None,
+            explanation: None,
+            project_id: None,
+            employee_id: Some(harness.worker.id),
+            provider: Some("codex".to_owned()),
+            task_id: Some(retry_id),
+            session_id: None,
+            turn_id: None,
+            message_id: None,
+            detail: json!({}),
+            occurred_at: None,
+        })
+        .unwrap()
+        .incident;
+    assert_eq!(recurred.escalation, IncidentEscalation::User);
+    assert_eq!(
+        recurred.escalation_reason,
+        Some(IncidentEscalationReason::RemediesExhausted)
+    );
+    let for_user = list_incidents(&harness.app, json!({"escalation": "user"})).await;
+    assert_eq!(for_user.len(), 1);
+    assert_eq!(for_user[0]["id"], incident.id.to_string());
+    assert_eq!(for_user[0]["escalationReason"], "remedies-exhausted");
+}
+
+#[tokio::test]
+async fn an_unremedied_window_reaches_the_user_on_the_sweep_and_nothing_else_changes() {
+    use chrono::{TimeDelta, Utc};
+    use lazoo_protocol::{IncidentEscalation, TaskState};
+
+    let (_temporary, harness) = tool_harness(AuthorityMode::SelfDecision);
+    let (root_task_id, child_id) = delegate_without_waiting(&harness).await;
+    let incident = promote_child_incident(&harness, "stall", "LZ-SESSION-STALLED", child_id);
+    harness.app.deliver_pending_notices_once().await.unwrap();
+    let turns = harness.backend.turns.load(Ordering::SeqCst);
+    let events_before = harness.store.list_events(0, 10_000).unwrap().len();
+
+    harness.app.escalate_due_incidents_once(Utc::now()).unwrap();
+    assert_eq!(
+        harness.store.get_incident(incident.id).unwrap().escalation,
+        IncidentEscalation::Lead,
+        "the window is still open"
+    );
+    assert_eq!(
+        harness.store.list_events(0, 10_000).unwrap().len(),
+        events_before
+    );
+
+    harness
+        .app
+        .escalate_due_incidents_once(Utc::now() + TimeDelta::seconds(301))
+        .unwrap();
+    let escalated = list_incidents(&harness.app, json!({"escalation": "user"})).await;
+    assert_eq!(escalated.len(), 1);
+    assert_eq!(escalated[0]["id"], incident.id.to_string());
+    assert_eq!(escalated[0]["escalationReason"], "no-remedy");
+    assert_eq!(
+        escalated[0]["state"], "open",
+        "only the user resolves an incident"
+    );
+    assert!(
+        incident_event_types(&harness.store).contains(&"incident.escalated-to-user".to_owned())
+    );
+    // Escalation is a notification, not an action: no turn, no session, no task change.
+    assert_eq!(harness.backend.turns.load(Ordering::SeqCst), turns);
+    assert_eq!(harness.backend.starts.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        harness.store.get_task(child_id).unwrap().task.state,
+        TaskState::Accepted
+    );
+    assert_eq!(
+        harness.store.get_task(root_task_id).unwrap().task.state,
+        TaskState::Running
+    );
+}
+
+#[test]
+fn lead_remediation_acceptance_contract_is_deterministic_and_backend_only() {
+    let repository = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let script_path = repository.join("scripts/acceptance/lead-remediation.ps1");
+    let script = std::fs::read_to_string(&script_path).expect("lead remediation acceptance script");
+
+    for required in [
+        "remediation_escalates_unless_a_remedy_holds_through_the_window",
+        "incident_notice_states_the_code_title_action_and_boundary",
+        "a_promoted_child_incident_gives_the_lead_two_remedies_inside_its_window",
+        "the_sweep_escalates_an_unremedied_window_and_keeps_a_remedy_that_held",
+        "incidents_with_no_lead_to_remediate_go_to_the_user_at_promotion",
+        "version_eleven_priority_incidents_upgrade_straight_to_the_user",
+        "incident_cli_maps_list_show_acknowledge_and_resolve",
+        "a_lead_remedies_a_promoted_child_incident_in_its_notice_turn_within_the_bound",
+        "an_unremedied_window_reaches_the_user_on_the_sweep_and_nothing_else_changes",
+        "lead_turn_lists_employees_delegates_and_waits_through_collaboration_tools",
+        "store_enables_wal_foreign_keys_and_schema_version",
+        "twoRemediesPerIncident",
+        "refusedRemedyConsumesNoAttempt",
+        "unremediedWindowEscalatesToUser",
+        "providerSmokeAbsent",
+        "externalModelUseAbsent",
+        "uiChangesAbsent",
+        "deterministic-fake-transport",
+        "schemaVersion = 15",
+    ] {
+        assert!(
+            script.contains(required),
+            "acceptance script must contain {required}"
+        );
+    }
+    for forbidden in [
+        "provider', 'smoke",
+        "apps\\lazoo-desktop\\src",
+        "LivePrompt",
+    ] {
+        assert!(
+            !script.contains(forbidden),
+            "acceptance script must not contain {forbidden}"
+        );
+    }
+}
+
+#[test]
+fn incident_thresholds_acceptance_contract_is_deterministic_and_backend_only() {
+    let repository = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let script_path = repository.join("scripts/acceptance/incident-thresholds.ps1");
+    let script =
+        std::fs::read_to_string(&script_path).expect("incident thresholds acceptance script");
+
+    for required in [
+        "section_fourteen_two_thresholds_promote_stalls_crashes_and_deaths_at_once",
+        "threshold_window_promotes_three_equivalent_failures_inside_five_minutes",
+        "stalls_and_crashes_promote_at_once_and_a_second_unexpected_exit_promotes",
+        "equivalent_failures_fold_escalate_at_the_threshold_and_replay_without_writes",
+        "a_stall_or_a_death_under_assigned_work_opens_the_lead_window_on_its_first_occurrence",
+        "restart_owner_loss_and_emergency_spool_fold_into_startup_incidents_once",
+        "an_unremedied_window_reaches_the_user_on_the_sweep_and_nothing_else_changes",
+        "a_promoted_child_incident_gives_the_lead_two_remedies_inside_its_window",
+        "store_enables_wal_foreign_keys_and_schema_version",
+        "secondUnexpectedExitPromotes",
+        "keeperCrashReachesUserAtStartup",
+        "providerSmokeAbsent",
+        "externalModelUseAbsent",
+        "uiChangesAbsent",
+        "deterministic-fake-transport",
+        "schemaVersion = 15",
+    ] {
+        assert!(
+            script.contains(required),
+            "acceptance script must contain {required}"
+        );
+    }
+    for forbidden in [
+        "provider', 'smoke",
+        "apps\\lazoo-desktop\\src",
+        "LivePrompt",
+    ] {
+        assert!(
+            !script.contains(forbidden),
+            "acceptance script must not contain {forbidden}"
+        );
+    }
+}
+
+/// Records each desktop notification instead of showing it; `fail` refuses every one.
+#[derive(Default)]
+struct RecordingNotifier {
+    shown: Mutex<Vec<(String, String)>>,
+    fail: bool,
+}
+
+impl lazood::UserNotifier for RecordingNotifier {
+    fn notify(&self, title: &str, message: &str) -> Result<(), String> {
+        if self.fail {
+            return Err("no desktop session".to_owned());
+        }
+        self.shown
+            .lock()
+            .unwrap()
+            .push((title.to_owned(), message.to_owned()));
+        Ok(())
+    }
+}
+
+fn raise_scoped(
+    harness: &ToolHarness,
+    key: &str,
+    code: &str,
+    source: lazoo_protocol::IncidentSource,
+    employee: Option<uuid::Uuid>,
+) -> lazoo_protocol::IncidentRecord {
+    harness
+        .store
+        .raise_incident(&lazoo_store::RaiseIncidentInput {
+            request_id: format!("request-{key}"),
+            idempotency_key: key.to_owned(),
+            code: code.to_owned(),
+            source,
+            title: None,
+            explanation: None,
+            project_id: None,
+            employee_id: employee,
+            provider: None,
+            task_id: None,
+            session_id: None,
+            turn_id: None,
+            message_id: None,
+            detail: json!({}),
+            occurred_at: None,
+        })
+        .unwrap()
+        .incident
+}
+
+#[tokio::test]
+#[allow(clippy::too_many_lines)] // One desktop, from a single escalation to a coalesced burst.
+async fn user_escalations_reach_the_desktop_once_coalesced_and_never_retried() {
+    use chrono::{TimeDelta, Utc};
+    use lazoo_protocol::IncidentSource;
+
+    let (_temporary, harness) = tool_harness(AuthorityMode::SelfDecision);
+    let (_root_task_id, child_id) = delegate_without_waiting(&harness).await;
+    let recorder = Arc::new(RecordingNotifier::default());
+    let app = harness.app.clone().with_user_notifier(recorder.clone());
+
+    // A stall with no lead is the user's at once and is announced on its own.
+    let stall = raise_scoped(
+        &harness,
+        "stall",
+        "LZ-SESSION-STALLED",
+        IncidentSource::Daemon,
+        Some(harness.worker.id),
+    );
+    app.notify_user_escalations_once(Utc::now()).unwrap();
+    {
+        let shown = recorder.shown.lock().unwrap();
+        assert_eq!(shown.len(), 1);
+        assert_eq!(
+            shown[0].0,
+            "Lazoo needs you: Session accepted work but produced no progress"
+        );
+        assert!(shown[0].1.contains("never retries"), "{}", shown[0].1);
+        assert!(shown[0].1.len() <= 240);
+    }
+    let shown_stall = app
+        .handle(request(
+            "show-stall",
+            "incident.show",
+            json!({"id": stall.id}),
+        ))
+        .await
+        .result
+        .unwrap();
+    assert_eq!(shown_stall["userNotification"], "shown");
+    assert!(shown_stall["userNotifiedAt"].is_string());
+
+    // A lead window is not the user's yet; the keeper's own record is never announced twice.
+    let windowed = promote_child_incident(&harness, "timeout", "LZ-MESSAGE-TIMEOUT", child_id);
+    raise_scoped(
+        &harness,
+        "crash",
+        "LZ-DAEMON-UNAVAILABLE",
+        IncidentSource::Keeper,
+        None,
+    );
+    app.notify_user_escalations_once(Utc::now()).unwrap();
+    assert_eq!(recorder.shown.lock().unwrap().len(), 1);
+    let keeper = list_incidents(&app, json!({"code": "LZ-DAEMON-UNAVAILABLE"})).await;
+    assert_eq!(keeper[0]["userNotification"], "keeper");
+
+    // The window closes unremedied while another failure reaches the user: one notification
+    // names both.
+    let later = Utc::now() + TimeDelta::seconds(301);
+    app.escalate_due_incidents_once(later).unwrap();
+    raise_scoped(
+        &harness,
+        "lead-exit-1",
+        "LZ-PROCESS-EXIT",
+        IncidentSource::Daemon,
+        Some(harness.lead.id),
+    );
+    let second_exit = raise_scoped(
+        &harness,
+        "lead-exit-2",
+        "LZ-PROCESS-EXIT",
+        IncidentSource::Daemon,
+        Some(harness.lead.id),
+    );
+    app.notify_user_escalations_once(later).unwrap();
+    {
+        let shown = recorder.shown.lock().unwrap();
+        assert_eq!(shown.len(), 2);
+        assert_eq!(shown[1].0, "Lazoo: 2 incidents need you");
+        assert!(shown[1].1.contains(&windowed.title), "{}", shown[1].1);
+        assert!(shown[1].1.contains(&second_exit.title), "{}", shown[1].1);
+    }
+    app.notify_user_escalations_once(later).unwrap();
+    assert_eq!(
+        recorder.shown.lock().unwrap().len(),
+        2,
+        "nothing is announced twice"
+    );
+
+    // A notification the desktop refuses is recorded as failed and never retried.
+    let refusing = harness
+        .app
+        .clone()
+        .with_user_notifier(Arc::new(RecordingNotifier {
+            fail: true,
+            ..RecordingNotifier::default()
+        }));
+    let lost = raise_scoped(
+        &harness,
+        "lost",
+        "LZ-SESSION-STALLED",
+        IncidentSource::Daemon,
+        Some(harness.lead.id),
+    );
+    refusing.notify_user_escalations_once(Utc::now()).unwrap();
+    app.notify_user_escalations_once(Utc::now()).unwrap();
+    assert_eq!(recorder.shown.lock().unwrap().len(), 2);
+    let lost = harness.store.get_incident(lost.id).unwrap();
+    assert_eq!(
+        lost.user_notification,
+        Some(lazoo_protocol::IncidentUserNotification::Failed)
+    );
+    // Nothing about the work changed.
+    assert_eq!(
+        harness.store.get_task(child_id).unwrap().task.state,
+        lazoo_protocol::TaskState::Accepted
+    );
+}
+
+#[test]
+fn user_notifications_acceptance_contract_is_deterministic_and_backend_only() {
+    let repository = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let script_path = repository.join("scripts/acceptance/user-notifications.ps1");
+    let script =
+        std::fs::read_to_string(&script_path).expect("user notifications acceptance script");
+
+    for required in [
+        "incident_record_round_trips_with_camel_case_keys",
+        "user_escalations_are_claimed_once_and_their_outcome_is_never_rewritten",
+        "user_escalations_reach_the_desktop_once_coalesced_and_never_retried",
+        "version_eleven_priority_incidents_upgrade_straight_to_the_user",
+        "store_enables_wal_foreign_keys_and_schema_version",
+        "announcedAtMostOnce",
+        "burstCoalescedIntoOneNotification",
+        "keeperRecordsNotAnnouncedTwice",
+        "failedNotificationNeverRetried",
+        "providerSmokeAbsent",
+        "externalModelUseAbsent",
+        "uiChangesAbsent",
+        "deterministic-fake-transport",
+        "schemaVersion = 15",
+    ] {
+        assert!(
+            script.contains(required),
+            "acceptance script must contain {required}"
+        );
+    }
+    for forbidden in ["provider', 'smoke", "LivePrompt"] {
+        assert!(
+            !script.contains(forbidden),
+            "acceptance script must not contain {forbidden}"
+        );
+    }
+}
+
+/// The paused clock moves only when every task is parked on a timer, so the virtual time the
+/// lead's turn takes is exactly what its waits slept: a store poll would cost at least one
+/// 250 ms interval, and a missed wakeup would run to the 10 second deadline and time out.
+#[tokio::test(start_paused = true)]
+async fn tool_waits_wake_on_the_store_write_instead_of_polling() {
+    let (_temporary, harness) = tool_harness(AuthorityMode::SelfDecision);
+    warm_tool_lead(&harness).await;
+    let roster_revision = harness.store.roster_snapshot().unwrap().revision;
+    harness.backend.tool_calls.lock().unwrap().extend([
+        tool_call(
+            "call-1",
+            "task_delegate",
+            json!({
+                "employeeId": harness.worker.id,
+                "objective": "Implement the parser fix",
+                "rosterRevision": roster_revision,
+                "requestedAuthority": "self-decision"
+            }),
+        ),
+        tool_call("call-2", "task_wait", json!({"timeoutSeconds": 10})),
+        tool_call(
+            "call-3",
+            "message_reply",
+            json!({"messageId": "$message-id", "text": "space-4"}),
+        ),
+        tool_call("call-4", "task_wait", json!({"timeoutSeconds": 10})),
+        session_tool_call(
+            "native-2",
+            "call-w1",
+            "message_send",
+            json!({
+                "employeeId": harness.lead.id,
+                "text": "Which token?",
+                "waitForReplySeconds": 10
+            }),
+        ),
+    ]);
+    let dispatcher_app = harness.app.clone();
+    let dispatcher = tokio::spawn(async move { dispatcher_app.run_task_dispatcher().await });
+    let started = tokio::time::Instant::now();
+    let submitted = submit_lead_turn(&harness, "self-decision").await;
+    let elapsed = started.elapsed();
+    dispatcher.abort();
+    let _ = dispatcher.await;
+
+    assert_eq!(submitted["turn"]["state"], "completed");
+    let results = harness.backend.tool_results.lock().unwrap().clone();
+    assert_eq!(results.len(), 5, "{results:?}");
+    // task_wait woke for the peer question, message_send for the reply, and the second
+    // task_wait for the child's completion; none of them reached its deadline.
+    assert_eq!(results[1].content["messages"][0]["text"], "Which token?");
+    assert_eq!(results[1].content["timedOut"], false);
+    assert_eq!(results[3].content["reply"]["text"], "space-4");
+    assert_eq!(results[3].content["timedOut"], false);
+    assert_eq!(results[4].content["tasks"][0]["state"], "completed");
+    assert_eq!(results[4].content["timedOut"], false);
+    assert!(
+        elapsed < Duration::from_millis(250),
+        "the waits slept {elapsed:?} of virtual time instead of waking on the write"
+    );
+}
+
+#[test]
+fn message_arrival_acceptance_contract_is_deterministic_and_backend_only() {
+    let repository = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let script_path = repository.join("scripts/acceptance/message-arrival.ps1");
+    let script = std::fs::read_to_string(&script_path).expect("message arrival acceptance script");
+
+    for required in [
+        "tool_waits_wake_on_the_store_write_instead_of_polling",
+        "task_wait_returns_early_with_a_peer_question_so_the_lead_answers_in_turn",
+        "task_wait_consumes_child_results_so_no_notice_turn_follows",
+        "store_enables_wal_foreign_keys_and_schema_version",
+        "wakesOnStoreWrite",
+        "pollIntervalAbsent",
+        "providerSmokeAbsent",
+        "externalModelUseAbsent",
+        "uiChangesAbsent",
+        "deterministic-fake-transport",
+        "schemaVersion = 15",
+    ] {
+        assert!(
+            script.contains(required),
+            "acceptance script must contain {required}"
+        );
+    }
+    for forbidden in ["provider', 'smoke", "LivePrompt"] {
+        assert!(
+            !script.contains(forbidden),
+            "acceptance script must not contain {forbidden}"
+        );
+    }
+}
+
+fn dead_letter_incidents(store: &Store) -> Vec<lazoo_protocol::IncidentRecord> {
+    store
+        .list_incidents(&lazoo_store::ListIncidentsInput {
+            limit: 100,
+            code: Some("LZ-MESSAGE-DEADLETTER".to_owned()),
+            ..lazoo_store::ListIncidentsInput::default()
+        })
+        .unwrap()
+}
+
+/// A lead's incident notice is a priority message. When its notice turn fails for good, nothing
+/// else reports the lost notice, so the sweep raises its dead letter as a priority incident; it
+/// is about the lead itself, so it goes to the user and is announced by the same sweep.
+#[tokio::test]
+async fn a_dead_lettered_incident_notice_reaches_the_user_in_one_sweep() {
+    use chrono::Utc;
+    use lazoo_protocol::{
+        IncidentEscalation, IncidentEscalationReason, IncidentPriority, IncidentSource,
+        MessageKind, MessagePriority,
+    };
+
+    let (_temporary, harness) = tool_harness(AuthorityMode::SelfDecision);
+    let (root_task_id, child_id) = delegate_without_waiting(&harness).await;
+    let stall = harness
+        .store
+        .raise_incident(&lazoo_store::RaiseIncidentInput {
+            request_id: "request-stall".to_owned(),
+            idempotency_key: "stall".to_owned(),
+            code: "LZ-SESSION-STALLED".to_owned(),
+            source: IncidentSource::Daemon,
+            title: None,
+            explanation: None,
+            project_id: None,
+            employee_id: Some(harness.worker.id),
+            provider: Some("codex".to_owned()),
+            task_id: Some(child_id),
+            session_id: None,
+            turn_id: None,
+            message_id: None,
+            detail: json!({}),
+            occurred_at: None,
+        })
+        .unwrap()
+        .incident;
+    assert_eq!(stall.escalation, IncidentEscalation::Lead);
+    *harness.backend.turn_failure.lock().unwrap() = Some("notice refused".to_owned());
+    let _ = harness.app.deliver_pending_notices_once().await;
+
+    let notices = lead_messages(&harness.store, MessageKind::Status);
+    assert_eq!(notices.len(), 1);
+    assert_eq!(notices[0].priority, MessagePriority::Priority);
+    assert_eq!(notices[0].task_id, Some(root_task_id));
+    assert_eq!(notices[0].state, MessageDeliveryState::TerminalFailed);
+    assert!(
+        harness
+            .store
+            .get_message(notices[0].id)
+            .unwrap()
+            .dead_letter
+            .is_some()
+    );
+    assert!(
+        dead_letter_incidents(&harness.store).is_empty(),
+        "the failed notice turn reports only its own provider failure"
+    );
+
+    let recorder = Arc::new(RecordingNotifier::default());
+    let app = harness.app.clone().with_user_notifier(recorder.clone());
+    let now = Utc::now();
+    app.note_priority_dead_letters_once().unwrap();
+    app.escalate_due_incidents_once(now).unwrap();
+    app.notify_user_escalations_once(now).unwrap();
+    let raised = dead_letter_incidents(&harness.store);
+    assert_eq!(raised.len(), 1);
+    assert_eq!(raised[0].priority, IncidentPriority::Priority);
+    assert_eq!(raised[0].occurrences, 1);
+    assert_eq!(raised[0].employee_id, Some(harness.lead.id));
+    assert_eq!(raised[0].message_id, Some(notices[0].id));
+    assert_eq!(raised[0].escalation, IncidentEscalation::User);
+    assert_eq!(
+        raised[0].escalation_reason,
+        Some(IncidentEscalationReason::NoLead)
+    );
+    assert_eq!(raised[0].detail["priority"], "priority");
+    {
+        let shown = recorder.shown.lock().unwrap();
+        assert_eq!(shown.len(), 1);
+        assert_eq!(
+            shown[0].0,
+            "Lazoo needs you: Message exhausted safe delivery attempts"
+        );
+    }
+
+    // The next sweep raises nothing new and announces nothing again; no work changed.
+    app.note_priority_dead_letters_once().unwrap();
+    app.notify_user_escalations_once(Utc::now()).unwrap();
+    assert_eq!(dead_letter_incidents(&harness.store)[0].occurrences, 1);
+    assert_eq!(recorder.shown.lock().unwrap().len(), 1);
+    assert_eq!(
+        harness.store.get_task(child_id).unwrap().task.state,
+        lazoo_protocol::TaskState::Accepted
+    );
+}
+
+/// The user's own `message.send` may be priority; `message.fail` raises its dead letter at once,
+/// promoted for a priority message and folded for a normal one, and the sweep never raises it
+/// twice.
+#[tokio::test]
+async fn message_fail_promotes_a_priority_dead_letter_at_once_and_only_once() {
+    use lazoo_protocol::IncidentPriority;
+
+    let (_temporary, _root, store, app, sender, recipient) = message_test_app();
+    let mut dead_letters = Vec::new();
+    for (key, priority) in [("normal", "normal"), ("urgent", "priority")] {
+        let sent = app
+            .handle(request(
+                &format!("send-{key}"),
+                "message.send",
+                json!({
+                    "sender": {"employeeId": sender},
+                    "recipient": {"employeeId": recipient},
+                    "kind": "status",
+                    "priority": priority,
+                    "body": {"text": key},
+                    "idempotencyKey": format!("send-{key}")
+                }),
+            ))
+            .await
+            .result
+            .unwrap();
+        assert_eq!(sent["message"]["envelope"]["priority"], priority);
+        let message_id = sent["message"]["envelope"]["id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let claimed = app
+            .handle(request(
+                &format!("claim-{key}"),
+                "message.claim",
+                json!({"id": message_id, "expectedRevision": 1, "idempotencyKey": format!("claim-{key}")}),
+            ))
+            .await
+            .result
+            .unwrap();
+        let failed = app
+            .handle(request(
+                &format!("fail-{key}"),
+                "message.fail",
+                json!({
+                    "id": message_id,
+                    "expectedRevision": 2,
+                    "attemptId": claimed["message"]["attempts"][0]["id"],
+                    "retryable": false,
+                    "failureCode": "LZ-TURN-PROVIDER",
+                    "failureMessage": "the adapter could not deliver it",
+                    "idempotencyKey": format!("fail-{key}")
+                }),
+            ))
+            .await
+            .result
+            .unwrap();
+        assert!(failed["message"]["deadLetter"].is_object());
+        dead_letters.push(dead_letter_incidents(&store));
+    }
+    assert_eq!(dead_letters[0].len(), 1);
+    assert_eq!(dead_letters[0][0].priority, IncidentPriority::Normal);
+    assert_eq!(dead_letters[1].len(), 1, "both fold into one incident");
+    assert_eq!(dead_letters[1][0].occurrences, 2);
+    assert_eq!(dead_letters[1][0].priority, IncidentPriority::Priority);
+
+    app.note_priority_dead_letters_once().unwrap();
+    assert_eq!(dead_letter_incidents(&store)[0].occurrences, 2);
+    let listed = app
+        .handle(request(
+            "list",
+            "message.list",
+            json!({"afterSequence": 0, "limit": 10}),
+        ))
+        .await
+        .result
+        .unwrap();
+    assert_eq!(listed[0]["priority"], "normal");
+    assert_eq!(listed[1]["priority"], "priority");
+}
+
+#[test]
+fn message_priority_acceptance_contract_is_deterministic_and_backend_only() {
+    let repository = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let script_path = repository.join("scripts/acceptance/message-priority.ps1");
+    let script = std::fs::read_to_string(&script_path).expect("message priority acceptance script");
+
+    for required in [
+        "message_priority_is_kebab_case_and_defaults_to_normal_for_older_records",
+        "section_fourteen_two_thresholds_promote_stalls_crashes_and_deaths_at_once",
+        "one_dead_lettered_priority_message_is_a_priority_incident_raised_once",
+        "version_thirteen_incident_notices_upgrade_as_priority_messages",
+        "message_cli_maps_send_envelope",
+        "a_dead_lettered_incident_notice_reaches_the_user_in_one_sweep",
+        "message_fail_promotes_a_priority_dead_letter_at_once_and_only_once",
+        "store_enables_wal_foreign_keys_and_schema_version",
+        "priorityDeadLetterPromotedAtOnce",
+        "incidentNoticesArePriority",
+        "toolsCannotSetPriority",
+        "providerSmokeAbsent",
+        "externalModelUseAbsent",
+        "uiChangesAbsent",
+        "deterministic-fake-transport",
+        "schemaVersion = 15",
+    ] {
+        assert!(
+            script.contains(required),
+            "acceptance script must contain {required}"
+        );
+    }
+    for forbidden in ["provider', 'smoke", "LivePrompt"] {
+        assert!(
+            !script.contains(forbidden),
+            "acceptance script must not contain {forbidden}"
+        );
+    }
+}
+
+/// The local user tunes a threshold through the daemon: a stall stops paging at the first
+/// occurrence, a reset restores the default, and a death under assigned work still promotes
+/// at once whatever is configured. No collaboration tool can see or change thresholds.
+#[tokio::test]
+#[allow(clippy::too_many_lines)] // One user session: list, set, apply, a loss, reset, events.
+async fn the_user_configures_incident_thresholds_through_the_daemon() {
+    use lazoo_protocol::{IncidentPriority, IncidentSource};
+
+    let (_temporary, harness) = tool_harness(AuthorityMode::SelfDecision);
+    let (_root_task_id, child_id) = delegate_without_waiting(&harness).await;
+    let call = |id: &str, method: &str, params: serde_json::Value| {
+        harness.app.handle(request(id, method, params))
+    };
+
+    let defaults = call("list", "incident.threshold.list", json!({}))
+        .await
+        .result
+        .unwrap();
+    let stall = defaults
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["code"] == "LZ-SESSION-STALLED")
+        .unwrap()
+        .clone();
+    assert_eq!(
+        stall,
+        json!({
+            "code": "LZ-SESSION-STALLED",
+            "occurrences": 1,
+            "windowSeconds": 300,
+            "source": "default",
+            "updatedAt": null
+        })
+    );
+    let refused = call(
+        "list-params",
+        "incident.threshold.list",
+        json!({"code": "LZ-SESSION-STALLED"}),
+    )
+    .await
+    .error
+    .unwrap();
+    assert_eq!(refused.code, "LZ-INVALID-PARAMS");
+
+    let set = call(
+        "set",
+        "incident.threshold.set",
+        json!({"code": "LZ-SESSION-STALLED", "occurrences": 2, "windowSeconds": 600}),
+    )
+    .await
+    .result
+    .unwrap();
+    assert_eq!(set["threshold"]["source"], "configured");
+    assert_eq!(set["threshold"]["windowSeconds"], 600);
+    assert!(set["eventSequence"].is_number());
+    let invalid = call(
+        "set-invalid",
+        "incident.threshold.set",
+        json!({"code": "LZ-SESSION-STALLED", "occurrences": 0}),
+    )
+    .await
+    .error
+    .unwrap();
+    assert_eq!(invalid.code, "LZ-INCIDENT-INVALID");
+
+    let first = raise_scoped(
+        &harness,
+        "stall-1",
+        "LZ-SESSION-STALLED",
+        IncidentSource::Daemon,
+        Some(harness.worker.id),
+    );
+    assert_eq!(first.priority, IncidentPriority::Normal);
+    let second = raise_scoped(
+        &harness,
+        "stall-2",
+        "LZ-SESSION-STALLED",
+        IncidentSource::Daemon,
+        Some(harness.worker.id),
+    );
+    assert_eq!(second.priority, IncidentPriority::Priority);
+
+    // Exits are configured to five, but a death under assigned work is still promoted at once.
+    call(
+        "set-exit",
+        "incident.threshold.set",
+        json!({"code": "LZ-PROCESS-EXIT", "occurrences": 5}),
+    )
+    .await
+    .result
+    .unwrap();
+    let death = harness
+        .store
+        .raise_incident(&lazoo_store::RaiseIncidentInput {
+            request_id: "request-death".to_owned(),
+            idempotency_key: "death".to_owned(),
+            code: "LZ-PROCESS-EXIT".to_owned(),
+            source: IncidentSource::Daemon,
+            title: None,
+            explanation: None,
+            project_id: None,
+            employee_id: Some(harness.worker.id),
+            provider: Some("codex".to_owned()),
+            task_id: Some(child_id),
+            session_id: None,
+            turn_id: None,
+            message_id: None,
+            detail: json!({}),
+            occurred_at: None,
+        })
+        .unwrap()
+        .incident;
+    assert_eq!(death.priority, IncidentPriority::Priority);
+
+    let reset = call(
+        "reset",
+        "incident.threshold.reset",
+        json!({"code": "LZ-SESSION-STALLED"}),
+    )
+    .await
+    .result
+    .unwrap();
+    assert_eq!(reset["threshold"]["source"], "default");
+    assert_eq!(reset["threshold"]["occurrences"], 1);
+    let events: Vec<String> = harness
+        .store
+        .list_events(0, 1000)
+        .unwrap()
+        .into_iter()
+        .map(|event| event.event_type)
+        .filter(|kind| kind.starts_with("incident.threshold"))
+        .collect();
+    assert_eq!(
+        events,
+        [
+            "incident.threshold-set",
+            "incident.threshold-set",
+            "incident.threshold-reset"
+        ]
+    );
+
+    // No tool in the catalog reads or sets a threshold.
+    let tools = harness.backend.session_tools.lock().unwrap().clone();
+    assert!(!tools.is_empty());
+    assert!(
+        tools
+            .iter()
+            .flatten()
+            .all(|name| !name.contains("threshold"))
+    );
+}
+
+#[test]
+fn configurable_thresholds_acceptance_contract_is_deterministic_and_backend_only() {
+    let repository = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let script_path = repository.join("scripts/acceptance/configurable-thresholds.ps1");
+    let script =
+        std::fs::read_to_string(&script_path).expect("configurable thresholds acceptance script");
+
+    for required in [
+        "incident_threshold_contracts_are_strict_and_default_to_five_minutes",
+        "a_configured_threshold_replaces_the_default_but_never_delays_a_loss",
+        "configured_thresholds_apply_from_the_next_occurrence_and_reset_to_the_default",
+        "incident_cli_maps_threshold_list_set_and_reset",
+        "the_user_configures_incident_thresholds_through_the_daemon",
+        "store_enables_wal_foreign_keys_and_schema_version",
+        "overrideAppliesFromNextOccurrence",
+        "lossesPromoteWhateverIsConfigured",
+        "toolsCannotSeeThresholds",
+        "providerSmokeAbsent",
+        "externalModelUseAbsent",
+        "uiChangesAbsent",
+        "deterministic-fake-transport",
+        "schemaVersion = 15",
+    ] {
+        assert!(
+            script.contains(required),
+            "acceptance script must contain {required}"
+        );
+    }
+    for forbidden in ["provider', 'smoke", "LivePrompt"] {
         assert!(
             !script.contains(forbidden),
             "acceptance script must not contain {forbidden}"

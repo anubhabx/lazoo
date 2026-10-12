@@ -1,9 +1,12 @@
 mod approval;
 mod delivery;
+mod idle;
 mod incident;
 mod task;
 mod tools;
 mod turn;
+
+pub use incident::UserNotifier;
 
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -21,7 +24,7 @@ use std::{
 use chrono::{SecondsFormat, Utc};
 use lazoo_domain::{
     inspect_git_repository, validate_employee_name, validate_employee_text_fields,
-    validate_native_settings,
+    validate_idle_timeout, validate_native_settings,
 };
 use lazoo_protocol::{
     AcknowledgeMessageParams, AuthorityMode, CancelMessageParams, ClaimMessageParams,
@@ -205,7 +208,11 @@ pub struct App {
     live_turns: Arc<Mutex<BTreeMap<Uuid, Arc<LiveTurn>>>>,
     task_dispatch_notify: Arc<Notify>,
     approval_notify: Arc<Notify>,
+    /// Woken by `publish_events`, which follows every store write, so a tool wait re-reads the
+    /// store when something changed instead of polling it.
+    store_changed: Arc<Notify>,
     approval_timeout: Duration,
+    user_notifier: Arc<dyn UserNotifier>,
 }
 
 /// How long a provider waits for the local user before a pending approval expires and is
@@ -291,7 +298,9 @@ impl App {
             live_turns: Arc::new(Mutex::new(BTreeMap::new())),
             task_dispatch_notify: Arc::new(Notify::new()),
             approval_notify: Arc::new(Notify::new()),
+            store_changed: Arc::new(Notify::new()),
             approval_timeout: DEFAULT_APPROVAL_TIMEOUT,
+            user_notifier: Arc::new(lazoo_runtime::NativeNotifier),
         };
         app.note_startup_incidents(&sessions.sessions, &messages.messages, &turns.turns, &tasks);
         Ok(app)
@@ -301,6 +310,13 @@ impl App {
     #[must_use]
     pub fn with_approval_timeout(mut self, timeout: Duration) -> Self {
         self.approval_timeout = timeout;
+        self
+    }
+
+    #[doc(hidden)]
+    #[must_use]
+    pub fn with_user_notifier(mut self, notifier: Arc<dyn UserNotifier>) -> Self {
+        self.user_notifier = notifier;
         self
     }
 
@@ -360,6 +376,9 @@ impl App {
             "incident.show" => self.incident_show(&request.params),
             "incident.acknowledge" => self.acknowledge_incident(&request),
             "incident.resolve" => self.resolve_incident(&request),
+            "incident.threshold.list" => self.incident_threshold_list(&request.params),
+            "incident.threshold.set" => self.set_incident_threshold(&request.params),
+            "incident.threshold.reset" => self.reset_incident_threshold(&request.params),
             "message.send" => self.send_message(&request),
             "message.claim" => self.claim_message(&request),
             "message.acknowledge" => self.acknowledge_message(&request),
@@ -462,9 +481,7 @@ impl App {
                 checkout_mode: params.checkout_mode,
             })
             .map_err(store_error)?;
-        for event in self.store.publish_pending_outbox().map_err(store_error)? {
-            let _ = self.events.send(event);
-        }
+        self.publish_events()?;
         Ok(to_value(result))
     }
 
@@ -578,6 +595,8 @@ impl App {
         .map_err(|error| employee_validation_error(&error))?;
         validate_native_settings(&params.native_settings)
             .map_err(|error| employee_validation_error(&error))?;
+        validate_idle_timeout(params.idle_timeout_seconds)
+            .map_err(|error| employee_validation_error(&error))?;
         let provider = employee_provider(&params.provider)?;
         let observation = self.observe_provider(provider).await;
         let result = self
@@ -595,6 +614,7 @@ impl App {
                 authority_mode: params.authority_mode,
                 checkout_policy: params.checkout_policy,
                 activation_policy: params.activation_policy,
+                idle_timeout_seconds: params.idle_timeout_seconds,
                 enabled: params.enabled,
                 provider_observation: Some(observation),
             })
@@ -662,6 +682,9 @@ impl App {
             validate_native_settings(native_settings)
                 .map_err(|error| employee_validation_error(&error))?;
         }
+        if let Some(seconds) = params.idle_timeout_seconds {
+            validate_idle_timeout(seconds).map_err(|error| employee_validation_error(&error))?;
+        }
         let should_probe = provider.is_some_and(|value| value.to_string() != current.provider)
             || params.enabled == Some(true) && !current.enabled;
         let provider_observation = if should_probe {
@@ -690,6 +713,7 @@ impl App {
                 authority_mode: params.authority_mode,
                 checkout_policy: params.checkout_policy,
                 activation_policy: params.activation_policy,
+                idle_timeout_seconds: params.idle_timeout_seconds,
                 enabled: params.enabled,
                 provider_observation,
             })
@@ -937,12 +961,22 @@ impl App {
                 expected_revision,
             })
             .map_err(session_store_error)?;
+        self.finish_session_stop_command(stopping).await
+    }
+
+    /// Stops the native session behind a session the store has just marked `stopping`, or
+    /// returns a replayed stop unchanged.
+    async fn finish_session_stop_command(
+        &self,
+        stopping: lazoo_protocol::SessionMutationResult,
+    ) -> Result<lazoo_protocol::SessionMutationResult, RpcError> {
         self.publish_events()?;
         if stopping.event_sequence.is_none() {
             self.task_dispatch_notify.notify_one();
             return Ok(stopping);
         }
 
+        let session_id = stopping.session.id;
         let session = self.live_sessions.lock().await.remove(&session_id);
         let Some(session) = session else {
             self.record_session_failure(
@@ -1023,6 +1057,7 @@ impl App {
                 correlation_id: params.correlation_id,
                 causation_id: params.causation_id,
                 kind: params.kind,
+                priority: params.priority,
                 body: params.body,
                 references: params.references,
                 max_attempts: params.max_attempts,
@@ -1087,28 +1122,8 @@ impl App {
             })
             .map_err(message_store_error)?;
         self.publish_events()?;
-        if result.event_sequence.is_some()
-            && let Some(dead_letter) = &result.message.dead_letter
-        {
-            self.note_incident(
-                &format!(
-                    "dead-letter:{}:{}",
-                    result.message.envelope.id, dead_letter.attempt_id
-                ),
-                "LZ-MESSAGE-DEADLETTER",
-                incident::IncidentScope {
-                    project_id: result.message.envelope.project_id,
-                    employee_id: Some(result.message.envelope.recipient.employee_id),
-                    task_id: result.message.envelope.task_id,
-                    message_id: Some(result.message.envelope.id),
-                    ..incident::IncidentScope::default()
-                },
-                json!({
-                    "failureCode": dead_letter.failure_code,
-                    "failureMessage": dead_letter.failure_message,
-                    "attempts": result.message.delivery.attempt_count,
-                }),
-            );
+        if result.event_sequence.is_some() {
+            self.note_dead_letter(&result.message);
         }
         Ok(to_value(result))
     }
@@ -1226,6 +1241,7 @@ impl App {
         for event in self.store.publish_pending_outbox().map_err(store_error)? {
             let _ = self.events.send(event);
         }
+        self.store_changed.notify_waiters();
         Ok(())
     }
 }

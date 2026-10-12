@@ -22,6 +22,7 @@ fn creation(key: &str, name: &str) -> CreateEmployeeInput {
         authority_mode: AuthorityMode::Ask,
         checkout_policy: EmployeeCheckoutPolicy::Isolated,
         activation_policy: lazoo_protocol::ActivationPolicy::Manual,
+        idle_timeout_seconds: 0,
         enabled: true,
         provider_observation: Some(ProviderObservation {
             provider: "codex".to_owned(),
@@ -57,6 +58,7 @@ fn update_role(
         authority_mode: None,
         checkout_policy: None,
         activation_policy: None,
+        idle_timeout_seconds: None,
         enabled: None,
         provider_observation: None,
     }
@@ -313,4 +315,61 @@ fn activation_policy_defaults_to_manual_and_a_change_bumps_the_configuration_rev
         .unwrap();
     assert_eq!(legacy.activation_policy, ActivationPolicy::Manual);
     assert_eq!(legacy.authority_mode, AuthorityMode::Ask);
+}
+
+#[test]
+fn idle_timeout_defaults_to_never_and_a_change_bumps_the_configuration_revision() {
+    let temporary = tempdir().unwrap();
+    let store = Store::open_path(temporary.path().join("lazoo.db")).unwrap();
+    let created = store
+        .create_employee(&creation("rhea", "Rhea"))
+        .unwrap()
+        .employee;
+    assert_eq!(created.idle_timeout_seconds, 0);
+
+    let mut opt_in = update_role("idle", created.id, 1, None);
+    opt_in.idle_timeout_seconds = Some(900);
+    let updated = store.update_employee(&opt_in).unwrap();
+    assert_eq!(updated.employee.idle_timeout_seconds, 900);
+    assert_eq!(updated.employee.configuration_revision, 2);
+    assert!(updated.event_sequence.is_some());
+    assert_eq!(
+        store.get_employee(created.id).unwrap().idle_timeout_seconds,
+        900
+    );
+
+    // Setting the same timeout again changes nothing and bumps nothing.
+    let mut same = update_role("idle-again", created.id, 2, None);
+    same.idle_timeout_seconds = Some(900);
+    let unchanged = store.update_employee(&same).unwrap();
+    assert_eq!(unchanged.employee.configuration_revision, 2);
+    assert_eq!(unchanged.event_sequence, None);
+
+    // The schema refuses a timeout the RPC boundary would have refused.
+    let mut too_short = update_role("idle-too-short", created.id, 2, None);
+    too_short.idle_timeout_seconds = Some(30);
+    assert!(store.update_employee(&too_short).is_err());
+    assert_eq!(
+        store.get_employee(created.id).unwrap().idle_timeout_seconds,
+        900
+    );
+
+    // A row written without the schema-11 column takes the migration default: never.
+    store
+        .execute_for_test(
+            "INSERT INTO employees (
+                id, name, provider, role, instructions, native_settings_json,
+                authority_mode, checkout_policy, enabled, configuration_revision,
+                created_at, updated_at
+             ) VALUES (
+                '00000000-0000-4000-8000-000000000011', 'Legacy', 'codex', '', '',
+                '{}', '\"ask\"', '\"isolated\"', 1, 1,
+                '2026-08-30T00:00:00Z', '2026-08-30T00:00:00Z'
+             )",
+        )
+        .unwrap();
+    let legacy = store
+        .get_employee("00000000-0000-4000-8000-000000000011".parse().unwrap())
+        .unwrap();
+    assert_eq!(legacy.idle_timeout_seconds, 0);
 }

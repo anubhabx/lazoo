@@ -135,11 +135,32 @@ fn message_cli_maps_send_envelope() {
                 "body": {"text": "Need the spacing token."},
                 "references": [{"kind": "file", "target": "tokens.css", "metadata": {}}],
                 "maxAttempts": 2,
+                "priority": "normal",
                 "idempotencyKey": "send-message"
             }),
             false
         )
     );
+
+    let priority = Cli::try_parse_from([
+        "lazooctl",
+        "message",
+        "send",
+        SENDER_ID,
+        RECIPIENT_ID,
+        "--kind",
+        "status",
+        "--body",
+        r#"{"text":"Deploy is blocked."}"#,
+        "--priority",
+        "--idempotency-key",
+        "send-priority",
+    ])
+    .unwrap();
+    let (method, params, _) = command_request(&priority.command);
+    assert_eq!(method, "message.send");
+    assert_eq!(params["priority"], "priority");
+    assert_eq!(params["kind"], "status");
 }
 
 #[test]
@@ -402,6 +423,10 @@ fn employee_cli_maps_mutations_and_roster_refresh() {
     assert_eq!(method, "employee.create");
     assert_eq!(params["nativeSettings"], json!({}));
     assert_eq!(params["activationPolicy"], "manual");
+    assert_eq!(
+        params["idleTimeoutSeconds"], 0,
+        "a new employee never idles out"
+    );
     assert!(!follows);
 
     let employee_id = "00000000-0000-4000-8000-000000000001";
@@ -416,11 +441,29 @@ fn employee_cli_maps_mutations_and_roster_refresh() {
         "Lead",
         "--activation-policy",
         "notice-turns",
+        "--idle-timeout-seconds",
+        "900",
     ])
     .unwrap();
     let (method, params, _) = command_request(&update.command);
     assert_eq!(method, "employee.update");
     assert_eq!(params["activationPolicy"], "notice-turns");
+    assert_eq!(params["idleTimeoutSeconds"], 900);
+    let unchanged = Cli::try_parse_from([
+        "lazooctl",
+        "employee",
+        "update",
+        employee_id,
+        "--expected-revision",
+        "2",
+        "--role",
+        "Lead",
+    ])
+    .unwrap();
+    assert!(
+        command_request(&unchanged.command).1["idleTimeoutSeconds"].is_null(),
+        "an update without the flag keeps the timeout"
+    );
 
     let disable = Cli::try_parse_from([
         "lazooctl",
@@ -1045,7 +1088,22 @@ fn incident_cli_maps_list_show_acknowledge_and_resolve() {
                 "priority": "priority",
                 "code": "LZ-SESSION-STALLED",
                 "employeeId": null,
-                "projectId": null
+                "projectId": null,
+                "escalation": null
+            }),
+        ),
+        (
+            vec!["lazooctl", "incident", "list", "--escalation", "user"],
+            "incident.list",
+            json!({
+                "afterSequence": 0,
+                "limit": 100,
+                "state": null,
+                "priority": null,
+                "code": null,
+                "employeeId": null,
+                "projectId": null,
+                "escalation": "user"
             }),
         ),
         (
@@ -1099,6 +1157,9 @@ fn incident_cli_maps_list_show_acknowledge_and_resolve() {
     }
     assert!(Cli::try_parse_from(["lazooctl", "incident", "list", "--state", "closed"]).is_err());
     assert!(
+        Cli::try_parse_from(["lazooctl", "incident", "list", "--escalation", "lead-only"]).is_err()
+    );
+    assert!(
         Cli::try_parse_from(["lazooctl", "incident", "resolve", INCIDENT_ID]).is_err(),
         "a resolution must cite the incident revision it is bound to"
     );
@@ -1122,4 +1183,59 @@ fn incident_errors_use_exit_code_fifteen() {
             15
         );
     }
+}
+
+#[test]
+fn incident_cli_maps_threshold_list_set_and_reset() {
+    let request = |args: &[&str]| {
+        let mut argv = vec!["lazooctl", "incident", "threshold"];
+        argv.extend_from_slice(args);
+        command_request(&Cli::try_parse_from(argv).unwrap().command)
+    };
+    assert_eq!(
+        request(&["list"]),
+        ("incident.threshold.list", json!({}), false)
+    );
+    assert_eq!(
+        request(&["set", "LZ-SESSION-STALLED", "--occurrences", "2"]),
+        (
+            "incident.threshold.set",
+            json!({"code": "LZ-SESSION-STALLED", "occurrences": 2, "windowSeconds": 300}),
+            false
+        )
+    );
+    assert_eq!(
+        request(&[
+            "set",
+            "LZ-MESSAGE-TIMEOUT",
+            "--occurrences",
+            "5",
+            "--window-seconds",
+            "900"
+        ]),
+        (
+            "incident.threshold.set",
+            json!({"code": "LZ-MESSAGE-TIMEOUT", "occurrences": 5, "windowSeconds": 900}),
+            false
+        )
+    );
+    assert_eq!(
+        request(&["reset", "LZ-SESSION-STALLED"]),
+        (
+            "incident.threshold.reset",
+            json!({"code": "LZ-SESSION-STALLED"}),
+            false
+        )
+    );
+    assert!(
+        Cli::try_parse_from([
+            "lazooctl",
+            "incident",
+            "threshold",
+            "set",
+            "LZ-SESSION-STALLED"
+        ])
+        .is_err(),
+        "--occurrences is required"
+    );
 }

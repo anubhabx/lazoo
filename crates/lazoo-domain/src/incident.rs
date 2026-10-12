@@ -1,5 +1,6 @@
 use std::fmt::Write as _;
 
+use lazoo_protocol::IncidentEscalationReason;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use thiserror::Error;
@@ -29,6 +30,8 @@ pub enum IncidentValidationError {
     DetailTooLarge,
     #[error("incident list limit must be between 1 and 1024")]
     ListLimit,
+    #[error("incident threshold must be 1 to 100 occurrences inside 60 to 86400 seconds")]
+    ThresholdRange,
 }
 
 /// Human-readable text for one incident code. Employees and operators read this before any raw
@@ -206,18 +209,152 @@ pub fn incident_fingerprint(
     hex
 }
 
-/// Advances the threshold window for one more occurrence. Returns whether the window restarted
-/// and the occurrence count inside the current window.
+/// Advances a `window_seconds` threshold window for one more occurrence. Returns whether the
+/// window restarted and the occurrence count inside the current window.
 #[must_use]
-pub const fn incident_window(elapsed_seconds: i64, window_occurrences: u64) -> (bool, u64) {
-    if elapsed_seconds < 0 || elapsed_seconds > INCIDENT_THRESHOLD_WINDOW_SECONDS {
+pub const fn incident_window(
+    elapsed_seconds: i64,
+    window_occurrences: u64,
+    window_seconds: i64,
+) -> (bool, u64) {
+    if elapsed_seconds < 0 || elapsed_seconds > window_seconds {
         (true, 1)
     } else {
         (false, window_occurrences + 1)
     }
 }
 
+/// What one failure was about, beyond its code.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct IncidentFacts {
+    /// The failure was tied to assigned work.
+    pub names_task: bool,
+    /// The failure dead-lettered a `priority` message.
+    pub priority_message: bool,
+}
+
+/// How many equivalent occurrences inside how long a window promote an incident to `priority`.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct IncidentThreshold {
+    pub occurrences: u64,
+    pub window_seconds: i64,
+}
+
+impl IncidentThreshold {
+    #[must_use]
+    pub const fn crossed(self, window_occurrences: u64) -> bool {
+        window_occurrences >= self.occurrences
+    }
+}
+
+/// Section 14.2's default threshold for one code, which the local user may override.
 #[must_use]
-pub const fn incident_threshold_crossed(window_occurrences: u64) -> bool {
-    window_occurrences >= INCIDENT_THRESHOLD_OCCURRENCES
+pub fn default_incident_threshold(code: &str) -> IncidentThreshold {
+    let occurrences = match code {
+        // Missed progress evidence past the adapter's deadline, and a daemon crash.
+        "LZ-SESSION-STALLED" | "LZ-DAEMON-UNAVAILABLE" => 1,
+        // An employee process that exits unexpectedly twice.
+        "LZ-PROCESS-EXIT" => 2,
+        _ => INCIDENT_THRESHOLD_OCCURRENCES,
+    };
+    IncidentThreshold {
+        occurrences,
+        window_seconds: INCIDENT_THRESHOLD_WINDOW_SECONDS,
+    }
+}
+
+/// The threshold one failure is judged against (brief section 14.2): the user's override for
+/// its code when there is one, otherwise the default. Two failures are about what was lost, not
+/// how often, and promote at once whatever is configured: an employee process that dies while it
+/// holds assigned work, and a dead-lettered priority message.
+#[must_use]
+pub fn incident_threshold(
+    code: &str,
+    facts: IncidentFacts,
+    configured: Option<IncidentThreshold>,
+) -> IncidentThreshold {
+    let threshold = configured.unwrap_or_else(|| default_incident_threshold(code));
+    let lost = (code == "LZ-PROCESS-EXIT" && facts.names_task)
+        || (code == "LZ-MESSAGE-DEADLETTER" && facts.priority_message);
+    if lost {
+        IncidentThreshold {
+            occurrences: 1,
+            ..threshold
+        }
+    } else {
+        threshold
+    }
+}
+
+/// A threshold the local user may configure: 1 to 100 occurrences inside one minute to one day.
+pub fn validate_incident_threshold(
+    occurrences: u64,
+    window_seconds: u64,
+) -> Result<IncidentThreshold, IncidentValidationError> {
+    if !(1..=100).contains(&occurrences) || !(60..=86_400).contains(&window_seconds) {
+        return Err(IncidentValidationError::ThresholdRange);
+    }
+    Ok(IncidentThreshold {
+        occurrences,
+        window_seconds: i64::try_from(window_seconds)
+            .map_err(|_| IncidentValidationError::ThresholdRange)?,
+    })
+}
+
+/// Every code Lazoo describes in its own words; `incident threshold list` shows each of them.
+pub const DESCRIBED_INCIDENT_CODES: &[&str] = &[
+    "LZ-PROVIDER-AUTH",
+    "LZ-PROVIDER-INCOMPATIBLE",
+    "LZ-PROCESS-EXIT",
+    "LZ-SESSION-STALLED",
+    "LZ-MESSAGE-TIMEOUT",
+    "LZ-MESSAGE-DEADLETTER",
+    "LZ-WORKTREE-CONFLICT",
+    "LZ-CONFIG-INCOMPATIBLE",
+    "LZ-DAEMON-UNAVAILABLE",
+    "LZ-SESSION-START-FAILED",
+    "LZ-SESSION-OWNER-LOST",
+    "LZ-MESSAGE-OWNER-LOST",
+    "LZ-TURN-OWNER-LOST",
+    "LZ-TASK-DISPATCH-OWNER-LOST",
+    "LZ-TURN-PROVIDER",
+    "LZ-EMPLOYEE-REPORTED",
+];
+
+/// A lead may apply at most this many remedies to one promoted incident...
+pub const MAX_INCIDENT_REMEDIES: u32 = 2;
+/// ...and only within this long after the promotion.
+pub const INCIDENT_REMEDIATION_WINDOW_SECONDS: i64 = 5 * 60;
+
+/// What becomes of a promoted incident in its lead's remediation window.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum RemediationVerdict {
+    /// The lead may still act; nothing changes yet.
+    Open,
+    /// The window closed and the failure has not recurred since the lead's last remedy.
+    Remediated,
+    /// Unresolved: the incident becomes a priority notification for the user.
+    EscalateToUser(IncidentEscalationReason),
+}
+
+/// The whole bounded-remediation rule. `remedies` is how many the lead applied, and `recurred`
+/// whether the failure occurred again after the last of them (false while there are none).
+/// A remediated incident that recurs is judged with a closed window.
+#[must_use]
+pub const fn remediation_verdict(
+    window_closed: bool,
+    remedies: u32,
+    recurred: bool,
+) -> RemediationVerdict {
+    if recurred && remedies >= MAX_INCIDENT_REMEDIES {
+        RemediationVerdict::EscalateToUser(IncidentEscalationReason::RemediesExhausted)
+    } else if !window_closed {
+        RemediationVerdict::Open
+    } else if remedies == 0 {
+        RemediationVerdict::EscalateToUser(IncidentEscalationReason::NoRemedy)
+    } else if recurred {
+        RemediationVerdict::EscalateToUser(IncidentEscalationReason::RecurredAfterRemedy)
+    } else {
+        RemediationVerdict::Remediated
+    }
 }

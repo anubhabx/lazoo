@@ -27,6 +27,75 @@ pub enum IncidentSource {
     Employee,
 }
 
+/// Who is expected to act on a priority incident. `lead` is the bounded remediation window;
+/// `remediated` means the lead's remedy held through it; `user` is the priority notification.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum IncidentEscalation {
+    #[default]
+    None,
+    Lead,
+    Remediated,
+    User,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum IncidentEscalationReason {
+    /// Promoted with no lead task tree to remediate it.
+    NoLead,
+    /// The window closed without a remedy.
+    NoRemedy,
+    /// The failure recurred after the second remedy.
+    RemediesExhausted,
+    /// The failure recurred after a remedy and the window closed (or had closed).
+    RecurredAfterRemedy,
+    /// Promoted before lead remediation existed.
+    SchemaUpgrade,
+}
+
+/// How a user-escalated incident was announced on the desktop, at most once.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum IncidentUserNotification {
+    /// Claimed for a notification whose outcome was never recorded (the daemon stopped).
+    Claimed,
+    Shown,
+    /// The notification could not be shown; it is not retried.
+    Failed,
+    /// The keeper already showed its own notification for this record.
+    Keeper,
+}
+
+/// The fixed set of remedies a lead may apply to an incident on its own task tree.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum IncidentRemedyKind {
+    /// Cancel the affected direct child task.
+    CancelTask,
+    /// Delegate the failed or cancelled child's objective again, to the same or another
+    /// employee, through the ordinary delegation guards.
+    RedelegateTask,
+}
+
+/// One remedy a lead applied; the action it names committed in the same transaction.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct IncidentRemedyRecord {
+    pub id: Uuid,
+    pub incident_id: Uuid,
+    pub attempt: u32,
+    pub kind: IncidentRemedyKind,
+    pub lead_employee_id: Uuid,
+    pub lead_task_id: Uuid,
+    pub turn_id: Uuid,
+    pub target_task_id: Uuid,
+    pub result_task_id: Option<Uuid>,
+    pub occurrences_at_remedy: u64,
+    pub note: String,
+    pub created_at: String,
+}
+
 /// One human-readable operational problem. Equivalent failures (same code, employee, and
 /// project) fold into one row whose occurrence counters and latest scope advance.
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
@@ -61,6 +130,20 @@ pub struct IncidentRecord {
     pub updated_at: String,
     pub acknowledged_at: Option<String>,
     pub resolved_at: Option<String>,
+    #[serde(default)]
+    pub escalation: IncidentEscalation,
+    #[serde(default)]
+    pub remediation_deadline_at: Option<String>,
+    #[serde(default)]
+    pub escalated_at: Option<String>,
+    #[serde(default)]
+    pub escalation_reason: Option<IncidentEscalationReason>,
+    #[serde(default)]
+    pub remedies: Vec<IncidentRemedyRecord>,
+    #[serde(default)]
+    pub user_notified_at: Option<String>,
+    #[serde(default)]
+    pub user_notification: Option<IncidentUserNotification>,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
@@ -82,6 +165,7 @@ pub struct IncidentListParams {
     pub code: Option<String>,
     pub employee_id: Option<Uuid>,
     pub project_id: Option<Uuid>,
+    pub escalation: Option<IncidentEscalation>,
 }
 
 impl Default for IncidentListParams {
@@ -94,6 +178,7 @@ impl Default for IncidentListParams {
             code: None,
             employee_id: None,
             project_id: None,
+            escalation: None,
         }
     }
 }
@@ -120,6 +205,54 @@ pub struct ResolveIncidentParams {
     pub idempotency_key: String,
 }
 
+/// Whether a code's threshold is section 14.2's default or the local user's override.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum IncidentThresholdSource {
+    Default,
+    Configured,
+}
+
+/// The persistent-failure threshold for one code: `occurrences` equivalent failures inside
+/// `windowSeconds` promote its incident. A death under assigned work and a dead-lettered
+/// priority message promote at once whatever is configured.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct IncidentThresholdRecord {
+    pub code: String,
+    pub occurrences: u64,
+    pub window_seconds: u64,
+    pub source: IncidentThresholdSource,
+    pub updated_at: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct IncidentThresholdMutationResult {
+    pub threshold: IncidentThresholdRecord,
+    /// `None` when the threshold already had this value.
+    pub event_sequence: Option<u64>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct SetIncidentThresholdParams {
+    pub code: String,
+    pub occurrences: u64,
+    #[serde(default = "default_threshold_window_seconds")]
+    pub window_seconds: u64,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct ResetIncidentThresholdParams {
+    pub code: String,
+}
+
 const fn default_list_limit() -> u32 {
     100
+}
+
+const fn default_threshold_window_seconds() -> u64 {
+    5 * 60
 }

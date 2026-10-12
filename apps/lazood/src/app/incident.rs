@@ -5,19 +5,44 @@
 //! one row per code, employee, and project so operators and employees read a concise problem
 //! instead of a flood of raw failure codes.
 
+use chrono::{DateTime, Utc};
 use lazoo_protocol::{
     AcknowledgeIncidentParams, ConversationTurnRecord, EmployeeSessionRecord, IncidentListParams,
-    IncidentShowParams, IncidentSource, JsonRpcRequest, MessageRecord, ResolveIncidentParams,
-    RpcError, TaskRecord,
+    IncidentShowParams, IncidentSource, JsonRpcRequest, MessageRecord,
+    ResetIncidentThresholdParams, ResolveIncidentParams, RpcError, SetIncidentThresholdParams,
+    TaskRecord,
 };
 use lazoo_providers::ProviderError;
-use lazoo_store::{ListIncidentsInput, RaiseIncidentInput, SettleIncidentInput, StoreError};
+use lazoo_store::{
+    ListIncidentsInput, RaiseIncidentInput, SetIncidentThresholdInput, SettleIncidentInput,
+    StoreError, dead_letter_incident_key,
+};
 use serde_json::{Value, json};
 use uuid::Uuid;
 
 use super::{App, to_value, truncate_utf8};
 
 const MAX_PROVIDER_ERROR_BYTES: usize = 1024;
+/// Bytes of incident text carried into one desktop notification; `incident show` has the rest.
+const MAX_NOTIFICATION_TEXT_BYTES: usize = 240;
+/// Incidents announced per pass; more wait for the next pass instead of flooding the desktop.
+const NOTIFICATION_PASS_LIMIT: u32 = 64;
+/// Priority dead letters raised per pass; the rest follow on the next.
+const DEAD_LETTER_PASS_LIMIT: u32 = 64;
+
+/// Shows one desktop notification to the local user. The daemon's default is the Windows toast
+/// the keeper already uses; tests substitute a recorder.
+pub trait UserNotifier: Send + Sync {
+    /// # Errors
+    /// Returns a description when the notification could not be shown.
+    fn notify(&self, title: &str, message: &str) -> Result<(), String>;
+}
+
+impl UserNotifier for lazoo_runtime::NativeNotifier {
+    fn notify(&self, title: &str, message: &str) -> Result<(), String> {
+        Self::notify(self, title, message).map_err(|error| error.to_string())
+    }
+}
 
 #[derive(Clone, Debug, Default)]
 pub(super) struct IncidentScope {
@@ -61,6 +86,47 @@ impl App {
             }
             Err(error) => tracing::warn!(code, %error, "incident could not be recorded"),
         }
+    }
+
+    /// Raises `LZ-MESSAGE-DEADLETTER` for a dead-lettered message, once per dead letter. The
+    /// store promotes it at once when the message is `priority`.
+    pub(super) fn note_dead_letter(&self, message: &MessageRecord) {
+        let Some(dead_letter) = &message.dead_letter else {
+            return;
+        };
+        self.note_incident(
+            &dead_letter_incident_key(message.envelope.id, dead_letter.attempt_id),
+            "LZ-MESSAGE-DEADLETTER",
+            IncidentScope {
+                project_id: message.envelope.project_id,
+                employee_id: Some(message.envelope.recipient.employee_id),
+                task_id: message.envelope.task_id,
+                message_id: Some(message.envelope.id),
+                ..IncidentScope::default()
+            },
+            json!({
+                "failureCode": dead_letter.failure_code,
+                "failureMessage": dead_letter.failure_message,
+                "attempts": message.delivery.attempt_count,
+                "priority": message.envelope.priority,
+            }),
+        );
+    }
+
+    /// Raises the dead-letter incident for every dead-lettered priority message that has none
+    /// yet, whichever path exhausted it: a failed notice or user turn, a failed dispatch, or
+    /// restart reconciliation (`message.fail` raises its own at once). Runs at startup and at the
+    /// head of the timed sweep, so the promotion is escalated and announced in the same sweep.
+    #[doc(hidden)]
+    pub fn note_priority_dead_letters_once(&self) -> Result<(), RpcError> {
+        for message in self
+            .store
+            .unnoted_priority_dead_letters(DEAD_LETTER_PASS_LIMIT)
+            .map_err(incident_store_error)?
+        {
+            self.note_dead_letter(&message);
+        }
+        Ok(())
     }
 
     pub(super) fn turn_scope(&self, turn: &ConversationTurnRecord) -> IncidentScope {
@@ -204,6 +270,43 @@ impl App {
             }
             Err(error) => tracing::warn!(%error, "emergency incidents could not be folded"),
         }
+        if let Err(error) = self.note_priority_dead_letters_once() {
+            tracing::warn!(code = %error.code, message = %error.message, "dead-letter incidents failed");
+        }
+    }
+
+    /// Every described or configured code with its effective threshold. Only the local user
+    /// reads and sets thresholds; no collaboration tool can.
+    pub(super) fn incident_threshold_list(&self, value: &Value) -> Result<Value, RpcError> {
+        super::require_empty_params(value, "incident.threshold.list")?;
+        self.store
+            .list_incident_thresholds()
+            .map(to_value)
+            .map_err(incident_store_error)
+    }
+
+    pub(super) fn set_incident_threshold(&self, value: &Value) -> Result<Value, RpcError> {
+        let params: SetIncidentThresholdParams = incident_params(value)?;
+        let result = self
+            .store
+            .set_incident_threshold(&SetIncidentThresholdInput {
+                code: params.code,
+                occurrences: params.occurrences,
+                window_seconds: params.window_seconds,
+            })
+            .map_err(incident_store_error)?;
+        self.publish_events()?;
+        Ok(to_value(result))
+    }
+
+    pub(super) fn reset_incident_threshold(&self, value: &Value) -> Result<Value, RpcError> {
+        let params: ResetIncidentThresholdParams = incident_params(value)?;
+        let result = self
+            .store
+            .reset_incident_threshold(&params.code)
+            .map_err(incident_store_error)?;
+        self.publish_events()?;
+        Ok(to_value(result))
     }
 
     pub(super) fn incident_list(&self, value: &Value) -> Result<Value, RpcError> {
@@ -217,9 +320,79 @@ impl App {
                 code: params.code,
                 employee_id: params.employee_id,
                 project_id: params.project_id,
+                escalation: params.escalation,
             })
             .map(to_value)
             .map_err(incident_store_error)
+    }
+
+    /// Closes every lead remediation window that passed by `now`: what the lead's remedy held
+    /// becomes `remediated`, everything else unresolved becomes a priority notification for the
+    /// user. Nothing here retries, restarts, or cancels anything.
+    #[doc(hidden)]
+    pub fn escalate_due_incidents_once(&self, now: DateTime<Utc>) -> Result<(), RpcError> {
+        let changed = self
+            .store
+            .escalate_due_incidents(now)
+            .map_err(incident_store_error)?;
+        for incident in &changed {
+            tracing::warn!(
+                incident_id = %incident.id,
+                code = %incident.code,
+                escalation = ?incident.escalation,
+                reason = ?incident.escalation_reason,
+                "lead remediation window closed"
+            );
+        }
+        if changed.is_empty() {
+            Ok(())
+        } else {
+            self.publish_events()
+        }
+    }
+
+    /// Announces every user-escalated incident not yet announced with one desktop notification:
+    /// the incident itself when it is alone, otherwise a count, so a burst or an upgrade never
+    /// floods the desktop. Claims commit first, so each incident is announced at most once, and
+    /// a notification that cannot be shown is recorded as `failed` and never retried.
+    #[doc(hidden)]
+    pub fn notify_user_escalations_once(&self, now: DateTime<Utc>) -> Result<(), RpcError> {
+        let claimed = self
+            .store
+            .claim_user_notifications(now, NOTIFICATION_PASS_LIMIT)
+            .map_err(incident_store_error)?;
+        self.publish_events()?;
+        let Some(first) = claimed.first() else {
+            return Ok(());
+        };
+        let (title, mut message) = if claimed.len() == 1 {
+            (
+                format!("Lazoo needs you: {}", first.title),
+                format!("{} {}", first.explanation, first.next_action),
+            )
+        } else {
+            (
+                format!("Lazoo: {} incidents need you", claimed.len()),
+                claimed
+                    .iter()
+                    .map(|incident| incident.title.as_str())
+                    .collect::<Vec<_>>()
+                    .join("; "),
+            )
+        };
+        truncate_utf8(&mut message, MAX_NOTIFICATION_TEXT_BYTES);
+        let shown = match self.user_notifier.notify(&title, &message) {
+            Ok(()) => true,
+            Err(error) => {
+                tracing::warn!(%error, count = claimed.len(), "incident notification was not shown");
+                false
+            }
+        };
+        let ids: Vec<Uuid> = claimed.iter().map(|incident| incident.id).collect();
+        self.store
+            .settle_user_notifications(&ids, shown)
+            .map_err(incident_store_error)?;
+        self.publish_events()
     }
 
     pub(super) fn incident_show(&self, value: &Value) -> Result<Value, RpcError> {

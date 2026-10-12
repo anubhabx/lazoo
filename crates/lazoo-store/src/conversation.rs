@@ -10,7 +10,7 @@ use lazoo_protocol::{
     AuthorityMode, CONVERSATION_CONTRACT_V1, ConversationMutationResult, ConversationRecord,
     ConversationSummary, ConversationTurnEvent, ConversationTurnRecord, ConversationTurnSummary,
     EmployeeAvailability, MESSAGE_ENVELOPE_V2, MessageDeliveryState, MessageEndpoint, MessageKind,
-    MessageSender, TaskState, TurnMutationResult, TurnReconcileResult, TurnState,
+    MessagePriority, MessageSender, TaskState, TurnMutationResult, TurnReconcileResult, TurnState,
 };
 use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, params};
 use serde::Serialize;
@@ -318,6 +318,7 @@ impl Store {
                 body: json!({"turnId": turn_id, "text": input.text}),
                 references: Vec::new(),
                 max_attempts: input.max_attempts,
+                priority: MessagePriority::Normal,
             },
         )?;
         let (author_kind, author_employee_id, author_session_id) = sender_columns(input.author);

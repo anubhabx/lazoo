@@ -263,6 +263,7 @@ fn employee_with(
         authority_mode,
         checkout_policy: EmployeeCheckoutPolicy::Isolated,
         activation_policy: lazoo_protocol::ActivationPolicy::Manual,
+        idle_timeout_seconds: 0,
         enabled,
         provider_observation: route_ready.then(|| ProviderObservation {
             provider: "codex".to_owned(),
@@ -707,6 +708,7 @@ fn canonical_messages_reject_missing_or_cross_scope_tasks_without_writes() {
         correlation_id: None,
         causation_id: None,
         kind: MessageKind::Peer,
+        priority: lazoo_protocol::MessagePriority::Normal,
         body: json!({"text": "missing"}),
         references: Vec::new(),
         max_attempts: 3,

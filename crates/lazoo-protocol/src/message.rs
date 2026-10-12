@@ -16,6 +16,16 @@ pub enum MessageKind {
     System,
 }
 
+/// How much a message matters if it is lost. A dead-lettered `priority` message is promoted to
+/// a priority incident by its first occurrence (brief section 14.2); delivery order is unchanged.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum MessagePriority {
+    #[default]
+    Normal,
+    Priority,
+}
+
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum MessageDeliveryState {
@@ -76,6 +86,8 @@ pub struct MessageEnvelope {
     pub conversation_id: Option<Uuid>,
     pub task_id: Option<Uuid>,
     pub kind: MessageKind,
+    #[serde(default)]
+    pub priority: MessagePriority,
     pub body: Value,
     pub references: Vec<MessageReference>,
     pub created_at: String,
@@ -151,6 +163,8 @@ pub struct MessageSummary {
     pub conversation_id: Option<Uuid>,
     pub task_id: Option<Uuid>,
     pub kind: MessageKind,
+    #[serde(default)]
+    pub priority: MessagePriority,
     pub state: MessageDeliveryState,
     pub revision: u64,
     pub attempt_count: u32,
@@ -185,6 +199,8 @@ pub struct SendMessageParams {
     pub correlation_id: Option<Uuid>,
     pub causation_id: Option<Uuid>,
     pub kind: MessageKind,
+    #[serde(default)]
+    pub priority: MessagePriority,
     pub body: Value,
     #[serde(default)]
     pub references: Vec<MessageReference>,

@@ -1,0 +1,89 @@
+﻿{
+    "status":  "PASS",
+    "schemaVersion":  15,
+    "mode":  "deterministic-fake-transport",
+    "startedAt":  "2026-10-11T17:02:26.9143538Z",
+    "durationMs":  7034,
+    "commands":  [
+                     {
+                         "command":  "cargo test -p lazoo-domain --test incident section_fourteen_two_thresholds_promote_stalls_crashes_and_deaths_at_once --locked -- --exact",
+                         "exitCode":  0,
+                         "durationMs":  321
+                     },
+                     {
+                         "command":  "cargo test -p lazoo-domain --test incident threshold_window_promotes_three_equivalent_failures_inside_five_minutes --locked -- --exact",
+                         "exitCode":  0,
+                         "durationMs":  291
+                     },
+                     {
+                         "command":  "cargo test -p lazoo-store --test incident stalls_and_crashes_promote_at_once_and_a_second_unexpected_exit_promotes --locked -- --exact",
+                         "exitCode":  0,
+                         "durationMs":  518
+                     },
+                     {
+                         "command":  "cargo test -p lazoo-store --test incident equivalent_failures_fold_escalate_at_the_threshold_and_replay_without_writes --locked -- --exact",
+                         "exitCode":  0,
+                         "durationMs":  577
+                     },
+                     {
+                         "command":  "cargo test -p lazoo-store --test delivery a_stall_or_a_death_under_assigned_work_opens_the_lead_window_on_its_first_occurrence --locked -- --exact",
+                         "exitCode":  0,
+                         "durationMs":  3345
+                     },
+                     {
+                         "command":  "cargo test -p lazood --test daemon restart_owner_loss_and_emergency_spool_fold_into_startup_incidents_once --locked -- --exact",
+                         "exitCode":  0,
+                         "durationMs":  525
+                     },
+                     {
+                         "command":  "cargo test -p lazood --test daemon an_unremedied_window_reaches_the_user_on_the_sweep_and_nothing_else_changes --locked -- --exact",
+                         "exitCode":  0,
+                         "durationMs":  555
+                     },
+                     {
+                         "command":  "cargo test -p lazoo-store --test delivery a_promoted_child_incident_gives_the_lead_two_remedies_inside_its_window --locked -- --exact",
+                         "exitCode":  0,
+                         "durationMs":  421
+                     },
+                     {
+                         "command":  "cargo test -p lazoo-store --test store store_enables_wal_foreign_keys_and_schema_version --locked -- --exact",
+                         "exitCode":  0,
+                         "durationMs":  383
+                     },
+                     {
+                         "command":  "git diff --quiet and git diff --cached --quiet -- apps/lazoo-desktop",
+                         "exitCode":  0,
+                         "durationMs":  null
+                     }
+                 ],
+    "evidence":  {
+                     "thresholdTableCovered":  true,
+                     "stallPromotesOnFirstOccurrence":  true,
+                     "daemonCrashPromotesOnFirstOccurrence":  true,
+                     "secondUnexpectedExitPromotes":  true,
+                     "deathUnderAssignedWorkPromotesOnFirstOccurrence":  true,
+                     "promotedChildFailureOpensLeadWindow":  true,
+                     "otherCodesKeepThreeInFiveMinutes":  true,
+                     "keeperCrashReachesUserAtStartup":  true,
+                     "leadRemediationUnchanged":  true,
+                     "schemaTwelve":  true,
+                     "providerSmokeAbsent":  true,
+                     "externalModelUseAbsent":  true,
+                     "uiChangesAbsent":  true
+                 },
+    "boundaries":  {
+                       "providerSmoke":  "NOT_RUN",
+                       "externalModelUse":  "NOT_RUN",
+                       "desktopUi":  "UNCHANGED",
+                       "schemaMigration":  "NONE",
+                       "stalledSessionThreshold":  1,
+                       "daemonCrashThreshold":  1,
+                       "processExitUnderAssignedWorkThreshold":  1,
+                       "unexpectedProcessExitThreshold":  2,
+                       "otherCodesThreshold":  3,
+                       "thresholdWindowSeconds":  300,
+                       "deadLetteredPriorityMessage":  "DEFERRED_NO_MESSAGE_PRIORITY",
+                       "configurableThresholds":  "DEFERRED",
+                       "automaticRetry":  "NEVER"
+                   }
+}

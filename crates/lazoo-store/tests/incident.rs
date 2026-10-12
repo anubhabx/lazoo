@@ -29,6 +29,7 @@ fn store_with_employee() -> (tempfile::TempDir, Store, Uuid) {
             authority_mode: AuthorityMode::Ask,
             checkout_policy: EmployeeCheckoutPolicy::Isolated,
             activation_policy: lazoo_protocol::ActivationPolicy::Manual,
+            idle_timeout_seconds: 0,
             enabled: true,
             provider_observation: None,
         })
@@ -82,24 +83,21 @@ fn equivalent_failures_fold_escalate_at_the_threshold_and_replay_without_writes(
     let (_temporary, store, employee) = store_with_employee();
 
     let first = store
-        .raise_incident(&raise("stall-1", "LZ-SESSION-STALLED", Some(employee)))
+        .raise_incident(&raise("stall-1", "LZ-MESSAGE-TIMEOUT", Some(employee)))
         .unwrap();
     assert_eq!(first.incident.version, 1);
     assert_eq!(first.incident.state, IncidentState::Open);
     assert_eq!(first.incident.priority, IncidentPriority::Normal);
     assert_eq!(first.incident.occurrences, 1);
     assert_eq!(first.incident.revision, 1);
-    assert_eq!(
-        first.incident.title,
-        "Session accepted work but produced no progress"
-    );
-    assert!(first.incident.next_action.contains("never retries"));
+    assert_eq!(first.incident.title, "Delivery deadline expired");
+    assert!(first.incident.next_action.contains("explicitly"));
     assert_eq!(first.incident.employee_id, Some(employee));
     assert_eq!(first.incident.detail["key"], "stall-1");
     assert!(first.event_sequence.is_some());
 
     let replay = store
-        .raise_incident(&raise("stall-1", "LZ-SESSION-STALLED", Some(employee)))
+        .raise_incident(&raise("stall-1", "LZ-MESSAGE-TIMEOUT", Some(employee)))
         .unwrap();
     assert_eq!(replay.incident, first.incident);
     assert!(replay.event_sequence.is_none(), "replays are write-free");
@@ -109,7 +107,7 @@ fn equivalent_failures_fold_escalate_at_the_threshold_and_replay_without_writes(
     ));
 
     let second = store
-        .raise_incident(&raise("stall-2", "LZ-SESSION-STALLED", Some(employee)))
+        .raise_incident(&raise("stall-2", "LZ-MESSAGE-TIMEOUT", Some(employee)))
         .unwrap();
     assert_eq!(second.incident.id, first.incident.id);
     assert_eq!(second.incident.occurrences, 2);
@@ -119,7 +117,7 @@ fn equivalent_failures_fold_escalate_at_the_threshold_and_replay_without_writes(
     assert_eq!(second.incident.detail["key"], "stall-2");
 
     let third = store
-        .raise_incident(&raise("stall-3", "LZ-SESSION-STALLED", Some(employee)))
+        .raise_incident(&raise("stall-3", "LZ-MESSAGE-TIMEOUT", Some(employee)))
         .unwrap();
     assert_eq!(third.incident.id, first.incident.id);
     assert_eq!(third.incident.occurrences, 3);
@@ -128,6 +126,16 @@ fn equivalent_failures_fold_escalate_at_the_threshold_and_replay_without_writes(
         IncidentPriority::Priority,
         "three equivalent failures inside five minutes cross the threshold"
     );
+    // No task tree means no lead to remediate it: the promotion is the user's at once.
+    assert_eq!(
+        third.incident.escalation,
+        lazoo_protocol::IncidentEscalation::User
+    );
+    assert_eq!(
+        third.incident.escalation_reason,
+        Some(lazoo_protocol::IncidentEscalationReason::NoLead)
+    );
+    assert!(third.incident.remediation_deadline_at.is_none());
     assert_eq!(
         third.incident.first_occurred_at,
         first.incident.first_occurred_at
@@ -135,7 +143,7 @@ fn equivalent_failures_fold_escalate_at_the_threshold_and_replay_without_writes(
     assert!(third.incident.last_occurred_at >= second.incident.last_occurred_at);
 
     let other_scope = store
-        .raise_incident(&raise("stall-other", "LZ-SESSION-STALLED", None))
+        .raise_incident(&raise("stall-other", "LZ-MESSAGE-TIMEOUT", None))
         .unwrap();
     assert_ne!(other_scope.incident.id, first.incident.id);
     assert_eq!(other_scope.incident.occurrences, 1);
@@ -196,7 +204,7 @@ fn equivalent_failures_fold_escalate_at_the_threshold_and_replay_without_writes(
 fn acknowledge_and_resolve_are_revisioned_idempotent_and_recurrence_reopens_until_resolved() {
     let (_temporary, store, employee) = store_with_employee();
     let raised = store
-        .raise_incident(&raise("exit-1", "LZ-PROCESS-EXIT", Some(employee)))
+        .raise_incident(&raise("exit-1", "LZ-MESSAGE-TIMEOUT", Some(employee)))
         .unwrap()
         .incident;
 
@@ -227,7 +235,7 @@ fn acknowledge_and_resolve_are_revisioned_idempotent_and_recurrence_reopens_unti
     );
 
     let recurred = store
-        .raise_incident(&raise("exit-2", "LZ-PROCESS-EXIT", Some(employee)))
+        .raise_incident(&raise("exit-2", "LZ-MESSAGE-TIMEOUT", Some(employee)))
         .unwrap()
         .incident;
     assert_eq!(recurred.id, raised.id);
@@ -255,7 +263,7 @@ fn acknowledge_and_resolve_are_revisioned_idempotent_and_recurrence_reopens_unti
     ));
 
     let fresh = store
-        .raise_incident(&raise("exit-3", "LZ-PROCESS-EXIT", Some(employee)))
+        .raise_incident(&raise("exit-3", "LZ-MESSAGE-TIMEOUT", Some(employee)))
         .unwrap()
         .incident;
     assert_ne!(fresh.id, raised.id, "a resolved incident never reopens");
@@ -299,7 +307,7 @@ fn emergency_spool_records_fold_into_keeper_incidents_exactly_once() {
     )
     .unwrap();
     let store = Store::open_path(root.state_db()).unwrap();
-    assert_eq!(store.status().unwrap().schema_version, 10);
+    assert_eq!(store.status().unwrap().schema_version, 15);
     assert_eq!(store.import_pending_incidents(&root).unwrap(), 2);
 
     let raised = store.reconcile_emergency_incidents().unwrap();
@@ -333,6 +341,484 @@ fn emergency_spool_records_fold_into_keeper_incidents_exactly_once() {
             })
             .unwrap()
             .len(),
+        1
+    );
+}
+
+#[test]
+fn stalls_and_crashes_promote_at_once_and_a_second_unexpected_exit_promotes() {
+    use lazoo_protocol::{IncidentEscalation, IncidentEscalationReason};
+
+    let (_temporary, store, employee) = store_with_employee();
+    for (key, code) in [
+        ("stall", "LZ-SESSION-STALLED"),
+        ("crash", "LZ-DAEMON-UNAVAILABLE"),
+    ] {
+        let born = store
+            .raise_incident(&raise(key, code, Some(employee)))
+            .unwrap()
+            .incident;
+        assert_eq!(born.occurrences, 1);
+        assert_eq!(born.priority, IncidentPriority::Priority, "{code}");
+        // No task tree, so no lead: the user is told at once.
+        assert_eq!(born.escalation, IncidentEscalation::User);
+        assert_eq!(
+            born.escalation_reason,
+            Some(IncidentEscalationReason::NoLead)
+        );
+    }
+
+    let first_exit = store
+        .raise_incident(&raise("exit-1", "LZ-PROCESS-EXIT", Some(employee)))
+        .unwrap()
+        .incident;
+    assert_eq!(first_exit.priority, IncidentPriority::Normal);
+    assert_eq!(first_exit.escalation, IncidentEscalation::None);
+    let second_exit = store
+        .raise_incident(&raise("exit-2", "LZ-PROCESS-EXIT", Some(employee)))
+        .unwrap()
+        .incident;
+    assert_eq!(second_exit.id, first_exit.id);
+    assert_eq!(second_exit.priority, IncidentPriority::Priority);
+    assert_eq!(second_exit.escalation, IncidentEscalation::User);
+
+    // A third stall folds into the promoted incident without a second promotion.
+    let again = store
+        .raise_incident(&raise("stall-2", "LZ-SESSION-STALLED", Some(employee)))
+        .unwrap()
+        .incident;
+    assert_eq!(again.occurrences, 2);
+    assert_eq!(
+        incident_event_types(&store),
+        vec![
+            "incident.escalated",
+            "incident.escalated",
+            "incident.raised",
+            "incident.escalated",
+            "incident.recurred",
+        ]
+    );
+}
+
+#[test]
+fn user_escalations_are_claimed_once_and_their_outcome_is_never_rewritten() {
+    use chrono::Utc;
+    use lazoo_protocol::{IncidentEscalation, IncidentUserNotification};
+
+    let (_temporary, store, employee) = store_with_employee();
+    // Two user escalations (a stall and a crash the keeper already announced), one normal
+    // incident, and one user escalation the user has already acknowledged.
+    let stall = store
+        .raise_incident(&raise("stall", "LZ-SESSION-STALLED", Some(employee)))
+        .unwrap()
+        .incident;
+    let crash = store
+        .raise_incident(&RaiseIncidentInput {
+            source: IncidentSource::Keeper,
+            ..raise("crash", "LZ-DAEMON-UNAVAILABLE", None)
+        })
+        .unwrap()
+        .incident;
+    let normal = store
+        .raise_incident(&raise("timeout", "LZ-MESSAGE-TIMEOUT", Some(employee)))
+        .unwrap()
+        .incident;
+    let seen = store
+        .raise_incident(&raise("seen", "LZ-SESSION-STALLED", None))
+        .unwrap()
+        .incident;
+    store
+        .acknowledge_incident(&settle("ack-seen", seen.id, seen.revision))
+        .unwrap();
+    for incident in [&stall, &crash, &seen] {
+        assert_eq!(incident.escalation, IncidentEscalation::User);
+        assert!(incident.user_notified_at.is_none());
+    }
+
+    let now = Utc::now();
+    let claimed = store.claim_user_notifications(now, 64).unwrap();
+    assert_eq!(
+        claimed
+            .iter()
+            .map(|incident| incident.id)
+            .collect::<Vec<_>>(),
+        vec![stall.id],
+        "the keeper's record, the normal incident, and the acknowledged one are not announced"
+    );
+    assert_eq!(
+        claimed[0].user_notification,
+        Some(IncidentUserNotification::Claimed)
+    );
+    assert_eq!(claimed[0].user_notified_at, Some(now.to_rfc3339()));
+    assert_eq!(claimed[0].revision, stall.revision + 1);
+    let crash = store.get_incident(crash.id).unwrap();
+    assert_eq!(
+        crash.user_notification,
+        Some(IncidentUserNotification::Keeper)
+    );
+    assert!(
+        store
+            .get_incident(normal.id)
+            .unwrap()
+            .user_notification
+            .is_none()
+    );
+    assert!(
+        store
+            .get_incident(seen.id)
+            .unwrap()
+            .user_notification
+            .is_none()
+    );
+    assert!(
+        store.claim_user_notifications(now, 64).unwrap().is_empty(),
+        "a claim is never repeated"
+    );
+
+    let settled = store.settle_user_notifications(&[stall.id], false).unwrap();
+    assert_eq!(
+        settled[0].user_notification,
+        Some(IncidentUserNotification::Failed)
+    );
+    assert!(
+        store
+            .settle_user_notifications(&[stall.id, crash.id], true)
+            .unwrap()
+            .is_empty(),
+        "a settled outcome, and a keeper record, are never rewritten"
+    );
+    assert_eq!(
+        store.get_incident(stall.id).unwrap().user_notification,
+        Some(IncidentUserNotification::Failed)
+    );
+    let notified = incident_event_types(&store)
+        .into_iter()
+        .filter(|kind| kind == "incident.user-notified")
+        .count();
+    assert_eq!(notified, 2, "the keeper settlement and the failed outcome");
+}
+
+/// Sends one message from and to `employee_id`, claims it, and fails it for good, so it is
+/// dead-lettered; returns its record.
+fn dead_letter(
+    store: &Store,
+    key: &str,
+    employee_id: Uuid,
+    priority: lazoo_protocol::MessagePriority,
+) -> lazoo_protocol::MessageRecord {
+    use lazoo_protocol::{MessageEndpoint, MessageKind};
+    use lazoo_store::{ClaimMessageInput, FailMessageInput, SendMessageInput};
+
+    let endpoint = MessageEndpoint {
+        employee_id,
+        session_id: None,
+    };
+    let sent = store
+        .send_message(&SendMessageInput {
+            request_id: format!("send-{key}"),
+            idempotency_key: format!("send-{key}"),
+            sender: endpoint,
+            recipient: endpoint,
+            project_id: None,
+            conversation_id: None,
+            task_id: None,
+            correlation_id: None,
+            causation_id: None,
+            kind: MessageKind::Status,
+            priority,
+            body: json!({"text": key}),
+            references: Vec::new(),
+            max_attempts: 3,
+        })
+        .unwrap()
+        .message;
+    let claimed = store
+        .claim_message(&ClaimMessageInput {
+            request_id: format!("claim-{key}"),
+            idempotency_key: format!("claim-{key}"),
+            message_id: sent.envelope.id,
+            expected_revision: sent.delivery.revision,
+        })
+        .unwrap()
+        .message;
+    store
+        .fail_message(&FailMessageInput {
+            request_id: format!("fail-{key}"),
+            idempotency_key: format!("fail-{key}"),
+            message_id: sent.envelope.id,
+            expected_revision: claimed.delivery.revision,
+            attempt_id: claimed.attempts[0].id,
+            retryable: false,
+            failure_code: "LZ-TURN-PROVIDER".to_owned(),
+            failure_message: "the provider refused the delivery".to_owned(),
+        })
+        .unwrap()
+        .message
+}
+
+fn dead_letter_raise(key: &str, message: &lazoo_protocol::MessageRecord) -> RaiseIncidentInput {
+    let attempt_id = message
+        .dead_letter
+        .as_ref()
+        .map_or_else(Uuid::new_v4, |dead| dead.attempt_id);
+    RaiseIncidentInput {
+        idempotency_key: lazoo_store::dead_letter_incident_key(message.envelope.id, attempt_id),
+        employee_id: Some(message.envelope.recipient.employee_id),
+        message_id: Some(message.envelope.id),
+        ..raise(key, "LZ-MESSAGE-DEADLETTER", None)
+    }
+}
+
+#[test]
+fn one_dead_lettered_priority_message_is_a_priority_incident_raised_once() {
+    use lazoo_protocol::{IncidentEscalation, IncidentEscalationReason, MessagePriority};
+
+    let (_temporary, store, employee_id) = store_with_employee();
+    let normal = dead_letter(&store, "normal", employee_id, MessagePriority::Normal);
+    let urgent = dead_letter(&store, "urgent", employee_id, MessagePriority::Priority);
+    assert_eq!(urgent.envelope.priority, MessagePriority::Priority);
+    assert_eq!(normal.envelope.priority, MessagePriority::Normal);
+    assert!(urgent.dead_letter.is_some() && normal.dead_letter.is_some());
+    let summaries = store.list_messages(0, 10).unwrap();
+    assert_eq!(summaries[0].priority, MessagePriority::Normal);
+    assert_eq!(summaries[1].priority, MessagePriority::Priority);
+
+    // Only the priority dead letter waits for its incident.
+    let unnoted = store.unnoted_priority_dead_letters(10).unwrap();
+    assert_eq!(unnoted.len(), 1);
+    assert_eq!(unnoted[0].envelope.id, urgent.envelope.id);
+
+    // A normal dead letter still needs three inside the window.
+    let folded = store
+        .raise_incident(&dead_letter_raise("normal", &normal))
+        .unwrap()
+        .incident;
+    assert_eq!(folded.priority, IncidentPriority::Normal);
+
+    // One priority dead letter promotes the incident it folds into, and with no lead to
+    // remediate it, it is the user's.
+    let promoted = store
+        .raise_incident(&dead_letter_raise("urgent", &urgent))
+        .unwrap()
+        .incident;
+    assert_eq!(promoted.id, folded.id);
+    assert_eq!(promoted.occurrences, 2);
+    assert_eq!(promoted.priority, IncidentPriority::Priority);
+    assert_eq!(promoted.escalation, IncidentEscalation::User);
+    assert_eq!(
+        promoted.escalation_reason,
+        Some(IncidentEscalationReason::NoLead)
+    );
+    assert_eq!(promoted.message_id, Some(urgent.envelope.id));
+    assert!(store.unnoted_priority_dead_letters(10).unwrap().is_empty());
+    let replay = store
+        .raise_incident(&dead_letter_raise("urgent", &urgent))
+        .unwrap();
+    assert!(
+        replay.event_sequence.is_none(),
+        "one incident per dead letter"
+    );
+
+    // Priority is read from the dead letter itself: naming a priority message that was never
+    // dead-lettered, or using another code, promotes nothing.
+    let (_other_temporary, other, other_employee) = store_with_employee();
+    let live = dead_letter(&other, "live", other_employee, MessagePriority::Priority);
+    let endpoint = live.envelope.recipient;
+    let pending = other
+        .send_message(&lazoo_store::SendMessageInput {
+            request_id: "send-pending".to_owned(),
+            idempotency_key: "send-pending".to_owned(),
+            sender: endpoint,
+            recipient: endpoint,
+            project_id: None,
+            conversation_id: None,
+            task_id: None,
+            correlation_id: None,
+            causation_id: None,
+            kind: lazoo_protocol::MessageKind::Status,
+            priority: MessagePriority::Priority,
+            body: json!({"text": "still queued"}),
+            references: Vec::new(),
+            max_attempts: 3,
+        })
+        .unwrap()
+        .message;
+    let asserted = other
+        .raise_incident(&RaiseIncidentInput {
+            message_id: Some(pending.envelope.id),
+            employee_id: Some(other_employee),
+            ..raise("asserted", "LZ-MESSAGE-DEADLETTER", None)
+        })
+        .unwrap()
+        .incident;
+    assert_eq!(asserted.priority, IncidentPriority::Normal);
+    let timeout = other
+        .raise_incident(&RaiseIncidentInput {
+            message_id: Some(live.envelope.id),
+            ..raise("timeout", "LZ-MESSAGE-TIMEOUT", Some(other_employee))
+        })
+        .unwrap()
+        .incident;
+    assert_eq!(timeout.priority, IncidentPriority::Normal);
+}
+
+fn threshold(
+    code: &str,
+    occurrences: u64,
+    window_seconds: u64,
+) -> lazoo_store::SetIncidentThresholdInput {
+    lazoo_store::SetIncidentThresholdInput {
+        code: code.to_owned(),
+        occurrences,
+        window_seconds,
+    }
+}
+
+#[test]
+#[allow(clippy::too_many_lines)] // One override's life: set, applied, windowed, lowered, reset.
+fn configured_thresholds_apply_from_the_next_occurrence_and_reset_to_the_default() {
+    use lazoo_domain::IncidentValidationError;
+    use lazoo_protocol::IncidentThresholdSource;
+
+    let (_temporary, store, employee_id) = store_with_employee();
+    let defaults = store.list_incident_thresholds().unwrap();
+    assert!(defaults.windows(2).all(|pair| pair[0].code < pair[1].code));
+    let stall = defaults
+        .iter()
+        .find(|row| row.code == "LZ-SESSION-STALLED")
+        .unwrap();
+    assert_eq!(stall.occurrences, 1);
+    assert_eq!(stall.window_seconds, 300);
+    assert_eq!(stall.source, IncidentThresholdSource::Default);
+    assert!(stall.updated_at.is_none());
+
+    // Stalls on a slow model: promote only the second inside ten minutes.
+    let set = store
+        .set_incident_threshold(&threshold("LZ-SESSION-STALLED", 2, 600))
+        .unwrap();
+    assert_eq!(set.threshold.source, IncidentThresholdSource::Configured);
+    assert_eq!(set.threshold.occurrences, 2);
+    assert!(set.threshold.updated_at.is_some());
+    assert!(set.event_sequence.is_some());
+    let unchanged = store
+        .set_incident_threshold(&threshold("LZ-SESSION-STALLED", 2, 600))
+        .unwrap();
+    assert!(
+        unchanged.event_sequence.is_none(),
+        "the same value is no change"
+    );
+    let first = store
+        .raise_incident(&raise("stall-1", "LZ-SESSION-STALLED", Some(employee_id)))
+        .unwrap()
+        .incident;
+    assert_eq!(first.priority, IncidentPriority::Normal);
+    let second = store
+        .raise_incident(&raise("stall-2", "LZ-SESSION-STALLED", Some(employee_id)))
+        .unwrap()
+        .incident;
+    assert_eq!(second.priority, IncidentPriority::Priority);
+
+    // A configured window counts occurrences further apart than the default five minutes.
+    store
+        .set_incident_threshold(&threshold("LZ-WORKTREE-CONFLICT", 2, 600))
+        .unwrap();
+    for (key, at) in [
+        ("conflict-1", "2026-10-11T00:00:00+00:00"),
+        ("conflict-2", "2026-10-11T00:06:40+00:00"),
+    ] {
+        store
+            .raise_incident(&RaiseIncidentInput {
+                occurred_at: Some(at.to_owned()),
+                ..raise(key, "LZ-WORKTREE-CONFLICT", Some(employee_id))
+            })
+            .unwrap();
+    }
+    let conflicts = store
+        .list_incidents(&ListIncidentsInput {
+            limit: 10,
+            code: Some("LZ-WORKTREE-CONFLICT".to_owned()),
+            ..ListIncidentsInput::default()
+        })
+        .unwrap();
+    assert_eq!(conflicts[0].priority, IncidentPriority::Priority);
+
+    // Lowered: one timeout is enough. An override for a code not yet described is kept.
+    store
+        .set_incident_threshold(&threshold("LZ-MESSAGE-TIMEOUT", 1, 300))
+        .unwrap();
+    let timeout = store
+        .raise_incident(&raise("timeout-1", "LZ-MESSAGE-TIMEOUT", Some(employee_id)))
+        .unwrap()
+        .incident;
+    assert_eq!(timeout.priority, IncidentPriority::Priority);
+    store
+        .set_incident_threshold(&threshold("LZ-RATE-LIMIT", 4, 900))
+        .unwrap();
+    let listed = store.list_incident_thresholds().unwrap();
+    let rate = listed
+        .iter()
+        .find(|row| row.code == "LZ-RATE-LIMIT")
+        .unwrap();
+    assert_eq!((rate.occurrences, rate.window_seconds), (4, 900));
+    assert_eq!(rate.source, IncidentThresholdSource::Configured);
+    assert_eq!(listed.len(), defaults.len() + 1);
+
+    // Reset returns the default; a promoted incident is never demoted.
+    let reset = store
+        .reset_incident_threshold("LZ-SESSION-STALLED")
+        .unwrap();
+    assert_eq!(reset.threshold.source, IncidentThresholdSource::Default);
+    assert_eq!(reset.threshold.occurrences, 1);
+    assert!(reset.event_sequence.is_some());
+    assert!(
+        store
+            .reset_incident_threshold("LZ-SESSION-STALLED")
+            .unwrap()
+            .event_sequence
+            .is_none()
+    );
+    assert_eq!(
+        store.get_incident(second.id).unwrap().priority,
+        IncidentPriority::Priority
+    );
+    let fresh = store
+        .raise_incident(&raise("stall-fresh", "LZ-SESSION-STALLED", None))
+        .unwrap()
+        .incident;
+    assert_eq!(fresh.priority, IncidentPriority::Priority);
+
+    for (input, expected) in [
+        (
+            threshold("LZ-MESSAGE-TIMEOUT", 0, 300),
+            IncidentValidationError::ThresholdRange,
+        ),
+        (
+            threshold("LZ-MESSAGE-TIMEOUT", 3, 30),
+            IncidentValidationError::ThresholdRange,
+        ),
+        (
+            threshold("not-a-code", 3, 300),
+            IncidentValidationError::CodeInvalid,
+        ),
+    ] {
+        assert!(matches!(
+            store.set_incident_threshold(&input),
+            Err(StoreError::IncidentValidation(error)) if error == expected
+        ));
+    }
+    let events = incident_event_types(&store);
+    assert_eq!(
+        events
+            .iter()
+            .filter(|kind| *kind == "incident.threshold-set")
+            .count(),
+        4
+    );
+    assert_eq!(
+        events
+            .iter()
+            .filter(|kind| *kind == "incident.threshold-reset")
+            .count(),
         1
     );
 }

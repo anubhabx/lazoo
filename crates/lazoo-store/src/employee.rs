@@ -24,6 +24,7 @@ pub struct CreateEmployeeInput {
     pub authority_mode: AuthorityMode,
     pub checkout_policy: EmployeeCheckoutPolicy,
     pub activation_policy: ActivationPolicy,
+    pub idle_timeout_seconds: u32,
     pub enabled: bool,
     pub provider_observation: Option<ProviderObservation>,
 }
@@ -44,6 +45,7 @@ pub struct UpdateEmployeeInput {
     pub authority_mode: Option<AuthorityMode>,
     pub checkout_policy: Option<EmployeeCheckoutPolicy>,
     pub activation_policy: Option<ActivationPolicy>,
+    pub idle_timeout_seconds: Option<u32>,
     pub enabled: Option<bool>,
     pub provider_observation: Option<ProviderObservation>,
 }
@@ -97,8 +99,8 @@ impl Store {
             "INSERT INTO employees (
                 id, name, provider, role, instructions, model, reasoning_effort,
                 native_settings_json, authority_mode, checkout_policy, activation_policy, enabled,
-                configuration_revision, created_at, updated_at, disabled_at
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, 1, ?13, ?13, ?14)",
+                configuration_revision, created_at, updated_at, disabled_at, idle_timeout_seconds
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, 1, ?13, ?13, ?14, ?15)",
             params![
                 employee_id.to_string(),
                 input.name,
@@ -114,6 +116,7 @@ impl Store {
                 i64::from(input.enabled),
                 now,
                 (!input.enabled).then_some(now.clone()),
+                i64::from(input.idle_timeout_seconds),
             ],
         )?;
         let roster_revision = advance_roster(&transaction, &now)?;
@@ -518,6 +521,9 @@ fn apply_employee_update(current: &EmployeeRecord, input: &UpdateEmployeeInput) 
     if let Some(activation_policy) = input.activation_policy {
         desired.activation_policy = activation_policy;
     }
+    if let Some(idle_timeout_seconds) = input.idle_timeout_seconds {
+        desired.idle_timeout_seconds = idle_timeout_seconds;
+    }
     if let Some(enabled) = input.enabled {
         desired.enabled = enabled;
     }
@@ -558,6 +564,7 @@ fn configuration_changed(current: &EmployeeRecord, desired: &EmployeeRecord) -> 
         || current.authority_mode != desired.authority_mode
         || current.checkout_policy != desired.checkout_policy
         || current.activation_policy != desired.activation_policy
+        || current.idle_timeout_seconds != desired.idle_timeout_seconds
         || current.enabled != desired.enabled
 }
 
@@ -570,7 +577,8 @@ fn write_employee(
             name = ?2, provider = ?3, role = ?4, instructions = ?5, model = ?6,
             reasoning_effort = ?7, native_settings_json = ?8, authority_mode = ?9,
             checkout_policy = ?10, activation_policy = ?11, enabled = ?12,
-            configuration_revision = ?13, updated_at = ?14, disabled_at = ?15
+            configuration_revision = ?13, updated_at = ?14, disabled_at = ?15,
+            idle_timeout_seconds = ?16
          WHERE id = ?1",
         params![
             employee.id.to_string(),
@@ -589,6 +597,7 @@ fn write_employee(
                 .map_err(|_| StoreError::NegativeSequence)?,
             employee.updated_at,
             employee.disabled_at,
+            i64::from(employee.idle_timeout_seconds),
         ],
     )?;
     Ok(())
@@ -628,7 +637,7 @@ fn query_employees(connection: &Connection) -> Result<Vec<EmployeeRecord>, Store
     let mut statement = connection.prepare(
         "SELECT id, name, provider, role, instructions, model, reasoning_effort,
                 native_settings_json, authority_mode, checkout_policy, activation_policy, enabled,
-                configuration_revision, created_at, updated_at, disabled_at
+                configuration_revision, created_at, updated_at, disabled_at, idle_timeout_seconds
          FROM employees ORDER BY created_at, id",
     )?;
     let rows = statement.query_map([], raw_employee)?;
@@ -643,7 +652,8 @@ pub(crate) fn query_employee(
         .query_row(
             "SELECT id, name, provider, role, instructions, model, reasoning_effort,
                     native_settings_json, authority_mode, checkout_policy, activation_policy, enabled,
-                    configuration_revision, created_at, updated_at, disabled_at
+                    configuration_revision, created_at, updated_at, disabled_at,
+                    idle_timeout_seconds
              FROM employees WHERE id = ?1",
             [employee_id.to_string()],
             raw_employee,
@@ -758,6 +768,7 @@ type RawEmployee = (
     String,
     String,
     Option<String>,
+    i64,
 );
 
 fn raw_employee(row: &rusqlite::Row<'_>) -> rusqlite::Result<RawEmployee> {
@@ -778,6 +789,7 @@ fn raw_employee(row: &rusqlite::Row<'_>) -> rusqlite::Result<RawEmployee> {
         row.get(13)?,
         row.get(14)?,
         row.get(15)?,
+        row.get(16)?,
     ))
 }
 
@@ -799,6 +811,7 @@ fn employee_from_raw(row: RawEmployee) -> Result<EmployeeRecord, StoreError> {
         created_at: row.13,
         updated_at: row.14,
         disabled_at: row.15,
+        idle_timeout_seconds: u32::try_from(row.16).map_err(|_| StoreError::NegativeSequence)?,
     })
 }
 

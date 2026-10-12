@@ -1,6 +1,6 @@
 use lazoo_protocol::{
     AuthorityMode, EmployeeCheckoutPolicy, MessageDeliveryState, MessageEndpoint, MessageKind,
-    MessageSender,
+    MessagePriority, MessageSender,
 };
 use lazoo_store::{
     AcknowledgeMessageInput, CancelMessageInput, ClaimMessageInput, FailMessageInput,
@@ -25,6 +25,7 @@ fn employee(name: &str) -> CreateEmployeeInput {
         authority_mode: AuthorityMode::Ask,
         checkout_policy: EmployeeCheckoutPolicy::Isolated,
         activation_policy: lazoo_protocol::ActivationPolicy::Manual,
+        idle_timeout_seconds: 0,
         enabled: true,
         provider_observation: None,
     }
@@ -48,6 +49,7 @@ fn send(key: &str, sender: Uuid, recipient: Uuid, causation_id: Option<Uuid>) ->
         correlation_id: None,
         causation_id,
         kind: MessageKind::Peer,
+        priority: MessagePriority::Normal,
         body: json!({"text": key}),
         references: Vec::new(),
         max_attempts: 3,

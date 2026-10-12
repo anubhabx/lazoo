@@ -6,8 +6,8 @@ use lazoo_protocol::{
     JsonRpcRequest, JsonRpcResponse, MAX_FRAME_BYTES, MessageDeliveryState, MessageEndpoint,
     MessageKind, MessageSender, PROTOCOL_V1, ProviderProbeParams, ProviderSmokeParams,
     ProviderSmokeResult, RetryTurnParams, SendMessageParams, SessionLifecycleState,
-    SubmitTurnParams, SystemStatus, TurnListParams, TurnState, UserMessageEndpoint,
-    UserMessageKind, WarmSessionParams,
+    SubmitTurnParams, SystemStatus, TurnListParams, TurnState, UpdateEmployeeParams,
+    UserMessageEndpoint, UserMessageKind, WarmSessionParams,
 };
 use serde_json::json;
 use uuid::Uuid;
@@ -363,4 +363,88 @@ fn activation_policies_round_trip_as_kebab_case_and_default_to_manual() {
     );
     assert_eq!(ActivationPolicy::default(), ActivationPolicy::Manual);
     assert!(serde_json::from_str::<ActivationPolicy>(r#""automatic""#).is_err());
+}
+
+#[test]
+fn idle_timeouts_default_to_never_on_create_and_stay_unchanged_when_an_update_omits_them() {
+    let create: CreateEmployeeParams = serde_json::from_value(json!({
+        "name": "Rhea",
+        "provider": "codex",
+        "idempotencyKey": "create-rhea"
+    }))
+    .unwrap();
+    assert_eq!(create.idle_timeout_seconds, 0);
+
+    let update = |extra: serde_json::Value| -> UpdateEmployeeParams {
+        let mut params = json!({
+            "id": "00000000-0000-4000-8000-000000000001",
+            "expectedRevision": 1,
+            "idempotencyKey": "update-rhea"
+        });
+        params
+            .as_object_mut()
+            .unwrap()
+            .extend(extra.as_object().unwrap().clone());
+        serde_json::from_value(params).unwrap()
+    };
+    assert_eq!(update(json!({})).idle_timeout_seconds, None);
+    assert_eq!(
+        update(json!({"idleTimeoutSeconds": 900})).idle_timeout_seconds,
+        Some(900)
+    );
+    assert_eq!(
+        update(json!({"idleTimeoutSeconds": 0})).idle_timeout_seconds,
+        Some(0)
+    );
+}
+
+#[test]
+fn message_priority_is_kebab_case_and_defaults_to_normal_for_older_records() {
+    use lazoo_protocol::{MessageEnvelope, MessagePriority};
+
+    let sender = Uuid::new_v4();
+    let params: SendMessageParams = serde_json::from_value(json!({
+        "sender": {"employeeId": sender},
+        "recipient": {"employeeId": sender},
+        "kind": "status",
+        "body": {"text": "Deploy is blocked."},
+        "idempotencyKey": "message-1"
+    }))
+    .unwrap();
+    assert_eq!(params.priority, MessagePriority::Normal);
+    let urgent: SendMessageParams = serde_json::from_value(json!({
+        "sender": {"employeeId": sender},
+        "recipient": {"employeeId": sender},
+        "kind": "status",
+        "priority": "priority",
+        "body": {"text": "Deploy is blocked."},
+        "idempotencyKey": "message-2"
+    }))
+    .unwrap();
+    assert_eq!(urgent.priority, MessagePriority::Priority);
+    assert_eq!(
+        serde_json::to_string(&MessagePriority::Priority).unwrap(),
+        r#""priority""#
+    );
+
+    let id = Uuid::new_v4();
+    let older: MessageEnvelope = serde_json::from_value(json!({
+        "version": 1,
+        "id": id,
+        "idempotencyKey": "older",
+        "correlationId": id,
+        "causationId": null,
+        "sender": {"employeeId": sender, "sessionId": null},
+        "recipient": {"employeeId": sender, "sessionId": null},
+        "projectId": null,
+        "conversationId": null,
+        "taskId": null,
+        "kind": "peer",
+        "body": {"text": "hello"},
+        "references": [],
+        "createdAt": "2026-10-11T00:00:00Z"
+    }))
+    .unwrap();
+    assert_eq!(older.priority, MessagePriority::Normal);
+    assert_eq!(serde_json::to_value(&older).unwrap()["priority"], "normal");
 }

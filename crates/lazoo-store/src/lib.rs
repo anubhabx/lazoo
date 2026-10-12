@@ -40,14 +40,17 @@ pub use employee::{
     CreateEmployeeInput, DisableEmployeeInput, RefreshProviderObservationsInput,
     UpdateEmployeeInput,
 };
-pub use incident::{ListIncidentsInput, RaiseIncidentInput, SettleIncidentInput};
+pub use incident::{
+    ApplyIncidentRemedyInput, IncidentRemedyAction, IncidentRemedyResult, ListIncidentsInput,
+    RaiseIncidentInput, SetIncidentThresholdInput, SettleIncidentInput, dead_letter_incident_key,
+};
 pub use message::{
     AcknowledgeMessageInput, CancelMessageInput, ClaimMessageInput, FailMessageInput,
     RetryMessageInput, SendMessageInput,
 };
 pub use session::{
-    BeginSessionInput, BeginSessionStopInput, FailSessionInput, FinishSessionStopInput,
-    MarkSessionReadyInput,
+    BeginIdleSessionStopInput, BeginSessionInput, BeginSessionStopInput, FailSessionInput,
+    FinishSessionStopInput, MarkSessionReadyInput,
 };
 pub use task::{
     AcceptTaskInput, CancelTaskInput, ClaimTaskDispatchInput, DeferTaskDispatchInput,
@@ -326,6 +329,18 @@ pub enum StoreError {
     },
     #[error("incident idempotency key was already used with different input")]
     IncidentIdempotencyConflict,
+    #[error("incident {incident_id} cannot take a remedy: {reason}")]
+    IncidentRemedyClosed {
+        incident_id: Uuid,
+        reason: &'static str,
+    },
+    #[error(
+        "incident {incident_id} is not about a direct child of this turn's root task, so this \
+         employee cannot remedy it"
+    )]
+    IncidentRemedyScope { incident_id: Uuid },
+    #[error("task {task_id} is {state}; redelegation needs a failed or cancelled task")]
+    IncidentRemedyTarget { task_id: Uuid, state: String },
     #[error(transparent)]
     IncidentValidation(#[from] lazoo_domain::IncidentValidationError),
     #[error("stored {field} is invalid: {message}")]
