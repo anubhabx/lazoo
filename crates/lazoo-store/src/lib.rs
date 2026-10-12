@@ -60,7 +60,7 @@ pub use task::{
     DelegateTaskInput, FailTaskDispatchInput, ListTasksInput, MarkTaskDispatchWorkspaceReadyInput,
     RecordTaskDispatchTurnInput, ReportTaskInput, ResolveTaskInput, StartTaskInput,
 };
-pub use workspace::SpaceConversation;
+pub use workspace::{ConversationWorkspace, SpaceConversation, WorkerRow};
 
 use crate::{emergency::import_pending_incidents, migration::apply_migrations};
 

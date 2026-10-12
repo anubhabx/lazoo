@@ -153,6 +153,13 @@ pub enum WorkspaceCommand {
         #[arg(long)]
         project_id: Option<Uuid>,
     },
+    /// The active conversation: its lead header, worker dock, attention items, and newest turns.
+    Show {
+        id: Uuid,
+        /// How many of the newest turns to include (1 to 500).
+        #[arg(long, default_value_t = 50)]
+        turn_limit: u32,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -859,6 +866,11 @@ fn workspace_request(command: &WorkspaceCommand) -> (&'static str, Value, bool) 
         WorkspaceCommand::Launcher { project_id } => (
             "workspace.launcher",
             json!({"projectId": project_id}),
+            false,
+        ),
+        WorkspaceCommand::Show { id, turn_limit } => (
+            "workspace.conversation",
+            json!({"id": id, "turnLimit": turn_limit}),
             false,
         ),
     }

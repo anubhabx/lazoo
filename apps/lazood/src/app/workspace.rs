@@ -1,19 +1,26 @@
-//! The desktop workspace read models, phase 1 (`docs/superpowers/specs/2026-10-13-desktop-
-//! workspace-contract-design.md`): `workspace.conversations` (one space's history rows with
-//! their markers and the remembered lead) and `workspace.launcher` (who can lead right now and
-//! why not, with the start request as data). Derived on every call; nothing is stored.
+//! The desktop workspace read models (`docs/superpowers/specs/2026-10-13-desktop-workspace-
+//! contract-design.md`): `workspace.conversations` (one space's history rows with their
+//! markers and the remembered lead), `workspace.launcher` (who can lead right now and why not,
+//! with the start request as data), and `workspace.conversation` (the lead header, the worker
+//! dock, the conversation's own Inbox items, and its newest turns). Derived on every call;
+//! nothing is stored.
 
 use std::collections::BTreeMap;
 
 use lazoo_domain::{
-    ConversationFacts, InboxCursor, conversation_marker, conversation_title, lead_startability,
-    validate_workspace_limit,
+    ConversationFacts, InboxCursor, WorkerFacts, conversation_marker, conversation_title,
+    lead_lifecycle, lead_startability, turn_in_flight, validate_workspace_limit, worker_label,
+    worker_state,
 };
 use lazoo_protocol::{
-    AuthorityMode, ConversationRow, InboxAttention, LeadCandidate, RpcError, WORKSPACE_CONTRACT_V1,
-    WorkspaceConversationsParams, WorkspaceConversationsResult, WorkspaceLauncherParams,
-    WorkspaceLauncherResult, WorkspaceStartAction,
+    AuthorityMode, ConversationRow, InboxAttention, IncidentEscalation, IncidentState,
+    LeadCandidate, LeadHeader, LeadSessionSummary, RosterEntry, RosterSnapshot, RpcError,
+    WORKSPACE_CONTRACT_V1, WorkerCard, WorkerSessionSummary, WorkerWorkspace,
+    WorkspaceConversationParams, WorkspaceConversationResult, WorkspaceConversationsParams,
+    WorkspaceConversationsResult, WorkspaceLauncherParams, WorkspaceLauncherResult, WorkspaceScope,
+    WorkspaceStartAction,
 };
+use lazoo_store::{ConversationWorkspace, InboxSources, WorkerRow};
 use serde_json::{Value, json};
 use uuid::Uuid;
 
@@ -242,5 +249,181 @@ fn workspace_invalid(message: impl Into<String>) -> RpcError {
         code: "LZ-WORKSPACE-INVALID".to_owned(),
         message: message.into(),
         data: None,
+    }
+}
+
+impl App {
+    /// Phase 2 of the workspace contract: the lead header, the worker dock, the conversation's
+    /// own Inbox items, and its newest turns, derived on every call.
+    pub(super) fn workspace_conversation(&self, value: &Value) -> Result<Value, RpcError> {
+        let params: WorkspaceConversationParams = serde_json::from_value(value.clone())
+            .map_err(|error| workspace_invalid(error.to_string()))?;
+        validate_workspace_limit(params.turn_limit)
+            .map_err(|error| workspace_invalid(error.to_string()))?;
+        let workspace = self
+            .store
+            .conversation_workspace(params.id, params.turn_limit)
+            .map_err(conversation_store_error)?;
+        let conversation = &workspace.conversation;
+        let project = self.require_project(conversation.project_id)?;
+        let roster = self.store.roster_snapshot().map_err(store_error)?;
+        let sources = self.store.inbox_sources().map_err(store_error)?;
+        let lead_entry = roster_entry(&roster, conversation.lead_employee_id)
+            .ok_or_else(|| workspace_invalid("the lead employee no longer exists"))?;
+        let (title, title_derived) = conversation_title(
+            conversation.title.as_deref(),
+            workspace.first_user_text.as_deref(),
+        );
+        let lead = self.lead_header(lead_entry, &workspace);
+        let workers = workspace
+            .workers
+            .iter()
+            .map(|row| worker_card(row, &roster, &sources))
+            .collect();
+        let attention = unresolved_items(&sources)
+            .into_iter()
+            .filter(|item| item.scope.conversation_id == Some(conversation.id))
+            .collect();
+        Ok(to_value(WorkspaceConversationResult {
+            version: WORKSPACE_CONTRACT_V1,
+            scope: WorkspaceScope {
+                project_id: conversation.project_id,
+                project_name: project.as_ref().map(|record| record.display_name.clone()),
+                canonical_path: project.as_ref().map(|record| record.canonical_path.clone()),
+                checkout_mode: project.as_ref().map(|record| record.checkout_mode),
+            },
+            conversation: workspace.conversation.clone(),
+            title,
+            title_derived,
+            lead,
+            root_task: workspace.root_task,
+            turns: workspace.turns,
+            turns_truncated: workspace.turns_truncated,
+            workers,
+            attention,
+            event_high_water: workspace.event_high_water.max(sources.event_high_water),
+        }))
+    }
+
+    /// The terminal header's identity line from the lead's roster entry and the conversation's
+    /// newest root task and lead turn.
+    fn lead_header(&self, entry: &RosterEntry, workspace: &ConversationWorkspace) -> LeadHeader {
+        LeadHeader {
+            employee_id: entry.employee.id,
+            name: entry.employee.name.clone(),
+            role: entry.employee.role.clone(),
+            provider: entry.employee.provider.clone(),
+            model: entry.employee.model.clone(),
+            reasoning_effort: entry.employee.reasoning_effort.clone(),
+            availability: entry.availability,
+            availability_reason: entry.availability_reason.clone(),
+            authority: workspace
+                .root_task
+                .as_ref()
+                .map(|task| task.effective_authority),
+            session: entry.session.as_ref().map(|session| LeadSessionSummary {
+                id: session.id,
+                state: session.state,
+                native_host_pid: session.native_host_pid,
+                working_directory: Some(
+                    self.root
+                        .session_working_dir(session.id)
+                        .to_string_lossy()
+                        .into_owned(),
+                ),
+            }),
+            lifecycle: lead_lifecycle(
+                entry.session.as_ref(),
+                workspace.latest_lead_turn.map(|(_, state)| state),
+            ),
+            active_turn_id: workspace
+                .latest_lead_turn
+                .filter(|(_, state)| turn_in_flight(*state))
+                .map(|(id, _)| id),
+        }
+    }
+}
+
+fn roster_entry(roster: &RosterSnapshot, employee_id: Uuid) -> Option<&RosterEntry> {
+    roster
+        .entries
+        .iter()
+        .find(|entry| entry.employee.id == employee_id)
+}
+
+/// One dock card from a worker's rows, the roster, and the Inbox sources (pending approvals
+/// and escalated incidents).
+fn worker_card(row: &WorkerRow, roster: &RosterSnapshot, sources: &InboxSources) -> WorkerCard {
+    let task = &row.task;
+    let employee = sources.employees.get(&task.assigned_employee_id);
+    let pending_approval = sources.approvals.iter().find(|approval| {
+        approval.task_id == Some(task.id)
+            || task
+                .active_turn_id
+                .is_some_and(|turn_id| approval.turn_id == turn_id)
+    });
+    let blocking_incident =
+        sources
+            .incidents
+            .iter()
+            .map(|(incident, _)| incident)
+            .find(|incident| {
+                incident.task_id == Some(task.id)
+                    && incident.state != IncidentState::Resolved
+                    && matches!(
+                        incident.escalation,
+                        IncidentEscalation::Lead | IncidentEscalation::User
+                    )
+            });
+    let (state, state_reason) = worker_state(&WorkerFacts {
+        task,
+        roster: roster_entry(roster, task.assigned_employee_id),
+        dispatch: row.dispatch.as_ref(),
+        active_turn_state: row.active_turn_state,
+        pending_approval,
+        blocking_incident,
+    });
+    WorkerCard {
+        task_id: task.id,
+        revision: task.revision,
+        root_task_id: task.root_task_id,
+        parent_task_id: task.parent_task_id,
+        depth: task.depth,
+        employee_id: task.assigned_employee_id,
+        name: employee.map(|record| record.name.clone()),
+        provider: employee.map(|record| record.provider.clone()),
+        model: employee.and_then(|record| record.model.clone()),
+        label: worker_label(&task.objective),
+        state,
+        state_reason,
+        task_state: task.state,
+        effective_authority: task.effective_authority,
+        session: task.active_session_id.and_then(|id| {
+            row.session_state
+                .map(|state| WorkerSessionSummary { id, state })
+        }),
+        active_turn_id: task.active_turn_id,
+        workspace: row.dispatch.as_ref().map(|dispatch| WorkerWorkspace {
+            kind: dispatch.workspace_kind,
+            path: dispatch.workspace_path.clone(),
+            branch_name: dispatch.branch_name.clone(),
+            base_commit: dispatch.base_commit.clone(),
+        }),
+        failure_code: task.failure_code.clone(),
+        failure_message: task.failure_message.clone(),
+        created_at: task.created_at.clone(),
+        updated_at: task.updated_at.clone(),
+        terminal_at: task.terminal_at.clone(),
+    }
+}
+
+fn conversation_store_error(error: lazoo_store::StoreError) -> RpcError {
+    match error {
+        lazoo_store::StoreError::ConversationNotFound { conversation_id } => RpcError {
+            code: "LZ-CONVERSATION-NOT-FOUND".to_owned(),
+            message: error.to_string(),
+            data: Some(json!({"conversationId": conversation_id})),
+        },
+        other => store_error(other),
     }
 }

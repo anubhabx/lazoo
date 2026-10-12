@@ -1400,3 +1400,28 @@ fn workspace_cli_maps_conversations_and_launcher() {
         )
     );
 }
+
+#[test]
+fn workspace_cli_maps_show() {
+    let request = |args: &[&str]| {
+        let mut argv = vec!["lazooctl", "workspace", "show"];
+        argv.extend_from_slice(args);
+        command_request(&Cli::try_parse_from(argv).unwrap().command)
+    };
+    assert_eq!(
+        request(&[CONVERSATION_ID]),
+        (
+            "workspace.conversation",
+            json!({"id": CONVERSATION_ID, "turnLimit": 50}),
+            false
+        )
+    );
+    assert_eq!(
+        request(&[CONVERSATION_ID, "--turn-limit", "5"]),
+        (
+            "workspace.conversation",
+            json!({"id": CONVERSATION_ID, "turnLimit": 5}),
+            false
+        )
+    );
+}

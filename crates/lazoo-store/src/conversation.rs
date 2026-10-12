@@ -1568,7 +1568,7 @@ type RawTurnSummary = (
     String,
 );
 
-fn raw_turn_summary(row: &rusqlite::Row<'_>) -> rusqlite::Result<RawTurnSummary> {
+pub(crate) fn raw_turn_summary(row: &rusqlite::Row<'_>) -> rusqlite::Result<RawTurnSummary> {
     Ok((
         row.get(0)?,
         row.get(1)?,
@@ -1587,7 +1587,9 @@ fn raw_turn_summary(row: &rusqlite::Row<'_>) -> rusqlite::Result<RawTurnSummary>
     ))
 }
 
-fn turn_summary_from_raw(raw: RawTurnSummary) -> Result<ConversationTurnSummary, StoreError> {
+pub(crate) fn turn_summary_from_raw(
+    raw: RawTurnSummary,
+) -> Result<ConversationTurnSummary, StoreError> {
     Ok(ConversationTurnSummary {
         sequence: unsigned(raw.0)?,
         id: parse_uuid(&raw.1, "conversation_turns.id")?,

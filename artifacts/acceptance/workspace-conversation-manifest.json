@@ -1,0 +1,65 @@
+{
+  "status": "PASS",
+  "schemaVersion": 15,
+  "mode": "deterministic-fake-transport",
+  "startedAt": "2026-10-12T22:10:52.3078451Z",
+  "durationMs": 2266,
+  "commands": [
+    {
+      "command": "cargo test -p lazoo-domain --test workspace the_lead_lifecycle_follows_the_session_and_its_newest_turn --locked -- --exact",
+      "exitCode": 0,
+      "durationMs": 367
+    },
+    {
+      "command": "cargo test -p lazoo-domain --test workspace worker_cards_take_the_first_state_that_holds_with_lazoo_words --locked -- --exact",
+      "exitCode": 0,
+      "durationMs": 279
+    },
+    {
+      "command": "cargo test -p lazooctl --test cli workspace_cli_maps_show --locked -- --exact",
+      "exitCode": 0,
+      "durationMs": 302
+    },
+    {
+      "command": "cargo test -p lazood --test daemon the_user_opens_the_conversation_header_and_worker_dock_through_the_daemon --locked -- --exact",
+      "exitCode": 0,
+      "durationMs": 770
+    },
+    {
+      "command": "cargo test -p lazoo-store --test store store_enables_wal_foreign_keys_and_schema_version --locked -- --exact",
+      "exitCode": 0,
+      "durationMs": 449
+    },
+    {
+      "command": "git diff --quiet and git diff --cached --quiet -- apps/lazoo-desktop",
+      "exitCode": 0,
+      "durationMs": null
+    }
+  ],
+  "evidence": {
+    "lifecycleFollowsTheSession": true,
+    "workerCardsFollowTheRows": true,
+    "cliMapsWorkspaceShow": true,
+    "daemonServesTheConversation": true,
+    "headerCarriesAuthorityAndSession": true,
+    "attentionIsEmbedded": true,
+    "turnsAreBounded": true,
+    "workspaceStoresNothing": true,
+    "snapshotUnchanged": true,
+    "schemaFifteen": true,
+    "providerSmokeAbsent": true,
+    "externalModelUseAbsent": true,
+    "uiChangesAbsent": true
+  },
+  "boundaries": {
+    "providerSmoke": "NOT_RUN",
+    "externalModelUse": "NOT_RUN",
+    "desktopUi": "UNCHANGED",
+    "schemaMigration": "NONE",
+    "storage": "DERIVED_NEVER_STORED",
+    "mutations": "NONE",
+    "phase": "TWO_HEADER_AND_WORKER_DOCK",
+    "deferred": "WORKSPACE_ACTIONS_AS_DATA",
+    "toolAccess": "NONE"
+  }
+}

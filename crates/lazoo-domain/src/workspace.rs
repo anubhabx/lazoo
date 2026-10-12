@@ -1,9 +1,14 @@
-//! The desktop workspace read models (sidebar rows and the launcher), derived from rows that
-//! stay authoritative. Nothing here is stored: the rules below say what a conversation's
-//! marker is, what its title is, and whether an employee can be started as the lead right now.
+//! The desktop workspace read models (sidebar rows, the launcher, the lead header, and the
+//! worker dock), derived from rows that stay authoritative. Nothing here is stored: the rules
+//! below say what a conversation's marker is, what its title is, whether an employee can be
+//! started as the lead right now, what the lead's lifecycle is, and which of the dock's eight
+//! states a worker is in.
 
 use lazoo_protocol::{
-    ConversationMarker, EmployeeAvailability, RosterEntry, TaskState, TurnState, WorkerCounts,
+    ApprovalRecord, ConversationMarker, EmployeeAvailability, EmployeeSessionRecord,
+    IncidentEscalation, IncidentRecord, LeadLifecycle, RosterEntry, SessionLifecycleState,
+    TaskDispatchRecord, TaskDispatchState, TaskRecord, TaskState, TurnState, WorkerCounts,
+    WorkerState,
 };
 use thiserror::Error;
 
@@ -153,4 +158,164 @@ pub fn lead_startability(entry: &RosterEntry) -> (bool, Option<String>) {
             )),
         ),
     }
+}
+
+pub const MAX_WORKER_LABEL_BYTES: usize = 120;
+
+/// The terminal header's lifecycle (contract section 4.5): no session is dormant; an idle
+/// session with the lead's newest turn unfinished is busy; an uncertain newest turn is unknown;
+/// otherwise the session's own state.
+#[must_use]
+pub fn lead_lifecycle(
+    session: Option<&EmployeeSessionRecord>,
+    latest_lead_turn: Option<TurnState>,
+) -> LeadLifecycle {
+    if latest_lead_turn == Some(TurnState::Uncertain) {
+        return LeadLifecycle::Unknown;
+    }
+    match session.map(|session| session.state) {
+        None => LeadLifecycle::Dormant,
+        Some(SessionLifecycleState::Starting) => LeadLifecycle::Starting,
+        Some(SessionLifecycleState::Idle) => {
+            if latest_lead_turn.is_some_and(turn_in_flight) {
+                LeadLifecycle::Busy
+            } else {
+                LeadLifecycle::Idle
+            }
+        }
+        Some(SessionLifecycleState::Stopping) => LeadLifecycle::Stopping,
+        Some(SessionLifecycleState::Suspended) => LeadLifecycle::Suspended,
+        Some(SessionLifecycleState::Failed) => LeadLifecycle::Failed,
+    }
+}
+
+/// A turn that has not reached a terminal state.
+#[must_use]
+pub const fn turn_in_flight(state: TurnState) -> bool {
+    matches!(
+        state,
+        TurnState::Recorded | TurnState::Submitting | TurnState::Accepted
+    )
+}
+
+/// The objective's first non-empty line, bounded, for a worker card.
+#[must_use]
+pub fn worker_label(objective: &str) -> String {
+    let line = objective
+        .lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty())
+        .unwrap_or_default();
+    truncate_utf8(line, MAX_WORKER_LABEL_BYTES)
+        .trim_end()
+        .to_owned()
+}
+
+/// What the worker card rule reads about one task below a root.
+#[derive(Clone, Copy, Debug)]
+pub struct WorkerFacts<'a> {
+    pub task: &'a TaskRecord,
+    /// The worker's roster entry, when the employee still exists.
+    pub roster: Option<&'a RosterEntry>,
+    pub dispatch: Option<&'a TaskDispatchRecord>,
+    /// The state of the task's active turn, when it has one.
+    pub active_turn_state: Option<TurnState>,
+    /// A pending approval naming the task or its active turn.
+    pub pending_approval: Option<&'a ApprovalRecord>,
+    /// An unresolved incident on the task escalated to the lead or the user.
+    pub blocking_incident: Option<&'a IncidentRecord>,
+}
+
+/// The dock state, first rule that holds (contract section 4.4), with Lazoo's words for it.
+#[must_use]
+pub fn worker_state(facts: &WorkerFacts<'_>) -> (WorkerState, String) {
+    let task = facts.task;
+    if task.state == TaskState::Uncertain {
+        return (
+            WorkerState::Unknown,
+            "The outcome is uncertain: decide how the task ended".to_owned(),
+        );
+    }
+    if let Some(approval) = facts.pending_approval {
+        return (
+            WorkerState::NeedsApproval,
+            format!("Waiting for your approval: {}", approval.action),
+        );
+    }
+    match task.state {
+        TaskState::CancelRequested => {
+            return (
+                WorkerState::Interrupted,
+                "Being interrupted: cancel requested".to_owned(),
+            );
+        }
+        TaskState::Cancelled => {
+            return (
+                WorkerState::Interrupted,
+                "Interrupted: the task was cancelled".to_owned(),
+            );
+        }
+        TaskState::Failed => {
+            return (
+                WorkerState::Failed,
+                format!(
+                    "Failed: {}",
+                    task.failure_code.as_deref().unwrap_or("see the task")
+                ),
+            );
+        }
+        TaskState::Completed => return (WorkerState::Complete, "Completed".to_owned()),
+        TaskState::Proposed => {
+            return (
+                WorkerState::Blocked,
+                "Waiting for you to accept the task".to_owned(),
+            );
+        }
+        TaskState::Accepted | TaskState::Running | TaskState::Uncertain => {}
+    }
+    if let Some(entry) = facts.roster
+        && matches!(
+            entry.availability,
+            EmployeeAvailability::Disabled
+                | EmployeeAvailability::Offline
+                | EmployeeAvailability::Unverified
+                | EmployeeAvailability::Failed
+        )
+        && let (false, Some(reason)) = lead_startability(entry)
+    {
+        return (WorkerState::Blocked, format!("Blocked: {reason}"));
+    }
+    if let Some(incident) = facts.blocking_incident {
+        let whom = if incident.escalation == IncidentEscalation::Lead {
+            "the lead"
+        } else {
+            "you"
+        };
+        return (
+            WorkerState::Blocked,
+            format!("Blocked: {} (escalated to {whom})", incident.title),
+        );
+    }
+    if task.state == TaskState::Running {
+        return match facts.active_turn_state {
+            Some(TurnState::Accepted) => (
+                WorkerState::Running,
+                "Running: turn accepted by the harness".to_owned(),
+            ),
+            Some(TurnState::Submitting) => {
+                (WorkerState::Running, "Running: turn submitting".to_owned())
+            }
+            _ => (WorkerState::Waiting, "Waiting between turns".to_owned()),
+        };
+    }
+    let reason = match facts.dispatch.map(|dispatch| dispatch.state) {
+        None => "Waiting to be dispatched when the worker is free",
+        Some(TaskDispatchState::Preparing) => "Preparing the workspace",
+        Some(TaskDispatchState::WorkspaceReady) => "Starting the worker's session",
+        Some(TaskDispatchState::TurnRecorded) => "Waiting for the first turn to start",
+        Some(
+            TaskDispatchState::Failed | TaskDispatchState::Cancelled | TaskDispatchState::Uncertain,
+        ) => "Waiting after an unfinished dispatch",
+    };
+    (WorkerState::Waiting, reason.to_owned())
 }

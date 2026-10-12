@@ -11000,3 +11000,313 @@ fn workspace_read_models_acceptance_contract_is_deterministic_and_backend_only()
         );
     }
 }
+
+/// The active conversation through the daemon: the lead header's lifecycle follows the lead's
+/// session, the root task and its authority appear with the first turn, each worker card takes
+/// the dock state its rows support with Lazoo's words, the conversation's own Inbox items are
+/// embedded, the turns are bounded, and nothing is stored or added to the desktop snapshot.
+#[tokio::test]
+#[allow(clippy::too_many_lines)] // One user session over a conversation's whole life.
+async fn the_user_opens_the_conversation_header_and_worker_dock_through_the_daemon() {
+    let (_temporary, harness) = tool_harness(AuthorityMode::Ask);
+    let call = |id: &str, method: &str, params: serde_json::Value| {
+        harness.app.handle(request(id, method, params))
+    };
+    let show = |id: &'static str| async move {
+        call(
+            id,
+            "workspace.conversation",
+            json!({"id": harness.conversation_id}),
+        )
+        .await
+        .result
+        .unwrap()
+    };
+
+    // Before anything: a dormant lead, no root task, no workers, nothing to attend to.
+    let view = show("fresh").await;
+    assert_eq!(view["version"], 1);
+    assert_eq!(view["conversation"]["id"], json!(harness.conversation_id));
+    assert_eq!(view["title"], "New work");
+    assert_eq!(view["titleDerived"], true);
+    assert_eq!(view["scope"]["projectId"], serde_json::Value::Null);
+    assert_eq!(view["scope"]["projectName"], serde_json::Value::Null);
+    assert_eq!(view["lead"]["employeeId"], json!(harness.lead.id));
+    assert_eq!(view["lead"]["name"], "Rhea");
+    assert_eq!(view["lead"]["role"], "Lead");
+    assert_eq!(view["lead"]["provider"], "codex");
+    assert_eq!(view["lead"]["model"], "test-model");
+    assert_eq!(view["lead"]["availability"], "dormant");
+    assert_eq!(view["lead"]["lifecycle"], "dormant");
+    assert_eq!(view["lead"]["session"], serde_json::Value::Null);
+    assert_eq!(view["lead"]["authority"], serde_json::Value::Null);
+    assert_eq!(view["lead"]["activeTurnId"], serde_json::Value::Null);
+    assert_eq!(view["rootTask"], serde_json::Value::Null);
+    assert_eq!(view["turns"], json!([]));
+    assert_eq!(view["turnsTruncated"], false);
+    assert_eq!(view["workers"], json!([]));
+    assert_eq!(view["attention"], json!([]));
+    assert!(view["eventHighWater"].is_u64());
+
+    // Bad parameters and an unknown conversation are refused with stable codes.
+    for (label, params, code) in [
+        (
+            "bad-limit",
+            json!({"id": harness.conversation_id, "turnLimit": 0}),
+            "LZ-WORKSPACE-INVALID",
+        ),
+        (
+            "bad-field",
+            json!({"id": harness.conversation_id, "nope": 1}),
+            "LZ-WORKSPACE-INVALID",
+        ),
+        (
+            "unknown",
+            json!({"id": uuid::Uuid::new_v4()}),
+            "LZ-CONVERSATION-NOT-FOUND",
+        ),
+    ] {
+        let error = call(label, "workspace.conversation", params)
+            .await
+            .error
+            .unwrap();
+        assert_eq!(error.code, code, "{label}");
+    }
+
+    // A warmed lead is idle, with its session and private working directory in the header.
+    warm_tool_lead(&harness).await;
+    let view = show("warmed").await;
+    assert_eq!(view["lead"]["availability"], "idle");
+    assert_eq!(view["lead"]["lifecycle"], "idle");
+    assert_eq!(view["lead"]["session"]["state"], "idle");
+    let lead_session_id = view["lead"]["session"]["id"].clone();
+    assert!(
+        view["lead"]["session"]["workingDirectory"]
+            .as_str()
+            .unwrap()
+            .contains(lead_session_id.as_str().unwrap())
+    );
+
+    // The lead's first turn delegates two tasks under ask: the root task carries the authority,
+    // both workers are blocked on the user's acceptance, and both proposals are the attention.
+    let roster_revision = harness.store.roster_snapshot().unwrap().revision;
+    harness.backend.tool_calls.lock().unwrap().extend([
+        tool_call(
+            "call-1",
+            "task_delegate",
+            json!({
+                "employeeId": harness.worker.id,
+                "objective": "Implement the parser fix",
+                "rosterRevision": roster_revision
+            }),
+        ),
+        tool_call(
+            "call-2",
+            "task_delegate",
+            json!({
+                "employeeId": harness.worker.id,
+                "objective": "Write the parser tests\nand run them",
+                "rosterRevision": roster_revision
+            }),
+        ),
+    ]);
+    let submitted = submit_lead_turn(&harness, "ask").await;
+    assert_eq!(submitted["turn"]["state"], "completed");
+    let child_ids: Vec<uuid::Uuid> = harness.backend.tool_results.lock().unwrap()[..2]
+        .iter()
+        .map(|result| result.content["taskId"].as_str().unwrap().parse().unwrap())
+        .collect();
+    let view = show("proposed").await;
+    assert_eq!(view["title"], "Coordinate the parser fix");
+    assert_eq!(view["lead"]["lifecycle"], "idle");
+    assert_eq!(view["lead"]["authority"], "ask");
+    assert_eq!(view["lead"]["activeTurnId"], serde_json::Value::Null);
+    assert_eq!(view["rootTask"]["role"], "lead");
+    assert_eq!(view["rootTask"]["state"], "running");
+    assert_eq!(view["rootTask"]["effectiveAuthority"], "ask");
+    let root_task_id = view["rootTask"]["id"].clone();
+    let turns = view["turns"].as_array().unwrap();
+    assert_eq!(turns.len(), 1);
+    assert_eq!(turns[0]["state"], "completed");
+    assert_eq!(turns[0]["recipient"]["employeeId"], json!(harness.lead.id));
+    let workers = view["workers"].as_array().unwrap();
+    assert_eq!(workers.len(), 2, "{workers:?}");
+    for (worker, child_id) in workers.iter().zip(&child_ids) {
+        assert_eq!(worker["taskId"], json!(child_id));
+        assert_eq!(worker["rootTaskId"], root_task_id);
+        assert_eq!(worker["parentTaskId"], root_task_id);
+        assert_eq!(worker["depth"], 1);
+        assert_eq!(worker["employeeId"], json!(harness.worker.id));
+        assert_eq!(worker["name"], "Mira");
+        assert_eq!(worker["provider"], "codex");
+        assert_eq!(worker["model"], "test-model");
+        assert_eq!(worker["state"], "blocked");
+        assert_eq!(worker["stateReason"], "Waiting for you to accept the task");
+        assert_eq!(worker["taskState"], "proposed");
+        assert_eq!(worker["effectiveAuthority"], "ask");
+        assert_eq!(worker["session"], serde_json::Value::Null);
+        assert_eq!(worker["workspace"], serde_json::Value::Null);
+        assert_eq!(worker["terminalAt"], serde_json::Value::Null);
+    }
+    assert_eq!(workers[0]["label"], "Implement the parser fix");
+    assert_eq!(workers[1]["label"], "Write the parser tests");
+    let attention = view["attention"].as_array().unwrap();
+    assert_eq!(attention.len(), 2, "{attention:?}");
+    assert!(attention.iter().all(|item| item["kind"] == "task-proposal"
+        && item["attention"] == "action-required"
+        && item["scope"]["conversationId"] == json!(harness.conversation_id)));
+    assert_eq!(attention[0]["actions"][0]["method"], "task.accept");
+
+    // Accepting the first makes it wait for dispatch; cancelling the second as the user
+    // interrupts it; only one proposal is left to attend to.
+    call(
+        "accept",
+        "task.accept",
+        json!({"id": child_ids[0], "expectedRevision": 1, "idempotencyKey": "dock-accept"}),
+    )
+    .await
+    .result
+    .unwrap();
+    let view = show("accepted").await;
+    assert_eq!(view["workers"][0]["state"], "waiting");
+    assert_eq!(
+        view["workers"][0]["stateReason"],
+        "Waiting to be dispatched when the worker is free"
+    );
+    assert_eq!(view["workers"][0]["taskState"], "accepted");
+    assert_eq!(view["attention"].as_array().unwrap().len(), 1);
+    call(
+        "cancel",
+        "task.cancel",
+        json!({
+            "id": child_ids[1],
+            "expectedRevision": 1,
+            "actor": {"kind": "user"},
+            "idempotencyKey": "dock-cancel"
+        }),
+    )
+    .await
+    .result
+    .unwrap();
+    let view = show("cancelled").await;
+    assert_eq!(view["workers"][1]["state"], "interrupted");
+    assert_eq!(
+        view["workers"][1]["stateReason"],
+        "Interrupted: the task was cancelled"
+    );
+    assert_eq!(view["workers"][1]["taskState"], "cancelled");
+    assert!(view["workers"][1]["terminalAt"].is_string());
+    assert_eq!(view["attention"], json!([]));
+
+    // Dispatch runs the first worker to completion on its own workspace; the worker's turn
+    // joins the conversation's turns, which a small limit bounds newest-first.
+    harness.app.dispatch_pending_tasks_once().await.unwrap();
+    let view = show("dispatched").await;
+    let worker = view["workers"][0].clone();
+    assert_eq!(worker["state"], "complete");
+    assert_eq!(worker["stateReason"], "Completed");
+    assert_eq!(worker["taskState"], "completed");
+    assert_eq!(worker["workspace"]["kind"], "projectless");
+    assert!(worker["workspace"]["path"].is_string());
+    // A terminal task holds no active session or turn any more; its turn is in the list.
+    assert_eq!(worker["session"], serde_json::Value::Null);
+    assert!(worker["terminalAt"].is_string());
+    let turns = view["turns"].as_array().unwrap();
+    assert_eq!(turns.len(), 2);
+    assert_eq!(turns[1]["taskId"], json!(child_ids[0]));
+    assert_eq!(
+        turns[1]["recipient"]["employeeId"],
+        json!(harness.worker.id)
+    );
+    assert_eq!(view["turnsTruncated"], false);
+    let bounded = call(
+        "bounded",
+        "workspace.conversation",
+        json!({"id": harness.conversation_id, "turnLimit": 1}),
+    )
+    .await
+    .result
+    .unwrap();
+    assert_eq!(bounded["turns"].as_array().unwrap().len(), 1);
+    assert_eq!(bounded["turns"][0]["id"], turns[1]["id"], "the newest turn");
+    assert_eq!(bounded["turnsTruncated"], true);
+
+    // The result reaching the lead completes the plan; stopping the lead suspends the header.
+    harness.app.deliver_pending_notices_once().await.unwrap();
+    let view = show("done").await;
+    assert_eq!(view["rootTask"]["state"], "completed");
+    assert_eq!(view["lead"]["lifecycle"], "idle");
+    let lead_session = harness
+        .store
+        .get_session(lead_session_id.as_str().unwrap().parse().unwrap())
+        .unwrap();
+    call(
+        "stop",
+        "session.stop",
+        json!({
+            "id": lead_session.id,
+            "expectedRevision": lead_session.revision,
+            "idempotencyKey": "dock-stop"
+        }),
+    )
+    .await
+    .result
+    .unwrap();
+    let view = show("stopped").await;
+    assert_eq!(view["lead"]["lifecycle"], "suspended");
+    assert_eq!(view["lead"]["availability"], "suspended");
+    assert_eq!(view["lead"]["session"]["state"], "suspended");
+
+    // Nothing was stored for the workspace, and the snapshot is unchanged.
+    assert!(
+        harness
+            .store
+            .list_events(0, 1000)
+            .unwrap()
+            .iter()
+            .all(|event| !event.event_type.starts_with("workspace"))
+    );
+    let snapshot = call("desktop", "desktop.snapshot", json!({}))
+        .await
+        .result
+        .unwrap();
+    assert!(snapshot.get("workspace").is_none());
+    assert!(snapshot.get("lead").is_none());
+    assert_desktop_is_roster_neutral(&harness.app).await;
+}
+
+#[test]
+fn workspace_conversation_acceptance_contract_is_deterministic_and_backend_only() {
+    let repository = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let script_path = repository.join("scripts/acceptance/workspace-conversation.ps1");
+    let script =
+        std::fs::read_to_string(&script_path).expect("workspace conversation acceptance script");
+
+    for required in [
+        "the_lead_lifecycle_follows_the_session_and_its_newest_turn",
+        "worker_cards_take_the_first_state_that_holds_with_lazoo_words",
+        "workspace_cli_maps_show",
+        "the_user_opens_the_conversation_header_and_worker_dock_through_the_daemon",
+        "store_enables_wal_foreign_keys_and_schema_version",
+        "lifecycleFollowsTheSession",
+        "workerCardsFollowTheRows",
+        "attentionIsEmbedded",
+        "workspaceStoresNothing",
+        "providerSmokeAbsent",
+        "externalModelUseAbsent",
+        "uiChangesAbsent",
+        "deterministic-fake-transport",
+        "schemaVersion = 15",
+    ] {
+        assert!(
+            script.contains(required),
+            "acceptance script must contain {required}"
+        );
+    }
+    for forbidden in ["provider', 'smoke", "LivePrompt"] {
+        assert!(
+            !script.contains(forbidden),
+            "acceptance script must not contain {forbidden}"
+        );
+    }
+}

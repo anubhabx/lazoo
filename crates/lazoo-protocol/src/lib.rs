@@ -62,9 +62,11 @@ pub use types::{
 };
 
 pub use workspace::{
-    ConversationMarker, ConversationRow, LeadCandidate, WORKSPACE_CONTRACT_V1, WorkerCounts,
+    ConversationMarker, ConversationRow, LeadCandidate, LeadHeader, LeadLifecycle,
+    LeadSessionSummary, WORKSPACE_CONTRACT_V1, WorkerCard, WorkerCounts, WorkerSessionSummary,
+    WorkerState, WorkerWorkspace, WorkspaceConversationParams, WorkspaceConversationResult,
     WorkspaceConversationsParams, WorkspaceConversationsResult, WorkspaceLauncherParams,
-    WorkspaceLauncherResult, WorkspaceStartAction,
+    WorkspaceLauncherResult, WorkspaceScope, WorkspaceStartAction,
 };
 
 pub const PROTOCOL_V1: u32 = 1;

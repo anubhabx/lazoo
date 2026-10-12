@@ -3,8 +3,9 @@ use serde_json::Value;
 use uuid::Uuid;
 
 use crate::{
-    AuthorityMode, EmployeeAvailability, EmployeeCheckoutPolicy, ProjectRecord, TaskState,
-    TurnState,
+    AuthorityMode, CheckoutMode, ConversationRecord, ConversationTurnSummary, EmployeeAvailability,
+    EmployeeCheckoutPolicy, InboxItem, ProjectRecord, SessionLifecycleState, TaskState,
+    TaskSummary, TaskWorkspaceKind, TurnState,
 };
 
 pub const WORKSPACE_CONTRACT_V1: u32 = 1;
@@ -135,4 +136,158 @@ pub struct WorkspaceLauncherResult {
 
 const fn default_workspace_limit() -> u32 {
     200
+}
+
+/// The lead terminal header's truthful lifecycle (information architecture section 8.1),
+/// from the lead's latest session and its latest turn.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum LeadLifecycle {
+    Dormant,
+    Starting,
+    Busy,
+    Idle,
+    Stopping,
+    Suspended,
+    Failed,
+    Unknown,
+}
+
+/// The worker dock's eight states (information architecture section 8.2), derived from
+/// durable task, dispatch, session, approval, and incident rows.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum WorkerState {
+    Running,
+    Waiting,
+    NeedsApproval,
+    Blocked,
+    Failed,
+    Complete,
+    Interrupted,
+    Unknown,
+}
+
+/// The lead's latest session as the header shows it; the working directory is the private
+/// per-session directory the daemon starts the lead in.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct LeadSessionSummary {
+    pub id: Uuid,
+    pub state: SessionLifecycleState,
+    pub native_host_pid: Option<u32>,
+    pub working_directory: Option<String>,
+}
+
+/// The terminal header's identity line: who leads, on what, under which authority, and the
+/// truthful lifecycle of the lead's session.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct LeadHeader {
+    pub employee_id: Uuid,
+    pub name: String,
+    pub role: String,
+    pub provider: String,
+    pub model: Option<String>,
+    pub reasoning_effort: Option<String>,
+    pub availability: EmployeeAvailability,
+    pub availability_reason: Option<String>,
+    /// The newest root task's effective authority; null before the first user turn.
+    pub authority: Option<AuthorityMode>,
+    pub session: Option<LeadSessionSummary>,
+    pub lifecycle: LeadLifecycle,
+    /// The lead's newest turn while it is unfinished.
+    pub active_turn_id: Option<Uuid>,
+}
+
+/// Where the conversation lives: a registered project, or Home.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct WorkspaceScope {
+    pub project_id: Option<Uuid>,
+    pub project_name: Option<String>,
+    pub canonical_path: Option<String>,
+    pub checkout_mode: Option<CheckoutMode>,
+}
+
+/// A worker's dispatched workspace, from its dispatch record.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct WorkerWorkspace {
+    pub kind: Option<TaskWorkspaceKind>,
+    pub path: Option<String>,
+    pub branch_name: Option<String>,
+    pub base_commit: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct WorkerSessionSummary {
+    pub id: Uuid,
+    pub state: SessionLifecycleState,
+}
+
+/// One worker dock card: a task below a root with its state in the dock's words. Completed
+/// cards stay in the list; the desktop dismisses them locally.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct WorkerCard {
+    pub task_id: Uuid,
+    pub revision: u64,
+    pub root_task_id: Uuid,
+    pub parent_task_id: Option<Uuid>,
+    pub depth: u32,
+    pub employee_id: Uuid,
+    pub name: Option<String>,
+    pub provider: Option<String>,
+    pub model: Option<String>,
+    /// The objective's first line, bounded.
+    pub label: String,
+    pub state: WorkerState,
+    pub state_reason: String,
+    /// The row's own state, unrenamed.
+    pub task_state: TaskState,
+    pub effective_authority: AuthorityMode,
+    pub session: Option<WorkerSessionSummary>,
+    pub active_turn_id: Option<Uuid>,
+    pub workspace: Option<WorkerWorkspace>,
+    pub failure_code: Option<String>,
+    pub failure_message: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
+    pub terminal_at: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct WorkspaceConversationParams {
+    pub id: Uuid,
+    /// How many of the newest turns to return (1 to 500).
+    #[serde(default = "default_turn_limit")]
+    pub turn_limit: u32,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct WorkspaceConversationResult {
+    pub version: u32,
+    pub conversation: ConversationRecord,
+    pub title: String,
+    pub title_derived: bool,
+    pub scope: WorkspaceScope,
+    pub lead: LeadHeader,
+    /// The newest root task.
+    pub root_task: Option<TaskSummary>,
+    /// The newest `turnLimit` turns, oldest first.
+    pub turns: Vec<ConversationTurnSummary>,
+    pub turns_truncated: bool,
+    /// One card per task below a root, oldest first.
+    pub workers: Vec<WorkerCard>,
+    /// The conversation's own unresolved Inbox items, in Inbox order.
+    pub attention: Vec<InboxItem>,
+    pub event_high_water: u64,
+}
+
+const fn default_turn_limit() -> u32 {
+    50
 }

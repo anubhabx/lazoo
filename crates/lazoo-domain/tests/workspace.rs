@@ -1,10 +1,15 @@
 use lazoo_domain::{
-    ConversationFacts, UNTITLED_CONVERSATION, WorkspaceValidationError, conversation_marker,
-    conversation_title, lead_startability, validate_workspace_limit,
+    ConversationFacts, MAX_WORKER_LABEL_BYTES, UNTITLED_CONVERSATION, WorkerFacts,
+    WorkspaceValidationError, conversation_marker, conversation_title, lead_lifecycle,
+    lead_startability, turn_in_flight, validate_workspace_limit, worker_label, worker_state,
 };
 use lazoo_protocol::{
-    ActivationPolicy, AuthorityMode, ConversationMarker, EmployeeAvailability,
-    EmployeeCheckoutPolicy, EmployeeRecord, RosterEntry, TaskState, TurnState, WorkerCounts,
+    ActivationPolicy, ApprovalKind, ApprovalRecord, ApprovalState, AuthorityMode,
+    ConversationMarker, EmployeeAvailability, EmployeeCheckoutPolicy, EmployeeRecord,
+    EmployeeSessionRecord, IncidentEscalation, IncidentPriority, IncidentRecord, IncidentSource,
+    IncidentState, LeadLifecycle, MessageEndpoint, MessageSender, RosterEntry,
+    SessionLifecycleState, TaskDispatchRecord, TaskDispatchState, TaskRecord, TaskRole, TaskState,
+    TurnState, WorkerCounts, WorkerState,
 };
 use serde_json::json;
 use uuid::Uuid;
@@ -199,4 +204,371 @@ fn startability_follows_roster_availability_with_lazoo_words_for_each_block() {
         Err(WorkspaceValidationError::Limit)
     );
     assert_eq!(validate_workspace_limit(200), Ok(()));
+}
+
+fn session(state: SessionLifecycleState) -> EmployeeSessionRecord {
+    EmployeeSessionRecord {
+        id: Uuid::from_u128(9),
+        employee_id: Uuid::from_u128(1),
+        employee_configuration_revision: 1,
+        provider: "codex".to_owned(),
+        state,
+        revision: 1,
+        owner_boot_id: None,
+        native_session_id: None,
+        native_host_pid: None,
+        failure_code: None,
+        failure_message: None,
+        created_at: "2026-10-13T00:00:00Z".to_owned(),
+        updated_at: "2026-10-13T00:00:00Z".to_owned(),
+        started_at: None,
+        stopped_at: None,
+    }
+}
+
+fn task(state: TaskState) -> TaskRecord {
+    TaskRecord {
+        sequence: 2,
+        version: 1,
+        id: Uuid::from_u128(20),
+        root_task_id: Uuid::from_u128(10),
+        parent_task_id: Some(Uuid::from_u128(10)),
+        depth: 1,
+        project_id: None,
+        conversation_id: Uuid::from_u128(5),
+        creation_turn_id: None,
+        delegation_message_id: None,
+        creator: MessageSender::Employee(MessageEndpoint {
+            employee_id: Uuid::from_u128(1),
+            session_id: None,
+        }),
+        assigned_employee_id: Uuid::from_u128(2),
+        role: TaskRole::Worker,
+        objective: "  Implement the parser fix\nwith tests".to_owned(),
+        references: Vec::new(),
+        requested_authority: AuthorityMode::Ask,
+        effective_authority: AuthorityMode::Ask,
+        employee_configuration_revision: 1,
+        roster_revision: 1,
+        state,
+        revision: 1,
+        active_turn_id: None,
+        active_session_id: None,
+        failure_code: None,
+        failure_message: None,
+        created_at: "2026-10-13T00:00:00Z".to_owned(),
+        updated_at: "2026-10-13T00:00:00Z".to_owned(),
+        terminal_at: None,
+    }
+}
+
+fn dispatch(state: TaskDispatchState) -> TaskDispatchRecord {
+    TaskDispatchRecord {
+        task_id: Uuid::from_u128(20),
+        message_id: Uuid::from_u128(30),
+        owner_boot_id: Uuid::from_u128(40),
+        project_id: None,
+        project_configuration_revision: None,
+        workspace_kind: None,
+        workspace_path: None,
+        base_commit: None,
+        branch_name: None,
+        turn_id: None,
+        session_id: None,
+        state,
+        revision: 1,
+        failure_code: None,
+        failure_message: None,
+        created_at: "2026-10-13T00:00:00Z".to_owned(),
+        updated_at: "2026-10-13T00:00:00Z".to_owned(),
+    }
+}
+
+fn approval() -> ApprovalRecord {
+    ApprovalRecord {
+        sequence: 1,
+        version: 1,
+        id: Uuid::from_u128(50),
+        turn_id: Uuid::from_u128(60),
+        task_id: Some(Uuid::from_u128(20)),
+        conversation_id: Uuid::from_u128(5),
+        project_id: None,
+        employee_id: Uuid::from_u128(2),
+        session_id: None,
+        owner_boot_id: Uuid::from_u128(40),
+        provider: "codex".to_owned(),
+        native_session_id: None,
+        native_turn_id: None,
+        native_request_id: None,
+        kind: ApprovalKind::CommandExecution,
+        action: "cargo test".to_owned(),
+        detail: json!({}),
+        fingerprint: "f".to_owned(),
+        authority: AuthorityMode::Ask,
+        scope_expansion: false,
+        state: ApprovalState::Pending,
+        decider: None,
+        revision: 1,
+        failure_code: None,
+        failure_message: None,
+        created_at: "2026-10-13T00:00:00Z".to_owned(),
+        expires_at: "2026-10-13T00:10:00Z".to_owned(),
+        updated_at: "2026-10-13T00:00:00Z".to_owned(),
+        decided_at: None,
+    }
+}
+
+fn incident(escalation: IncidentEscalation) -> IncidentRecord {
+    IncidentRecord {
+        sequence: 1,
+        version: 1,
+        id: Uuid::from_u128(70),
+        code: "LZ-SESSION-STALLED".to_owned(),
+        fingerprint: "f".to_owned(),
+        title: "Mira's session stalled".to_owned(),
+        explanation: String::new(),
+        next_action: String::new(),
+        project_id: None,
+        employee_id: Some(Uuid::from_u128(2)),
+        provider: None,
+        task_id: Some(Uuid::from_u128(20)),
+        session_id: None,
+        turn_id: None,
+        message_id: None,
+        source: IncidentSource::Daemon,
+        detail: json!({}),
+        occurrences: 1,
+        window_occurrences: 1,
+        first_occurred_at: "2026-10-13T00:00:00Z".to_owned(),
+        last_occurred_at: "2026-10-13T00:00:00Z".to_owned(),
+        window_started_at: "2026-10-13T00:00:00Z".to_owned(),
+        priority: IncidentPriority::Priority,
+        state: IncidentState::Open,
+        revision: 1,
+        created_at: "2026-10-13T00:00:00Z".to_owned(),
+        updated_at: "2026-10-13T00:00:00Z".to_owned(),
+        acknowledged_at: None,
+        resolved_at: None,
+        escalation,
+        remediation_deadline_at: None,
+        escalated_at: None,
+        escalation_reason: None,
+        remedies: Vec::new(),
+        user_notification: None,
+        user_notified_at: None,
+    }
+}
+
+fn facts(task: &TaskRecord) -> WorkerFacts<'_> {
+    WorkerFacts {
+        task,
+        roster: None,
+        dispatch: None,
+        active_turn_state: None,
+        pending_approval: None,
+        blocking_incident: None,
+    }
+}
+
+#[test]
+fn the_lead_lifecycle_follows_the_session_and_its_newest_turn() {
+    assert_eq!(lead_lifecycle(None, None), LeadLifecycle::Dormant);
+    assert_eq!(
+        lead_lifecycle(None, Some(TurnState::Uncertain)),
+        LeadLifecycle::Unknown
+    );
+    let idle = session(SessionLifecycleState::Idle);
+    assert_eq!(lead_lifecycle(Some(&idle), None), LeadLifecycle::Idle);
+    assert_eq!(
+        lead_lifecycle(Some(&idle), Some(TurnState::Completed)),
+        LeadLifecycle::Idle
+    );
+    for state in [
+        TurnState::Recorded,
+        TurnState::Submitting,
+        TurnState::Accepted,
+    ] {
+        assert!(turn_in_flight(state));
+        assert_eq!(
+            lead_lifecycle(Some(&idle), Some(state)),
+            LeadLifecycle::Busy
+        );
+    }
+    assert!(!turn_in_flight(TurnState::RetryableFailed));
+    for (state, lifecycle) in [
+        (SessionLifecycleState::Starting, LeadLifecycle::Starting),
+        (SessionLifecycleState::Stopping, LeadLifecycle::Stopping),
+        (SessionLifecycleState::Suspended, LeadLifecycle::Suspended),
+        (SessionLifecycleState::Failed, LeadLifecycle::Failed),
+    ] {
+        assert_eq!(
+            lead_lifecycle(Some(&session(state)), Some(TurnState::Accepted)),
+            lifecycle
+        );
+    }
+}
+
+#[test]
+#[allow(clippy::too_many_lines)] // The whole state table, one rule after another.
+fn worker_cards_take_the_first_state_that_holds_with_lazoo_words() {
+    let state = |task: &TaskRecord| worker_state(&facts(task));
+
+    assert_eq!(
+        state(&task(TaskState::Uncertain)),
+        (
+            WorkerState::Unknown,
+            "The outcome is uncertain: decide how the task ended".to_owned()
+        )
+    );
+    let pending = approval();
+    let running = task(TaskState::Running);
+    assert_eq!(
+        worker_state(&WorkerFacts {
+            pending_approval: Some(&pending),
+            ..facts(&running)
+        }),
+        (
+            WorkerState::NeedsApproval,
+            "Waiting for your approval: cargo test".to_owned()
+        )
+    );
+    assert_eq!(
+        state(&task(TaskState::CancelRequested)),
+        (
+            WorkerState::Interrupted,
+            "Being interrupted: cancel requested".to_owned()
+        )
+    );
+    assert_eq!(
+        state(&task(TaskState::Cancelled)),
+        (
+            WorkerState::Interrupted,
+            "Interrupted: the task was cancelled".to_owned()
+        )
+    );
+    let mut failed = task(TaskState::Failed);
+    assert_eq!(
+        state(&failed),
+        (WorkerState::Failed, "Failed: see the task".to_owned())
+    );
+    failed.failure_code = Some("LZ-PROCESS-EXIT".to_owned());
+    assert_eq!(state(&failed).1, "Failed: LZ-PROCESS-EXIT");
+    assert_eq!(
+        state(&task(TaskState::Completed)),
+        (WorkerState::Complete, "Completed".to_owned())
+    );
+    assert_eq!(
+        state(&task(TaskState::Proposed)),
+        (
+            WorkerState::Blocked,
+            "Waiting for you to accept the task".to_owned()
+        )
+    );
+
+    // Blocked by the worker's availability, then by an escalated incident; `starting` is not
+    // a block.
+    let accepted = task(TaskState::Accepted);
+    let disabled = entry(EmployeeAvailability::Disabled, Some("employee is disabled"));
+    assert_eq!(
+        worker_state(&WorkerFacts {
+            roster: Some(&disabled),
+            ..facts(&accepted)
+        }),
+        (WorkerState::Blocked, "Blocked: Rhea is disabled".to_owned())
+    );
+    let starting = entry(EmployeeAvailability::Starting, None);
+    assert_eq!(
+        worker_state(&WorkerFacts {
+            roster: Some(&starting),
+            ..facts(&accepted)
+        })
+        .0,
+        WorkerState::Waiting
+    );
+    let lead_window = incident(IncidentEscalation::Lead);
+    assert_eq!(
+        worker_state(&WorkerFacts {
+            blocking_incident: Some(&lead_window),
+            ..facts(&running)
+        }),
+        (
+            WorkerState::Blocked,
+            "Blocked: Mira's session stalled (escalated to the lead)".to_owned()
+        )
+    );
+    let escalated = incident(IncidentEscalation::User);
+    assert_eq!(
+        worker_state(&WorkerFacts {
+            blocking_incident: Some(&escalated),
+            ..facts(&running)
+        })
+        .1,
+        "Blocked: Mira's session stalled (escalated to you)"
+    );
+
+    // Running needs an accepted or submitting turn; otherwise the worker waits.
+    assert_eq!(
+        worker_state(&WorkerFacts {
+            active_turn_state: Some(TurnState::Accepted),
+            ..facts(&running)
+        }),
+        (
+            WorkerState::Running,
+            "Running: turn accepted by the harness".to_owned()
+        )
+    );
+    assert_eq!(
+        worker_state(&WorkerFacts {
+            active_turn_state: Some(TurnState::Submitting),
+            ..facts(&running)
+        })
+        .1,
+        "Running: turn submitting"
+    );
+    assert_eq!(
+        worker_state(&WorkerFacts {
+            active_turn_state: Some(TurnState::Completed),
+            ..facts(&running)
+        }),
+        (WorkerState::Waiting, "Waiting between turns".to_owned())
+    );
+    assert_eq!(
+        state(&accepted),
+        (
+            WorkerState::Waiting,
+            "Waiting to be dispatched when the worker is free".to_owned()
+        )
+    );
+    for (dispatch_state, words) in [
+        (TaskDispatchState::Preparing, "Preparing the workspace"),
+        (
+            TaskDispatchState::WorkspaceReady,
+            "Starting the worker's session",
+        ),
+        (
+            TaskDispatchState::TurnRecorded,
+            "Waiting for the first turn to start",
+        ),
+        (
+            TaskDispatchState::Failed,
+            "Waiting after an unfinished dispatch",
+        ),
+    ] {
+        let record = dispatch(dispatch_state);
+        assert_eq!(
+            worker_state(&WorkerFacts {
+                dispatch: Some(&record),
+                ..facts(&accepted)
+            }),
+            (WorkerState::Waiting, words.to_owned())
+        );
+    }
+
+    // The label is the objective's first line, bounded.
+    assert_eq!(
+        worker_label(&accepted.objective),
+        "Implement the parser fix"
+    );
+    assert_eq!(worker_label(&"y".repeat(300)).len(), MAX_WORKER_LABEL_BYTES);
+    assert_eq!(worker_label("  \n "), "");
 }

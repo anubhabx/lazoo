@@ -1,71 +1,71 @@
-﻿{
-    "status":  "PASS",
-    "schemaVersion":  15,
-    "mode":  "deterministic-fake-transport",
-    "startedAt":  "2026-10-12T21:12:36.5323247Z",
-    "durationMs":  13639,
-    "commands":  [
-                     {
-                         "command":  "cargo test -p lazoo-domain --test workspace the_marker_prefers_attention_then_activity_then_failure_then_completion --locked -- --exact",
-                         "exitCode":  0,
-                         "durationMs":  296
-                     },
-                     {
-                         "command":  "cargo test -p lazoo-domain --test workspace titles_come_from_the_store_then_the_first_request_then_a_default --locked -- --exact",
-                         "exitCode":  0,
-                         "durationMs":  265
-                     },
-                     {
-                         "command":  "cargo test -p lazoo-domain --test workspace startability_follows_roster_availability_with_lazoo_words_for_each_block --locked -- --exact",
-                         "exitCode":  0,
-                         "durationMs":  266
-                     },
-                     {
-                         "command":  "cargo test -p lazooctl --test cli workspace_cli_maps_conversations_and_launcher --locked -- --exact",
-                         "exitCode":  0,
-                         "durationMs":  295
-                     },
-                     {
-                         "command":  "cargo test -p lazood --test daemon the_user_browses_a_space_and_its_launcher_through_the_daemon --locked -- --exact",
-                         "exitCode":  0,
-                         "durationMs":  4232
-                     },
-                     {
-                         "command":  "cargo test -p lazoo-store --test store store_enables_wal_foreign_keys_and_schema_version --locked -- --exact",
-                         "exitCode":  0,
-                         "durationMs":  8208
-                     },
-                     {
-                         "command":  "git diff --quiet and git diff --cached --quiet -- apps/lazoo-desktop",
-                         "exitCode":  0,
-                         "durationMs":  null
-                     }
-                 ],
-    "evidence":  {
-                     "markersFollowTheRows":  true,
-                     "titlesDeriveFromTheFirstRequest":  true,
-                     "startabilityFollowsAvailability":  true,
-                     "cliMapsWorkspaceCommands":  true,
-                     "daemonServesSpaces":  true,
-                     "rememberedLeadIsTheNewest":  true,
-                     "launcherExplainsBlocks":  true,
-                     "pagesWithCursor":  true,
-                     "workspaceStoresNothing":  true,
-                     "snapshotUnchanged":  true,
-                     "schemaFifteen":  true,
-                     "providerSmokeAbsent":  true,
-                     "externalModelUseAbsent":  true,
-                     "uiChangesAbsent":  true
-                 },
-    "boundaries":  {
-                       "providerSmoke":  "NOT_RUN",
-                       "externalModelUse":  "NOT_RUN",
-                       "desktopUi":  "UNCHANGED",
-                       "schemaMigration":  "NONE",
-                       "storage":  "DERIVED_NEVER_STORED",
-                       "mutations":  "NONE",
-                       "phase":  "ONE_SIDEBAR_AND_LAUNCHER",
-                       "deferred":  "WORKSPACE_CONVERSATION_HEADER_AND_WORKER_DOCK",
-                       "toolAccess":  "NONE"
-                   }
+{
+  "status": "PASS",
+  "schemaVersion": 15,
+  "mode": "deterministic-fake-transport",
+  "startedAt": "2026-10-12T22:10:54.9863877Z",
+  "durationMs": 2515,
+  "commands": [
+    {
+      "command": "cargo test -p lazoo-domain --test workspace the_marker_prefers_attention_then_activity_then_failure_then_completion --locked -- --exact",
+      "exitCode": 0,
+      "durationMs": 279
+    },
+    {
+      "command": "cargo test -p lazoo-domain --test workspace titles_come_from_the_store_then_the_first_request_then_a_default --locked -- --exact",
+      "exitCode": 0,
+      "durationMs": 264
+    },
+    {
+      "command": "cargo test -p lazoo-domain --test workspace startability_follows_roster_availability_with_lazoo_words_for_each_block --locked -- --exact",
+      "exitCode": 0,
+      "durationMs": 264
+    },
+    {
+      "command": "cargo test -p lazooctl --test cli workspace_cli_maps_conversations_and_launcher --locked -- --exact",
+      "exitCode": 0,
+      "durationMs": 300
+    },
+    {
+      "command": "cargo test -p lazood --test daemon the_user_browses_a_space_and_its_launcher_through_the_daemon --locked -- --exact",
+      "exitCode": 0,
+      "durationMs": 860
+    },
+    {
+      "command": "cargo test -p lazoo-store --test store store_enables_wal_foreign_keys_and_schema_version --locked -- --exact",
+      "exitCode": 0,
+      "durationMs": 453
+    },
+    {
+      "command": "git diff --quiet and git diff --cached --quiet -- apps/lazoo-desktop",
+      "exitCode": 0,
+      "durationMs": null
+    }
+  ],
+  "evidence": {
+    "markersFollowTheRows": true,
+    "titlesDeriveFromTheFirstRequest": true,
+    "startabilityFollowsAvailability": true,
+    "cliMapsWorkspaceCommands": true,
+    "daemonServesSpaces": true,
+    "rememberedLeadIsTheNewest": true,
+    "launcherExplainsBlocks": true,
+    "pagesWithCursor": true,
+    "workspaceStoresNothing": true,
+    "snapshotUnchanged": true,
+    "schemaFifteen": true,
+    "providerSmokeAbsent": true,
+    "externalModelUseAbsent": true,
+    "uiChangesAbsent": true
+  },
+  "boundaries": {
+    "providerSmoke": "NOT_RUN",
+    "externalModelUse": "NOT_RUN",
+    "desktopUi": "UNCHANGED",
+    "schemaMigration": "NONE",
+    "storage": "DERIVED_NEVER_STORED",
+    "mutations": "NONE",
+    "phase": "ONE_SIDEBAR_AND_LAUNCHER",
+    "deferred": "WORKSPACE_CONVERSATION_HEADER_AND_WORKER_DOCK",
+    "toolAccess": "NONE"
+  }
 }

@@ -2337,7 +2337,7 @@ pub(crate) fn required_task(
         .ok_or(StoreError::TaskNotFound { task_id })
 }
 
-fn query_tasks(
+pub(crate) fn query_tasks(
     connection: &Connection,
     input: &ListTasksInput,
 ) -> Result<Vec<TaskSummary>, StoreError> {

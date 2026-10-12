@@ -2,63 +2,63 @@
   "status": "PASS",
   "schemaVersion": 15,
   "mode": "deterministic-fake-transport",
-  "startedAt": "2026-10-12T21:47:54.1609476Z",
-  "durationMs": 5641,
+  "startedAt": "2026-10-12T22:07:58.6597651Z",
+  "durationMs": 5541,
   "commands": [
     {
       "command": "cargo test -p lazoo-protocol --test inbox inbox_list_params_default_to_two_hundred_and_reject_unknown_fields --locked -- --exact",
       "exitCode": 0,
-      "durationMs": 1009
+      "durationMs": 976
     },
     {
       "command": "cargo test -p lazoo-protocol --test inbox inbox_items_and_counts_serialize_with_camel_case_keys_and_kebab_case_values --locked -- --exact",
       "exitCode": 0,
-      "durationMs": 298
+      "durationMs": 277
     },
     {
       "command": "cargo test -p lazoo-domain --test inbox a_pending_approval_needs_the_user_and_a_decided_one_is_the_archive --locked -- --exact",
       "exitCode": 0,
-      "durationMs": 1161
+      "durationMs": 1093
     },
     {
       "command": "cargo test -p lazoo-domain --test inbox proposed_and_uncertain_tasks_need_the_user_and_running_ones_are_not_items --locked -- --exact",
       "exitCode": 0,
-      "durationMs": 285
+      "durationMs": 277
     },
     {
       "command": "cargo test -p lazoo-domain --test inbox only_escalated_incidents_are_items_and_only_user_escalations_count --locked -- --exact",
       "exitCode": 0,
-      "durationMs": 258
+      "durationMs": 261
     },
     {
       "command": "cargo test -p lazoo-domain --test inbox counts_filters_and_order_follow_attention_then_deadline_then_age --locked -- --exact",
       "exitCode": 0,
-      "durationMs": 274
+      "durationMs": 256
     },
     {
       "command": "cargo test -p lazoo-domain --test inbox cursors_round_trip_and_limits_are_bounded --locked -- --exact",
       "exitCode": 0,
-      "durationMs": 253
+      "durationMs": 261
     },
     {
       "command": "cargo test -p lazooctl --test cli inbox_cli_maps_list_and_counts --locked -- --exact",
       "exitCode": 0,
-      "durationMs": 319
+      "durationMs": 299
     },
     {
       "command": "cargo test -p lazood --test daemon the_inbox_lists_a_pending_approval_and_its_decision_archives_it --locked -- --exact",
       "exitCode": 0,
-      "durationMs": 587
+      "durationMs": 615
     },
     {
       "command": "cargo test -p lazood --test daemon the_inbox_derives_tasks_and_incidents_and_pages_the_archive --locked -- --exact",
       "exitCode": 0,
-      "durationMs": 649
+      "durationMs": 675
     },
     {
       "command": "cargo test -p lazoo-store --test store store_enables_wal_foreign_keys_and_schema_version --locked -- --exact",
       "exitCode": 0,
-      "durationMs": 445
+      "durationMs": 447
     },
     {
       "command": "git diff --quiet and git diff --cached --quiet -- apps/lazoo-desktop",
