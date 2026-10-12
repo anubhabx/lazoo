@@ -2,28 +2,28 @@
   "status": "PASS",
   "schemaVersion": 15,
   "mode": "deterministic-fake-transport",
-  "startedAt": "2026-10-12T22:21:32.0303977Z",
-  "durationMs": 3263,
+  "startedAt": "2026-10-12T22:29:08.5379771Z",
+  "durationMs": 3262,
   "commands": [
     {
       "command": "cargo test -p lazood --test daemon the_core_scenario_runs_end_to_end_on_the_deterministic_provider --locked -- --exact",
       "exitCode": 0,
-      "durationMs": 988
+      "durationMs": 994
     },
     {
       "command": "cargo test -p lazood --test daemon project_task_dispatch_uses_an_isolated_worktree_and_preserves_dirty_user_files --locked -- --exact",
       "exitCode": 0,
-      "durationMs": 1166
+      "durationMs": 1140
     },
     {
       "command": "cargo test -p lazood --test daemon message_restart_reconciles_an_uncertain_attempt --locked -- --exact",
       "exitCode": 0,
-      "durationMs": 568
+      "durationMs": 588
     },
     {
       "command": "cargo test -p lazoo-store --test store store_enables_wal_foreign_keys_and_schema_version --locked -- --exact",
       "exitCode": 0,
-      "durationMs": 444
+      "durationMs": 440
     },
     {
       "command": "git diff --quiet and git diff --cached --quiet -- apps/lazoo-desktop",
@@ -74,8 +74,8 @@
     },
     "step9": {
       "text": "One provider stalls after accepting work; Lazoo detects missing progress, retries safely, then raises a clean incident",
-      "status": "PARTIAL",
-      "evidence": "core scenario story raises the stall as the daemon would; detection and bounded retry are conversation-delivery.ps1 and minimum-incidents.ps1"
+      "status": "PASS",
+      "evidence": "core scenario story: the third task dispatch turn stalls (the adapter progress deadline reported as a stalled provider error, as opencode_acceptance_without_progress_becomes_stalled proves for the real adapter), the turn is recorded retryable-failed, the task stays accepted for a bounded retry by the lead or the user and is never retried automatically, the worker session is stopped, and one LZ-SESSION-STALLED incident on the task is raised and promoted at once"
     },
     "step10": {
       "text": "The threshold notifies Rhea, allows bounded remediation, and escalates to the user when unresolved",

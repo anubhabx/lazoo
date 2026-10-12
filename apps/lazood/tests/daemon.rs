@@ -82,6 +82,9 @@ struct FakeSessionBackend {
     turn_requests: Arc<Mutex<Vec<TurnRequest>>>,
     turn_failure: Arc<Mutex<Option<String>>>,
     turn_retryable_failure: Arc<AtomicBool>,
+    /// While set, every turn stalls: the provider accepts the input and then shows no progress
+    /// inside its deadline, as the adapters report it.
+    turn_stall: Arc<AtomicBool>,
     /// Scripted start refusals: each one fails the next `start` before any session is counted.
     fail_starts: Arc<AtomicUsize>,
     working_directories: Arc<Mutex<Vec<PathBuf>>>,
@@ -112,6 +115,7 @@ impl Default for FakeSessionBackend {
             turn_requests: Arc::new(Mutex::new(Vec::new())),
             turn_failure: Arc::new(Mutex::new(None)),
             turn_retryable_failure: Arc::new(AtomicBool::new(false)),
+            turn_stall: Arc::new(AtomicBool::new(false)),
             fail_starts: Arc::new(AtomicUsize::new(0)),
             working_directories: Arc::new(Mutex::new(Vec::new())),
             permission_requests: Arc::new(Mutex::new(Vec::new())),
@@ -137,6 +141,7 @@ struct FakeManagedSession {
     turn_requests: Arc<Mutex<Vec<TurnRequest>>>,
     turn_failure: Arc<Mutex<Option<String>>>,
     turn_retryable_failure: Arc<AtomicBool>,
+    turn_stall: Arc<AtomicBool>,
     permission_requests: Arc<Mutex<Vec<PermissionRequest>>>,
     permission_decisions: Arc<Mutex<Vec<PermissionDecision>>>,
     tool_calls: Arc<Mutex<Vec<ToolCall>>>,
@@ -184,6 +189,9 @@ impl ManagedSession for FakeManagedSession {
             self.turn_requests.lock().unwrap().push(request.clone());
             if self.turn_retryable_failure.load(Ordering::SeqCst) {
                 return Err(ProviderError::Timeout { phase: "fake turn" });
+            }
+            if self.turn_stall.load(Ordering::SeqCst) {
+                return Err(ProviderError::Stalled { millis: 250 });
             }
             let failure = self.turn_failure.lock().unwrap().clone();
             if let Some(message) = failure {
@@ -280,6 +288,7 @@ impl SessionBackend for FakeSessionBackend {
                 turn_requests: Arc::clone(&self.turn_requests),
                 turn_failure: Arc::clone(&self.turn_failure),
                 turn_retryable_failure: Arc::clone(&self.turn_retryable_failure),
+                turn_stall: Arc::clone(&self.turn_stall),
                 permission_requests: Arc::clone(&self.permission_requests),
                 permission_decisions: Arc::clone(&self.permission_decisions),
                 tool_calls: Arc::clone(&self.tool_calls),
@@ -10136,7 +10145,10 @@ fn provider_config_acceptance_contract_is_read_only_and_backend_only() {
 #[allow(clippy::too_many_lines)] // The scenario is one story by definition.
 async fn the_core_scenario_runs_end_to_end_on_the_deterministic_provider() {
     use chrono::{TimeDelta, Utc};
-    use lazoo_protocol::{IncidentEscalation, TaskState, TaskWorkspaceKind};
+    use lazoo_protocol::{
+        IncidentEscalation, IncidentPriority, SessionLifecycleState, TaskState, TaskWorkspaceKind,
+    };
+    use lazoo_store::ListIncidentsInput;
 
     let (temporary, harness) = tool_harness(AuthorityMode::Ask);
     let call = |id: &str, method: &str, params: serde_json::Value| {
@@ -10400,10 +10412,58 @@ async fn the_core_scenario_runs_end_to_end_on_the_deterministic_provider() {
     .result
     .unwrap();
 
-    // 10. A stall on the queued task is promoted at once: Rhea receives the incident with its
-    // remediation window as a notice turn, applies one remedy, and when the stall recurs the
-    // closed window escalates to the user, who sees it in the Inbox.
-    let incident = promote_child_incident(&harness, "stall", "LZ-SESSION-STALLED", third);
+    // 9. Mira's provider stalls after accepting the third task's dispatch: the adapter's
+    // progress deadline surfaces as a stalled turn, the daemon records it as retryable, keeps
+    // the task accepted for a bounded retry by the lead or the user (never automatically),
+    // stops the session, and raises one clean `LZ-SESSION-STALLED` incident on the task.
+    harness.backend.turn_stall.store(true, Ordering::SeqCst);
+    let stalled = harness.app.dispatch_pending_tasks_once().await.unwrap_err();
+    harness.backend.turn_stall.store(false, Ordering::SeqCst);
+    assert_eq!(stalled.code, "LZ-TURN-PROVIDER");
+    let stalled_task = harness.store.get_task(third).unwrap();
+    assert_eq!(stalled_task.task.state, TaskState::Accepted);
+    let stalled_turn = harness
+        .store
+        .get_turn(stalled_task.dispatch.unwrap().turn_id.unwrap())
+        .unwrap();
+    assert_eq!(stalled_turn.state, TurnState::RetryableFailed);
+    assert_eq!(
+        stalled_turn.failure_code.as_deref(),
+        Some("LZ-TURN-PROVIDER")
+    );
+    assert_eq!(
+        harness.backend.starts.load(Ordering::SeqCst),
+        4,
+        "the stalled dispatch ran on its own session"
+    );
+    assert!(
+        harness
+            .store
+            .list_sessions()
+            .unwrap()
+            .iter()
+            .all(|session| session.state != SessionLifecycleState::Idle
+                || session.employee_id == harness.lead.id),
+        "the stalled worker session was stopped"
+    );
+    let stalls: Vec<_> = harness
+        .store
+        .list_incidents(&ListIncidentsInput {
+            code: Some("LZ-SESSION-STALLED".to_owned()),
+            limit: 100,
+            ..ListIncidentsInput::default()
+        })
+        .unwrap();
+    assert_eq!(stalls.len(), 1, "{stalls:?}");
+    let incident = stalls.into_iter().next().unwrap();
+    assert_eq!(incident.task_id, Some(third));
+    assert_eq!(incident.employee_id, Some(harness.worker.id));
+    assert_eq!(incident.occurrences, 1);
+
+    // 10. The stall is promoted at once: Rhea receives the incident with its remediation
+    // window as a notice turn, applies one remedy, and when the stall recurs the closed window
+    // escalates to the user, who sees it in the Inbox.
+    assert_eq!(incident.priority, IncidentPriority::Priority);
     assert_eq!(incident.escalation, IncidentEscalation::Lead);
     harness
         .backend
@@ -10424,7 +10484,7 @@ async fn the_core_scenario_runs_end_to_end_on_the_deterministic_provider() {
     assert!(prompt.contains("[Lazoo incident]"), "{prompt}");
     assert_eq!(
         harness.backend.starts.load(Ordering::SeqCst),
-        3,
+        4,
         "the notices rode Rhea's idle session"
     );
     let remedied = harness.store.get_incident(incident.id).unwrap();
