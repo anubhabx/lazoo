@@ -1,58 +1,58 @@
-﻿{
-    "status":  "PASS",
-    "schemaVersion":  15,
-    "mode":  "deterministic-fake-transport",
-    "startedAt":  "2026-10-12T20:54:06.1819233Z",
-    "durationMs":  7524,
-    "commands":  [
-                     {
-                         "command":  "cargo test -p lazoo-store --test conversation conversation_rename_is_revisioned_naturally_idempotent_and_validated --locked -- --exact",
-                         "exitCode":  0,
-                         "durationMs":  2590
-                     },
-                     {
-                         "command":  "cargo test -p lazooctl --test cli conversation_cli_maps_rename_with_and_without_a_title --locked -- --exact",
-                         "exitCode":  0,
-                         "durationMs":  1654
-                     },
-                     {
-                         "command":  "cargo test -p lazood --test daemon the_user_renames_a_conversation_through_the_daemon --locked -- --exact",
-                         "exitCode":  0,
-                         "durationMs":  1635
-                     },
-                     {
-                         "command":  "cargo test -p lazoo-store --test store store_enables_wal_foreign_keys_and_schema_version --locked -- --exact",
-                         "exitCode":  0,
-                         "durationMs":  1416
-                     },
-                     {
-                         "command":  "git diff --quiet and git diff --cached --quiet -- apps/lazoo-desktop",
-                         "exitCode":  0,
-                         "durationMs":  null
-                     }
-                 ],
-    "evidence":  {
-                     "renameIsRevisioned":  true,
-                     "sameTitleEmitsNoEvent":  true,
-                     "staleRevisionRefused":  true,
-                     "blankTitleClears":  true,
-                     "validationBeforeWrite":  true,
-                     "cliMapsRename":  true,
-                     "daemonServesRename":  true,
-                     "readModelsCarryTheTitle":  true,
-                     "schemaFifteen":  true,
-                     "providerSmokeAbsent":  true,
-                     "externalModelUseAbsent":  true,
-                     "uiChangesAbsent":  true
-                 },
-    "boundaries":  {
-                       "providerSmoke":  "NOT_RUN",
-                       "externalModelUse":  "NOT_RUN",
-                       "desktopUi":  "UNCHANGED",
-                       "schemaMigration":  "NONE",
-                       "idempotency":  "NATURAL_SAME_TITLE_NO_OP",
-                       "revisionCheck":  "REQUIRED_FOR_A_CHANGE",
-                       "writer":  "LOCAL_USER_THROUGH_DAEMON_AND_CLI",
-                       "toolAccess":  "NONE"
-                   }
+{
+  "status": "PASS",
+  "schemaVersion": 15,
+  "mode": "deterministic-fake-transport",
+  "startedAt": "2026-10-12T21:47:46.3758693Z",
+  "durationMs": 3573,
+  "commands": [
+    {
+      "command": "cargo test -p lazoo-store --test conversation conversation_rename_is_revisioned_naturally_idempotent_and_validated --locked -- --exact",
+      "exitCode": 0,
+      "durationMs": 2153
+    },
+    {
+      "command": "cargo test -p lazooctl --test cli conversation_cli_maps_rename_with_and_without_a_title --locked -- --exact",
+      "exitCode": 0,
+      "durationMs": 330
+    },
+    {
+      "command": "cargo test -p lazood --test daemon the_user_renames_a_conversation_through_the_daemon --locked -- --exact",
+      "exitCode": 0,
+      "durationMs": 551
+    },
+    {
+      "command": "cargo test -p lazoo-store --test store store_enables_wal_foreign_keys_and_schema_version --locked -- --exact",
+      "exitCode": 0,
+      "durationMs": 440
+    },
+    {
+      "command": "git diff --quiet and git diff --cached --quiet -- apps/lazoo-desktop",
+      "exitCode": 0,
+      "durationMs": null
+    }
+  ],
+  "evidence": {
+    "renameIsRevisioned": true,
+    "sameTitleEmitsNoEvent": true,
+    "staleRevisionRefused": true,
+    "blankTitleClears": true,
+    "validationBeforeWrite": true,
+    "cliMapsRename": true,
+    "daemonServesRename": true,
+    "readModelsCarryTheTitle": true,
+    "schemaFifteen": true,
+    "providerSmokeAbsent": true,
+    "externalModelUseAbsent": true,
+    "uiChangesAbsent": true
+  },
+  "boundaries": {
+    "providerSmoke": "NOT_RUN",
+    "externalModelUse": "NOT_RUN",
+    "desktopUi": "UNCHANGED",
+    "schemaMigration": "NONE",
+    "idempotency": "NATURAL_SAME_TITLE_NO_OP",
+    "revisionCheck": "REQUIRED_FOR_A_CHANGE",
+    "writer": "LOCAL_USER_THROUGH_DAEMON_AND_CLI",
+    "toolAccess": "NONE"
+  }
 }

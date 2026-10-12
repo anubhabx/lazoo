@@ -1,65 +1,65 @@
-﻿{
-    "status":  "PASS",
-    "schemaVersion":  15,
-    "mode":  "deterministic-fake-transport",
-    "startedAt":  "2026-10-12T20:54:14.4451383Z",
-    "durationMs":  6647,
-    "commands":  [
-                     {
-                         "command":  "cargo test -p lazoo-runtime --test process_job job_accounting_reports_the_tree_and_survives_its_termination --locked -- --exact",
-                         "exitCode":  0,
-                         "durationMs":  1389
-                     },
-                     {
-                         "command":  "cargo test -p lazoo-runtime --test process_job current_process_accounting_reports_this_process --locked -- --exact",
-                         "exitCode":  0,
-                         "durationMs":  932
-                     },
-                     {
-                         "command":  "cargo test -p lazooctl --test cli session_and_system_cli_map_resources --locked -- --exact",
-                         "exitCode":  0,
-                         "durationMs":  757
-                     },
-                     {
-                         "command":  "cargo test -p lazood --test daemon the_user_reads_resource_use_for_the_daemon_and_a_live_session --locked -- --exact",
-                         "exitCode":  0,
-                         "durationMs":  1607
-                     },
-                     {
-                         "command":  "cargo test -p lazoo-store --test store store_enables_wal_foreign_keys_and_schema_version --locked -- --exact",
-                         "exitCode":  0,
-                         "durationMs":  1758
-                     },
-                     {
-                         "command":  "git diff --quiet and git diff --cached --quiet -- apps/lazoo-desktop",
-                         "exitCode":  0,
-                         "durationMs":  null
-                     }
-                 ],
-    "evidence":  {
-                     "jobAccountingReportsTheTree":  true,
-                     "jobAccountingSurvivesTermination":  true,
-                     "processAccountingReportsItself":  true,
-                     "daemonServesResources":  true,
-                     "sessionResourcesOnlyWhileLive":  true,
-                     "providerUseSeparateFromDaemonUse":  true,
-                     "resourcesNeverStored":  true,
-                     "snapshotUnchanged":  true,
-                     "cliMapsResourceCommands":  true,
-                     "schemaFifteen":  true,
-                     "providerSmokeAbsent":  true,
-                     "externalModelUseAbsent":  true,
-                     "uiChangesAbsent":  true
-                 },
-    "boundaries":  {
-                       "providerSmoke":  "NOT_RUN",
-                       "externalModelUse":  "NOT_RUN",
-                       "desktopUi":  "UNCHANGED",
-                       "schemaMigration":  "NONE",
-                       "storage":  "POINT_SAMPLES_NEVER_STORED",
-                       "enforcement":  "NONE",
-                       "ceiling":  "NOT_MEASURED_OVER_ROLLING_WINDOWS",
-                       "providerUse":  "DISPLAYED_NEVER_COUNTED_AGAINST_LAZOO",
-                       "toolAccess":  "NONE"
-                   }
+{
+  "status": "PASS",
+  "schemaVersion": 15,
+  "mode": "deterministic-fake-transport",
+  "startedAt": "2026-10-12T21:49:20.0556327Z",
+  "durationMs": 2053,
+  "commands": [
+    {
+      "command": "cargo test -p lazoo-runtime --test process_job job_accounting_reports_the_tree_and_survives_its_termination --locked -- --exact",
+      "exitCode": 0,
+      "durationMs": 404
+    },
+    {
+      "command": "cargo test -p lazoo-runtime --test process_job current_process_accounting_reports_this_process --locked -- --exact",
+      "exitCode": 0,
+      "durationMs": 271
+    },
+    {
+      "command": "cargo test -p lazooctl --test cli session_and_system_cli_map_resources --locked -- --exact",
+      "exitCode": 0,
+      "durationMs": 293
+    },
+    {
+      "command": "cargo test -p lazood --test daemon the_user_reads_resource_use_for_the_daemon_and_a_live_session --locked -- --exact",
+      "exitCode": 0,
+      "durationMs": 552
+    },
+    {
+      "command": "cargo test -p lazoo-store --test store store_enables_wal_foreign_keys_and_schema_version --locked -- --exact",
+      "exitCode": 0,
+      "durationMs": 438
+    },
+    {
+      "command": "git diff --quiet and git diff --cached --quiet -- apps/lazoo-desktop",
+      "exitCode": 0,
+      "durationMs": null
+    }
+  ],
+  "evidence": {
+    "jobAccountingReportsTheTree": true,
+    "jobAccountingSurvivesTermination": true,
+    "processAccountingReportsItself": true,
+    "daemonServesResources": true,
+    "sessionResourcesOnlyWhileLive": true,
+    "providerUseSeparateFromDaemonUse": true,
+    "resourcesNeverStored": true,
+    "snapshotUnchanged": true,
+    "cliMapsResourceCommands": true,
+    "schemaFifteen": true,
+    "providerSmokeAbsent": true,
+    "externalModelUseAbsent": true,
+    "uiChangesAbsent": true
+  },
+  "boundaries": {
+    "providerSmoke": "NOT_RUN",
+    "externalModelUse": "NOT_RUN",
+    "desktopUi": "UNCHANGED",
+    "schemaMigration": "NONE",
+    "storage": "POINT_SAMPLES_NEVER_STORED",
+    "enforcement": "NONE",
+    "ceiling": "NOT_MEASURED_OVER_ROLLING_WINDOWS",
+    "providerUse": "DISPLAYED_NEVER_COUNTED_AGAINST_LAZOO",
+    "toolAccess": "NONE"
+  }
 }
