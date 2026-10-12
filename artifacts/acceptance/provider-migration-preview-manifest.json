@@ -2,28 +2,28 @@
   "status": "PASS",
   "schemaVersion": 15,
   "mode": "deterministic-fake-transport",
-  "startedAt": "2026-10-12T23:37:43.6026620Z",
-  "durationMs": 1748,
+  "startedAt": "2026-10-12T23:48:13.7449438Z",
+  "durationMs": 1647,
   "commands": [
     {
       "command": "cargo test -p lazoo-providers --test preview the_preview_proposes_manage_merge_or_choose_per_identity_and_never_reads_a_secret --locked -- --exact",
       "exitCode": 0,
-      "durationMs": 467
+      "durationMs": 371
     },
     {
       "command": "cargo test -p lazooctl --test cli provider_cli_maps_preview --locked -- --exact",
       "exitCode": 0,
-      "durationMs": 296
+      "durationMs": 297
     },
     {
       "command": "cargo test -p lazood --test daemon provider_config_preview_proposes_manage_merge_and_choose_without_writing --locked -- --exact",
       "exitCode": 0,
-      "durationMs": 485
+      "durationMs": 483
     },
     {
       "command": "cargo test -p lazoo-store --test store store_enables_wal_foreign_keys_and_schema_version --locked -- --exact",
       "exitCode": 0,
-      "durationMs": 414
+      "durationMs": 410
     },
     {
       "command": "git diff --quiet and git diff --cached --quiet -- apps/lazoo-desktop",

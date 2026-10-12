@@ -10359,6 +10359,10 @@ async fn the_core_scenario_runs_end_to_end_on_the_deterministic_provider() {
         .unwrap();
     assert_eq!(counts["counts"]["unresolved"], 0);
 
+    // 13. The user has uncommitted work in the canonical checkout before any worker starts;
+    // nothing below may touch it.
+    std::fs::write(repository.join("parser.txt"), "dirty user edit\n").unwrap();
+
     // 6. The approved employee activates into independent native sessions and workspaces: each
     // accepted task runs to completion on a fresh session for Mira, which stops with its turn,
     // and the next queued task wakes as soon as she is free. The first worker reports its
@@ -10405,11 +10409,23 @@ async fn the_core_scenario_runs_end_to_end_on_the_deterministic_provider() {
             "{workspace}"
         );
         assert_ne!(path, repository.as_path(), "never the canonical checkout");
+        // 13. Each worktree starts from the committed base under the configured authority,
+        // and the user's dirty edit is never carried into it.
+        assert_eq!(
+            std::fs::read_to_string(path.join("parser.txt")).unwrap(),
+            "base\n"
+        );
+        assert_eq!(detail.task.effective_authority, AuthorityMode::Ask);
         assert!(
             worktrees.insert(workspace),
             "each task has its own worktree"
         );
     }
+    assert_eq!(
+        std::fs::read_to_string(repository.join("parser.txt")).unwrap(),
+        "dirty user edit\n",
+        "the canonical checkout keeps the user's uncommitted work"
+    );
     assert!(
         harness
             .backend

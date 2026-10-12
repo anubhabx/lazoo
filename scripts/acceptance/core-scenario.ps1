@@ -39,7 +39,7 @@ $steps = [ordered]@{
     step10 = [ordered]@{ text = 'The threshold notifies Rhea, allows bounded remediation, and escalates to the user when unresolved'; status = 'PENDING'; evidence = 'core scenario story: the stall on the queued third task opens the lead window, the lead cancels it in its notice turn, the stall recurs, the sweep escalates to the user, and the user acknowledges it from the Inbox' }
     step11 = [ordered]@{ text = 'Lazoo restarts during an in-flight message and reconciles without losing or duplicating the logical task'; status = 'PENDING'; evidence = 'core scenario story restarts with the prior boot owner-lost and every task kept once; the in-flight attempt is message_restart_reconciles_an_uncertain_attempt in collaboration-bus.ps1 and native-session-ownership.ps1' }
     step12 = [ordered]@{ text = 'Results include commits, verification, task links, messages, incidents, and concise memory records'; status = 'PENDING'; evidence = 'core scenario story: the first worker reports completion through task_report with commit and verification evidence, which is the task''s durable evidence through task.show, and the result notice links the task; messages and incidents are ledgers of their own (result-delivery.ps1, minimum-incidents.ps1); memory records need Stage 5' }
-    step13 = [ordered]@{ text = 'Integration follows configured authority and never overwrites dirty user work'; status = 'PROVEN_ELSEWHERE'; evidence = 'project_task_dispatch_uses_an_isolated_worktree_and_preserves_dirty_user_files in automatic-task-dispatch.ps1' }
+    step13 = [ordered]@{ text = 'Integration follows configured authority and never overwrites dirty user work'; status = 'PENDING'; evidence = 'core scenario story: every task runs under the ask authority the user configured, each worktree starts from the committed base, and the dirty edit in the canonical checkout is untouched after both dispatches; project_task_dispatch_uses_an_isolated_worktree_and_preserves_dirty_user_files (automatic-task-dispatch.ps1) proves the same with a running provider turn' }
     step14 = [ordered]@{ text = 'Employees return to idle and suspend after policy timeout'; status = 'PENDING'; evidence = 'core scenario story: Mira idles after warm and is suspended once her one-minute timeout passes' }
     step15 = [ordered]@{ text = 'Lazoo remains inside its measured resource budget'; status = 'PROVEN_ELSEWHERE'; evidence = 'resource-budget.ps1 (idle and routing windows only)' }
 }
@@ -73,7 +73,7 @@ try {
     Push-Location $repoRoot
     Invoke-Test 'lazood' 'daemon' 'the_core_scenario_runs_end_to_end_on_the_deterministic_provider'
     $evidence.scenarioStory = $true
-    foreach ($key in @('step1', 'step2', 'step3', 'step4', 'step5', 'step6', 'step8', 'step9', 'step10', 'step11', 'step14')) {
+    foreach ($key in @('step1', 'step2', 'step3', 'step4', 'step5', 'step6', 'step8', 'step9', 'step10', 'step11', 'step13', 'step14')) {
         $steps[$key].status = 'PASS'
     }
     # Step 12 is proven as far as the backend can hold it today; memory records need Stage 5.
