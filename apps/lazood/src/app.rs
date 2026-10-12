@@ -7,6 +7,7 @@ mod resources;
 mod task;
 mod tools;
 mod turn;
+mod workspace;
 
 pub use incident::UserNotifier;
 
@@ -387,6 +388,8 @@ impl App {
             "approval.show" => self.approval_show(&request.params),
             "inbox.list" => self.inbox_list(&request.params),
             "inbox.counts" => self.inbox_counts(&request.params),
+            "workspace.conversations" => self.workspace_conversations(&request.params),
+            "workspace.launcher" => self.workspace_launcher(&request.params),
             "incident.list" => self.incident_list(&request.params),
             "incident.show" => self.incident_show(&request.params),
             "incident.acknowledge" => self.acknowledge_incident(&request),

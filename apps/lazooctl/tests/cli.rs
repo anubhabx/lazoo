@@ -1355,3 +1355,48 @@ fn provider_cli_maps_config() {
         ("provider.config", json!({}), false)
     );
 }
+
+#[test]
+fn workspace_cli_maps_conversations_and_launcher() {
+    let request = |args: &[&str]| {
+        let mut argv = vec!["lazooctl", "workspace"];
+        argv.extend_from_slice(args);
+        command_request(&Cli::try_parse_from(argv).unwrap().command)
+    };
+    assert_eq!(
+        request(&["conversations"]),
+        (
+            "workspace.conversations",
+            json!({"projectId": null, "limit": 200, "before": null}),
+            false
+        )
+    );
+    assert_eq!(
+        request(&[
+            "conversations",
+            "--project-id",
+            CONVERSATION_ID,
+            "--limit",
+            "20",
+            "--before",
+            "x|y"
+        ]),
+        (
+            "workspace.conversations",
+            json!({"projectId": CONVERSATION_ID, "limit": 20, "before": "x|y"}),
+            false
+        )
+    );
+    assert_eq!(
+        request(&["launcher"]),
+        ("workspace.launcher", json!({"projectId": null}), false)
+    );
+    assert_eq!(
+        request(&["launcher", "--project-id", CONVERSATION_ID]),
+        (
+            "workspace.launcher",
+            json!({"projectId": CONVERSATION_ID}),
+            false
+        )
+    );
+}

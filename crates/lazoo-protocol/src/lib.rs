@@ -6,6 +6,7 @@ mod message;
 mod rpc;
 mod task;
 mod types;
+mod workspace;
 
 pub use approval::{
     APPROVAL_CONTRACT_V1, ApprovalDecider, ApprovalDecision, ApprovalKind, ApprovalListParams,
@@ -58,6 +59,12 @@ pub use types::{
     SessionLifecycleState, SessionMutationResult, SessionReconcileResult, SessionResources,
     SessionResourcesParams, SessionShowParams, StopSessionParams, SystemStatus,
     UpdateEmployeeParams, WarmSessionParams,
+};
+
+pub use workspace::{
+    ConversationMarker, ConversationRow, LeadCandidate, WORKSPACE_CONTRACT_V1, WorkerCounts,
+    WorkspaceConversationsParams, WorkspaceConversationsResult, WorkspaceLauncherParams,
+    WorkspaceLauncherResult, WorkspaceStartAction,
 };
 
 pub const PROTOCOL_V1: u32 = 1;

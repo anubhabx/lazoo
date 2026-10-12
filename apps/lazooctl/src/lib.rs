@@ -52,6 +52,8 @@ pub enum Command {
     #[command(subcommand)]
     Inbox(InboxCommand),
     #[command(subcommand)]
+    Workspace(WorkspaceCommand),
+    #[command(subcommand)]
     System(SystemCommand),
 }
 
@@ -131,6 +133,26 @@ pub enum InboxCommand {
     },
     /// The rail badge: how many items need you right now.
     Counts,
+}
+
+/// The desktop workspace read models: a space's conversation history with its markers, and
+/// who can lead a new conversation right now. Nothing here changes anything.
+#[derive(Debug, Subcommand)]
+pub enum WorkspaceCommand {
+    Conversations {
+        /// A registered project; omit for Home (projectless conversations).
+        #[arg(long)]
+        project_id: Option<Uuid>,
+        #[arg(long, default_value_t = 200)]
+        limit: u32,
+        /// The `nextBefore` of the previous page.
+        #[arg(long)]
+        before: Option<String>,
+    },
+    Launcher {
+        #[arg(long)]
+        project_id: Option<Uuid>,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -728,6 +750,7 @@ pub fn command_request(command: &Command) -> (&'static str, Value, bool) {
         Command::Approval(command) => approval_request(command),
         Command::Incident(command) => incident_request(command),
         Command::Inbox(command) => inbox_request(command),
+        Command::Workspace(command) => workspace_request(command),
         Command::System(SystemCommand::Shutdown) => ("system.shutdown", json!({}), false),
         Command::System(SystemCommand::Resources) => ("system.resources", json!({}), false),
     }
@@ -819,6 +842,25 @@ fn inbox_request(command: &InboxCommand) -> (&'static str, Value, bool) {
             false,
         ),
         InboxCommand::Counts => ("inbox.counts", json!({}), false),
+    }
+}
+
+fn workspace_request(command: &WorkspaceCommand) -> (&'static str, Value, bool) {
+    match command {
+        WorkspaceCommand::Conversations {
+            project_id,
+            limit,
+            before,
+        } => (
+            "workspace.conversations",
+            json!({"projectId": project_id, "limit": limit, "before": before}),
+            false,
+        ),
+        WorkspaceCommand::Launcher { project_id } => (
+            "workspace.launcher",
+            json!({"projectId": project_id}),
+            false,
+        ),
     }
 }
 

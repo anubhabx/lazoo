@@ -9,6 +9,7 @@ mod message;
 mod migration;
 mod session;
 mod task;
+mod workspace;
 
 use std::{
     path::{Path, PathBuf},
@@ -59,6 +60,7 @@ pub use task::{
     DelegateTaskInput, FailTaskDispatchInput, ListTasksInput, MarkTaskDispatchWorkspaceReadyInput,
     RecordTaskDispatchTurnInput, ReportTaskInput, ResolveTaskInput, StartTaskInput,
 };
+pub use workspace::SpaceConversation;
 
 use crate::{emergency::import_pending_incidents, migration::apply_migrations};
 

@@ -10648,3 +10648,355 @@ fn core_scenario_acceptance_contract_maps_every_step_to_evidence() {
         );
     }
 }
+
+/// The desktop's sidebar and launcher through the daemon: Home and a project are separate
+/// spaces, each row carries a derived title and marker that follow the conversation's own
+/// rows, the remembered lead is the newest conversation's, the launcher says who can lead and
+/// why not, and nothing is stored or added to the desktop snapshot.
+#[tokio::test]
+#[allow(clippy::too_many_lines)] // One user session over Home, a project, and the launcher.
+async fn the_user_browses_a_space_and_its_launcher_through_the_daemon() {
+    use lazoo_protocol::TaskState;
+
+    let (temporary, harness) = tool_harness(AuthorityMode::Ask);
+    let call = |id: &str, method: &str, params: serde_json::Value| {
+        harness.app.handle(request(id, method, params))
+    };
+
+    // Home holds the harness conversation; a registered project holds one more.
+    let repository = temporary.path().join("repository");
+    std::fs::create_dir_all(&repository).unwrap();
+    git_init(&repository);
+    let registered = call(
+        "register",
+        "project.register",
+        json!({"path": repository, "idempotencyKey": "workspace-project"}),
+    )
+    .await
+    .result
+    .unwrap();
+    let project_id = registered["project"]["id"].clone();
+    let project_conversation = call(
+        "create-project-conversation",
+        "conversation.create",
+        json!({
+            "projectId": project_id,
+            "leadEmployeeId": harness.worker.id,
+            "title": "Release checklist",
+            "idempotencyKey": "workspace-project-conversation"
+        }),
+    )
+    .await
+    .result
+    .unwrap()["conversation"]["id"]
+        .clone();
+
+    // Home before any turn: one untitled, unmarked row led by Rhea.
+    let home = call("home", "workspace.conversations", json!({}))
+        .await
+        .result
+        .unwrap();
+    assert_eq!(home["version"], 1);
+    assert_eq!(home["projectId"], serde_json::Value::Null);
+    let rows = home["conversations"].as_array().unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0]["id"], json!(harness.conversation_id));
+    assert_eq!(rows[0]["title"], "New work");
+    assert_eq!(rows[0]["titleDerived"], true);
+    assert_eq!(rows[0]["leadName"], "Rhea");
+    assert_eq!(rows[0]["provider"], "codex");
+    assert_eq!(rows[0]["marker"], serde_json::Value::Null);
+    assert_eq!(rows[0]["unresolved"], 0);
+    assert_eq!(home["rememberedLeadId"], json!(harness.lead.id));
+    assert_eq!(home["truncated"], false);
+
+    // The project space is separate, keeps its stored title, and remembers Mira.
+    let project = call(
+        "project",
+        "workspace.conversations",
+        json!({"projectId": project_id}),
+    )
+    .await
+    .result
+    .unwrap();
+    let rows = project["conversations"].as_array().unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0]["id"], project_conversation);
+    assert_eq!(rows[0]["title"], "Release checklist");
+    assert_eq!(rows[0]["titleDerived"], false);
+    assert_eq!(project["rememberedLeadId"], json!(harness.worker.id));
+
+    // The lead's turn delegates under ask: the title derives from the request and the proposal
+    // makes the conversation need attention.
+    warm_tool_lead(&harness).await;
+    let roster_revision = harness.store.roster_snapshot().unwrap().revision;
+    harness
+        .backend
+        .tool_calls
+        .lock()
+        .unwrap()
+        .extend([tool_call(
+            "call-1",
+            "task_delegate",
+            json!({
+                "employeeId": harness.worker.id,
+                "objective": "Implement the parser fix",
+                "rosterRevision": roster_revision
+            }),
+        )]);
+    let submitted = submit_lead_turn(&harness, "ask").await;
+    assert_eq!(submitted["turn"]["state"], "completed");
+    let child_id: uuid::Uuid = harness.backend.tool_results.lock().unwrap()[0].content["taskId"]
+        .as_str()
+        .unwrap()
+        .parse()
+        .unwrap();
+    let home = call("home-proposed", "workspace.conversations", json!({}))
+        .await
+        .result
+        .unwrap();
+    let row = home["conversations"][0].clone();
+    assert_eq!(row["title"], "Coordinate the parser fix");
+    assert_eq!(row["titleDerived"], true);
+    assert_eq!(row["marker"], "needs-attention");
+    assert_eq!(row["markerReason"], "1 item needs you");
+    assert_eq!(row["unresolved"], 1);
+    assert_eq!(
+        row["workers"],
+        json!({"total": 1, "running": 0, "waiting": 1, "failed": 0, "completed": 0})
+    );
+    assert_eq!(row["rootTaskState"], "running");
+    assert_eq!(row["lastTurnState"], "completed");
+
+    // Accepting makes it active (waiting to run); dispatch completes it; the result reaching
+    // the lead completes the plan.
+    call(
+        "accept",
+        "task.accept",
+        json!({"id": child_id, "expectedRevision": 1, "idempotencyKey": "workspace-accept"}),
+    )
+    .await
+    .result
+    .unwrap();
+    let row = call("home-accepted", "workspace.conversations", json!({}))
+        .await
+        .result
+        .unwrap()["conversations"][0]
+        .clone();
+    assert_eq!(row["marker"], "active");
+    assert_eq!(row["markerReason"], "1 waiting to run");
+    harness.app.dispatch_pending_tasks_once().await.unwrap();
+    assert_eq!(
+        harness.store.get_task(child_id).unwrap().task.state,
+        TaskState::Completed
+    );
+    harness.app.deliver_pending_notices_once().await.unwrap();
+    let row = call("home-done", "workspace.conversations", json!({}))
+        .await
+        .result
+        .unwrap()["conversations"][0]
+        .clone();
+    assert_eq!(row["marker"], "completed");
+    assert_eq!(row["rootTaskState"], "completed");
+    assert_eq!(row["workers"]["completed"], 1);
+    assert!(row["lastResultAt"].is_string());
+
+    // A rename is the stored title from then on.
+    call(
+        "rename",
+        "conversation.rename",
+        json!({"id": harness.conversation_id, "expectedRevision": 1, "title": "Parser fix"}),
+    )
+    .await
+    .result
+    .unwrap();
+    let row = call("home-renamed", "workspace.conversations", json!({}))
+        .await
+        .result
+        .unwrap()["conversations"][0]
+        .clone();
+    assert_eq!(row["title"], "Parser fix");
+    assert_eq!(row["titleDerived"], false);
+
+    // Paging: a one-row page is truncated with a cursor; an unknown project is refused.
+    let second = call(
+        "create-second",
+        "conversation.create",
+        json!({
+            "projectId": null,
+            "leadEmployeeId": harness.lead.id,
+            "title": "Second",
+            "idempotencyKey": "workspace-second"
+        }),
+    )
+    .await
+    .result
+    .unwrap()["conversation"]["id"]
+        .clone();
+    let page = call("page-1", "workspace.conversations", json!({"limit": 1}))
+        .await
+        .result
+        .unwrap();
+    assert_eq!(page["conversations"].as_array().unwrap().len(), 1);
+    assert_eq!(page["conversations"][0]["id"], second, "newest first");
+    assert_eq!(page["truncated"], true);
+    let next = call(
+        "page-2",
+        "workspace.conversations",
+        json!({"limit": 1, "before": page["nextBefore"]}),
+    )
+    .await
+    .result
+    .unwrap();
+    assert_eq!(
+        next["conversations"][0]["id"],
+        json!(harness.conversation_id)
+    );
+    assert_eq!(next["truncated"], false);
+    for (label, params, code) in [
+        ("bad-limit", json!({"limit": 0}), "LZ-WORKSPACE-INVALID"),
+        (
+            "bad-cursor",
+            json!({"before": "nope"}),
+            "LZ-WORKSPACE-INVALID",
+        ),
+        (
+            "bad-project",
+            json!({"projectId": uuid::Uuid::new_v4()}),
+            "LZ-WORKSPACE-PROJECT-NOT-FOUND",
+        ),
+    ] {
+        let error = call(label, "workspace.conversations", params)
+            .await
+            .error
+            .unwrap();
+        assert_eq!(error.code, code, "{label}");
+    }
+
+    // The launcher: both employees can lead, Rhea is remembered for Home and Mira for the
+    // project; disabling Mira blocks her with Lazoo's words and the project's remembered lead
+    // says why it no longer works.
+    let launcher = call("launcher", "workspace.launcher", json!({}))
+        .await
+        .result
+        .unwrap();
+    assert_eq!(launcher["version"], 1);
+    assert_eq!(launcher["project"], serde_json::Value::Null);
+    assert_eq!(launcher["rememberedLeadId"], json!(harness.lead.id));
+    assert_eq!(
+        launcher["rememberedLeadBlockingReason"],
+        serde_json::Value::Null
+    );
+    assert_eq!(
+        launcher["authorityModes"],
+        json!(["ask", "self-decision", "full-autonomy"])
+    );
+    let leads = launcher["leads"].as_array().unwrap();
+    assert_eq!(leads.len(), 2);
+    assert_eq!(leads[0]["name"], "Mira");
+    assert_eq!(leads[1]["name"], "Rhea");
+    assert!(
+        leads.iter().all(|lead| lead["startable"] == true),
+        "{leads:?}"
+    );
+    assert_eq!(leads[1]["availability"], "idle");
+    assert_eq!(launcher["start"][0]["method"], "conversation.create");
+    assert_eq!(launcher["start"][1]["method"], "turn.submit");
+    assert_eq!(launcher["start"][1]["params"]["activateIfNeeded"], true);
+    let mira = harness.store.get_employee(harness.worker.id).unwrap();
+    call(
+        "disable-mira",
+        "employee.disable",
+        json!({
+            "id": mira.id,
+            "expectedRevision": mira.configuration_revision,
+            "idempotencyKey": "workspace-disable-mira"
+        }),
+    )
+    .await
+    .result
+    .unwrap();
+    let launcher = call(
+        "launcher-project",
+        "workspace.launcher",
+        json!({"projectId": project_id}),
+    )
+    .await
+    .result
+    .unwrap();
+    assert_eq!(launcher["project"]["id"], project_id);
+    assert_eq!(launcher["rememberedLeadId"], json!(harness.worker.id));
+    assert_eq!(launcher["rememberedLeadBlockingReason"], "Mira is disabled");
+    let mira_lead = launcher["leads"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|lead| lead["employeeId"] == json!(harness.worker.id))
+        .cloned()
+        .unwrap();
+    assert_eq!(mira_lead["startable"], false);
+    assert_eq!(mira_lead["blockingReason"], "Mira is disabled");
+    let refused = call(
+        "launcher-bad",
+        "workspace.launcher",
+        json!({"projectId": uuid::Uuid::new_v4()}),
+    )
+    .await
+    .error
+    .unwrap();
+    assert_eq!(refused.code, "LZ-WORKSPACE-PROJECT-NOT-FOUND");
+
+    // Nothing was stored for the workspace, and the snapshot is unchanged.
+    assert!(
+        harness
+            .store
+            .list_events(0, 1000)
+            .unwrap()
+            .iter()
+            .all(|event| !event.event_type.starts_with("workspace"))
+    );
+    let snapshot = call("desktop", "desktop.snapshot", json!({}))
+        .await
+        .result
+        .unwrap();
+    assert!(snapshot.get("workspace").is_none());
+    assert!(snapshot.get("conversations").is_none());
+    assert_desktop_is_roster_neutral(&harness.app).await;
+}
+
+#[test]
+fn workspace_read_models_acceptance_contract_is_deterministic_and_backend_only() {
+    let repository = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let script_path = repository.join("scripts/acceptance/workspace-read-models.ps1");
+    let script =
+        std::fs::read_to_string(&script_path).expect("workspace read models acceptance script");
+
+    for required in [
+        "the_marker_prefers_attention_then_activity_then_failure_then_completion",
+        "titles_come_from_the_store_then_the_first_request_then_a_default",
+        "startability_follows_roster_availability_with_lazoo_words_for_each_block",
+        "workspace_cli_maps_conversations_and_launcher",
+        "the_user_browses_a_space_and_its_launcher_through_the_daemon",
+        "store_enables_wal_foreign_keys_and_schema_version",
+        "markersFollowTheRows",
+        "rememberedLeadIsTheNewest",
+        "launcherExplainsBlocks",
+        "workspaceStoresNothing",
+        "providerSmokeAbsent",
+        "externalModelUseAbsent",
+        "uiChangesAbsent",
+        "deterministic-fake-transport",
+        "schemaVersion = 15",
+    ] {
+        assert!(
+            script.contains(required),
+            "acceptance script must contain {required}"
+        );
+    }
+    for forbidden in ["provider', 'smoke", "LivePrompt"] {
+        assert!(
+            !script.contains(forbidden),
+            "acceptance script must not contain {forbidden}"
+        );
+    }
+}

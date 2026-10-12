@@ -1369,7 +1369,7 @@ pub(crate) fn turn_for_command(
         .transpose()
 }
 
-fn required_conversation(
+pub(crate) fn required_conversation(
     connection: &Connection,
     id: Uuid,
 ) -> Result<ConversationRecord, StoreError> {

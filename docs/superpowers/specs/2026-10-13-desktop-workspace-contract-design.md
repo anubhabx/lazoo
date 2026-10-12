@@ -2,7 +2,7 @@
 
 **Date:** 2026-10-13
 
-**Status:** Proposed. Design only, for review by the owner and the separately owned desktop UI before any implementation. No code, schema, RPC, Tauri, or desktop change is part of this document.
+**Status:** Phase 1 implemented on `feat/workspace-read-models` (pull request #18): `workspace.conversations` and `workspace.launcher` as sections 3.1, 3.2, and 4.1 to 4.3 describe, with section 9's proposed answers taken as defaults on the owner's direction to finish as much as possible (questions 1, 2, 4, 6, and 7; `conversation.rename` landed as pull request #15). Phase 2 (`workspace.conversation`, section 3.3 and 4.4 to 4.5) and the actions phase (section 6) still wait for the owner's and the UI owner's review; no Tauri or desktop change is part of this document.
 
 **Scope:** The typed, daemon-derived read models the desktop needs after the Inbox (`docs/superpowers/specs/2026-10-11-desktop-inbox-contract-design.md`, implemented in pull request #11) to build the information architecture's slices 3 and 4 (section 19): Home and project navigation with conversation history, the launcher, the active conversation's header, and the worker dock. It names the rows, the derived states, the live-update path, and the actions, each mapped to an existing RPC. Terminal streaming (ConPTY) is outside it; the terminal host binds to a separate framed stream contract when that work exists.
 
