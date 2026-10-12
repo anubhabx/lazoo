@@ -441,6 +441,14 @@ pub enum ConversationCommand {
     Show {
         id: Uuid,
     },
+    /// Set or clear (omit --title) the conversation's title at the revision you saw.
+    Rename {
+        id: Uuid,
+        #[arg(long)]
+        expected_revision: u64,
+        #[arg(long)]
+        title: Option<String>,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -901,6 +909,15 @@ fn conversation_request(command: &ConversationCommand) -> (&'static str, Value, 
             false,
         ),
         ConversationCommand::Show { id } => ("conversation.show", json!({"id": id}), false),
+        ConversationCommand::Rename {
+            id,
+            expected_revision,
+            title,
+        } => (
+            "conversation.rename",
+            json!({"id": id, "expectedRevision": expected_revision, "title": title}),
+            false,
+        ),
     }
 }
 

@@ -16,8 +16,8 @@ pub use conversation::{
     CONVERSATION_CONTRACT_V1, CancelTurnParams, ConversationDetail, ConversationListParams,
     ConversationMutationResult, ConversationRecord, ConversationShowParams, ConversationSummary,
     ConversationTurnEvent, ConversationTurnRecord, ConversationTurnSummary,
-    CreateConversationParams, RetryTurnParams, SubmitTurnParams, TurnListParams,
-    TurnMutationResult, TurnReconcileResult, TurnShowParams, TurnState,
+    CreateConversationParams, RenameConversationParams, RetryTurnParams, SubmitTurnParams,
+    TurnListParams, TurnMutationResult, TurnReconcileResult, TurnShowParams, TurnState,
 };
 pub use inbox::{
     INBOX_CONTRACT_V1, InboxAction, InboxAttention, InboxCounts, InboxCountsResult, InboxDeadline,

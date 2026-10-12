@@ -2,33 +2,33 @@
     "status":  "PASS",
     "schemaVersion":  15,
     "mode":  "deterministic-fake-transport",
-    "startedAt":  "2026-10-12T19:52:47.5884894Z",
-    "durationMs":  15258,
+    "startedAt":  "2026-10-12T20:15:51.2894616Z",
+    "durationMs":  1874,
     "commands":  [
                      {
                          "command":  "cargo test -p lazoo-runtime --test process_job job_accounting_reports_the_tree_and_survives_its_termination --locked -- --exact",
                          "exitCode":  0,
-                         "durationMs":  473
+                         "durationMs":  366
                      },
                      {
                          "command":  "cargo test -p lazoo-runtime --test process_job current_process_accounting_reports_this_process --locked -- --exact",
                          "exitCode":  0,
-                         "durationMs":  295
+                         "durationMs":  244
                      },
                      {
                          "command":  "cargo test -p lazooctl --test cli session_and_system_cli_map_resources --locked -- --exact",
                          "exitCode":  0,
-                         "durationMs":  1803
+                         "durationMs":  293
                      },
                      {
                          "command":  "cargo test -p lazood --test daemon the_user_reads_resource_use_for_the_daemon_and_a_live_session --locked -- --exact",
                          "exitCode":  0,
-                         "durationMs":  4404
+                         "durationMs":  500
                      },
                      {
                          "command":  "cargo test -p lazoo-store --test store store_enables_wal_foreign_keys_and_schema_version --locked -- --exact",
                          "exitCode":  0,
-                         "durationMs":  8205
+                         "durationMs":  404
                      },
                      {
                          "command":  "git diff --quiet and git diff --cached --quiet -- apps/lazoo-desktop",

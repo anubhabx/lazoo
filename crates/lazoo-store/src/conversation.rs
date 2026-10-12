@@ -117,7 +117,59 @@ pub struct MarkTurnUncertainInput {
     pub failure_message: String,
 }
 
+/// What the user renames a conversation to; `None` clears the stored title.
+#[derive(Clone, Debug)]
+pub struct RenameConversationInput {
+    pub conversation_id: Uuid,
+    pub expected_revision: u64,
+    pub title: Option<String>,
+}
+
 impl Store {
+    /// Renames a conversation (information architecture section 6.3: titles are user-editable).
+    /// Naturally idempotent: a title the conversation already has changes nothing and emits no
+    /// event; otherwise `expected_revision` must be current, and the revision advances.
+    pub fn rename_conversation(
+        &self,
+        input: &RenameConversationInput,
+    ) -> Result<ConversationMutationResult, StoreError> {
+        let title = validate_conversation_title(input.title.as_deref())?;
+        let mut connection = self.lock()?;
+        let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let current = required_conversation(&transaction, input.conversation_id)?;
+        if current.title == title {
+            transaction.commit()?;
+            return Ok(ConversationMutationResult {
+                conversation: current,
+                event_sequence: None,
+            });
+        }
+        if current.revision != input.expected_revision {
+            return Err(StoreError::ConversationStale {
+                conversation_id: current.id,
+                current_revision: current.revision,
+            });
+        }
+        let now = Utc::now().to_rfc3339();
+        transaction.execute(
+            "UPDATE conversations SET title = ?1, revision = revision + 1, updated_at = ?2
+             WHERE id = ?3",
+            params![title, now, current.id.to_string()],
+        )?;
+        let conversation = required_conversation(&transaction, current.id)?;
+        let event_sequence = employee::insert_event(
+            &transaction,
+            "conversation.renamed",
+            &json!({"conversation": &conversation, "previousTitle": current.title}),
+            &now,
+        )?;
+        transaction.commit()?;
+        Ok(ConversationMutationResult {
+            conversation,
+            event_sequence: Some(event_sequence),
+        })
+    }
+
     pub fn create_conversation(
         &self,
         input: &CreateConversationInput,

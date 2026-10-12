@@ -367,6 +367,7 @@ impl App {
             "conversation.create" => self.create_conversation(&request),
             "conversation.list" => self.conversation_list(request.params),
             "conversation.show" => self.conversation_show(request.params),
+            "conversation.rename" => self.rename_conversation(&request),
             "turn.submit" => self.submit_turn(&request).await,
             "turn.retry" => self.retry_turn(&request).await,
             "turn.cancel" => self.cancel_turn(&request).await,

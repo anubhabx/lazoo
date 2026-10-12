@@ -9842,3 +9842,174 @@ fn resource_budget_acceptance_contract_measures_lazoo_itself_without_a_provider(
         );
     }
 }
+
+/// The user renames a conversation through the daemon: the title the user saw is replaced at
+/// the revision they saw, a replay changes nothing, a stale revision is refused with the current
+/// one, the list and show read models carry the new title, and the desktop snapshot is unchanged.
+#[tokio::test]
+#[allow(clippy::too_many_lines)] // One user session: create, rename, replay, refusals, read back, clear.
+async fn the_user_renames_a_conversation_through_the_daemon() {
+    let temporary = tempdir().unwrap();
+    let root = DataRoot::from_path(temporary.path().join("data"));
+    root.ensure().unwrap();
+    let store = Store::open_path(root.state_db()).unwrap();
+    let employee = configured_employee(&store);
+    let app =
+        App::new_with_provider_environment(store.clone(), root, DiscoveryEnvironment::empty())
+            .unwrap();
+    let call =
+        |id: &str, method: &str, params: serde_json::Value| app.handle(request(id, method, params));
+
+    let created = call(
+        "create",
+        "conversation.create",
+        json!({
+            "projectId": null,
+            "leadEmployeeId": employee.id,
+            "title": null,
+            "idempotencyKey": "create-untitled"
+        }),
+    )
+    .await
+    .result
+    .unwrap();
+    let id = created["conversation"]["id"].clone();
+    assert_eq!(created["conversation"]["title"], serde_json::Value::Null);
+    assert_eq!(created["conversation"]["revision"], 1);
+
+    let renamed = call(
+        "rename",
+        "conversation.rename",
+        json!({"id": id, "expectedRevision": 1, "title": "Parser fix"}),
+    )
+    .await
+    .result
+    .unwrap();
+    assert_eq!(renamed["conversation"]["title"], "Parser fix");
+    assert_eq!(renamed["conversation"]["revision"], 2);
+    assert!(renamed["eventSequence"].is_number());
+
+    let replay = call(
+        "rename-replay",
+        "conversation.rename",
+        json!({"id": id, "expectedRevision": 1, "title": "Parser fix"}),
+    )
+    .await
+    .result
+    .unwrap();
+    assert_eq!(replay["conversation"], renamed["conversation"]);
+    assert_eq!(replay["eventSequence"], serde_json::Value::Null);
+
+    let stale = call(
+        "rename-stale",
+        "conversation.rename",
+        json!({"id": id, "expectedRevision": 1, "title": "Something else"}),
+    )
+    .await
+    .error
+    .unwrap();
+    assert_eq!(stale.code, "LZ-CONVERSATION-STALE");
+    assert_eq!(stale.data.unwrap()["currentRevision"], 2);
+    for (label, params, code) in [
+        (
+            "zero",
+            json!({"id": id, "expectedRevision": 0, "title": "x"}),
+            "LZ-CONVERSATION-INVALID",
+        ),
+        (
+            "unknown",
+            json!({"id": id, "expectedRevision": 2, "unknown": true}),
+            "LZ-CONVERSATION-INVALID",
+        ),
+        (
+            "too-long",
+            json!({"id": id, "expectedRevision": 2, "title": "x".repeat(300)}),
+            "LZ-CONVERSATION-INVALID",
+        ),
+        (
+            "missing",
+            json!({"id": uuid::Uuid::new_v4(), "expectedRevision": 1, "title": "x"}),
+            "LZ-CONVERSATION-NOT-FOUND",
+        ),
+    ] {
+        let error = call(label, "conversation.rename", params)
+            .await
+            .error
+            .unwrap();
+        assert_eq!(error.code, code, "{label}");
+    }
+
+    let listed = call("list", "conversation.list", json!({}))
+        .await
+        .result
+        .unwrap();
+    assert_eq!(listed[0]["title"], "Parser fix");
+    assert_eq!(listed[0]["revision"], 2);
+    let shown = call("show", "conversation.show", json!({"id": id}))
+        .await
+        .result
+        .unwrap();
+    assert_eq!(shown["conversation"]["title"], "Parser fix");
+
+    let cleared = call(
+        "clear",
+        "conversation.rename",
+        json!({"id": id, "expectedRevision": 2, "title": null}),
+    )
+    .await
+    .result
+    .unwrap();
+    assert_eq!(cleared["conversation"]["title"], serde_json::Value::Null);
+    assert_eq!(cleared["conversation"]["revision"], 3);
+
+    let events: Vec<String> = store
+        .list_events(0, 100)
+        .unwrap()
+        .into_iter()
+        .map(|event| event.event_type)
+        .filter(|kind| kind.starts_with("conversation."))
+        .collect();
+    assert_eq!(
+        events,
+        [
+            "conversation.created",
+            "conversation.renamed",
+            "conversation.renamed"
+        ]
+    );
+    assert_desktop_is_roster_neutral(&app).await;
+}
+
+#[test]
+fn conversation_rename_acceptance_contract_is_deterministic_and_backend_only() {
+    let repository = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let script_path = repository.join("scripts/acceptance/conversation-rename.ps1");
+    let script =
+        std::fs::read_to_string(&script_path).expect("conversation rename acceptance script");
+
+    for required in [
+        "conversation_rename_is_revisioned_naturally_idempotent_and_validated",
+        "conversation_cli_maps_rename_with_and_without_a_title",
+        "the_user_renames_a_conversation_through_the_daemon",
+        "store_enables_wal_foreign_keys_and_schema_version",
+        "renameIsRevisioned",
+        "sameTitleEmitsNoEvent",
+        "staleRevisionRefused",
+        "providerSmokeAbsent",
+        "externalModelUseAbsent",
+        "uiChangesAbsent",
+        "deterministic-fake-transport",
+        "schemaVersion = 15",
+    ] {
+        assert!(
+            script.contains(required),
+            "acceptance script must contain {required}"
+        );
+    }
+    for forbidden in ["provider', 'smoke", "LivePrompt"] {
+        assert!(
+            !script.contains(forbidden),
+            "acceptance script must not contain {forbidden}"
+        );
+    }
+}

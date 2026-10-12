@@ -148,6 +148,16 @@ pub struct CreateConversationParams {
     pub idempotency_key: String,
 }
 
+/// Rename a conversation (information architecture section 6.3: titles are user-editable).
+/// `title: null` clears the stored title.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct RenameConversationParams {
+    pub id: Uuid,
+    pub expected_revision: u64,
+    pub title: Option<String>,
+}
+
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct ConversationShowParams {

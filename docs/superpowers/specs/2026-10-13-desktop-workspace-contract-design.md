@@ -129,7 +129,7 @@ Completed workers stay in the list, so the dock can keep them visible and muted 
 
 ### 4.1 Title
 
-The stored `title` when set; otherwise the first user turn's text, trimmed to its first line and 80 bytes, with `titleDerived: true`; otherwise "New work". The architecture makes titles user-editable; that needs a `conversation.rename` mutation that does not exist today and is phase 3 (section 6).
+The stored `title` when set; otherwise the first user turn's text, trimmed to its first line and 80 bytes, with `titleDerived: true`; otherwise "New work". The architecture makes titles user-editable; `conversation.rename` now exists (pull request #15), so the header's `rename` action is data for it from phase 3 (section 6).
 
 ### 4.2 Conversation marker
 
@@ -204,7 +204,7 @@ Each worker card and the conversation header list the actions that apply now, as
 | lead `busy` | `cancel-turn` → `turn.cancel` |
 | lead latest turn `retryable-failed` | `retry-turn` → `turn.retry` |
 | lead session `idle` | `stop-session` → `session.stop` |
-| header | `rename` → `conversation.rename` (new mutation, phase 3; see question 1) |
+| header | `rename` → `conversation.rename` (`{ id, expectedRevision, title }`) |
 
 No action starts a provider process on its own; the launcher's `turn.submit` with `activateIfNeeded: true` is the user's explicit start (brief section 9.2).
 
@@ -219,11 +219,11 @@ A conversation row's `id` opens `workspace.conversation`; a worker card's `taskI
 - `lazoo-protocol`: `ConversationRow`, `LeadCandidate`, `LeadHeader`, `WorkerCard`, the three params and results, `WORKSPACE_CONTRACT_V1`.
 - `lazood`: `workspace.conversations`, `workspace.launcher`, `workspace.conversation`; `lazooctl workspace conversations|launcher|show`.
 - Deterministic acceptance: every marker and worker state from its rows, the remembered lead and each blocking reason, the sidebar cursor, the header's lifecycle through warm, turn, suspend, and failure, and `eventHighWater` plus the subscription losing no change across a reconnect.
-- No schema change is expected for phases 1 and 2; `conversation.rename` (phase 3) needs a `conversations.title` write path and an idempotent command, not a migration.
+- No schema change is expected for phases 1 and 2; `conversation.rename` already exists for phase 3.
 
 ## 9. Questions for the owner and the UI owner
 
-1. **Titles**: derive from the first user turn as proposed, and add `conversation.rename` in phase 3? Or store a generated title at `conversation.create` so it never changes under the user?
+1. **Titles**: derive from the first user turn as proposed (the user renames through `conversation.rename`, pull request #15)? Or store a generated title at `conversation.create` so it never changes under the user?
 2. **"Completed unread"**: UI-local seen timestamps against `lastResultAt`, as proposed, or daemon read state (a table and a mutation the Inbox deliberately avoided)?
 3. **`blocked`**: should an open lead-window incident (`watching` in the Inbox) make a worker `blocked`, as proposed, or only a user escalation?
 4. **Failed lead**: is a `failed` availability a block or a warning the user can override?
@@ -233,4 +233,4 @@ A conversation row's `id` opens `workspace.conversation`; a worker card's `taskI
 
 ## 10. Review gate
 
-Agreeing to this document authorizes only an implementation plan for `workspace.conversations`, `workspace.launcher`, and `workspace.conversation` with the rules above, in the phases above. It does not authorize desktop or Tauri changes, the `conversation.rename` mutation, terminal streaming, or `UI BACKEND CONTRACT: GO`, which waits for the implemented contracts' own review.
+Agreeing to this document authorizes only an implementation plan for `workspace.conversations`, `workspace.launcher`, and `workspace.conversation` with the rules above, in the phases above. It does not authorize desktop or Tauri changes, terminal streaming, or `UI BACKEND CONTRACT: GO`, which waits for the implemented contracts' own review.

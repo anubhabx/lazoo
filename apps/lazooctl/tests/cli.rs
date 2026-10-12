@@ -1311,3 +1311,38 @@ fn session_and_system_cli_map_resources() {
         "the session id is required"
     );
 }
+
+#[test]
+fn conversation_cli_maps_rename_with_and_without_a_title() {
+    let request = |args: &[&str]| {
+        let mut argv = vec!["lazooctl", "conversation", "rename"];
+        argv.extend_from_slice(args);
+        command_request(&Cli::try_parse_from(argv).unwrap().command)
+    };
+    assert_eq!(
+        request(&[
+            CONVERSATION_ID,
+            "--expected-revision",
+            "2",
+            "--title",
+            "Parser fix"
+        ]),
+        (
+            "conversation.rename",
+            json!({"id": CONVERSATION_ID, "expectedRevision": 2, "title": "Parser fix"}),
+            false
+        )
+    );
+    assert_eq!(
+        request(&[CONVERSATION_ID, "--expected-revision", "3"]),
+        (
+            "conversation.rename",
+            json!({"id": CONVERSATION_ID, "expectedRevision": 3, "title": null}),
+            false
+        )
+    );
+    assert!(
+        Cli::try_parse_from(["lazooctl", "conversation", "rename", CONVERSATION_ID]).is_err(),
+        "--expected-revision is required"
+    );
+}
