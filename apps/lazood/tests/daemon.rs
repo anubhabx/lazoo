@@ -8082,6 +8082,9 @@ fn promote_child_incident(
     use lazoo_protocol::{IncidentPriority, IncidentSource};
     use lazoo_store::RaiseIncidentInput;
 
+    // Incidents fold per code, employee, and project: a recurrence on a project task carries
+    // the task's project.
+    let project_id = harness.store.get_task(task).unwrap().task.project_id;
     let mut promoted = None;
     for attempt in 1..=3 {
         promoted = Some(
@@ -8094,7 +8097,7 @@ fn promote_child_incident(
                     source: IncidentSource::Daemon,
                     title: None,
                     explanation: None,
-                    project_id: None,
+                    project_id,
                     employee_id: Some(harness.worker.id),
                     provider: Some("codex".to_owned()),
                     task_id: Some(task),
@@ -10151,7 +10154,55 @@ async fn the_core_scenario_runs_end_to_end_on_the_deterministic_provider() {
     };
     use lazoo_store::ListIncidentsInput;
 
-    let (temporary, harness) = tool_harness(AuthorityMode::Ask);
+    let (temporary, mut harness) = tool_harness(AuthorityMode::Ask);
+
+    // 3. The conversation lives in a registered project: a repository with a base commit, so
+    // every dispatched task gets its own retained worktree from it.
+    let repository = temporary.path().join("repository");
+    git_init(&repository);
+    git(
+        &repository,
+        &["config", "user.email", "lazoo@example.invalid"],
+    );
+    git(&repository, &["config", "user.name", "Lazoo Test"]);
+    git(&repository, &["config", "core.autocrlf", "false"]);
+    std::fs::write(repository.join("parser.txt"), "base\n").unwrap();
+    git(&repository, &["add", "parser.txt"]);
+    git(&repository, &["commit", "--quiet", "-m", "base"]);
+    let project_id: uuid::Uuid = harness
+        .app
+        .handle(request(
+            "register-project",
+            "project.register",
+            json!({"path": repository, "displayName": "Parser", "idempotencyKey": "scenario-project"}),
+        ))
+        .await
+        .result
+        .unwrap()["project"]["id"]
+        .as_str()
+        .unwrap()
+        .parse()
+        .unwrap();
+    harness.conversation_id = harness
+        .app
+        .handle(request(
+            "create-project-conversation",
+            "conversation.create",
+            json!({
+                "projectId": project_id,
+                "leadEmployeeId": harness.lead.id,
+                "title": "Parser fix",
+                "idempotencyKey": "scenario-project-conversation"
+            }),
+        ))
+        .await
+        .result
+        .unwrap()["conversation"]["id"]
+        .as_str()
+        .unwrap()
+        .parse()
+        .unwrap();
+    let harness = harness;
     let call = |id: &str, method: &str, params: serde_json::Value| {
         harness.app.handle(request(id, method, params))
     };
@@ -10231,8 +10282,8 @@ async fn the_core_scenario_runs_end_to_end_on_the_deterministic_provider() {
     assert_eq!(availability(quinn.id), "disabled");
     assert_eq!(harness.backend.starts.load(Ordering::SeqCst), 0);
 
-    // 3 and 4. The user starts a conversation with Rhea, who reads the live roster and proposes
-    // a two-part plan for Mira; 8. the disabled peer cannot be selected.
+    // 4. Rhea reads the live roster and proposes a two-part plan for Mira in the project
+    // conversation; 8. the disabled peer cannot be selected.
     warm_tool_lead(&harness).await;
     let roster_revision = harness.store.roster_snapshot().unwrap().revision;
     let delegate = |call_id: &str, employee: uuid::Uuid, objective: &str| {
@@ -10336,17 +10387,41 @@ async fn the_core_scenario_runs_end_to_end_on_the_deterministic_provider() {
         3,
         "Rhea's session and one per dispatched task"
     );
+    let mut worktrees = std::collections::BTreeSet::new();
     for child in &children {
         let detail = harness.store.get_task(*child).unwrap();
         assert_eq!(detail.task.state, TaskState::Completed);
         let dispatch = detail.dispatch.unwrap();
+        assert_eq!(dispatch.project_id, Some(project_id));
         assert_eq!(
             dispatch.workspace_kind,
-            Some(TaskWorkspaceKind::Projectless)
+            Some(TaskWorkspaceKind::GitWorktree)
         );
+        assert!(dispatch.branch_name.is_some() && dispatch.base_commit.is_some());
         let workspace = dispatch.workspace_path.unwrap();
-        assert!(Path::new(&workspace).is_dir(), "{workspace}");
+        let path = Path::new(&workspace);
+        assert!(
+            path.is_dir() && path.join("parser.txt").is_file(),
+            "{workspace}"
+        );
+        assert_ne!(path, repository.as_path(), "never the canonical checkout");
+        assert!(
+            worktrees.insert(workspace),
+            "each task has its own worktree"
+        );
     }
+    assert!(
+        harness
+            .backend
+            .working_directories
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|directory| worktrees.contains(&directory.to_string_lossy().into_owned()))
+            .count()
+            == 2,
+        "each worker session started inside its task's worktree"
+    );
     assert!(
         harness
             .store

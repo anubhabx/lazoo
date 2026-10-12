@@ -2,33 +2,33 @@
   "status": "PASS",
   "schemaVersion": 15,
   "mode": "deterministic-fake-transport",
-  "startedAt": "2026-10-12T23:28:56.7714234Z",
-  "durationMs": 2197,
+  "startedAt": "2026-10-12T23:37:41.2335490Z",
+  "durationMs": 1999,
   "commands": [
     {
       "command": "cargo test -p lazoo-providers --test config provider_configuration_is_parsed_from_known_formats_redacted_hashed_and_compared --locked -- --exact",
       "exitCode": 0,
-      "durationMs": 389
+      "durationMs": 365
     },
     {
       "command": "cargo test -p lazoo-providers --test config missing_and_malformed_configuration_is_reported_without_quoting_it_or_failing --locked -- --exact",
       "exitCode": 0,
-      "durationMs": 410
+      "durationMs": 362
     },
     {
       "command": "cargo test -p lazooctl --test cli provider_cli_maps_config --locked -- --exact",
       "exitCode": 0,
-      "durationMs": 312
+      "durationMs": 294
     },
     {
       "command": "cargo test -p lazood --test daemon provider_config_reports_redacted_integrations_without_changing_the_desktop_snapshot --locked -- --exact",
       "exitCode": 0,
-      "durationMs": 519
+      "durationMs": 476
     },
     {
       "command": "cargo test -p lazoo-store --test store store_enables_wal_foreign_keys_and_schema_version --locked -- --exact",
       "exitCode": 0,
-      "durationMs": 471
+      "durationMs": 414
     },
     {
       "command": "git diff --quiet and git diff --cached --quiet -- apps/lazoo-desktop",

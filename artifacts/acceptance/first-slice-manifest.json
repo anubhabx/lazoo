@@ -2,19 +2,19 @@
   "schemaVersion": 1,
   "databaseSchemaVersion": 11,
   "status": "PASS",
-  "startedAt": "2026-10-12T23:27:54.0120212Z",
-  "completedAt": "2026-10-12T23:28:04.2381941Z",
-  "durationMs": 10222,
+  "startedAt": "2026-10-12T23:36:40.6302609Z",
+  "completedAt": "2026-10-12T23:36:50.9956298Z",
+  "durationMs": 10361,
   "platform": "Microsoft Windows NT 10.0.26200.0",
   "rustcVersion": "rustc 1.98.0 (88d9e12ae 2026-08-18)",
   "cargoVersion": "cargo 1.98.0 (797e8a9bc 2026-08-05)",
   "repositoryRoot": "C:\\workspace\\Orchestrator",
-  "isolatedDataRoot": "C:\\Users\\anubhab\\AppData\\Local\\Temp\\lazoo-acceptance-cbc844dce83946cd9d4e14da9ca3350a\\data",
-  "temporaryProject": "C:\\Users\\anubhab\\AppData\\Local\\Temp\\lazoo-acceptance-cbc844dce83946cd9d4e14da9ca3350a\\repository",
+  "isolatedDataRoot": "C:\\Users\\anubhab\\AppData\\Local\\Temp\\lazoo-acceptance-d3960ea40bdc4d0f9d0b641f8b87b482\\data",
+  "temporaryProject": "C:\\Users\\anubhab\\AppData\\Local\\Temp\\lazoo-acceptance-d3960ea40bdc4d0f9d0b641f8b87b482\\repository",
   "artifacts": {
     "manifest": "C:\\workspace\\Orchestrator\\artifacts\\acceptance\\first-slice-manifest.json",
-    "runLogs": "C:\\Users\\anubhab\\AppData\\Local\\Temp\\lazoo-acceptance-cbc844dce83946cd9d4e14da9ca3350a",
-    "database": "C:\\Users\\anubhab\\AppData\\Local\\Temp\\lazoo-acceptance-cbc844dce83946cd9d4e14da9ca3350a\\data\\state\\lazoo.db"
+    "runLogs": "C:\\Users\\anubhab\\AppData\\Local\\Temp\\lazoo-acceptance-d3960ea40bdc4d0f9d0b641f8b87b482",
+    "database": "C:\\Users\\anubhab\\AppData\\Local\\Temp\\lazoo-acceptance-d3960ea40bdc4d0f9d0b641f8b87b482\\data\\state\\lazoo.db"
   },
   "commands": [
     {
@@ -25,17 +25,17 @@
     {
       "command": "lazooctl --json status",
       "exitCode": 0,
-      "durationMs": 106
+      "durationMs": 141
     },
     {
-      "command": "lazooctl --json project register C:\\Users\\anubhab\\AppData\\Local\\Temp\\lazoo-acceptance-cbc844dce83946cd9d4e14da9ca3350a\\repository --idempotency-key acceptance-cbc844dce83946cd9d4e14da9ca3350a",
+      "command": "lazooctl --json project register C:\\Users\\anubhab\\AppData\\Local\\Temp\\lazoo-acceptance-d3960ea40bdc4d0f9d0b641f8b87b482\\repository --idempotency-key acceptance-d3960ea40bdc4d0f9d0b641f8b87b482",
       "exitCode": 0,
-      "durationMs": 88
+      "durationMs": 109
     },
     {
-      "command": "lazooctl --json project register C:\\Users\\anubhab\\AppData\\Local\\Temp\\lazoo-acceptance-cbc844dce83946cd9d4e14da9ca3350a\\repository --idempotency-key acceptance-cbc844dce83946cd9d4e14da9ca3350a",
+      "command": "lazooctl --json project register C:\\Users\\anubhab\\AppData\\Local\\Temp\\lazoo-acceptance-d3960ea40bdc4d0f9d0b641f8b87b482\\repository --idempotency-key acceptance-d3960ea40bdc4d0f9d0b641f8b87b482",
       "exitCode": 0,
-      "durationMs": 78
+      "durationMs": 99
     },
     {
       "command": "lazooctl --json project list",
@@ -45,22 +45,22 @@
     {
       "command": "lazooctl --json events list --after 0 --limit 100",
       "exitCode": 0,
-      "durationMs": 19
+      "durationMs": 46
     },
     {
       "command": "lazooctl --json status",
       "exitCode": 0,
-      "durationMs": 1092
+      "durationMs": 1076
     },
     {
       "command": "lazooctl --json project list",
       "exitCode": 0,
-      "durationMs": 16
+      "durationMs": 14
     },
     {
       "command": "lazooctl --json events list --after 0 --limit 100",
       "exitCode": 0,
-      "durationMs": 17
+      "durationMs": 15
     },
     {
       "command": "lazooctl --json system shutdown",
@@ -70,7 +70,7 @@
     {
       "command": "lazooctl --json status",
       "exitCode": 0,
-      "durationMs": 85
+      "durationMs": 81
     },
     {
       "command": "lazooctl --json system shutdown",
@@ -80,12 +80,12 @@
     {
       "command": "lazooctl --json status",
       "exitCode": 0,
-      "durationMs": 49
+      "durationMs": 51
     },
     {
       "command": "lazooctl --json system shutdown",
       "exitCode": 0,
-      "durationMs": 14
+      "durationMs": 13
     }
   ],
   "gates": {
