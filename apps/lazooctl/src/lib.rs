@@ -201,6 +201,8 @@ pub enum EventsCommand {
 #[derive(Debug, Subcommand)]
 pub enum SystemCommand {
     Shutdown,
+    /// The daemon's own CPU time, working set, and handle count.
+    Resources,
 }
 
 #[derive(Debug, Subcommand)]
@@ -311,6 +313,10 @@ pub enum SessionCommand {
     },
     List,
     Show {
+        id: Uuid,
+    },
+    /// Process count, CPU time, and peak memory of a live session's native process tree.
+    Resources {
         id: Uuid,
     },
     Stop {
@@ -711,6 +717,7 @@ pub fn command_request(command: &Command) -> (&'static str, Value, bool) {
         Command::Incident(command) => incident_request(command),
         Command::Inbox(command) => inbox_request(command),
         Command::System(SystemCommand::Shutdown) => ("system.shutdown", json!({}), false),
+        Command::System(SystemCommand::Resources) => ("system.resources", json!({}), false),
     }
 }
 
@@ -1349,6 +1356,7 @@ fn session_request(command: &SessionCommand) -> (&'static str, Value, bool) {
         ),
         SessionCommand::List => ("session.list", json!({}), false),
         SessionCommand::Show { id } => ("session.show", json!({"id": id}), false),
+        SessionCommand::Resources { id } => ("session.resources", json!({"id": id}), false),
         SessionCommand::Stop {
             id,
             expected_revision,

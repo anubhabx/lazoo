@@ -236,12 +236,14 @@ impl CodexAdapter {
             })?
             .to_owned();
         let native_host_pid = process.native_host_pid();
+        let job = Some(process.job());
         let control = process.control();
         Ok(CodexSession {
             process: Mutex::new(process),
             control,
             session_id,
             native_host_pid,
+            job,
             resumed,
             request: request.clone(),
             active_turn: RwLock::new(None),
@@ -283,6 +285,7 @@ pub struct CodexSession {
     control: JsonRpcControl,
     session_id: String,
     native_host_pid: Option<u32>,
+    job: Option<std::sync::Arc<lazoo_runtime::JobObject>>,
     resumed: bool,
     request: SessionRequest,
     active_turn: RwLock<Option<String>>,
@@ -491,6 +494,10 @@ impl ProviderSession for CodexSession {
 
     fn native_host_pid(&self) -> Option<u32> {
         self.native_host_pid
+    }
+
+    fn resources(&self) -> Option<lazoo_runtime::JobAccounting> {
+        self.job.as_ref().and_then(|job| job.accounting().ok())
     }
 
     fn turn<'a>(&'a self, request: &'a TurnRequest) -> AdapterFuture<'a, Vec<ProviderEvent>> {

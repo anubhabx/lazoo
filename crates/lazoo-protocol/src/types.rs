@@ -343,6 +343,49 @@ pub struct SystemStatus {
     pub degraded: Vec<String>,
 }
 
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct SessionResourcesParams {
+    pub id: Uuid,
+}
+
+/// Point-in-time Job Object accounting for one live session's native process tree (brief
+/// section 20): displayed, never counted against Lazoo's own ceiling.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct SessionResources {
+    pub session_id: Uuid,
+    pub employee_id: Uuid,
+    pub provider: String,
+    pub native_host_pid: Option<u32>,
+    pub active_processes: u32,
+    pub total_processes: u32,
+    pub cpu_millis: u64,
+    pub user_cpu_millis: u64,
+    pub kernel_cpu_millis: u64,
+    pub peak_process_memory_bytes: u64,
+    pub peak_job_memory_bytes: u64,
+    pub sampled_at: String,
+}
+
+/// Point-in-time accounting for the daemon's own process, the part of "Lazoo itself" the
+/// daemon can measure for the brief's section 20.1 budget.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct DaemonResources {
+    pub pid: u32,
+    pub boot_id: Uuid,
+    pub uptime_millis: u64,
+    pub cpu_millis: u64,
+    pub user_cpu_millis: u64,
+    pub kernel_cpu_millis: u64,
+    pub working_set_bytes: u64,
+    pub peak_working_set_bytes: u64,
+    pub handle_count: u32,
+    pub live_sessions: u32,
+    pub sampled_at: String,
+}
+
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct DesktopSnapshot {

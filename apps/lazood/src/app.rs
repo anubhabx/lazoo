@@ -3,6 +3,7 @@ mod delivery;
 mod idle;
 mod inbox;
 mod incident;
+mod resources;
 mod task;
 mod tools;
 mod turn;
@@ -41,7 +42,7 @@ use lazoo_providers::{
     ProviderError, ProviderEvent, ProviderKind, ProviderProbe, ProviderRegistry, ProviderSession,
     ProviderSessionHandle, ProviderVerification, SessionRequest, TurnEventObserver, TurnRequest,
 };
-use lazoo_runtime::DataRoot;
+use lazoo_runtime::{DataRoot, JobAccounting};
 use lazoo_store::{
     AcknowledgeMessageInput, BeginSessionInput, BeginSessionStopInput, CancelMessageInput,
     ClaimMessageInput, CreateEmployeeInput, DisableEmployeeInput, FailMessageInput,
@@ -63,6 +64,10 @@ pub type SessionBackendFuture<'a> =
 pub trait ManagedSession: Send + Sync {
     fn id(&self) -> String;
     fn native_host_pid(&self) -> Option<u32>;
+    /// Job Object accounting for the native process tree; `None` when there is no job.
+    fn resources(&self) -> Option<JobAccounting> {
+        None
+    }
     fn ready_for_turn(
         &self,
     ) -> Pin<Box<dyn Future<Output = Result<(), ProviderError>> + Send + '_>> {
@@ -160,6 +165,10 @@ impl ManagedSession for ProviderSessionHandle {
 
     fn native_host_pid(&self) -> Option<u32> {
         ProviderSession::native_host_pid(self)
+    }
+
+    fn resources(&self) -> Option<JobAccounting> {
+        ProviderSession::resources(self)
     }
 
     fn turn_observed<'a>(
@@ -354,6 +363,7 @@ impl App {
             "session.list" => self.session_list(&request.params),
             "session.show" => self.session_show(request.params),
             "session.stop" => self.stop_session(&request).await,
+            "session.resources" => self.session_resources(&request.params).await,
             "conversation.create" => self.create_conversation(&request),
             "conversation.list" => self.conversation_list(request.params),
             "conversation.show" => self.conversation_show(request.params),
@@ -390,6 +400,7 @@ impl App {
             "message.cancel" => self.cancel_message(&request),
             "message.list" => self.message_list(request.params),
             "message.show" => self.message_show(request.params),
+            "system.resources" => self.system_resources(&request.params).await,
             "system.shutdown" => {
                 let _ = self.shutdown.send(true);
                 Ok(json!({"planned": true}))

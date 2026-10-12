@@ -1290,3 +1290,24 @@ fn inbox_cli_maps_list_and_counts() {
     };
     assert_eq!(filter, lazoo_protocol::InboxFilter::Incidents);
 }
+
+#[test]
+fn session_and_system_cli_map_resources() {
+    let request = |args: &[&str]| {
+        let mut argv = vec!["lazooctl"];
+        argv.extend_from_slice(args);
+        command_request(&Cli::try_parse_from(argv).unwrap().command)
+    };
+    assert_eq!(
+        request(&["session", "resources", SESSION_ID]),
+        ("session.resources", json!({"id": SESSION_ID}), false)
+    );
+    assert_eq!(
+        request(&["system", "resources"]),
+        ("system.resources", json!({}), false)
+    );
+    assert!(
+        Cli::try_parse_from(["lazooctl", "session", "resources"]).is_err(),
+        "the session id is required"
+    );
+}

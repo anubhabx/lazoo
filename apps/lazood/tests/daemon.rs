@@ -152,6 +152,17 @@ impl ManagedSession for FakeManagedSession {
         Some(4242)
     }
 
+    fn resources(&self) -> Option<lazoo_runtime::JobAccounting> {
+        Some(lazoo_runtime::JobAccounting {
+            active_processes: 2,
+            total_processes: 3,
+            user_cpu_millis: 1500,
+            kernel_cpu_millis: 250,
+            peak_process_memory_bytes: 50 * 1024 * 1024,
+            peak_job_memory_bytes: 80 * 1024 * 1024,
+        })
+    }
+
     fn ready_for_turn(
         &self,
     ) -> Pin<Box<dyn Future<Output = Result<(), ProviderError>> + Send + '_>> {
@@ -9598,6 +9609,188 @@ fn desktop_inbox_acceptance_contract_is_deterministic_and_backend_only() {
         "archivePagesWithCursor",
         "inboxStoresNothing",
         "toolsCannotSeeInbox",
+        "providerSmokeAbsent",
+        "externalModelUseAbsent",
+        "uiChangesAbsent",
+        "deterministic-fake-transport",
+        "schemaVersion = 15",
+    ] {
+        assert!(
+            script.contains(required),
+            "acceptance script must contain {required}"
+        );
+    }
+    for forbidden in ["provider', 'smoke", "LivePrompt"] {
+        assert!(
+            !script.contains(forbidden),
+            "acceptance script must not contain {forbidden}"
+        );
+    }
+}
+
+/// The user reads resource use through the daemon: `system.resources` is the daemon's own
+/// process, `session.resources` is a live session's native process tree and refuses one that
+/// is not live, nothing is stored, and the desktop snapshot is unchanged.
+#[tokio::test]
+#[allow(clippy::too_many_lines)] // One user session: the daemon, a warm session, then stopped.
+async fn the_user_reads_resource_use_for_the_daemon_and_a_live_session() {
+    let (_temporary, app, backend, employee_id) = session_test_app();
+    let call =
+        |id: &str, method: &str, params: serde_json::Value| app.handle(request(id, method, params));
+
+    let daemon = call("daemon", "system.resources", json!({}))
+        .await
+        .result
+        .unwrap();
+    assert_eq!(daemon["pid"], std::process::id());
+    assert!(daemon["workingSetBytes"].as_u64().unwrap() > 0, "{daemon}");
+    assert!(
+        daemon["peakWorkingSetBytes"].as_u64().unwrap()
+            >= daemon["workingSetBytes"].as_u64().unwrap(),
+        "{daemon}"
+    );
+    assert!(daemon["handleCount"].as_u64().unwrap() > 0, "{daemon}");
+    assert_eq!(
+        daemon["cpuMillis"],
+        json!(
+            daemon["userCpuMillis"].as_u64().unwrap() + daemon["kernelCpuMillis"].as_u64().unwrap()
+        )
+    );
+    assert_eq!(daemon["liveSessions"], 0);
+    assert!(daemon["sampledAt"].is_string());
+    let status = call("status", "system.status", json!({}))
+        .await
+        .result
+        .unwrap();
+    assert_eq!(daemon["bootId"], status["bootId"]);
+    assert!(status.get("resources").is_none());
+    let refused = call("daemon-params", "system.resources", json!({"pid": 1}))
+        .await
+        .error
+        .unwrap();
+    assert_eq!(refused.code, "LZ-INVALID-PARAMS");
+
+    let warmed = call(
+        "warm",
+        "session.warm",
+        json!({
+            "employeeId": employee_id,
+            "expectedEmployeeRevision": 1,
+            "idempotencyKey": "warm-rhea-resources"
+        }),
+    )
+    .await
+    .result
+    .unwrap();
+    let session_id = warmed["session"]["id"].clone();
+    assert_eq!(backend.starts.load(Ordering::SeqCst), 1);
+    let session = call("session", "session.resources", json!({"id": session_id}))
+        .await
+        .result
+        .unwrap();
+    assert_eq!(session["sessionId"], session_id);
+    assert_eq!(session["employeeId"], json!(employee_id));
+    assert_eq!(session["provider"], "codex");
+    assert_eq!(session["nativeHostPid"], 4242);
+    assert_eq!(session["activeProcesses"], 2);
+    assert_eq!(session["totalProcesses"], 3);
+    assert_eq!(session["userCpuMillis"], 1500);
+    assert_eq!(session["kernelCpuMillis"], 250);
+    assert_eq!(session["cpuMillis"], 1750);
+    assert_eq!(session["peakProcessMemoryBytes"], 52_428_800);
+    assert_eq!(session["peakJobMemoryBytes"], 83_886_080);
+    assert!(session["sampledAt"].is_string());
+    // The provider's use is reported beside the daemon's own, never folded into it.
+    let daemon_live = call("daemon-live", "system.resources", json!({}))
+        .await
+        .result
+        .unwrap();
+    assert_eq!(daemon_live["liveSessions"], 1);
+    assert_eq!(daemon_live["pid"], std::process::id());
+    assert!(daemon_live.get("activeProcesses").is_none());
+    let shown = call("show", "session.show", json!({"id": session_id}))
+        .await
+        .result
+        .unwrap();
+    assert!(shown.get("resources").is_none());
+    assert!(shown.get("activeProcesses").is_none());
+
+    let missing = call(
+        "missing",
+        "session.resources",
+        json!({"id": uuid::Uuid::new_v4()}),
+    )
+    .await
+    .error
+    .unwrap();
+    assert_eq!(missing.code, "LZ-SESSION-NOT-FOUND");
+    let invalid = call(
+        "invalid",
+        "session.resources",
+        json!({"id": session_id, "window": "5m"}),
+    )
+    .await
+    .error
+    .unwrap();
+    assert_eq!(invalid.code, "LZ-INVALID-PARAMS");
+
+    call(
+        "stop",
+        "session.stop",
+        json!({
+            "id": session_id,
+            "expectedRevision": warmed["session"]["revision"],
+            "idempotencyKey": "stop-rhea-resources"
+        }),
+    )
+    .await
+    .result
+    .unwrap();
+    let suspended = call("suspended", "session.resources", json!({"id": session_id}))
+        .await
+        .error
+        .unwrap();
+    assert_eq!(suspended.code, "LZ-SESSION-NOT-LIVE");
+    assert_eq!(suspended.data.unwrap()["state"], "suspended");
+    let daemon_after = call("daemon-after", "system.resources", json!({}))
+        .await
+        .result
+        .unwrap();
+    assert_eq!(daemon_after["liveSessions"], 0);
+
+    // Nothing was stored: no event names a resource sample, and the snapshot is unchanged.
+    let events = app.subscribe(0).unwrap().0;
+    assert!(
+        events
+            .iter()
+            .all(|event| !event.event_type.contains("resource"))
+    );
+    let snapshot = call("desktop", "desktop.snapshot", json!({}))
+        .await
+        .result
+        .unwrap();
+    assert!(snapshot.get("resources").is_none());
+    assert!(snapshot["status"].get("resources").is_none());
+    assert_desktop_is_roster_neutral(&app).await;
+}
+
+#[test]
+fn resource_accounting_acceptance_contract_is_deterministic_and_backend_only() {
+    let repository = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let script_path = repository.join("scripts/acceptance/resource-accounting.ps1");
+    let script =
+        std::fs::read_to_string(&script_path).expect("resource accounting acceptance script");
+
+    for required in [
+        "job_accounting_reports_the_tree_and_survives_its_termination",
+        "current_process_accounting_reports_this_process",
+        "session_and_system_cli_map_resources",
+        "the_user_reads_resource_use_for_the_daemon_and_a_live_session",
+        "store_enables_wal_foreign_keys_and_schema_version",
+        "sessionResourcesOnlyWhileLive",
+        "providerUseSeparateFromDaemonUse",
+        "resourcesNeverStored",
+        "snapshotUnchanged",
         "providerSmokeAbsent",
         "externalModelUseAbsent",
         "uiChangesAbsent",

@@ -164,6 +164,7 @@ pub(crate) async fn start_acp_session(
         .close
         .is_some();
     let native_host_pid = process.native_host_pid();
+    let job = Some(process.job());
     let control = process.control();
     Ok((
         AcpSession {
@@ -172,6 +173,7 @@ pub(crate) async fn start_acp_session(
             provider,
             session_id,
             native_host_pid,
+            job,
             resumed,
             request: request.clone(),
             close_supported,
@@ -208,6 +210,7 @@ pub(crate) struct AcpSession {
     provider: ProviderKind,
     session_id: String,
     native_host_pid: Option<u32>,
+    job: Option<std::sync::Arc<lazoo_runtime::JobObject>>,
     resumed: bool,
     request: SessionRequest,
     close_supported: bool,
@@ -364,6 +367,10 @@ impl ProviderSession for AcpSession {
 
     fn native_host_pid(&self) -> Option<u32> {
         self.native_host_pid
+    }
+
+    fn resources(&self) -> Option<lazoo_runtime::JobAccounting> {
+        self.job.as_ref().and_then(|job| job.accounting().ok())
     }
 
     fn turn<'a>(&'a self, request: &'a TurnRequest) -> AdapterFuture<'a, Vec<ProviderEvent>> {

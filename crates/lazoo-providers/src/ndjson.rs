@@ -96,6 +96,10 @@ impl NdjsonProcess {
         self.child.try_lock().ok().and_then(|child| child.id())
     }
 
+    pub(crate) fn job(&self) -> Option<std::sync::Arc<lazoo_runtime::JobObject>> {
+        self.child.try_lock().ok().map(|child| child.job())
+    }
+
     pub(crate) async fn next_message(
         &mut self,
         wait: Duration,
