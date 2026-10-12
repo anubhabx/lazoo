@@ -2,6 +2,7 @@ mod approval;
 mod conversation;
 mod delivery;
 mod employee;
+mod inbox;
 mod incident;
 mod message;
 mod project;
@@ -31,6 +32,11 @@ pub use employee::{
     EmployeeValidationError, MAX_IDLE_TIMEOUT_SECONDS, MIN_IDLE_TIMEOUT_SECONDS, idle_session_due,
     validate_employee_name, validate_employee_text_fields, validate_idle_timeout,
     validate_native_settings,
+};
+pub use inbox::{
+    InboxCursor, InboxEmployees, InboxValidationError, MAX_INBOX_LIMIT, MAX_INBOX_TITLE_BYTES,
+    approval_inbox_item, inbox_counts, inbox_filter_matches, incident_inbox_item,
+    sort_inbox_archive, sort_unresolved_inbox, task_inbox_item, validate_inbox_limit,
 };
 pub use incident::{
     DESCRIBED_INCIDENT_CODES, INCIDENT_REMEDIATION_WINDOW_SECONDS, INCIDENT_THRESHOLD_OCCURRENCES,

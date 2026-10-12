@@ -1,5 +1,6 @@
 mod approval;
 mod conversation;
+mod inbox;
 mod incident;
 mod message;
 mod rpc;
@@ -17,6 +18,11 @@ pub use conversation::{
     ConversationTurnEvent, ConversationTurnRecord, ConversationTurnSummary,
     CreateConversationParams, RetryTurnParams, SubmitTurnParams, TurnListParams,
     TurnMutationResult, TurnReconcileResult, TurnShowParams, TurnState,
+};
+pub use inbox::{
+    INBOX_CONTRACT_V1, InboxAction, InboxAttention, InboxCounts, InboxCountsResult, InboxDeadline,
+    InboxDeadlineKind, InboxFilter, InboxItem, InboxKind, InboxListParams, InboxListResult,
+    InboxScope, InboxSeverity,
 };
 pub use incident::{
     AcknowledgeIncidentParams, INCIDENT_CONTRACT_V1, IncidentEscalation, IncidentEscalationReason,

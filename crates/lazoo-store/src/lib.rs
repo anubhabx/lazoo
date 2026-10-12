@@ -3,6 +3,7 @@ mod conversation;
 mod delivery;
 mod emergency;
 mod employee;
+mod inbox;
 mod incident;
 mod message;
 mod migration;
@@ -40,6 +41,7 @@ pub use employee::{
     CreateEmployeeInput, DisableEmployeeInput, RefreshProviderObservationsInput,
     UpdateEmployeeInput,
 };
+pub use inbox::{InboxArchive, InboxSources};
 pub use incident::{
     ApplyIncidentRemedyInput, IncidentRemedyAction, IncidentRemedyResult, ListIncidentsInput,
     RaiseIncidentInput, SetIncidentThresholdInput, SettleIncidentInput, dead_letter_incident_key,
@@ -586,7 +588,7 @@ impl Store {
     }
 }
 
-fn scalar_count(connection: &Connection, sql: &str) -> Result<u64, StoreError> {
+pub(crate) fn scalar_count(connection: &Connection, sql: &str) -> Result<u64, StoreError> {
     let value: i64 = connection.query_row(sql, [], |row| row.get(0))?;
     u64::try_from(value).map_err(|_| StoreError::NegativeSequence)
 }

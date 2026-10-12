@@ -22,7 +22,8 @@ use uuid::Uuid;
 
 use crate::{Store, StoreError, conversation, employee, message, task, task::DelegateTaskInput};
 
-const INCIDENT_COLUMNS: &str = "sequence, contract_version, id, code, fingerprint, title,
+pub(crate) const INCIDENT_COLUMNS: &str =
+    "sequence, contract_version, id, code, fingerprint, title,
     explanation, next_action, project_id, employee_id, provider, task_id, session_id, turn_id,
     message_id, source, detail_json, occurrences, window_occurrences, first_occurred_at,
     last_occurred_at, window_started_at, priority, state, revision, created_at, updated_at,
@@ -1400,13 +1401,16 @@ pub(crate) fn required_incident(
     read_incident(connection, raw)
 }
 
-fn read_incident(connection: &Connection, raw: RawIncident) -> Result<IncidentRecord, StoreError> {
+pub(crate) fn read_incident(
+    connection: &Connection,
+    raw: RawIncident,
+) -> Result<IncidentRecord, StoreError> {
     let mut incident = incident_from_raw(raw)?;
     incident.remedies = remedies_for(connection, incident.id)?;
     Ok(incident)
 }
 
-struct RawIncident {
+pub(crate) struct RawIncident {
     sequence: i64,
     contract_version: i64,
     id: String,
@@ -1444,7 +1448,7 @@ struct RawIncident {
     user_notification: Option<String>,
 }
 
-fn raw_incident(row: &rusqlite::Row<'_>) -> rusqlite::Result<RawIncident> {
+pub(crate) fn raw_incident(row: &rusqlite::Row<'_>) -> rusqlite::Result<RawIncident> {
     Ok(RawIncident {
         sequence: row.get(0)?,
         contract_version: row.get(1)?,

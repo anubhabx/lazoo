@@ -1,6 +1,7 @@
 mod approval;
 mod delivery;
 mod idle;
+mod inbox;
 mod incident;
 mod task;
 mod tools;
@@ -372,6 +373,8 @@ impl App {
             "approval.decide" => self.decide_approval(&request),
             "approval.list" => self.approval_list(&request.params),
             "approval.show" => self.approval_show(&request.params),
+            "inbox.list" => self.inbox_list(&request.params),
+            "inbox.counts" => self.inbox_counts(&request.params),
             "incident.list" => self.incident_list(&request.params),
             "incident.show" => self.incident_show(&request.params),
             "incident.acknowledge" => self.acknowledge_incident(&request),

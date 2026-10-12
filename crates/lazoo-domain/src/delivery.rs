@@ -223,7 +223,7 @@ const fn state_name(state: TaskState) -> &'static str {
     }
 }
 
-fn truncate_utf8(value: &str, maximum: usize) -> &str {
+pub(crate) fn truncate_utf8(value: &str, maximum: usize) -> &str {
     if value.len() <= maximum {
         return value;
     }

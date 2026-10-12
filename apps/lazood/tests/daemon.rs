@@ -9087,3 +9087,532 @@ fn configurable_thresholds_acceptance_contract_is_deterministic_and_backend_only
         );
     }
 }
+
+/// The user reads the Inbox through the daemon: a pending approval is the only counted item,
+/// its actions name `approval.decide` with the revision the user saw, and the decision moves it
+/// to the archive. The Inbox stores nothing and the desktop snapshot is unchanged.
+#[tokio::test]
+#[allow(clippy::too_many_lines)] // One user session: empty, pending, strict parameters, decided.
+async fn the_inbox_lists_a_pending_approval_and_its_decision_archives_it() {
+    let (_temporary, harness) = approval_harness(
+        AuthorityMode::Ask,
+        Duration::from_secs(60),
+        vec![permission_request(
+            PermissionKind::CommandExecution,
+            "cargo test",
+            false,
+        )],
+        "completed",
+    );
+    let call = |id: &str, method: &str, params: serde_json::Value| {
+        harness.app.handle(request(id, method, params))
+    };
+    let zero =
+        json!({"unresolved": 0, "approvals": 0, "permissions": 0, "incidents": 0, "watching": 0});
+    let empty = call("counts-empty", "inbox.counts", json!({}))
+        .await
+        .result
+        .unwrap();
+    assert_eq!(empty["version"], 1);
+    assert_eq!(empty["counts"], zero);
+
+    warm_lead(&harness).await;
+    let submission = submit_governed_turn(&harness, "ask");
+    let pending = wait_for_pending_approval(&harness).await;
+
+    let counts = call("counts", "inbox.counts", json!({}))
+        .await
+        .result
+        .unwrap();
+    assert_eq!(counts["counts"]["unresolved"], 1);
+    assert_eq!(counts["counts"]["approvals"], 1);
+    assert_eq!(counts["counts"]["incidents"], 0);
+    let listed = call("list", "inbox.list", json!({"filter": "approvals"}))
+        .await
+        .result
+        .unwrap();
+    assert_eq!(listed["version"], 1);
+    assert_eq!(listed["truncated"], false);
+    assert_eq!(listed["nextBefore"], serde_json::Value::Null);
+    assert_eq!(listed["counts"], counts["counts"]);
+    assert_eq!(listed["eventHighWater"], counts["eventHighWater"]);
+    let items = listed["items"].as_array().unwrap();
+    assert_eq!(items.len(), 1);
+    let item = &items[0];
+    assert_eq!(item["kind"], "approval");
+    assert_eq!(item["id"], pending["id"]);
+    assert_eq!(item["revision"], pending["revision"]);
+    assert_eq!(item["attention"], "action-required");
+    assert_eq!(item["severity"], "priority");
+    assert_eq!(item["subtype"], "command-execution");
+    assert_eq!(item["state"], "pending");
+    assert_eq!(item["title"], "Approval requested: cargo test");
+    assert_eq!(item["requiredAction"], "Approve or decline: cargo test");
+    assert_eq!(item["deadline"]["kind"], "expires");
+    assert_eq!(item["deadline"]["at"], pending["expiresAt"]);
+    assert_eq!(item["scope"]["employeeName"], "Rhea");
+    assert_eq!(item["scope"]["provider"], "codex");
+    assert_eq!(
+        item["scope"]["conversationId"],
+        json!(harness.conversation_id)
+    );
+    assert_eq!(item["scope"]["projectId"], serde_json::Value::Null);
+    assert_eq!(item["scope"]["turnId"], pending["turnId"]);
+    assert_eq!(item["detail"]["authority"], "ask");
+    assert_eq!(item["detail"]["detail"]["command"], "cargo test");
+    let approve = &item["actions"][0];
+    assert_eq!(approve["action"], "approve");
+    assert_eq!(approve["method"], "approval.decide");
+    assert_eq!(
+        approve["params"],
+        json!({"id": pending["id"], "expectedRevision": pending["revision"], "decision": "approve"})
+    );
+    assert_eq!(item["actions"][1]["params"]["decision"], "decline");
+    for (filter, expected) in [("all", 1), ("incidents", 0), ("permissions", 0)] {
+        let listed = call(filter, "inbox.list", json!({"filter": filter}))
+            .await
+            .result
+            .unwrap();
+        assert_eq!(
+            listed["items"].as_array().unwrap().len(),
+            expected,
+            "{filter}"
+        );
+    }
+
+    // Parameters are strict: the limit is bounded, only the archive pages, cursors are opaque
+    // but checked, and counts take nothing.
+    for (id, params) in [
+        ("bad-limit", json!({"filter": "all", "limit": 0})),
+        (
+            "bad-filter-cursor",
+            json!({"filter": "all", "before": "x|y"}),
+        ),
+        (
+            "bad-cursor",
+            json!({"filter": "resolved", "before": "nope"}),
+        ),
+        ("bad-unknown", json!({"filter": "all", "unknown": true})),
+    ] {
+        let error = call(id, "inbox.list", params).await.error.unwrap();
+        assert_eq!(error.code, "LZ-INBOX-INVALID", "{id}");
+    }
+    let error = call("bad-counts", "inbox.counts", json!({"filter": "all"}))
+        .await
+        .error
+        .unwrap();
+    assert_eq!(error.code, "LZ-INVALID-PARAMS");
+
+    // The user sends exactly the action's params plus a fresh idempotency key.
+    let mut params = approve["params"].clone();
+    params["idempotencyKey"] = json!("approve-from-inbox");
+    let decided = call("decide", "approval.decide", params)
+        .await
+        .result
+        .unwrap();
+    assert_eq!(decided["approval"]["state"], "approved");
+    let submitted = submission.await.unwrap().result.unwrap();
+    assert_eq!(submitted["turn"]["state"], "completed");
+
+    let after = call("counts-after", "inbox.counts", json!({}))
+        .await
+        .result
+        .unwrap();
+    assert_eq!(after["counts"], zero);
+    let archive = call("archive", "inbox.list", json!({"filter": "resolved"}))
+        .await
+        .result
+        .unwrap();
+    let archived = archive["items"].as_array().unwrap();
+    assert_eq!(archived.len(), 1);
+    assert_eq!(archived[0]["id"], pending["id"]);
+    assert_eq!(archived[0]["attention"], "resolved");
+    assert_eq!(archived[0]["state"], "approved");
+    assert_eq!(archived[0]["revision"], 2);
+    assert_eq!(archived[0]["deadline"], serde_json::Value::Null);
+    assert_eq!(archived[0]["actions"], json!([]));
+    assert_eq!(archive["truncated"], false);
+    assert_eq!(archive["counts"], zero);
+    assert!(
+        call("all-after", "inbox.list", json!({"filter": "all"}))
+            .await
+            .result
+            .unwrap()["items"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+
+    // The Inbox is derived: the high-water mark is the store's own, and reading it wrote
+    // nothing.
+    assert_eq!(
+        after["eventHighWater"],
+        json!(harness.store.status().unwrap().event_high_water)
+    );
+    assert_eq!(
+        approval_event_types(&harness.store),
+        ["approval.requested", "approval.decided"]
+    );
+    assert!(
+        harness
+            .store
+            .list_events(0, 1000)
+            .unwrap()
+            .iter()
+            .all(|event| !event.event_type.starts_with("inbox"))
+    );
+    assert_desktop_is_roster_neutral(&harness.app).await;
+    let snapshot = call("desktop", "desktop.snapshot", json!({}))
+        .await
+        .result
+        .unwrap();
+    assert!(snapshot.get("inbox").is_none());
+    assert!(snapshot.get("approvals").is_none());
+}
+
+/// Proposals, uncertain tasks, and escalated incidents through the daemon: counted items
+/// order first, a lead's window is watched until the sweep hands it to the user, an
+/// acknowledged escalation stays visible but uncounted, each action removes its item through
+/// the RPC it names, and the archive pages newest first. No tool can read the Inbox.
+#[tokio::test]
+#[allow(clippy::too_many_lines)] // One user session over every item kind, in order.
+async fn the_inbox_derives_tasks_and_incidents_and_pages_the_archive() {
+    use chrono::{TimeDelta, Utc};
+    use lazoo_protocol::{IncidentEscalation, IncidentSource};
+
+    let (_temporary, harness) = tool_harness(AuthorityMode::Ask);
+    warm_tool_lead(&harness).await;
+    let roster_revision = harness.store.roster_snapshot().unwrap().revision;
+    harness.backend.tool_calls.lock().unwrap().extend(
+        ["Implement the parser fix", "Write the parser tests"]
+            .into_iter()
+            .enumerate()
+            .map(|(index, objective)| {
+                tool_call(
+                    &format!("call-{}", index + 1),
+                    "task_delegate",
+                    json!({
+                        "employeeId": harness.worker.id,
+                        "objective": objective,
+                        "rosterRevision": roster_revision
+                    }),
+                )
+            }),
+    );
+    let submitted = submit_lead_turn(&harness, "ask").await;
+    assert_eq!(submitted["turn"]["state"], "completed");
+    let results = harness.backend.tool_results.lock().unwrap().clone();
+    let children: Vec<uuid::Uuid> = results[..2]
+        .iter()
+        .map(|result| {
+            assert!(result.success, "{result:?}");
+            assert_eq!(result.content["state"], "proposed");
+            result.content["taskId"].as_str().unwrap().parse().unwrap()
+        })
+        .collect();
+    let (proposal_id, uncertain_id) = (children[0], children[1]);
+    let call = |id: &str, method: &str, params: serde_json::Value| {
+        harness.app.handle(request(id, method, params))
+    };
+
+    // Restart truth marks the second child uncertain; the row stays authoritative and the Inbox
+    // only reads it.
+    harness
+        .store
+        .execute_for_test(&format!(
+            "UPDATE tasks SET state = 'uncertain', failure_code = 'LZ-TURN-OWNER-LOST',
+                    failure_message = 'the daemon restarted during the turn'
+             WHERE id = '{uncertain_id}';
+             INSERT INTO task_evidence (id, task_id, task_revision, kind, actor_kind,
+                                        detail_json, created_at)
+             VALUES ('{}', '{uncertain_id}', 1, 'uncertain', 'user', '{{}}',
+                     '2026-10-13T00:00:00+00:00');",
+            uuid::Uuid::new_v4()
+        ))
+        .unwrap();
+    // One incident with no lead reaches the user at once, one on the proposed child opens the
+    // lead's window, and one more reaches the user and is acknowledged.
+    let stall = raise_scoped(
+        &harness,
+        "stall",
+        "LZ-SESSION-STALLED",
+        IncidentSource::Daemon,
+        Some(harness.worker.id),
+    );
+    assert_eq!(stall.escalation, IncidentEscalation::User);
+    let windowed = promote_child_incident(&harness, "timeout", "LZ-MESSAGE-TIMEOUT", proposal_id);
+    assert_eq!(windowed.escalation, IncidentEscalation::Lead);
+    let crashed = raise_scoped(
+        &harness,
+        "crash",
+        "LZ-DAEMON-UNAVAILABLE",
+        IncidentSource::Daemon,
+        None,
+    );
+    assert_eq!(crashed.escalation, IncidentEscalation::User);
+    call(
+        "ack",
+        "incident.acknowledge",
+        json!({"id": crashed.id, "expectedRevision": crashed.revision, "idempotencyKey": "ack-crash"}),
+    )
+    .await
+    .result
+    .unwrap();
+
+    let listed = call("list", "inbox.list", json!({"filter": "all"}))
+        .await
+        .result
+        .unwrap();
+    let items = listed["items"].as_array().unwrap().clone();
+    let order: Vec<(String, String)> = items
+        .iter()
+        .map(|item| {
+            (
+                item["kind"].as_str().unwrap().to_owned(),
+                item["attention"].as_str().unwrap().to_owned(),
+            )
+        })
+        .collect();
+    assert_eq!(order.len(), 5, "{order:?}");
+    // Both tasks were born in one turn, so they tie on age and may land either way round.
+    assert!(
+        order[..2]
+            .iter()
+            .all(|(_, attention)| attention == "action-required")
+            && order[..2].iter().any(|(kind, _)| kind == "task-proposal")
+            && order[..2].iter().any(|(kind, _)| kind == "task-uncertain"),
+        "{order:?}"
+    );
+    assert_eq!(
+        order[2..],
+        [
+            ("incident".to_owned(), "action-required".to_owned()),
+            ("incident".to_owned(), "watching".to_owned()),
+            ("incident".to_owned(), "acknowledged".to_owned()),
+        ],
+        "{order:?}"
+    );
+    assert_eq!(
+        listed["counts"],
+        json!({"unresolved": 3, "approvals": 1, "permissions": 0, "incidents": 2, "watching": 1})
+    );
+    let by_id = |id: uuid::Uuid| {
+        items
+            .iter()
+            .find(|item| item["id"] == json!(id))
+            .cloned()
+            .unwrap()
+    };
+    let proposal = by_id(proposal_id);
+    assert_eq!(proposal["severity"], "normal");
+    assert_eq!(proposal["scope"]["employeeName"], "Mira");
+    assert_eq!(
+        proposal["scope"]["conversationId"],
+        json!(harness.conversation_id)
+    );
+    assert_eq!(proposal["detail"]["effectiveAuthority"], "ask");
+    assert_eq!(proposal["actions"][0]["method"], "task.accept");
+    assert_eq!(
+        proposal["actions"][1]["params"],
+        json!({"id": proposal_id, "expectedRevision": 1, "actor": {"kind": "user"}})
+    );
+    let uncertain = by_id(uncertain_id);
+    assert_eq!(uncertain["kind"], "task-uncertain");
+    assert_eq!(uncertain["subtype"], "task-uncertain");
+    assert_eq!(uncertain["severity"], "priority");
+    assert_eq!(uncertain["detail"]["failureCode"], "LZ-TURN-OWNER-LOST");
+    let resolve_failed = uncertain["actions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|action| action["action"] == "resolve-failed")
+        .cloned()
+        .unwrap();
+    assert_eq!(resolve_failed["method"], "task.resolve");
+    assert_eq!(
+        resolve_failed["params"]["failureCode"],
+        "LZ-TURN-OWNER-LOST"
+    );
+    let watched = by_id(windowed.id);
+    assert_eq!(watched["subtype"], "LZ-MESSAGE-TIMEOUT");
+    assert_eq!(watched["deadline"]["kind"], "remediation");
+    assert_eq!(
+        watched["deadline"]["at"],
+        json!(windowed.remediation_deadline_at)
+    );
+    assert_eq!(watched["scope"]["taskId"], json!(proposal_id));
+    assert_eq!(
+        watched["scope"]["conversationId"],
+        json!(harness.conversation_id)
+    );
+    assert_eq!(watched["actions"], json!([]));
+    let stalled = by_id(stall.id);
+    assert_eq!(stalled["detail"]["escalationReason"], "no-lead");
+    assert_eq!(stalled["actions"][0]["method"], "incident.acknowledge");
+    assert_eq!(stalled["actions"][1]["method"], "incident.resolve");
+    let acknowledged = by_id(crashed.id);
+    assert_eq!(acknowledged["state"], "acknowledged");
+    assert_eq!(acknowledged["actions"].as_array().unwrap().len(), 1);
+    assert_eq!(acknowledged["actions"][0]["method"], "incident.resolve");
+    for (filter, expected) in [("approvals", 1), ("incidents", 4), ("permissions", 0)] {
+        let listed = call(filter, "inbox.list", json!({"filter": filter}))
+            .await
+            .result
+            .unwrap();
+        assert_eq!(
+            listed["items"].as_array().unwrap().len(),
+            expected,
+            "{filter}"
+        );
+    }
+
+    // Each action removes its item through the RPC it names.
+    let mut accept = proposal["actions"][0]["params"].clone();
+    accept["idempotencyKey"] = json!("accept-from-inbox");
+    assert_eq!(
+        call("accept", "task.accept", accept).await.result.unwrap()["task"]["state"],
+        "accepted"
+    );
+    let mut resolve = resolve_failed["params"].clone();
+    resolve["idempotencyKey"] = json!("resolve-from-inbox");
+    assert_eq!(
+        call("resolve", "task.resolve", resolve)
+            .await
+            .result
+            .unwrap()["task"]["state"],
+        "failed"
+    );
+    let mut settle = stalled["actions"][1]["params"].clone();
+    settle["idempotencyKey"] = json!("resolve-stall-from-inbox");
+    assert_eq!(
+        call("resolve-stall", "incident.resolve", settle)
+            .await
+            .result
+            .unwrap()["incident"]["state"],
+        "resolved"
+    );
+    // The sweep closes the lead's window without a remedy: watched becomes counted.
+    harness
+        .app
+        .escalate_due_incidents_once(Utc::now() + TimeDelta::seconds(301))
+        .unwrap();
+    let counts = call("counts", "inbox.counts", json!({}))
+        .await
+        .result
+        .unwrap();
+    assert_eq!(
+        counts["counts"],
+        json!({"unresolved": 1, "approvals": 0, "permissions": 0, "incidents": 1, "watching": 0})
+    );
+    let remaining = call("remaining", "inbox.list", json!({"filter": "all"}))
+        .await
+        .result
+        .unwrap();
+    let remaining = remaining["items"].as_array().unwrap();
+    assert_eq!(remaining.len(), 2);
+    assert_eq!(remaining[0]["id"], json!(windowed.id));
+    assert_eq!(remaining[0]["attention"], "action-required");
+    assert_eq!(remaining[0]["detail"]["escalationReason"], "no-remedy");
+    assert_eq!(remaining[0]["deadline"], serde_json::Value::Null);
+    assert_eq!(remaining[1]["id"], json!(crashed.id));
+
+    // The archive pages newest first with an opaque cursor; the accepted proposal is not
+    // terminal and so not archived.
+    let first = call(
+        "page-1",
+        "inbox.list",
+        json!({"filter": "resolved", "limit": 1}),
+    )
+    .await
+    .result
+    .unwrap();
+    assert_eq!(first["items"].as_array().unwrap().len(), 1);
+    assert_eq!(first["truncated"], true);
+    assert_eq!(first["counts"], counts["counts"]);
+    let cursor = first["nextBefore"].as_str().unwrap().to_owned();
+    let second = call(
+        "page-2",
+        "inbox.list",
+        json!({"filter": "resolved", "limit": 1, "before": cursor}),
+    )
+    .await
+    .result
+    .unwrap();
+    assert_eq!(second["items"].as_array().unwrap().len(), 1);
+    assert_eq!(second["truncated"], false);
+    assert_ne!(second["items"][0]["id"], first["items"][0]["id"]);
+    let whole = call("archive", "inbox.list", json!({"filter": "resolved"}))
+        .await
+        .result
+        .unwrap();
+    let archived = whole["items"].as_array().unwrap();
+    assert_eq!(archived.len(), 2);
+    assert_eq!(archived[0]["id"], first["items"][0]["id"]);
+    assert_eq!(archived[1]["id"], second["items"][0]["id"]);
+    let archived_task = archived
+        .iter()
+        .find(|item| item["id"] == json!(uncertain_id))
+        .unwrap();
+    assert_eq!(archived_task["kind"], "task-uncertain");
+    assert_eq!(archived_task["state"], "failed");
+    assert_eq!(archived_task["attention"], "resolved");
+    assert_eq!(archived_task["actions"], json!([]));
+    let archived_incident = archived
+        .iter()
+        .find(|item| item["id"] == json!(stall.id))
+        .unwrap();
+    assert_eq!(archived_incident["state"], "resolved");
+
+    // Nothing was stored for the Inbox, and no tool in the catalog can read it.
+    assert!(
+        harness
+            .store
+            .list_events(0, 1000)
+            .unwrap()
+            .iter()
+            .all(|event| !event.event_type.starts_with("inbox"))
+    );
+    let tools = harness.backend.session_tools.lock().unwrap().clone();
+    assert!(!tools.is_empty());
+    assert!(tools.iter().flatten().all(|name| !name.contains("inbox")));
+}
+
+#[test]
+fn desktop_inbox_acceptance_contract_is_deterministic_and_backend_only() {
+    let repository = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let script_path = repository.join("scripts/acceptance/desktop-inbox.ps1");
+    let script = std::fs::read_to_string(&script_path).expect("desktop inbox acceptance script");
+
+    for required in [
+        "inbox_list_params_default_to_two_hundred_and_reject_unknown_fields",
+        "a_pending_approval_needs_the_user_and_a_decided_one_is_the_archive",
+        "only_escalated_incidents_are_items_and_only_user_escalations_count",
+        "counts_filters_and_order_follow_attention_then_deadline_then_age",
+        "cursors_round_trip_and_limits_are_bounded",
+        "inbox_cli_maps_list_and_counts",
+        "the_inbox_lists_a_pending_approval_and_its_decision_archives_it",
+        "the_inbox_derives_tasks_and_incidents_and_pages_the_archive",
+        "store_enables_wal_foreign_keys_and_schema_version",
+        "badgeCountsOnlyActionRequired",
+        "leadWindowWatchedThenCounted",
+        "archivePagesWithCursor",
+        "inboxStoresNothing",
+        "toolsCannotSeeInbox",
+        "providerSmokeAbsent",
+        "externalModelUseAbsent",
+        "uiChangesAbsent",
+        "deterministic-fake-transport",
+        "schemaVersion = 15",
+    ] {
+        assert!(
+            script.contains(required),
+            "acceptance script must contain {required}"
+        );
+    }
+    for forbidden in ["provider', 'smoke", "LivePrompt"] {
+        assert!(
+            !script.contains(forbidden),
+            "acceptance script must not contain {forbidden}"
+        );
+    }
+}

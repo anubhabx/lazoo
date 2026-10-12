@@ -2,58 +2,58 @@
     "status":  "PASS",
     "schemaVersion":  15,
     "mode":  "deterministic-fake-transport",
-    "startedAt":  "2026-10-11T17:02:41.7361821Z",
-    "durationMs":  7866,
+    "startedAt":  "2026-10-12T19:32:22.3313712Z",
+    "durationMs":  8220,
     "commands":  [
                      {
                          "command":  "cargo test -p lazoo-protocol --test contracts idle_timeouts_default_to_never_on_create_and_stay_unchanged_when_an_update_omits_them --locked -- --exact",
                          "exitCode":  0,
-                         "durationMs":  270
+                         "durationMs":  274
                      },
                      {
                          "command":  "cargo test -p lazoo-domain --test employee idle_timeouts_are_never_or_a_minute_to_a_day_and_due_only_after_the_whole_timeout --locked -- --exact",
                          "exitCode":  0,
-                         "durationMs":  865
+                         "durationMs":  883
                      },
                      {
                          "command":  "cargo test -p lazoo-store --test employee idle_timeout_defaults_to_never_and_a_change_bumps_the_configuration_revision --locked -- --exact",
                          "exitCode":  0,
-                         "durationMs":  1639
+                         "durationMs":  1769
                      },
                      {
                          "command":  "cargo test -p lazoo-store --test session idle_sessions_are_due_only_after_their_employee_timeout_and_stop_once_under_their_own_key --locked -- --exact",
                          "exitCode":  0,
-                         "durationMs":  1956
+                         "durationMs":  1751
                      },
                      {
                          "command":  "cargo test -p lazooctl --test cli employee_cli_maps_mutations_and_roster_refresh --locked -- --exact",
                          "exitCode":  0,
-                         "durationMs":  411
+                         "durationMs":  324
                      },
                      {
                          "command":  "cargo test -p lazood --test daemon an_idle_session_suspends_after_its_employee_timeout_and_the_next_user_turn_starts_fresh --locked -- --exact",
                          "exitCode":  0,
-                         "durationMs":  573
+                         "durationMs":  662
                      },
                      {
                          "command":  "cargo test -p lazood --test daemon idle_suspension_waits_for_an_unfinished_turn_and_never_touches_a_zero_timeout --locked -- --exact",
                          "exitCode":  0,
-                         "durationMs":  593
+                         "durationMs":  738
                      },
                      {
                          "command":  "cargo test -p lazood --test daemon a_turn_recorded_on_a_since_stopped_session_is_delivered_on_the_current_session --locked -- --exact",
                          "exitCode":  0,
-                         "durationMs":  507
+                         "durationMs":  602
                      },
                      {
                          "command":  "cargo test -p lazood --test daemon a_notice_turns_lead_suspended_for_idleness_is_woken_once_by_its_childs_result --locked -- --exact",
                          "exitCode":  0,
-                         "durationMs":  563
+                         "durationMs":  700
                      },
                      {
                          "command":  "cargo test -p lazoo-store --test store store_enables_wal_foreign_keys_and_schema_version --locked -- --exact",
                          "exitCode":  0,
-                         "durationMs":  388
+                         "durationMs":  436
                      },
                      {
                          "command":  "git diff --quiet and git diff --cached --quiet -- apps/lazoo-desktop",

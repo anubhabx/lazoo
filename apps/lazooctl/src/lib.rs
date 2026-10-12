@@ -4,9 +4,9 @@ use clap::{Parser, Subcommand};
 use lazoo_ipc::{IpcError, PipeClient};
 use lazoo_protocol::{
     ActivationPolicy, ApprovalDecision, ApprovalState, AuthorityMode, CheckoutMode,
-    EmployeeCheckoutPolicy, IncidentEscalation, IncidentPriority, IncidentState, JsonRpcRequest,
-    JsonRpcResponse, MessageEndpoint, MessageKind, MessagePriority, MessageSender, RpcError,
-    TaskReportKind, TaskResolution, TaskState, UserMessageEndpoint, UserMessageKind,
+    EmployeeCheckoutPolicy, InboxFilter, IncidentEscalation, IncidentPriority, IncidentState,
+    JsonRpcRequest, JsonRpcResponse, MessageEndpoint, MessageKind, MessagePriority, MessageSender,
+    RpcError, TaskReportKind, TaskResolution, TaskState, UserMessageEndpoint, UserMessageKind,
 };
 use lazoo_runtime::{DataRoot, Installation, RuntimeError};
 use serde_json::{Value, json};
@@ -49,6 +49,8 @@ pub enum Command {
     Approval(ApprovalCommand),
     #[command(subcommand)]
     Incident(IncidentCommand),
+    #[command(subcommand)]
+    Inbox(InboxCommand),
     #[command(subcommand)]
     System(SystemCommand),
 }
@@ -111,6 +113,24 @@ pub enum IncidentThresholdCommand {
     Reset {
         code: String,
     },
+}
+
+/// What needs you, derived from the approval, task, and incident ledgers for the desktop
+/// Inbox; nothing here changes anything.
+#[derive(Debug, Subcommand)]
+pub enum InboxCommand {
+    List {
+        /// all, approvals, permissions, incidents, or resolved (the archive).
+        #[arg(long, default_value = "all", value_parser = parse_inbox_filter)]
+        filter: InboxFilter,
+        #[arg(long, default_value_t = 200)]
+        limit: u32,
+        /// The `nextBefore` of the previous resolved page.
+        #[arg(long)]
+        before: Option<String>,
+    },
+    /// The rail badge: how many items need you right now.
+    Counts,
 }
 
 #[derive(Debug, Subcommand)]
@@ -689,6 +709,7 @@ pub fn command_request(command: &Command) -> (&'static str, Value, bool) {
         Command::Task(command) => task_request(command),
         Command::Approval(command) => approval_request(command),
         Command::Incident(command) => incident_request(command),
+        Command::Inbox(command) => inbox_request(command),
         Command::System(SystemCommand::Shutdown) => ("system.shutdown", json!({}), false),
     }
 }
@@ -764,6 +785,21 @@ fn incident_request(command: &IncidentCommand) -> (&'static str, Value, bool) {
         IncidentCommand::Threshold(IncidentThresholdCommand::Reset { code }) => {
             ("incident.threshold.reset", json!({"code": code}), false)
         }
+    }
+}
+
+fn inbox_request(command: &InboxCommand) -> (&'static str, Value, bool) {
+    match command {
+        InboxCommand::List {
+            filter,
+            limit,
+            before,
+        } => (
+            "inbox.list",
+            json!({"filter": filter, "limit": limit, "before": before}),
+            false,
+        ),
+        InboxCommand::Counts => ("inbox.counts", json!({}), false),
     }
 }
 
@@ -1445,6 +1481,17 @@ pub fn exit_code_for_rpc(error: &RpcError) -> i32 {
         code if code.starts_with("LZ-APPROVAL-") => 14,
         code if code.starts_with("LZ-INCIDENT-") => 15,
         _ => 10,
+    }
+}
+
+fn parse_inbox_filter(value: &str) -> Result<InboxFilter, String> {
+    match value {
+        "all" => Ok(InboxFilter::All),
+        "approvals" => Ok(InboxFilter::Approvals),
+        "permissions" => Ok(InboxFilter::Permissions),
+        "incidents" => Ok(InboxFilter::Incidents),
+        "resolved" => Ok(InboxFilter::Resolved),
+        _ => Err("expected all, approvals, permissions, incidents, or resolved".to_owned()),
     }
 }
 

@@ -2314,21 +2314,20 @@ fn actor_columns(actor: MessageSender) -> (&'static str, Option<String>, Option<
     }
 }
 
+pub(crate) const TASK_RECORD_COLUMNS: &str = "sequence, contract_version, id, root_task_id,
+    parent_task_id, depth, project_id, conversation_id, creation_turn_id, delegation_message_id,
+    creator_kind, creator_employee_id, creator_session_id, assigned_employee_id, role, objective,
+    references_json, requested_authority, effective_authority, employee_configuration_revision,
+    roster_revision, state, revision, active_turn_id, active_session_id, failure_code,
+    failure_message, created_at, updated_at, terminal_at";
+
 pub(crate) fn required_task(
     connection: &Connection,
     task_id: Uuid,
 ) -> Result<TaskRecord, StoreError> {
     connection
         .query_row(
-            "SELECT sequence, contract_version, id, root_task_id, parent_task_id,
-                    depth, project_id, conversation_id, creation_turn_id,
-                    delegation_message_id, creator_kind, creator_employee_id,
-                    creator_session_id, assigned_employee_id, role, objective,
-                    references_json, requested_authority, effective_authority,
-                    employee_configuration_revision, roster_revision, state, revision,
-                    active_turn_id, active_session_id, failure_code, failure_message,
-                    created_at, updated_at, terminal_at
-             FROM tasks WHERE id = ?1",
+            &format!("SELECT {TASK_RECORD_COLUMNS} FROM tasks WHERE id = ?1"),
             [task_id.to_string()],
             raw_task,
         )
@@ -2449,7 +2448,7 @@ type RawTask = (
     Option<String>,
 );
 
-fn raw_task(row: &rusqlite::Row<'_>) -> rusqlite::Result<RawTask> {
+pub(crate) fn raw_task(row: &rusqlite::Row<'_>) -> rusqlite::Result<RawTask> {
     Ok((
         row.get(0)?,
         row.get(1)?,
@@ -2484,7 +2483,7 @@ fn raw_task(row: &rusqlite::Row<'_>) -> rusqlite::Result<RawTask> {
     ))
 }
 
-fn task_from_raw(raw: RawTask) -> Result<TaskRecord, StoreError> {
+pub(crate) fn task_from_raw(raw: RawTask) -> Result<TaskRecord, StoreError> {
     Ok(TaskRecord {
         sequence: unsigned(raw.0)?,
         version: unsigned32(raw.1)?,

@@ -3,8 +3,9 @@ use std::path::PathBuf;
 use clap::Parser;
 use lazoo_protocol::{CheckoutMode, MessageKind, RpcError};
 use lazooctl::{
-    Cli, Command, ConversationCommand, EmployeeCommand, MessageCommand, ProjectCommand,
-    RosterCommand, SessionCommand, TurnCommand, command_request, exit_code_for_rpc, render_result,
+    Cli, Command, ConversationCommand, EmployeeCommand, InboxCommand, MessageCommand,
+    ProjectCommand, RosterCommand, SessionCommand, TurnCommand, command_request, exit_code_for_rpc,
+    render_result,
 };
 use serde_json::json;
 
@@ -1238,4 +1239,54 @@ fn incident_cli_maps_threshold_list_set_and_reset() {
         .is_err(),
         "--occurrences is required"
     );
+}
+
+#[test]
+fn inbox_cli_maps_list_and_counts() {
+    let request = |args: &[&str]| {
+        let mut argv = vec!["lazooctl", "inbox"];
+        argv.extend_from_slice(args);
+        command_request(&Cli::try_parse_from(argv).unwrap().command)
+    };
+    assert_eq!(
+        request(&["list"]),
+        (
+            "inbox.list",
+            json!({"filter": "all", "limit": 200, "before": null}),
+            false
+        )
+    );
+    assert_eq!(
+        request(&[
+            "list",
+            "--filter",
+            "resolved",
+            "--limit",
+            "20",
+            "--before",
+            "2026-10-13T00:00:00Z|00000000-0000-4000-8000-000000000001"
+        ]),
+        (
+            "inbox.list",
+            json!({
+                "filter": "resolved",
+                "limit": 20,
+                "before": "2026-10-13T00:00:00Z|00000000-0000-4000-8000-000000000001"
+            }),
+            false
+        )
+    );
+    assert_eq!(request(&["counts"]), ("inbox.counts", json!({}), false));
+    assert!(
+        Cli::try_parse_from(["lazooctl", "inbox", "list", "--filter", "everything"]).is_err(),
+        "the filter is one of the five Inbox filters"
+    );
+    let Command::Inbox(InboxCommand::List { filter, .. }) =
+        Cli::try_parse_from(["lazooctl", "inbox", "list", "--filter", "incidents"])
+            .unwrap()
+            .command
+    else {
+        panic!("expected inbox list");
+    };
+    assert_eq!(filter, lazoo_protocol::InboxFilter::Incidents);
 }
