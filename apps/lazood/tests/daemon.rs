@@ -9809,3 +9809,36 @@ fn resource_accounting_acceptance_contract_is_deterministic_and_backend_only() {
         );
     }
 }
+
+#[test]
+fn resource_budget_acceptance_contract_measures_lazoo_itself_without_a_provider() {
+    let repository = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let script_path = repository.join("scripts/acceptance/resource-budget.ps1");
+    let script = std::fs::read_to_string(&script_path).expect("resource budget acceptance script");
+
+    for required in [
+        "'system', 'resources'",
+        "idleCpuUnderOnePercent",
+        "idleMemoryUnder350MiB",
+        "routingCpuUnderFivePercent",
+        "noProviderProcess",
+        "plannedShutdown",
+        "[Environment]::ProcessorCount",
+        "$idleCpuCeiling = 0.01",
+        "$routingCpuCeiling = 0.05",
+        "$idleMemoryCeilingBytes = 350MB",
+        "schemaVersion = 15",
+        "real-binaries-no-provider",
+    ] {
+        assert!(
+            script.contains(required),
+            "acceptance script must contain {required}"
+        );
+    }
+    for forbidden in ["provider', 'smoke", "session', 'warm", "LivePrompt"] {
+        assert!(
+            !script.contains(forbidden),
+            "acceptance script must not contain {forbidden}"
+        );
+    }
+}
