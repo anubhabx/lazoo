@@ -139,6 +139,14 @@ Pop-Location
 
 ## Verification
 
+The whole backend gate (format check, clippy with warnings denied, the workspace tests, the locked release build, and every acceptance script except the live model turn and the separately owned desktop, the real-binary ones with `-SkipBuild`) runs with one command and writes `artifacts\acceptance\gate-manifest.json` with every step's exit code and duration:
+
+```powershell
+pwsh -NoProfile -ExecutionPolicy Bypass -File scripts\gate.ps1
+```
+
+`-AcceptanceOnly` skips the cargo steps, `-Only` and `-Skip` pick scripts by base name, and `-Provider` names the harness for `native-session-ownership.ps1` (a real session, no model turn). The steps it runs, individually:
+
 ```powershell
 & .\scripts\verify-rust-toolchain.ps1
 npm --prefix apps\lazoo-desktop\ui ci

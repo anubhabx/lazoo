@@ -12028,3 +12028,32 @@ async fn the_desktop_resumes_every_read_model_from_its_event_high_water_without_
     }
     read_marks("settled").await;
 }
+
+/// The committed gate runner is the full gate every slice must pass: the four cargo steps in
+/// order, every acceptance script except the live model turn and the separately owned
+/// desktop, the real-binary scripts with `-SkipBuild`, and a manifest of every step.
+#[test]
+fn gate_runner_runs_the_whole_gate_and_excludes_only_the_live_and_ui_scripts() {
+    let repository = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let script = std::fs::read_to_string(repository.join("scripts/gate.ps1")).expect("gate runner");
+    for required in [
+        "cargo fmt --all -- --check",
+        "cargo clippy --workspace --all-targets --locked -- -D warnings",
+        "cargo test --workspace --locked",
+        "cargo build --workspace --release --locked",
+        "$excluded = @('provider-adapters', 'desktop-shell')",
+        r"scripts\acceptance\*.ps1",
+        "-SkipBuild",
+        "-Provider",
+        "gate-manifest.json",
+    ] {
+        assert!(
+            script.contains(required),
+            "gate runner must contain {required}"
+        );
+    }
+    assert!(
+        !script.contains("LivePrompt") && !script.contains("provider', 'smoke"),
+        "the gate runner never runs a live model turn"
+    );
+}

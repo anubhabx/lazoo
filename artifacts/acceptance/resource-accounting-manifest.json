@@ -2,33 +2,33 @@
   "status": "PASS",
   "schemaVersion": 15,
   "mode": "deterministic-fake-transport",
-  "startedAt": "2026-10-12T23:48:15.7675494Z",
-  "durationMs": 1822,
+  "startedAt": "2026-10-13T00:11:30.3746851Z",
+  "durationMs": 2145,
   "commands": [
     {
       "command": "cargo test -p lazoo-runtime --test process_job job_accounting_reports_the_tree_and_survives_its_termination --locked -- --exact",
       "exitCode": 0,
-      "durationMs": 284
+      "durationMs": 459
     },
     {
       "command": "cargo test -p lazoo-runtime --test process_job current_process_accounting_reports_this_process --locked -- --exact",
       "exitCode": 0,
-      "durationMs": 270
+      "durationMs": 285
     },
     {
       "command": "cargo test -p lazooctl --test cli session_and_system_cli_map_resources --locked -- --exact",
       "exitCode": 0,
-      "durationMs": 271
+      "durationMs": 305
     },
     {
       "command": "cargo test -p lazood --test daemon the_user_reads_resource_use_for_the_daemon_and_a_live_session --locked -- --exact",
       "exitCode": 0,
-      "durationMs": 494
+      "durationMs": 563
     },
     {
       "command": "cargo test -p lazoo-store --test store store_enables_wal_foreign_keys_and_schema_version --locked -- --exact",
       "exitCode": 0,
-      "durationMs": 417
+      "durationMs": 440
     },
     {
       "command": "git diff --quiet and git diff --cached --quiet -- apps/lazoo-desktop",
