@@ -12182,3 +12182,283 @@ fn gate_runner_runs_the_whole_gate_and_excludes_only_the_live_and_ui_scripts() {
         "the gate runner never runs a live model turn"
     );
 }
+
+/// Claude Code is the one other provider that enforces an authority ceiling natively, and only
+/// `full-autonomy` (its prompt-free `auto` mode). A Codex lead's delegation to a Claude worker
+/// under full autonomy is dispatched and completes on the worker's own session; the same
+/// delegation to a Claude worker whose authority is `ask` is proposed, accepted by the user,
+/// and then refused at dispatch with the task failed and an incident, as is an Antigravity
+/// worker under full autonomy (no prompt-free mode); a Claude lead takes a user turn under
+/// full autonomy and refuses one under `ask`. No support is claimed beyond this deterministic
+/// path: a live gate per provider still has to run.
+#[tokio::test]
+#[allow(clippy::too_many_lines)] // One story over every provider and authority pairing.
+async fn claude_code_runs_turns_and_tasks_only_under_full_autonomy() {
+    use lazoo_protocol::TaskState;
+    use lazoo_store::ListIncidentsInput;
+
+    let (_temporary, harness) = tool_harness(AuthorityMode::FullAutonomy);
+    let call = |id: &str, method: &str, params: serde_json::Value| {
+        harness.app.handle(request(id, method, params))
+    };
+    let employee = |name: &str, provider: &str, authority: AuthorityMode| CreateEmployeeInput {
+        request_id: format!("claude-{name}-request"),
+        idempotency_key: format!("claude-{name}"),
+        name: name.to_owned(),
+        provider: provider.to_owned(),
+        role: "Worker".to_owned(),
+        instructions: String::new(),
+        model: None,
+        reasoning_effort: None,
+        native_settings: json!({}),
+        authority_mode: authority,
+        checkout_policy: EmployeeCheckoutPolicy::Isolated,
+        activation_policy: lazoo_protocol::ActivationPolicy::Manual,
+        idle_timeout_seconds: 0,
+        enabled: true,
+        provider_observation: Some(ProviderObservation {
+            provider: provider.to_owned(),
+            verification: "configured".to_owned(),
+            version: Some("test".to_owned()),
+            protocol: Some("test".to_owned()),
+            capabilities: json!({"session": true}),
+            authentication: json!({"native": "ready", "external": "unknown"}),
+            degradation_reason: None,
+            checked_at: "2026-10-13T00:00:00Z".to_owned(),
+        }),
+    };
+    let cleo = harness
+        .store
+        .create_employee(&employee(
+            "Cleo",
+            "claude-code",
+            AuthorityMode::FullAutonomy,
+        ))
+        .unwrap()
+        .employee;
+    let ava = harness
+        .store
+        .create_employee(&employee("Ava", "claude-code", AuthorityMode::Ask))
+        .unwrap()
+        .employee;
+    let gus = harness
+        .store
+        .create_employee(&employee("Gus", "antigravity", AuthorityMode::FullAutonomy))
+        .unwrap()
+        .employee;
+
+    // Rhea (Codex, full autonomy) delegates to all three inside her turn.
+    warm_tool_lead(&harness).await;
+    let roster_revision = harness.store.roster_snapshot().unwrap().revision;
+    let delegate = |call_id: &str, employee: uuid::Uuid, objective: &str| {
+        tool_call(
+            call_id,
+            "task_delegate",
+            json!({"employeeId": employee, "objective": objective, "rosterRevision": roster_revision}),
+        )
+    };
+    harness.backend.tool_calls.lock().unwrap().extend([
+        delegate("call-1", cleo.id, "Port the parser to Claude"),
+        // Ava's ceiling is `ask`, so the lead asks for `ask`; a wider request is refused.
+        tool_call(
+            "call-2",
+            "task_delegate",
+            json!({
+                "employeeId": ava.id,
+                "objective": "Review the port",
+                "requestedAuthority": "ask",
+                "rosterRevision": roster_revision
+            }),
+        ),
+        delegate("call-3", gus.id, "Draft the release notes"),
+    ]);
+    assert_eq!(
+        submit_lead_turn(&harness, "full-autonomy").await["turn"]["state"],
+        "completed"
+    );
+    let results = harness.backend.tool_results.lock().unwrap().clone();
+    assert_eq!(results.len(), 3, "{results:?}");
+    assert!(results.iter().all(|result| result.success), "{results:?}");
+    let task_of = |index: usize| -> uuid::Uuid {
+        results[index].content["taskId"]
+            .as_str()
+            .unwrap()
+            .parse()
+            .unwrap()
+    };
+    let (cleo_task, ava_task, gus_task) = (task_of(0), task_of(1), task_of(2));
+    assert_eq!(results[0].content["effectiveAuthority"], "full-autonomy");
+    assert_eq!(results[0].content["state"], "accepted");
+    assert_eq!(results[1].content["effectiveAuthority"], "ask");
+    assert_eq!(results[1].content["state"], "proposed");
+    assert_eq!(results[2].content["effectiveAuthority"], "full-autonomy");
+    assert_eq!(results[2].content["state"], "accepted");
+
+    // Cleo's task runs on her own Claude Code session and completes; Gus's is refused at
+    // dispatch because Antigravity has no prompt-free mode: the task fails with the refusal
+    // and an incident names the incompatible configuration.
+    let outcome = harness.app.dispatch_pending_tasks_once().await;
+    assert_eq!(
+        outcome.unwrap_err().code,
+        "LZ-TASK-AUTHORITY-UNSUPPORTED",
+        "the pass reports Gus's refusal after running Cleo"
+    );
+    let cleo_detail = harness.store.get_task(cleo_task).unwrap();
+    assert_eq!(cleo_detail.task.state, TaskState::Completed);
+    let cleo_session = harness
+        .store
+        .get_session(cleo_detail.dispatch.unwrap().session_id.unwrap())
+        .unwrap();
+    assert_eq!(cleo_session.provider, "claude-code");
+    assert_eq!(cleo_session.employee_id, cleo.id);
+    let gus_detail = harness.store.get_task(gus_task).unwrap();
+    assert_eq!(gus_detail.task.state, TaskState::Failed);
+    assert_eq!(
+        gus_detail.task.failure_code.as_deref(),
+        Some("LZ-TASK-AUTHORITY-UNSUPPORTED")
+    );
+    assert!(
+        harness
+            .store
+            .list_incidents(&ListIncidentsInput {
+                code: Some("LZ-CONFIG-INCOMPATIBLE".to_owned()),
+                limit: 100,
+                ..ListIncidentsInput::default()
+            })
+            .unwrap()
+            .iter()
+            .any(|incident| incident.task_id == Some(gus_task)),
+        "the refused dispatch is an incident"
+    );
+    assert_eq!(
+        harness.backend.starts.load(Ordering::SeqCst),
+        2,
+        "Rhea's session and Cleo's; nothing started for Ava or Gus"
+    );
+
+    // Ava's proposal is accepted by the user, then refused at dispatch: under `ask` Claude
+    // Code's prompts stay inside its own stream, so Lazoo fails closed.
+    call(
+        "accept-ava",
+        "task.accept",
+        json!({"id": ava_task, "expectedRevision": 1, "idempotencyKey": "accept-ava"}),
+    )
+    .await
+    .result
+    .unwrap();
+    assert_eq!(
+        harness
+            .app
+            .dispatch_pending_tasks_once()
+            .await
+            .unwrap_err()
+            .code,
+        "LZ-TASK-AUTHORITY-UNSUPPORTED"
+    );
+    assert_eq!(
+        harness.store.get_task(ava_task).unwrap().task.state,
+        TaskState::Failed
+    );
+    assert_eq!(harness.backend.starts.load(Ordering::SeqCst), 2);
+
+    // A Claude Code lead: a user turn under `ask` is refused before any provider I/O; one
+    // under full autonomy activates her session and completes.
+    let conversation: uuid::Uuid = call(
+        "create-cleo-conversation",
+        "conversation.create",
+        json!({
+            "projectId": null,
+            "leadEmployeeId": cleo.id,
+            "title": "Claude leads",
+            "idempotencyKey": "cleo-conversation"
+        }),
+    )
+    .await
+    .result
+    .unwrap()["conversation"]["id"]
+        .as_str()
+        .unwrap()
+        .parse()
+        .unwrap();
+    let submit = |id: &'static str, authority: &'static str| {
+        call(
+            id,
+            "turn.submit",
+            json!({
+                "conversationId": conversation,
+                "author": {"kind": "user"},
+                "recipient": null,
+                "authorityMode": authority,
+                "text": "Summarize the parser",
+                "activateIfNeeded": true,
+                "maxAttempts": 1,
+                "idempotencyKey": id
+            }),
+        )
+    };
+    let refused = timeout(Duration::from_secs(20), submit("cleo-ask", "ask"))
+        .await
+        .unwrap()
+        .error
+        .unwrap();
+    assert_eq!(refused.code, "LZ-TASK-AUTHORITY-UNSUPPORTED");
+    assert_eq!(harness.backend.starts.load(Ordering::SeqCst), 2);
+    let completed = timeout(
+        Duration::from_secs(20),
+        submit("cleo-full", "full-autonomy"),
+    )
+    .await
+    .unwrap()
+    .result
+    .unwrap();
+    assert_eq!(completed["turn"]["state"], "completed");
+    assert_eq!(completed["task"]["effectiveAuthority"], "full-autonomy");
+    assert_eq!(harness.backend.starts.load(Ordering::SeqCst), 3);
+    let cleo_lead_session = harness
+        .store
+        .list_sessions()
+        .unwrap()
+        .into_iter()
+        .rfind(|session| session.employee_id == cleo.id)
+        .unwrap();
+    assert_eq!(cleo_lead_session.provider, "claude-code");
+    assert_eq!(
+        harness.backend.turns.load(Ordering::SeqCst),
+        3,
+        "Rhea's turn, Cleo's dispatch turn, Cleo's user turn"
+    );
+}
+
+#[test]
+fn claude_full_autonomy_acceptance_contract_is_deterministic_and_backend_only() {
+    let repository = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let script_path = repository.join("scripts/acceptance/claude-full-autonomy.ps1");
+    let script =
+        std::fs::read_to_string(&script_path).expect("claude full autonomy acceptance script");
+
+    for required in [
+        "claude_code_runs_turns_and_tasks_only_under_full_autonomy",
+        "task_turn_rejects_a_provider_without_authority_override_support_before_io",
+        "store_enables_wal_foreign_keys_and_schema_version",
+        "fullAutonomyDelivered",
+        "askAndSelfDecisionRefused",
+        "otherProvidersRefused",
+        "noSupportClaimed",
+        "providerSmokeAbsent",
+        "externalModelUseAbsent",
+        "uiChangesAbsent",
+        "deterministic-fake-transport",
+        "schemaVersion = 15",
+    ] {
+        assert!(
+            script.contains(required),
+            "acceptance script must contain {required}"
+        );
+    }
+    for forbidden in ["provider', 'smoke", "LivePrompt"] {
+        assert!(
+            !script.contains(forbidden),
+            "acceptance script must not contain {forbidden}"
+        );
+    }
+}

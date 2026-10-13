@@ -7,10 +7,10 @@ use std::{
 };
 
 use lazoo_protocol::{
-    CancelTurnParams, ConversationDetail, ConversationListParams, ConversationShowParams,
-    CreateConversationParams, EmployeeAvailability, JsonRpcRequest, MessageSender,
-    RenameConversationParams, RetryTurnParams, RpcError, SessionLifecycleState, SubmitTurnParams,
-    TaskState, TurnListParams, TurnMutationResult, TurnShowParams, TurnState,
+    AuthorityMode, CancelTurnParams, ConversationDetail, ConversationListParams,
+    ConversationShowParams, CreateConversationParams, EmployeeAvailability, JsonRpcRequest,
+    MessageSender, RenameConversationParams, RetryTurnParams, RpcError, SessionLifecycleState,
+    SubmitTurnParams, TaskState, TurnListParams, TurnMutationResult, TurnShowParams, TurnState,
 };
 use lazoo_providers::{
     AdapterFuture, PermissionDecision, PermissionRequest, ProviderError, ProviderEvent,
@@ -318,7 +318,15 @@ impl App {
             .provider
             .parse::<ProviderKind>()
             .map_err(|_| turn_invalid("the recipient employee has an unknown provider"))?;
-        if provider != ProviderKind::Codex {
+        // A turn runs under its task's effective authority (a user turn's root task, a
+        // dispatch turn's child, a notice turn's recipient task); with no task it fails closed.
+        let authority = turn
+            .task_id
+            .map(|task_id| self.store.get_task(task_id))
+            .transpose()
+            .map_err(turn_store_error)?
+            .map_or(AuthorityMode::Ask, |detail| detail.task.effective_authority);
+        if !super::provider_enforces_authority(provider, authority) {
             return Err(turn_failure(
                 if turn.task_id.is_some() {
                     "LZ-TASK-AUTHORITY-UNSUPPORTED"
@@ -328,7 +336,7 @@ impl App {
                 if turn.task_id.is_some() {
                     "the selected provider cannot enforce this task authority ceiling"
                 } else {
-                    "conversation turn delivery currently supports only Codex"
+                    "conversation turn delivery supports Codex, and Claude Code under full autonomy"
                 },
                 turn.id,
             ));

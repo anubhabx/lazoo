@@ -1,38 +1,38 @@
 {
   "manifestVersion": 1,
   "status": "PASS",
-  "startedAt": "2026-10-13T00:44:46.3586852Z",
-  "completedAt": "2026-10-13T00:44:57.0739201Z",
-  "durationMs": 10705,
+  "startedAt": "2026-10-13T01:00:25.6408939Z",
+  "completedAt": "2026-10-13T01:00:36.2129126Z",
+  "durationMs": 10562,
   "protocolVersion": 1,
   "schemaVersion": 15,
-  "isolatedDataRoot": "C:\\Users\\anubhab\\AppData\\Local\\Temp\\lazoo-employee-roster-e4c16365b7b3445b96f98f7e5e0de84d\\data",
+  "isolatedDataRoot": "C:\\Users\\anubhab\\AppData\\Local\\Temp\\lazoo-employee-roster-929d13cc69cb4508a65467503c6d38d7\\data",
   "temporaryDataRetained": false,
   "commands": [
     {
       "command": "lazooctl --json status",
       "exitCode": 0,
-      "durationMs": 145
+      "durationMs": 132
     },
     {
-      "command": "lazooctl --json employee create Rhea --provider codex --role Lead --idempotency-key employee-create-e4c16365b7b3445b96f98f7e5e0de84d",
+      "command": "lazooctl --json employee create Rhea --provider codex --role Lead --idempotency-key employee-create-929d13cc69cb4508a65467503c6d38d7",
       "exitCode": 0,
-      "durationMs": 3765
+      "durationMs": 3338
     },
     {
-      "command": "lazooctl --json employee create Rhea --provider codex --role Lead --idempotency-key employee-create-e4c16365b7b3445b96f98f7e5e0de84d",
+      "command": "lazooctl --json employee create Rhea --provider codex --role Lead --idempotency-key employee-create-929d13cc69cb4508a65467503c6d38d7",
       "exitCode": 0,
-      "durationMs": 3288
+      "durationMs": 3084
     },
     {
       "command": "lazooctl --json employee list",
       "exitCode": 0,
-      "durationMs": 16
+      "durationMs": 17
     },
     {
       "command": "lazooctl --json roster show",
       "exitCode": 0,
-      "durationMs": 16
+      "durationMs": 17
     },
     {
       "command": "lazooctl --json system shutdown",
@@ -42,30 +42,30 @@
     {
       "command": "lazooctl --json status",
       "exitCode": 0,
-      "durationMs": 49
+      "durationMs": 55
     },
     {
-      "command": "lazooctl --json employee show b71675fe-8c05-4f79-846a-f13ece7a7d5b",
+      "command": "lazooctl --json employee show 54441f99-fbbd-4462-8bcf-d3372d39657d",
       "exitCode": 0,
       "durationMs": 16
     },
     {
-      "command": "lazooctl --json employee update b71675fe-8c05-4f79-846a-f13ece7a7d5b --expected-revision 1 --role Principal lead --idempotency-key employee-update-e4c16365b7b3445b96f98f7e5e0de84d",
+      "command": "lazooctl --json employee update 54441f99-fbbd-4462-8bcf-d3372d39657d --expected-revision 1 --role Principal lead --idempotency-key employee-update-929d13cc69cb4508a65467503c6d38d7",
       "exitCode": 0,
-      "durationMs": 25
+      "durationMs": 27
     },
     {
-      "command": "lazooctl --json employee update b71675fe-8c05-4f79-846a-f13ece7a7d5b --expected-revision 1 --role Stale edit --idempotency-key employee-stale-e4c16365b7b3445b96f98f7e5e0de84d",
+      "command": "lazooctl --json employee update 54441f99-fbbd-4462-8bcf-d3372d39657d --expected-revision 1 --role Stale edit --idempotency-key employee-stale-929d13cc69cb4508a65467503c6d38d7",
       "exitCode": 9,
       "durationMs": null
     },
     {
-      "command": "lazooctl --json roster refresh --idempotency-key roster-refresh-e4c16365b7b3445b96f98f7e5e0de84d",
+      "command": "lazooctl --json roster refresh --idempotency-key roster-refresh-929d13cc69cb4508a65467503c6d38d7",
       "exitCode": 0,
-      "durationMs": 3041
+      "durationMs": 3521
     },
     {
-      "command": "lazooctl --json employee disable b71675fe-8c05-4f79-846a-f13ece7a7d5b --expected-revision 2 --idempotency-key employee-disable-e4c16365b7b3445b96f98f7e5e0de84d",
+      "command": "lazooctl --json employee disable 54441f99-fbbd-4462-8bcf-d3372d39657d --expected-revision 2 --idempotency-key employee-disable-929d13cc69cb4508a65467503c6d38d7",
       "exitCode": 0,
       "durationMs": 22
     },
@@ -77,22 +77,22 @@
     {
       "command": "lazooctl --json status",
       "exitCode": 0,
-      "durationMs": 12
+      "durationMs": 14
     },
     {
       "command": "lazooctl --json system shutdown",
       "exitCode": 0,
-      "durationMs": 13
+      "durationMs": 14
     },
     {
       "command": "lazooctl --json status",
       "exitCode": 0,
-      "durationMs": 58
+      "durationMs": 54
     },
     {
-      "command": "lazooctl --json employee show b71675fe-8c05-4f79-846a-f13ece7a7d5b",
+      "command": "lazooctl --json employee show 54441f99-fbbd-4462-8bcf-d3372d39657d",
       "exitCode": 0,
-      "durationMs": 14
+      "durationMs": 18
     }
   ],
   "gates": {
