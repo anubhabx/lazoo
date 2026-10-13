@@ -28,7 +28,7 @@ The gate on this branch was run by the runner itself: `pwsh -NoProfile -Executio
 |---|---:|---|
 | `cargo fmt --all -- --check` | 0 | No formatting differences. |
 | `cargo clippy --workspace --all-targets --locked -- -D warnings` | 0 | Clean. |
-| `cargo test --workspace --locked` | 0 | 414 passed, 0 failed, 11 ignored (explicit live-provider tests), 258 test binaries. New: `lazood` 1 (the gate runner contract). |
+| `cargo test --workspace --locked` | 0 | 414 passed, 0 failed, 11 ignored (explicit live-provider tests), 70 test binaries (59 test targets and 10 doc-test runs, as every gate today). New: `lazood` 1 (the gate runner contract). |
 | `cargo build --workspace --release --locked` | 0 | Locked release build (up to date in 0.6 s: the task-graph acceptance contract test inside the workspace test run had just rebuilt the release binaries from the same sources). |
 | every acceptance script except `provider-adapters` and `desktop-shell` | 0 | 31 PASS manifests at schema 15, run by the runner with `-SkipBuild` where accepted and `-Provider codex` for `native-session-ownership`. |
 | `git diff --check` | 0 | No whitespace errors. |
