@@ -122,7 +122,16 @@ $manifestStatus = 'FAIL'
 # Section 20.1 targets, as shares of total machine capacity and bytes.
 $idleCpuCeiling = 0.01
 $routingCpuCeiling = 0.05
+$stormCpuCeiling = 0.20
 $idleMemoryCeilingBytes = 350MB
+$activeMemoryCeilingBytes = 750MB
+
+function ConvertTo-NativeJsonArgument([string]$Value) {
+    if ($PSVersionTable.PSVersion.Major -lt 7) {
+        return $Value.Replace('"', '\"')
+    }
+    return $Value
+}
 
 New-Item -ItemType Directory -Force -Path $artifactDir, $dataRoot, $projectRoot | Out-Null
 
@@ -206,6 +215,87 @@ try {
     Assert-True (($routingAfter.daemonWorkingSetBytes + $routingAfter.keeperWorkingSetBytes) -lt $idleMemoryCeilingBytes) 'routing working set under the idle ceiling'
     $gates.routingMemoryUnder350MiB = 'PASS'
 
+    # Failure storm (section 20.2): one-attempt messages sent, claimed, and failed as fast as
+    # the CLI can for the window, so every cycle dead-letters, raises and folds an incident,
+    # promotes it by the section 14.2 threshold, escalates it to the user, and the timed sweep
+    # announces it once. Measured the same way against the hard ceiling and the active-core
+    # memory target. Nothing is enforced.
+    $stormSender = Invoke-Json @(
+        'employee', 'create', 'Storm',
+        '--provider', 'codex',
+        '--role', 'Lead',
+        '--idempotency-key', "storm-sender-$runId"
+    )
+    $stormRecipient = Invoke-Json @(
+        'employee', 'create', 'Target',
+        '--provider', 'codex',
+        '--role', 'Worker',
+        '--idempotency-key', "storm-recipient-$runId"
+    )
+    $stormSenderId = [string]$stormSender.employee.id
+    $stormRecipientId = [string]$stormRecipient.employee.id
+    $stormBody = ConvertTo-NativeJsonArgument '{"text":"failure-storm"}'
+    $stormBefore = Get-Sample $keeper
+    $stormCycles = 0
+    $stormDeadline = [DateTime]::UtcNow.AddSeconds($WindowSeconds)
+    while ([DateTime]::UtcNow -lt $stormDeadline) {
+        $sent = Invoke-Json @(
+            'message', 'send', $stormSenderId, $stormRecipientId,
+            '--kind', 'peer',
+            '--body', $stormBody,
+            '--max-attempts', '1',
+            '--idempotency-key', "storm-send-$runId-$stormCycles"
+        )
+        $stormMessageId = [string]$sent.message.envelope.id
+        $claimed = Invoke-Json @(
+            'message', 'claim', $stormMessageId,
+            '--expected-revision', '1',
+            '--idempotency-key', "storm-claim-$runId-$stormCycles"
+        )
+        $stormAttemptId = [string]$claimed.message.attempts[0].id
+        $failed = Invoke-Json @(
+            'message', 'fail', $stormMessageId,
+            '--expected-revision', '2',
+            '--attempt-id', $stormAttemptId,
+            '--retryable', 'true',
+            '--failure-code', 'LZ-MESSAGE-TIMEOUT',
+            '--failure-message', 'failure storm: acknowledgement was not observed',
+            '--idempotency-key', "storm-fail-$runId-$stormCycles"
+        )
+        if ($stormCycles -eq 0) {
+            Assert-Equal $failed.message.delivery.state 'terminal-failed' 'a one-attempt failure dead-letters'
+        }
+        $stormCycles += 1
+    }
+    $stormAfter = Get-Sample $keeper
+    $stormShare = Get-CpuShare $stormBefore $stormAfter
+    $stormMemory = $stormAfter.daemonWorkingSetBytes + $stormAfter.keeperWorkingSetBytes
+    $stormIncidents = @(Invoke-Json @('incident', 'list', '--limit', '100'))
+    $stormOccurrences = 0
+    foreach ($incident in $stormIncidents) {
+        if ([int]$incident.occurrences -gt $stormOccurrences) { $stormOccurrences = [int]$incident.occurrences }
+    }
+    $measurements.failureStorm = [ordered]@{
+        windowSeconds = $WindowSeconds
+        cycles = $stormCycles
+        deadLetters = $stormCycles
+        incidents = $stormIncidents.Count
+        foldedOccurrences = $stormOccurrences
+        cpuShare = $stormShare
+        daemonCpuMillis = $stormAfter.daemonCpuMillis - $stormBefore.daemonCpuMillis
+        keeperCpuMillis = $stormAfter.keeperCpuMillis - $stormBefore.keeperCpuMillis
+        daemonWorkingSetBytes = $stormAfter.daemonWorkingSetBytes
+        daemonPeakWorkingSetBytes = $stormAfter.daemonPeakWorkingSetBytes
+        lazooWorkingSetBytes = $stormMemory
+    }
+    Assert-True ($stormCycles -ge 5) 'failure storm drove cycles'
+    Assert-True ($stormIncidents.Count -ge 1) 'the storm raised an incident'
+    Assert-True ($stormOccurrences -ge 3) 'the storm folded into a promoted incident'
+    Assert-True ($stormShare -lt $stormCpuCeiling) "failure storm CPU share $stormShare under $stormCpuCeiling"
+    $gates.failureStormCpuUnderTwentyPercent = 'PASS'
+    Assert-True ($stormMemory -lt $activeMemoryCeilingBytes) "failure storm working set $stormMemory under $activeMemoryCeilingBytes"
+    $gates.failureStormMemoryUnder750MiB = 'PASS'
+
     $resources = Invoke-Json @('system', 'resources')
     Assert-Equal ([int]$resources.liveSessions) 0 'no provider session was started'
     $gates.noProviderProcess = 'PASS'
@@ -232,7 +322,9 @@ try {
         targets = [ordered]@{
             idleCpuShare = $idleCpuCeiling
             routingCpuShare = $routingCpuCeiling
+            failureStormCpuShare = $stormCpuCeiling
             idleWorkingSetBytes = [long]$idleMemoryCeilingBytes
+            activeWorkingSetBytes = [long]$activeMemoryCeilingBytes
             windowSeconds = $WindowSeconds
         }
         measurements = $measurements
@@ -244,7 +336,7 @@ try {
             desktopUi = 'NOT_RUNNING'
             measured = 'KEEPER_AND_DAEMON'
             notMeasured = 'DESKTOP_CLI_MEMORY_WORKERS_VOICE'
-            scenarios = 'IDLE_AND_ROUTING_ONLY'
+            scenarios = 'IDLE_ROUTING_AND_FAILURE_STORM'
             enforcement = 'NONE'
         }
     }

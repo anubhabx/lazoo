@@ -2,58 +2,58 @@
   "status": "PASS",
   "schemaVersion": 15,
   "mode": "deterministic-fake-transport",
-  "startedAt": "2026-10-13T00:32:44.2466476Z",
-  "durationMs": 5174,
+  "startedAt": "2026-10-13T00:45:51.9313714Z",
+  "durationMs": 5085,
   "commands": [
     {
       "command": "cargo test -p lazoo-domain --test delivery peer_message_text_names_the_sender_tasks_and_reply_tool --locked -- --exact",
       "exitCode": 0,
-      "durationMs": 258
+      "durationMs": 274
     },
     {
       "command": "cargo test -p lazoo-domain --test delivery peer_reply_text_threads_under_the_question --locked -- --exact",
       "exitCode": 0,
-      "durationMs": 235
+      "durationMs": 240
     },
     {
       "command": "cargo test -p lazoo-domain --test delivery peer_message_content_is_refused_when_empty_or_oversized --locked -- --exact",
       "exitCode": 0,
-      "durationMs": 240
+      "durationMs": 247
     },
     {
       "command": "cargo test -p lazoo-store --test delivery peer_messages_link_both_tasks_and_queue_once --locked -- --exact",
       "exitCode": 0,
-      "durationMs": 442
+      "durationMs": 432
     },
     {
       "command": "cargo test -p lazoo-store --test delivery replies_thread_under_the_question_and_return_to_the_sender_task --locked -- --exact",
       "exitCode": 0,
-      "durationMs": 444
+      "durationMs": 439
     },
     {
       "command": "cargo test -p lazoo-store --test delivery peer_messages_are_consumed_in_turn_with_evidence_and_close_an_orphan_notice_turn --locked -- --exact",
       "exitCode": 0,
-      "durationMs": 471
+      "durationMs": 451
     },
     {
       "command": "cargo test -p lazoo-store --test delivery peer_turns_never_complete_the_recipient_task --locked -- --exact",
       "exitCode": 0,
-      "durationMs": 465
+      "durationMs": 478
     },
     {
       "command": "cargo test -p lazood --test daemon peer_questions_reach_an_idle_lead_as_a_turn_and_the_reply_returns_to_the_waiting_worker --locked -- --exact",
       "exitCode": 0,
-      "durationMs": 722
+      "durationMs": 698
     },
     {
       "command": "cargo test -p lazood --test daemon task_wait_returns_early_with_a_peer_question_so_the_lead_answers_in_turn --locked -- --exact",
       "exitCode": 0,
-      "durationMs": 683
+      "durationMs": 663
     },
     {
       "command": "cargo test -p lazood --test daemon peer_messages_never_activate_a_dormant_recipient_and_refusals_never_end_the_turn --locked -- --exact",
       "exitCode": 0,
-      "durationMs": 708
+      "durationMs": 658
     },
     {
       "command": "cargo test -p lazoo-store --test store store_enables_wal_foreign_keys_and_schema_version --locked -- --exact",
