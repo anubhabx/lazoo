@@ -48,7 +48,9 @@ $stopped = $false
 function Invoke-Step([string]$Name, [string]$Command, [scriptblock]$Block) {
     Write-Host "==> $Name"
     $timer = [Diagnostics.Stopwatch]::StartNew()
-    & $Block
+    # Shown, not returned: a function's pipeline output would otherwise ride along with the
+    # boolean below and turn a failed step into a truthy array.
+    & $Block | Out-Host
     $exitCode = $LASTEXITCODE
     $timer.Stop()
     $steps.Add([ordered]@{
@@ -96,9 +98,9 @@ try {
         if ($SkipBuild -and $header -match '\[switch\]\$SkipBuild') { $arguments += '-SkipBuild' }
         if ($header -match '\[string\]\$Provider') { $arguments += @('-Provider', $Provider) }
         $command = "$name.ps1 $($arguments -join ' ')".TrimEnd()
-        Invoke-Step $name $command {
+        $null = Invoke-Step $name $command {
             & $pwshExe -NoProfile -ExecutionPolicy Bypass -File $script.FullName @arguments
-        } | Out-Null
+        }
     }
 } finally {
     Pop-Location
