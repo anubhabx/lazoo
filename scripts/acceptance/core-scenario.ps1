@@ -27,13 +27,13 @@ $manifestStatus = 'FAIL'
 # own run; 'PROVEN_ELSEWHERE' names the acceptance script that carries the step; 'PARTIAL' and
 # 'NOT_COVERED' say so.
 $steps = [ordered]@{
-    step1 = [ordered]@{ text = 'The user configures Rhea as the lead and four peers across different providers'; status = 'PENDING'; evidence = 'core scenario story: Rhea leads; Mira on Codex, Oren on OpenCode, Pia on Grok Build, Quinn on Antigravity' }
+    step1 = [ordered]@{ text = 'The user configures Rhea as the lead and four peers across different providers'; status = 'PENDING'; evidence = 'core scenario story: Rhea leads; Mira and Nico on Codex, Oren on OpenCode, Pia on Grok Build, Quinn on Antigravity (four peers across different providers, plus a second Codex peer so the story can hold a sibling clarification)' }
     step2 = [ordered]@{ text = 'All employees begin dormant; one is disabled'; status = 'PENDING'; evidence = 'core scenario story: roster.get shows four dormant and Quinn disabled before any session starts' }
     step3 = [ordered]@{ text = 'The user starts a project conversation with Rhea'; status = 'PENDING'; evidence = 'core scenario story: the conversation is created in a registered project (a temporary git repository with a base commit) and led by Rhea' }
     step4 = [ordered]@{ text = 'Rhea receives a current roster and proposes a multi-part plan'; status = 'PENDING'; evidence = 'core scenario story: employees_list then two task_delegate calls inside the lead turn, and a third in a follow-up turn once the first plan finished' }
     step5 = [ordered]@{ text = 'Under ask mode, Lazoo presents precise delegation approvals'; status = 'PENDING'; evidence = 'core scenario story: both children are proposed, counted by the Inbox, and accepted by the user; provider permission approvals are approval-gate.ps1' }
     step6 = [ordered]@{ text = 'Approved employees activate into independent native sessions and editing worktrees'; status = 'PENDING'; evidence = 'core scenario story: each accepted task runs on a fresh session for Mira started inside its own retained git worktree of the project (never the canonical checkout), the session stops with its turn, and the next queued task wakes when she is free' }
-    step7 = [ordered]@{ text = 'An employee asks a peer a direct clarification without routing through Rhea'; status = 'PROVEN_ELSEWHERE'; evidence = 'peer-messaging.ps1 and coalesced-notices.ps1' }
+    step7 = [ordered]@{ text = 'An employee asks a peer a direct clarification without routing through Rhea'; status = 'PENDING'; evidence = 'core scenario story: inside her dispatch turn Mira asks Nico through message_send and waits; Nico, waiting on her task in task_wait, receives the question in that wait and answers through message_reply; her wait returns his answer; the ledger holds the question on his task and the reply on hers; no peer turn reaches Rhea; peer-messaging.ps1 and coalesced-notices.ps1 prove the lead-recipient path and the idle-session delivery' }
     step8 = [ordered]@{ text = 'The disabled employee is not selected and cannot receive dispatch'; status = 'PENDING'; evidence = 'core scenario story: task_delegate to Quinn is refused LZ-TASK-ASSIGNEE-UNAVAILABLE and writes nothing' }
     step9 = [ordered]@{ text = 'One provider stalls after accepting work; Lazoo detects missing progress, retries safely, then raises a clean incident'; status = 'PENDING'; evidence = 'core scenario story: the third task dispatch turn stalls (the adapter progress deadline reported as a stalled provider error, as opencode_acceptance_without_progress_becomes_stalled proves for the real adapter), the turn is recorded retryable-failed, the task stays accepted for a bounded retry by the lead or the user and is never retried automatically, the worker session is stopped, and one LZ-SESSION-STALLED incident on the task is raised and promoted at once' }
     step10 = [ordered]@{ text = 'The threshold notifies Rhea, allows bounded remediation, and escalates to the user when unresolved'; status = 'PENDING'; evidence = 'core scenario story: the stall on the queued third task opens the lead window, the lead cancels it in its notice turn, the stall recurs, the sweep escalates to the user, and the user acknowledges it from the Inbox' }
@@ -73,7 +73,7 @@ try {
     Push-Location $repoRoot
     Invoke-Test 'lazood' 'daemon' 'the_core_scenario_runs_end_to_end_on_the_deterministic_provider'
     $evidence.scenarioStory = $true
-    foreach ($key in @('step1', 'step2', 'step3', 'step4', 'step5', 'step6', 'step8', 'step9', 'step10', 'step11', 'step13', 'step14')) {
+    foreach ($key in @('step1', 'step2', 'step3', 'step4', 'step5', 'step6', 'step7', 'step8', 'step9', 'step10', 'step11', 'step13', 'step14')) {
         $steps[$key].status = 'PASS'
     }
     # Step 12 is proven as far as the backend can hold it today; memory records need Stage 5.

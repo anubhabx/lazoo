@@ -10233,7 +10233,14 @@ async fn the_core_scenario_runs_end_to_end_on_the_deterministic_provider() {
         }),
     };
 
-    // 1. Rhea leads; Mira on Codex and three peers on other providers; one peer is disabled.
+    // 1. Rhea leads; Mira and Nico on Codex and three peers on other providers; one peer is
+    // disabled.
+    let mut nico_input = peer("Nico", "codex");
+    nico_input.model = Some("test-model".to_owned());
+    if let Some(observation) = nico_input.provider_observation.as_mut() {
+        observation.capabilities = json!({"session": true, "permission": true, "mcp": true});
+    }
+    let nico = harness.store.create_employee(&nico_input).unwrap().employee;
     let oren = harness
         .store
         .create_employee(&peer("Oren", "opencode"))
@@ -10268,7 +10275,7 @@ async fn the_core_scenario_runs_end_to_end_on_the_deterministic_provider() {
         .result
         .unwrap();
     let entries = roster["entries"].as_array().unwrap().clone();
-    assert_eq!(entries.len(), 5);
+    assert_eq!(entries.len(), 6);
     let availability = |id: uuid::Uuid| {
         entries
             .iter()
@@ -10276,7 +10283,7 @@ async fn the_core_scenario_runs_end_to_end_on_the_deterministic_provider() {
             .unwrap()["availability"]
             .clone()
     };
-    for id in [harness.lead.id, harness.worker.id, oren.id, pia.id] {
+    for id in [harness.lead.id, harness.worker.id, nico.id, oren.id, pia.id] {
         assert_eq!(availability(id), "dormant");
     }
     assert_eq!(availability(quinn.id), "disabled");
@@ -10295,8 +10302,8 @@ async fn the_core_scenario_runs_end_to_end_on_the_deterministic_provider() {
     };
     harness.backend.tool_calls.lock().unwrap().extend([
         tool_call("call-1", "employees_list", json!({})),
-        delegate("call-2", harness.worker.id, "Implement the parser fix"),
-        delegate("call-3", harness.worker.id, "Write the parser tests"),
+        delegate("call-2", nico.id, "Write the parser tests"),
+        delegate("call-3", harness.worker.id, "Implement the parser fix"),
         delegate("call-4", quinn.id, "Review the plan"),
     ]);
     let submitted = submit_lead_turn(&harness, "ask").await;
@@ -10363,19 +10370,40 @@ async fn the_core_scenario_runs_end_to_end_on_the_deterministic_provider() {
     // nothing below may touch it.
     std::fs::write(repository.join("parser.txt"), "dirty user edit\n").unwrap();
 
-    // 6. The approved employee activates into independent native sessions and workspaces: each
-    // accepted task runs to completion on a fresh session for Mira, which stops with its turn,
-    // and the next queued task wakes as soon as she is free. The first worker reports its
-    // completion through `task_report` with commit and verification evidence before its
-    // native turn ends (step 12); sessions are numbered in start order, so hers is the second.
-    harness
-        .backend
-        .tool_calls
-        .lock()
-        .unwrap()
-        .push(session_tool_call(
+    // 6 and 7. The approved employees activate into independent native sessions and
+    // workspaces, one fresh session per task that stops with its turn. Sessions are numbered
+    // in start order: Nico's task was delegated first, so his is the second and Mira's the
+    // third. Inside her turn Mira asks Nico, not Rhea, for the one fact she is missing and
+    // waits for his answer; Nico's turn is waiting on her task and finds the question in its
+    // `task_wait`, answers, and both turns finish. Mira then reports her completion through
+    // `task_report` with commit and verification evidence before her native turn ends (12).
+    let (nico_task, mira_task) = (children[0], children[1]);
+    harness.backend.tool_calls.lock().unwrap().extend([
+        session_tool_call(
             "native-2",
-            "call-w1",
+            "call-n1",
+            "task_wait",
+            json!({"taskIds": [mira_task], "timeoutSeconds": 10}),
+        ),
+        session_tool_call(
+            "native-2",
+            "call-n2",
+            "message_reply",
+            json!({"messageId": "$message-id", "text": "space-4"}),
+        ),
+        session_tool_call(
+            "native-3",
+            "call-m1",
+            "message_send",
+            json!({
+                "employeeId": nico.id,
+                "text": "Which spacing token should the parser emit?",
+                "waitForReplySeconds": 10
+            }),
+        ),
+        session_tool_call(
+            "native-3",
+            "call-m2",
             "task_report",
             json!({
                 "kind": "completed",
@@ -10384,8 +10412,48 @@ async fn the_core_scenario_runs_end_to_end_on_the_deterministic_provider() {
                     "verification": [{"command": "cargo test -p parser", "exitCode": 0}]
                 }
             }),
-        ));
-    harness.app.dispatch_pending_tasks_once().await.unwrap();
+        ),
+    ]);
+    // The first dispatch pass takes Nico's task and stays inside his waiting turn; once his
+    // turn is in flight, a second pass sees only Mira's task (his already has a dispatch row)
+    // and runs hers to completion, which lets his finish too.
+    let first_pass_app = harness.app.clone();
+    let first_pass =
+        tokio::spawn(async move { first_pass_app.dispatch_pending_tasks_once().await });
+    timeout(Duration::from_secs(10), async {
+        loop {
+            let detail = harness.store.get_task(nico_task).unwrap();
+            if detail.task.state == TaskState::Running
+                && detail
+                    .dispatch
+                    .as_ref()
+                    .is_some_and(|dispatch| dispatch.turn_id.is_some())
+            {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("Nico's turn is in flight before Mira's starts");
+    timeout(
+        Duration::from_secs(20),
+        harness.app.dispatch_pending_tasks_once(),
+    )
+    .await
+    .expect("Mira's turn ends once Nico's reply arrives")
+    .unwrap();
+    let first_pass = timeout(Duration::from_secs(20), first_pass)
+        .await
+        .expect("Nico's turn ends once he has answered")
+        .unwrap();
+    assert!(
+        first_pass.is_ok()
+            || first_pass
+                .as_ref()
+                .is_err_and(|error| error.code.starts_with("LZ-TASK-")),
+        "the first pass finds Mira's task already dispatched: {first_pass:?}"
+    );
     assert_eq!(
         harness.backend.starts.load(Ordering::SeqCst),
         3,
@@ -10444,9 +10512,61 @@ async fn the_core_scenario_runs_end_to_end_on_the_deterministic_provider() {
             .list_sessions()
             .unwrap()
             .iter()
-            .filter(|session| session.employee_id == harness.worker.id)
+            .filter(|session| [harness.worker.id, nico.id].contains(&session.employee_id))
             .all(|session| session.state == lazoo_protocol::SessionLifecycleState::Suspended),
         "a worker's dispatch session stops with its turn"
+    );
+
+    // 7. The clarification went from Mira's task to Nico's and back without Rhea: Nico's wait
+    // returned early with the question, his reply closed it, Mira's wait returned the answer,
+    // the ledger holds both messages between the two tasks, and no peer turn reached Rhea.
+    let results = harness.backend.tool_results.lock().unwrap().clone();
+    assert_eq!(results.len(), 8, "{results:?}");
+    assert!(results[4].success, "{:?}", results[4]);
+    assert_eq!(results[4].content["timedOut"], false);
+    let question = &results[4].content["messages"][0];
+    assert_eq!(question["fromEmployeeId"], harness.worker.id.to_string());
+    assert_eq!(
+        question["text"],
+        "Which spacing token should the parser emit?"
+    );
+    assert!(results[5].success, "{:?}", results[5]);
+    assert_eq!(
+        results[5].content["replyToMessageId"],
+        question["messageId"]
+    );
+    assert!(results[6].success, "{:?}", results[6]);
+    assert_eq!(results[6].content["timedOut"], false);
+    assert_eq!(results[6].content["reply"]["text"], "space-4");
+    assert_eq!(
+        results[6].content["reply"]["fromEmployeeId"],
+        nico.id.to_string()
+    );
+    let exchange: Vec<_> = employee_messages(&harness.store)
+        .into_iter()
+        .filter(|message| {
+            matches!(
+                message.kind,
+                lazoo_protocol::MessageKind::Peer | lazoo_protocol::MessageKind::Reply
+            )
+        })
+        .collect();
+    assert_eq!(exchange.len(), 2, "{exchange:?}");
+    assert_eq!(
+        exchange[0].task_id,
+        Some(nico_task),
+        "the question is Nico's task's"
+    );
+    assert_eq!(
+        exchange[1].task_id,
+        Some(mira_task),
+        "the reply is Mira's task's"
+    );
+    assert!(
+        prompts(&harness.backend)
+            .iter()
+            .all(|prompt| !prompt.starts_with("[Lazoo peer message]")),
+        "no peer turn reached Rhea"
     );
     assert_eq!(
         harness.store.pending_task_results(10).unwrap().len(),
@@ -10457,7 +10577,7 @@ async fn the_core_scenario_runs_end_to_end_on_the_deterministic_provider() {
     // 12. The reported commits and verification are the task's durable evidence, readable
     // through `task.show`; the result notice below links the task; incidents and messages are
     // ledgers of their own. Memory records wait for Stage 5.
-    let reported = harness.store.get_task(children[0]).unwrap();
+    let reported = harness.store.get_task(mira_task).unwrap();
     let completed = reported
         .evidence
         .iter()
@@ -10472,7 +10592,7 @@ async fn the_core_scenario_runs_end_to_end_on_the_deterministic_provider() {
         reported.dispatch.as_ref().unwrap().session_id,
         "the evidence names the worker's own session"
     );
-    let shown = call("show-reported", "task.show", json!({"id": children[0]}))
+    let shown = call("show-reported", "task.show", json!({"id": mira_task}))
         .await
         .result
         .unwrap();
@@ -10533,9 +10653,9 @@ async fn the_core_scenario_runs_end_to_end_on_the_deterministic_provider() {
     .unwrap();
     assert_eq!(follow_up["turn"]["state"], "completed");
     let results = harness.backend.tool_results.lock().unwrap().clone();
-    assert_eq!(results.len(), 6, "{results:?}");
-    assert!(results[5].success, "{:?}", results[5]);
-    let third: uuid::Uuid = results[5].content["taskId"]
+    assert_eq!(results.len(), 9, "{results:?}");
+    assert!(results[8].success, "{:?}", results[8]);
+    let third: uuid::Uuid = results[8].content["taskId"]
         .as_str()
         .unwrap()
         .parse()

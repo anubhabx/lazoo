@@ -2,28 +2,28 @@
   "status": "PASS",
   "schemaVersion": 15,
   "mode": "deterministic-fake-transport",
-  "startedAt": "2026-10-13T00:16:43.5101151Z",
-  "durationMs": 4228,
+  "startedAt": "2026-10-13T00:31:29.4256981Z",
+  "durationMs": 4521,
   "commands": [
     {
       "command": "cargo test -p lazood --test daemon the_core_scenario_runs_end_to_end_on_the_deterministic_provider --locked -- --exact",
       "exitCode": 0,
-      "durationMs": 2064
+      "durationMs": 2302
     },
     {
       "command": "cargo test -p lazood --test daemon project_task_dispatch_uses_an_isolated_worktree_and_preserves_dirty_user_files --locked -- --exact",
       "exitCode": 0,
-      "durationMs": 1098
+      "durationMs": 1134
     },
     {
       "command": "cargo test -p lazood --test daemon message_restart_reconciles_an_uncertain_attempt --locked -- --exact",
       "exitCode": 0,
-      "durationMs": 546
+      "durationMs": 586
     },
     {
       "command": "cargo test -p lazoo-store --test store store_enables_wal_foreign_keys_and_schema_version --locked -- --exact",
       "exitCode": 0,
-      "durationMs": 431
+      "durationMs": 408
     },
     {
       "command": "git diff --quiet and git diff --cached --quiet -- apps/lazoo-desktop",
@@ -35,7 +35,7 @@
     "step1": {
       "text": "The user configures Rhea as the lead and four peers across different providers",
       "status": "PASS",
-      "evidence": "core scenario story: Rhea leads; Mira on Codex, Oren on OpenCode, Pia on Grok Build, Quinn on Antigravity"
+      "evidence": "core scenario story: Rhea leads; Mira and Nico on Codex, Oren on OpenCode, Pia on Grok Build, Quinn on Antigravity (four peers across different providers, plus a second Codex peer so the story can hold a sibling clarification)"
     },
     "step2": {
       "text": "All employees begin dormant; one is disabled",
@@ -64,8 +64,8 @@
     },
     "step7": {
       "text": "An employee asks a peer a direct clarification without routing through Rhea",
-      "status": "PROVEN_ELSEWHERE",
-      "evidence": "peer-messaging.ps1 and coalesced-notices.ps1"
+      "status": "PASS",
+      "evidence": "core scenario story: inside her dispatch turn Mira asks Nico through message_send and waits; Nico, waiting on her task in task_wait, receives the question in that wait and answers through message_reply; her wait returns his answer; the ledger holds the question on his task and the reply on hers; no peer turn reaches Rhea; peer-messaging.ps1 and coalesced-notices.ps1 prove the lead-recipient path and the idle-session delivery"
     },
     "step8": {
       "text": "The disabled employee is not selected and cannot receive dispatch",

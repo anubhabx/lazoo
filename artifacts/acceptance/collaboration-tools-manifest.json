@@ -2,48 +2,48 @@
   "status": "PASS",
   "schemaVersion": 15,
   "mode": "deterministic-fake-transport",
-  "startedAt": "2026-10-13T00:16:02.1382535Z",
-  "durationMs": 11376,
+  "startedAt": "2026-10-13T00:30:47.5697353Z",
+  "durationMs": 11479,
   "commands": [
     {
       "command": "cargo test -p lazoo-providers --test contract observer_tool_calls_fail_closed_without_an_attached_control_plane --locked -- --exact",
       "exitCode": 0,
-      "durationMs": 360
+      "durationMs": 465
     },
     {
       "command": "cargo test -p lazoo-providers --test codex codex_tool_calls_normalize_with_the_active_turn_fallback --locked -- --exact",
       "exitCode": 0,
-      "durationMs": 359
+      "durationMs": 354
     },
     {
       "command": "cargo test -p lazoo-providers --test codex observed_codex_tool_calls_are_answered_with_the_lazoo_result --locked -- --exact",
       "exitCode": 0,
-      "durationMs": 5283
+      "durationMs": 5257
     },
     {
       "command": "cargo test -p lazoo-providers --test codex codex_sessions_without_tools_stay_stable_and_resume_with_tools_fails_closed --locked -- --exact",
       "exitCode": 0,
-      "durationMs": 3126
+      "durationMs": 3106
     },
     {
       "command": "cargo test -p lazood --test daemon lead_turn_lists_employees_delegates_and_waits_through_collaboration_tools --locked -- --exact",
       "exitCode": 0,
-      "durationMs": 593
+      "durationMs": 627
     },
     {
       "command": "cargo test -p lazood --test daemon ask_lead_delegation_through_tools_is_proposed_and_refusals_never_end_the_turn --locked -- --exact",
       "exitCode": 0,
-      "durationMs": 557
+      "durationMs": 553
     },
     {
       "command": "cargo test -p lazood --test daemon worker_turn_reports_failure_through_task_report_before_native_completion --locked -- --exact",
       "exitCode": 0,
-      "durationMs": 570
+      "durationMs": 601
     },
     {
       "command": "cargo test -p lazoo-store --test store store_enables_wal_foreign_keys_and_schema_version --locked -- --exact",
       "exitCode": 0,
-      "durationMs": 429
+      "durationMs": 422
     },
     {
       "command": "git diff --quiet and git diff --cached --quiet -- apps/lazoo-desktop",
