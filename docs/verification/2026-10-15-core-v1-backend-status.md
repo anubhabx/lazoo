@@ -2,7 +2,7 @@
 
 The owner authorized the core v1 backend on 2026-10-15. Before implementation, `main` was checked out and pulled once (`dfa35f1`), then merged into `codex/core-v1-backend` (`ab00236`). Existing Claude full-autonomy work was retained. The desktop frontend, Tauri surface, and `desktop.snapshot` were not changed.
 
-Status: the backend services below are implemented and tested; full core v1 acceptance is still incomplete. Three live-provider gates and a non-reproduced CLI timeout remain, alongside the explicitly listed integration limits. A passing deterministic gate is not a claim that all native providers, full transcript retention, or the whole-product performance budget are verified.
+Status updated 2026-10-16: the backend services below are implemented and tested; full core v1 acceptance is still incomplete. The owner excluded Grok and restored Claude's subscription path. All four required providers now have passing short live smoke evidence. The unresolved intermittent timeouts and the explicitly listed lifecycle/integration limits remain. A passing smoke or deterministic gate is not a claim that complete native provider lifecycles, full transcript retention, or the whole-product performance budget are verified.
 
 ## Implemented behavior
 
@@ -31,6 +31,8 @@ Focused regressions already cover provider permission transport, configuration f
 
 The repository gate excludes live model adapter tests and the separately owned desktop UI. The owner separately authorized five short live model tests on 2026-10-15. Codex and Antigravity passed exact-response gates. OpenCode accepted the request but emitted no progress for 30 seconds; its native log identified the configured `opencode/big-pickle` model and an aborted request, without an authentication error. Grok failed before a prompt: a separate non-model ACP check confirmed `Authentication required`. Claude's first attempt exposed SessionStart hook frames before init and was rejected before sending a prompt. That compatibility fix is fixture-verified; the latest native probe reports logged out and no ready external credential, so the model test remains blocked without sending a prompt. Claude now handles the native CLI's valid exit-1 logged-out response correctly. Current exact outcomes are in `artifacts/acceptance/provider-adapters-manifest.json` and `core-v1-provider-diagnostics.json`. No actual user-provider configuration was changed.
 
+The paragraph above records the 2026-10-15 attempts. The 2026-10-16 scope and recheck supersede its current-provider blockers: OpenCode 1.19.0 passed through Lazoo using Big Pickle; the previous stall was on 1.18.23. After the owner signed in, Claude 2.1.300 reported native authentication ready. Its first adapter attempt timed out; a native diagnostic then returned the exact token in 13.844 seconds, and the final Lazoo smoke passed in 11.307 seconds. No adapter or timeout code was changed between those attempts, so no causal timeout fix is claimed. The core manifest now evaluates Codex, OpenCode, Antigravity, and Claude only. See `docs/verification/2026-10-16-provider-recheck.md` for current evidence and remaining boundaries. The user's Claude login was the only authentication change.
+
 ## CLI entry points
 
 ```powershell
@@ -47,8 +49,8 @@ Memory retention/injection can be disabled independently. Changing retention doe
 
 ## Remaining core v1 acceptance boundaries
 
-1. Resolve Grok's missing native authentication and OpenCode's configured-model stall, then pass their live gates. Complete Claude's configured external-endpoint gate. Deterministic fixtures and handshakes do not substitute for these gates.
-2. Prove native policy coverage before enabling governed OpenCode/Grok tasks or Claude ask/self-decision. An approval bridge alone cannot control actions a provider auto-allows.
+1. Complete the broader native lifecycle acceptance beyond the four passing short smoke tests: tools, permission behavior, cancellation, resume/recovery, and terminal attachment where supported. Grok is excluded; Claude's native subscription is an accepted path.
+2. Prove native policy coverage before enabling governed OpenCode tasks or Claude ask/self-decision. An approval bridge alone cannot control actions a provider auto-allows. The excluded Grok adapter remains refused for governed delivery.
 3. Complete provider-session terminal takeover/UI binding and full raw-history archive requirements if section 24 is being accepted as the whole product, rather than this backend increment.
 4. Verify the aggregate budget with the separately owned desktop and representative memory/terminal workloads; the current cap explicitly covers daemon/keeper/CLI only.
 5. Extend configuration apply beyond the verified Codex MCP format only with exact version/schema evidence.

@@ -9,6 +9,21 @@ param(
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
+# Owner scope update, 2026-10-16: Grok is excluded from core v1 acceptance.
+# Retain its historical evidence, but do not let it satisfy or block a required gate.
+$requiredCoreProviders = @('codex', 'opencode', 'antigravity', 'claude-code')
+
+function Get-CoreProviderStatus([Collections.IDictionary]$Entries, [string[]]$RequiredProviders) {
+    if (@($RequiredProviders | Where-Object { -not $Entries.Contains($_) }).Count -gt 0) {
+        return 'PARTIAL'
+    }
+    $statuses = @($RequiredProviders | ForEach-Object { $Entries[$_].status })
+    if ($statuses -contains 'FAIL') { return 'FAIL' }
+    if ($statuses -contains 'BLOCKED') { return 'BLOCKED' }
+    if (@($statuses | Where-Object { $_ -ne 'PASS' }).Count -gt 0) { return 'UNVERIFIED' }
+    return 'PASS'
+}
+
 function ConvertTo-PathHash([string]$Path) {
     $sha256 = [Security.Cryptography.SHA256]::Create()
     try {
@@ -280,21 +295,12 @@ try {
     if ($null -ne $entry) {
         $providerEntries = Read-ExistingProviders $manifestPath
         $providerEntries[$Provider] = $entry
-        $statuses = @($providerEntries.Values | ForEach-Object { $_.status })
-        $manifestStatus = if ($providerEntries.Count -lt 5) {
-            'PARTIAL'
-        } elseif ($statuses -contains 'FAIL') {
-            'FAIL'
-        } elseif ($statuses -contains 'BLOCKED') {
-            'BLOCKED'
-        } elseif ($statuses -contains 'UNVERIFIED') {
-            'UNVERIFIED'
-        } else {
-            'PASS'
-        }
+        $manifestStatus = Get-CoreProviderStatus $providerEntries $requiredCoreProviders
         $manifest = [ordered]@{
             schemaVersion = 1
             status = $manifestStatus
+            requiredProviders = $requiredCoreProviders
+            excludedProviders = @([ordered]@{ provider = 'grok-build'; reason = 'Excluded by owner on 2026-10-16' })
             generatedAt = [DateTime]::UtcNow.ToString('o')
             platform = [Environment]::OSVersion.VersionString
             rustcVersion = (& rustc --version)

@@ -3,6 +3,7 @@
 - **Status:** Owner-reviewed product and engineering contract
 - **Research snapshot:** 2026-08-28
 - **Owner review:** 2026-08-28
+- **Provider scope update:** 2026-10-16: Grok Build is excluded from core v1 acceptance. Claude's restored native subscription is an accepted live-verification path; a configured external endpoint remains an alternative. Earlier provider research and results remain historical evidence.
 - **Product boundary:** Windows-first, single-user, local desktop software
 - **Repository stage:** Control-plane foundation, redesigned read-only Tauri desktop shell, backend native-provider adapters, durable employees, native-session Job Object ownership, collaboration-message and conversation/turn ledgers, schema-7 automatic Codex task dispatch with retained isolated workspaces, and the schema-8 approval gate for Codex command/file-change requests implemented with deterministic acceptance; ConPTY, per-capability policy, other-provider task delivery and approval bridging, and resource-governor slices remain
 
@@ -872,9 +873,9 @@ Measure aggregate Lazoo CPU, memory, handles, threads, database latency, termina
 | Provider | Gate before claiming support |
 |---|---|
 | Codex | App Server contract and fallback tested against supported installed versions |
-| Claude Code | Live Windows session, messaging, permissions, cancellation, and resume/recovery tested through a configured external endpoint/model; the native Anthropic subscription path is verified and reported separately when available |
+| Claude Code | Live Windows session, messaging, permissions, cancellation, and resume/recovery tested through the restored native subscription or a configured external endpoint/model; record the channel actually verified |
 | OpenCode | Server/SSE or ACP lifecycle tested, including accepted-but-stalled fault handling |
-| Grok Build | ACP stdio lifecycle, permissions, terminal events, cancel, and resume tested |
+| Grok Build | Excluded from core v1 by the owner on 2026-10-16; historical adapter evidence does not count toward required gates |
 | Antigravity | Supported agy CLI installed; long-lived stream-JSON lifecycle and resume tested |
 
 Until those gates pass, the UI must say **Detected**, **Configured**, **Degraded**, or **Unverified**—never “Supported” based only on documentation.
@@ -925,7 +926,7 @@ Current Stage 3 status: Codex, OpenCode, and Grok Build adapters are implemented
 
 - validate agy authentication and a model-backed stream, then build the Antigravity adapter against the installed CLI;
 - implement the Claude Code adapter against recorded/documented fixtures;
-- complete Claude live harness acceptance through a configured external endpoint/model;
+- complete Claude live harness acceptance through the restored native subscription or a configured external endpoint/model;
 - verify and report the native Anthropic subscription path separately when a subscription is available;
 - validate optional native-message acceleration without weakening the Lazoo bus.
 
@@ -998,9 +999,9 @@ Core v1 is complete when:
 - ask, self-decision, and full-autonomy modes enforce documented boundaries;
 - live roster changes prevent offline dispatch;
 - clean incidents, thresholds, bounded lead remediation, emergency reporting, and user notifications work;
-- Codex, OpenCode, and Grok Build pass live adapter gates;
+- Codex and OpenCode pass live adapter gates; Grok Build is excluded from core v1;
 - Antigravity passes its adapter gates against the installed agy CLI;
-- Claude Code passes its live harness gate through a configured external endpoint/model; the native Anthropic subscription path has its own verification state and does not independently block core v1;
+- Claude Code passes its live harness gate through the restored native subscription or a configured external endpoint/model, with the verified authentication channel recorded;
 - local transcript archive and summarized typed-memory modes work with bounded context injection;
 - MCP/plugin/skill federation can import, preview, apply, and roll back at least the verified supported configurations;
 - the end-to-end acceptance scenario passes;

@@ -1,8 +1,8 @@
 {
   "schemaVersion": 1,
-  "generatedAt": "2026-10-15T18:34:09.5533041Z",
+  "generatedAt": "2026-10-15T19:00:36.8128156Z",
   "status": "IMPLEMENTED_WITH_OPEN_ACCEPTANCE_GATES",
-  "scope": "Core v1 backend; connectors, vector retrieval, voice, and desktop implementation excluded",
+  "scope": "Core v1 backend; Grok, connectors, vector retrieval, voice, and desktop implementation excluded",
   "branch": "codex/core-v1-backend",
   "mainPulledBeforeImplementation": "dfa35f1ff8ea66a346b9ff765d32709f79a4c3da",
   "mainMerge": "ab0023641782f5389d7bb981b814768a54ffd681",
@@ -79,11 +79,12 @@
     "priorHeapCorruption": "Not reproduced; no causal fix established"
   },
   "liveProviders": {
-    "status": "BLOCKED",
+    "status": "PASS",
     "manifest": "artifacts/acceptance/provider-adapters-manifest.json",
     "diagnostics": "artifacts/acceptance/core-v1-provider-diagnostics.json",
     "providers": {
       "codex": {
+        "requiredForCoreV1": true,
         "status": "PASS",
         "completedAt": "2026-10-15T18:00:57.0802067Z",
         "installedVersion": "codex-cli 0.162.0-alpha.17.2",
@@ -122,9 +123,10 @@
         }
       },
       "opencode": {
-        "status": "BLOCKED",
-        "completedAt": "2026-10-15T18:01:39.9144331Z",
-        "installedVersion": "1.18.23",
+        "requiredForCoreV1": true,
+        "status": "PASS",
+        "completedAt": "2026-10-15T18:51:40.778118Z",
+        "installedVersion": "1.19.0",
         "handshake": {
           "status": "PASS",
           "verification": "unverified",
@@ -132,22 +134,36 @@
           "blocker": null
         },
         "modelBacked": {
-          "status": "BLOCKED",
-          "outputMatched": false,
-          "eventTypes": [],
-          "usage": null,
-          "blocker": "RPC request failed: RpcError { code: \"LZ-PROVIDER-TIMEOUT\", message: \"provider accepted work but emitted no progress for 30000 ms\", data: None }"
+          "status": "PASS",
+          "outputMatched": true,
+          "eventTypes": [
+            "sessionStarted",
+            "turnStarted",
+            "progress",
+            "thoughtDelta",
+            "textDelta",
+            "usage",
+            "turnCompleted"
+          ],
+          "usage": {
+            "inputTokens": null,
+            "outputTokens": null,
+            "totalTokens": 28953,
+            "costUsd": null
+          },
+          "blocker": null
         },
         "authentication": {
           "native": "unknown",
           "external": "unknown"
         },
         "testedBinaries": {
-          "daemonSha256": "E04C951C8BA788E6EE8701334E393CDA2D53C61E9F9A92BFABDA847DBD876FFA",
-          "cliSha256": "F93445FF6C9C7AF59BBDAE31E82DE31906A38DB3AB12D63CD0363C9617AFDD4F"
+          "daemonSha256": "C146E61EE80652CCC3006BCC31574DE1F0E3821CD8FFF9990594081A941B587B",
+          "cliSha256": "02470E82ED3D59928314EE7FC85FD6BC267F4A72815CD12626A2151CC1C7291D"
         }
       },
       "grok-build": {
+        "requiredForCoreV1": false,
         "status": "BLOCKED",
         "completedAt": "2026-10-15T18:01:44.1775598Z",
         "installedVersion": "grok 1.0.13 (5e9a58528b76)",
@@ -174,6 +190,7 @@
         }
       },
       "antigravity": {
+        "requiredForCoreV1": true,
         "status": "PASS",
         "completedAt": "2026-10-15T18:02:15.9642907Z",
         "installedVersion": "1.3.6",
@@ -211,24 +228,37 @@
         }
       },
       "claude-code": {
-        "status": "BLOCKED",
-        "completedAt": "2026-10-15T18:26:29.0330836Z",
-        "installedVersion": "2.1.296 (Claude Code)",
+        "requiredForCoreV1": true,
+        "status": "PASS",
+        "completedAt": "2026-10-15T18:58:15.6485015Z",
+        "installedVersion": "2.1.300 (Claude Code)",
         "handshake": {
-          "status": "BLOCKED",
-          "verification": "degraded",
+          "status": "PASS",
+          "verification": "configured",
           "protocol": "claude-code/stream-json-v1",
-          "blocker": "no ready authentication channel was detected"
+          "blocker": null
         },
         "modelBacked": {
-          "status": "BLOCKED",
-          "outputMatched": false,
-          "eventTypes": [],
-          "usage": null,
-          "blocker": "readiness probe did not pass"
+          "status": "PASS",
+          "outputMatched": true,
+          "eventTypes": [
+            "sessionStarted",
+            "turnStarted",
+            "progress",
+            "textDelta",
+            "usage",
+            "turnCompleted"
+          ],
+          "usage": {
+            "inputTokens": 2,
+            "outputTokens": 17,
+            "totalTokens": 19,
+            "costUsd": 1.23953275
+          },
+          "blocker": null
         },
         "authentication": {
-          "native": "needs-login",
+          "native": "ready",
           "external": "unknown"
         },
         "testedBinaries": {
@@ -237,18 +267,35 @@
         }
       }
     },
-    "note": "Each provider retains its own tested binary hashes. Passing earlier provider tests are not described as reruns against the final release."
+    "note": "The required four providers have passing short smoke evidence. OpenCode and Claude were rechecked on 2026-10-16 local time against the final release; Codex and Antigravity retain earlier per-entry hashes. Grok is excluded. Broader native lifecycle and authority acceptance is not implied.",
+    "requiredProviders": [
+      "codex",
+      "opencode",
+      "antigravity",
+      "claude-code"
+    ],
+    "excludedProviders": [
+      {
+        "provider": "grok-build",
+        "reason": "Excluded by owner on 2026-10-16"
+      }
+    ]
   },
   "remainingAcceptance": [
-    "Grok Build native session/new requires authentication",
-    "Claude Code requires a ready configured external endpoint/model; latest native status is logged out and external readiness is unknown",
-    "OpenCode configured opencode/big-pickle accepted the request but stalled without progress; do not automatically resend uncertain work",
-    "Intermittent CLI timeout and earlier heap-corruption exit remain unexplained",
-    "Native authority coverage must be established before governed OpenCode/Grok delivery or Claude ask/self-decision delivery can be enabled",
+    "Broader native tool, permission, cancellation, resume/recovery and terminal-attachment acceptance beyond short smoke tests remains open for included providers",
+    "Intermittent CLI timeout, earlier heap-corruption exit, and intermittent provider no-progress timeouts have no established causal fix",
+    "Native authority coverage must be established before governed OpenCode delivery or Claude ask/self-decision delivery can be enabled",
     "Provider-session terminal takeover and desktop integration are not implemented by the generic owner-terminal service",
     "Canonical bounded turn archives do not guarantee complete raw provider history",
     "Aggregate desktop-inclusive performance budget is not verified",
     "Native configuration apply is limited to reviewed exact Codex MCP formats; other provider/plugin/skill apply remains refused"
   ],
-  "statusReport": "docs/verification/2026-10-15-core-v1-backend-status.md"
+  "statusReport": "docs/verification/2026-10-15-core-v1-backend-status.md",
+  "providerRecheckReport": "docs/verification/2026-10-16-provider-recheck.md",
+  "providerScopeValidation": {
+    "status": "PASS",
+    "cases": 6,
+    "script": "scripts/acceptance/provider-adapters.ps1",
+    "scope": "Missing, excluded, failed, blocked, unverified and passing provider aggregation; PowerShell parse and diff checks"
+  }
 }
