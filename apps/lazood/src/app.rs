@@ -1,10 +1,19 @@
 mod approval;
+mod configuration;
 mod delivery;
 mod idle;
 mod inbox;
 mod incident;
+mod memory;
+mod memory_context;
+mod memory_worker;
+mod memory_worker_cleanup;
+mod memory_worker_execution;
+#[cfg(test)]
+mod memory_worker_tests;
 mod resources;
 mod task;
+mod terminal;
 mod tools;
 mod turn;
 mod workspace;
@@ -224,6 +233,9 @@ pub struct App {
     store_changed: Arc<Notify>,
     approval_timeout: Duration,
     user_notifier: Arc<dyn UserNotifier>,
+    resource_budget: Option<Arc<resources::ResourceBudget>>,
+    resource_budget_error: Option<String>,
+    terminals: Arc<Mutex<terminal::TerminalState>>,
 }
 
 /// How long a provider waits for the local user before a pending approval expires and is
@@ -312,7 +324,12 @@ impl App {
             store_changed: Arc::new(Notify::new()),
             approval_timeout: DEFAULT_APPROVAL_TIMEOUT,
             user_notifier: Arc::new(lazoo_runtime::NativeNotifier),
+            resource_budget: None,
+            resource_budget_error: None,
+            terminals: Arc::new(Mutex::new(terminal::TerminalState::default())),
         };
+        app.configuration_recover_startup()?;
+        app.memory_recover()?;
         app.note_startup_incidents(&sessions.sessions, &messages.messages, &turns.turns, &tasks);
         Ok(app)
     }
@@ -331,6 +348,7 @@ impl App {
         self
     }
 
+    #[allow(clippy::too_many_lines)] // One declarative RPC dispatch table, kept together for auditing.
     pub async fn handle(&self, request: JsonRpcRequest) -> JsonRpcResponse {
         if request.jsonrpc != "2.0" {
             return failure(
@@ -342,6 +360,25 @@ impl App {
         }
         let result = match request.method.as_str() {
             "system.status" => self.status(),
+            "system.budget" => self.system_budget(&request.params),
+            "memory.policy.show" => self.memory_policy_show(&request.params),
+            "memory.policy.set" => self.memory_policy_set(&request.params),
+            "memory.archive" => self.memory_archive(&request.params),
+            "memory.search" => self.memory_search(&request.params),
+            "memory.context" => self.memory_context(&request.params),
+            "memory.cleanup.preview" => self.memory_cleanup_preview(&request.params),
+            "memory.cleanup.apply" => self.memory_cleanup_apply(&request.params),
+            "memory.queue.status" => self.memory_queue_status(&request.params),
+            "memory.worker.show" => self.memory_worker_show(request.params),
+            "memory.worker.configure" => self.memory_worker_configure(request.params),
+            "provider.config.select.preview" => {
+                self.configuration_select_preview(request.params).await
+            }
+            "provider.config.apply" => self.configuration_apply(request.params).await,
+            "provider.config.rollback" => self.configuration_rollback(request.params),
+            "provider.config.operations.show" => self.configuration_show(request.params),
+            "terminal.open" | "terminal.list" | "terminal.show" | "terminal.resize"
+            | "terminal.stop" => self.terminal_control(&request.method, request.params).await,
             "project.register" => self.register(&request),
             "project.list" => self
                 .store

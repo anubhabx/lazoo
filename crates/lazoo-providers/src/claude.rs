@@ -1,18 +1,24 @@
 use std::{
     cmp,
+    collections::{HashMap, HashSet},
     path::{Path, PathBuf},
     sync::atomic::{AtomicBool, Ordering},
     time::{Duration, Instant},
 };
 
 use serde_json::{Value, json};
-use tokio::{process::Command, sync::Mutex, time::timeout};
+use tokio::{
+    process::Command,
+    sync::{Mutex, Notify},
+    time::{self, timeout},
+};
 
 use crate::{
     ADAPTER_CONTRACT_V1, AdapterFuture, AuthenticationEvidence, AuthenticationState, CommandSpec,
-    DiscoveryEnvironment, ExecutableCandidate, ProviderAdapter, ProviderCapabilities,
-    ProviderError, ProviderEvent, ProviderKind, ProviderProbe, ProviderSession,
-    ProviderVerification, SessionRequest, TurnRequest,
+    DiscoveryEnvironment, ExecutableCandidate, PermissionDecision, PermissionKind,
+    PermissionRequest, ProviderAdapter, ProviderCapabilities, ProviderError, ProviderEvent,
+    ProviderKind, ProviderProbe, ProviderSession, ProviderVerification, SessionRequest,
+    TurnEventObserver, TurnRequest,
     ndjson::{NdjsonControl, NdjsonProcess},
     redact_json,
 };
@@ -22,6 +28,8 @@ const STOP_TIMEOUT: Duration = Duration::from_secs(2);
 const VERSION_TIMEOUT: Duration = Duration::from_secs(5);
 const AUTH_TIMEOUT: Duration = Duration::from_secs(15);
 const MAX_PROBE_BYTES: usize = 1024 * 1024;
+const MAX_STARTUP_HOOK_FRAMES: usize = 64;
+const STARTUP_HOOK_DRAIN_TIMEOUT: Duration = Duration::from_secs(1);
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct ClaudeExternalAuth {
@@ -80,6 +88,11 @@ impl ClaudeAdapter {
             .arg("--include-partial-messages")
             .arg("--permission-mode")
             .arg(permission_mode(request.permission_mode.as_deref()))
+            // The documented SDK control protocol emits `can_use_tool` requests only when the
+            // print host owns prompts.  Capability remains false: mutable native configuration
+            // can still auto-allow calls that never reach this bridge.
+            .arg("--permission-prompts")
+            .arg("host")
             .arg("--no-chrome");
         if let Some(session_id) = &request.session_id {
             command = command.arg("--resume").arg(session_id);
@@ -228,6 +241,8 @@ impl ClaudeAdapter {
             request: request.clone(),
             active: AtomicBool::new(false),
             cancel_requested: AtomicBool::new(false),
+            lifecycle: std::sync::Mutex::new(false),
+            cancellation: Notify::new(),
             stopped: AtomicBool::new(false),
         })
     }
@@ -271,33 +286,86 @@ pub struct ClaudeSession {
     request: SessionRequest,
     active: AtomicBool,
     cancel_requested: AtomicBool,
+    lifecycle: std::sync::Mutex<bool>,
+    cancellation: Notify,
     stopped: AtomicBool,
 }
 
 impl ClaudeSession {
     async fn run_turn(&self, request: &TurnRequest) -> Result<Vec<ProviderEvent>, ProviderError> {
+        if request.read_only {
+            return Err(ProviderError::Unsupported {
+                provider: ProviderKind::ClaudeCode,
+                capability: "read-only turns",
+            });
+        }
         if self.stopped.load(Ordering::Acquire) {
             return Err(ProviderError::Protocol(
                 "Claude Code session has already stopped".to_owned(),
             ));
         }
-        if self.active.swap(true, Ordering::AcqRel) {
+        let mut process = self.process.lock().await;
+        self.begin_turn()?;
+        let outcome = self.collect_turn(&mut process, request, None).await;
+        self.finish_turn();
+        outcome
+    }
+
+    async fn run_turn_observed(
+        &self,
+        request: &TurnRequest,
+        observer: &dyn TurnEventObserver,
+    ) -> Result<Vec<ProviderEvent>, ProviderError> {
+        if request.read_only {
+            return Err(ProviderError::Unsupported {
+                provider: ProviderKind::ClaudeCode,
+                capability: "read-only turns",
+            });
+        }
+        if self.stopped.load(Ordering::Acquire) {
+            return Err(ProviderError::Protocol(
+                "Claude Code session has already stopped".to_owned(),
+            ));
+        }
+        let mut process = self.process.lock().await;
+        self.begin_turn()?;
+        let outcome = self
+            .collect_turn(&mut process, request, Some(observer))
+            .await;
+        self.finish_turn();
+        outcome
+    }
+
+    fn begin_turn(&self) -> Result<(), ProviderError> {
+        let mut lifecycle = self.lifecycle.lock().map_err(|_| {
+            ProviderError::Protocol("Claude Code lifecycle lock is poisoned".to_owned())
+        })?;
+        if *lifecycle {
             return Err(ProviderError::Protocol(
                 "Claude Code session already has an active turn".to_owned(),
             ));
         }
         self.cancel_requested.store(false, Ordering::Release);
-        let mut process = self.process.lock().await;
-        let outcome = self.collect_turn(&mut process, request).await;
-        self.active.store(false, Ordering::Release);
-        outcome
+        *lifecycle = true;
+        self.active.store(true, Ordering::Release);
+        Ok(())
     }
 
+    fn finish_turn(&self) {
+        self.active.store(false, Ordering::Release);
+        if let Ok(mut lifecycle) = self.lifecycle.lock() {
+            *lifecycle = false;
+        }
+    }
+
+    #[allow(clippy::too_many_lines)]
     async fn collect_turn(
         &self,
         process: &mut NdjsonProcess,
         request: &TurnRequest,
+        observer: Option<&dyn TurnEventObserver>,
     ) -> Result<Vec<ProviderEvent>, ProviderError> {
+        self.drain_pre_prompt_startup(process).await?;
         self.control
             .send(&ClaudeAdapter::turn_input(request))
             .await?;
@@ -305,6 +373,10 @@ impl ClaudeSession {
         let mut last_progress = started;
         let mut turn_started = false;
         let mut events = Vec::new();
+        let mut permission_ids = HashSet::new();
+        let mut tool_use_ids = HashSet::new();
+        let mut permission_responses = HashMap::new();
+        let mut startup_bound = false;
         loop {
             let total_remaining = self
                 .request
@@ -349,8 +421,55 @@ impl ClaudeSession {
                 result => result?,
             };
             last_progress = Instant::now();
+            if !startup_bound {
+                if is_startup_hook(&message, &self.session_id) {
+                    continue;
+                }
+                if message.get("type").and_then(Value::as_str) != Some("system")
+                    || message.get("subtype").and_then(Value::as_str) != Some("init")
+                    || session_id(&message).as_deref() != Some(self.session_id.as_str())
+                {
+                    return Err(ProviderError::InvalidEvent(
+                        "Claude Code emitted a frame before correlated startup init".to_owned(),
+                    ));
+                }
+                let init = normalize_claude_message(&message)?;
+                if let Some(observer) = observer {
+                    observer.observe(&init[0])?;
+                }
+                events.extend(init);
+                startup_bound = true;
+                continue;
+            }
+            if message.get("type").and_then(Value::as_str) == Some("control_request") {
+                if let Some(event) = self
+                    .handle_control_request(
+                        &message,
+                        observer,
+                        request,
+                        started,
+                        &mut permission_ids,
+                        &mut tool_use_ids,
+                        &mut permission_responses,
+                    )
+                    .await?
+                {
+                    if let Some(observer) = observer {
+                        observer.observe(&event)?;
+                    }
+                    events.push(event);
+                }
+                continue;
+            }
             let terminal = is_result_message(&message);
             for event in normalize_claude_message(&message)? {
+                if let Some(event_session_id) = claude_event_session_id(&event)
+                    && event_session_id != self.session_id
+                {
+                    return Err(ProviderError::InvalidEvent(
+                        "Claude Code event targeted a different session".to_owned(),
+                    ));
+                }
                 if !turn_started && !matches!(event, ProviderEvent::SessionStarted { .. }) {
                     events.push(ProviderEvent::TurnStarted {
                         provider: ProviderKind::ClaudeCode,
@@ -359,6 +478,12 @@ impl ClaudeSession {
                         raw: None,
                     });
                     turn_started = true;
+                    if let Some(observer) = observer {
+                        observer.observe(events.last().expect("turn event was appended"))?;
+                    }
+                }
+                if let Some(observer) = observer {
+                    observer.observe(&event)?;
                 }
                 events.push(event);
             }
@@ -367,6 +492,186 @@ impl ClaudeSession {
             }
         }
     }
+
+    /// Claude Code 2.1.296 emits correlated `SessionStart` hook lifecycle frames before it reads
+    /// the first stream-json user record. Those frames do not establish a turn, and are not
+    /// durable evidence. Every other pre-prompt frame is refused so it cannot be attributed to
+    /// the first Lazoo turn.
+    async fn drain_pre_prompt_startup(
+        &self,
+        process: &mut NdjsonProcess,
+    ) -> Result<(), ProviderError> {
+        let started = Instant::now();
+        let mut frames = 0_usize;
+        while process
+            .wait_for_ready_output(Duration::from_millis(1))
+            .await?
+        {
+            if frames == MAX_STARTUP_HOOK_FRAMES || started.elapsed() >= STARTUP_HOOK_DRAIN_TIMEOUT
+            {
+                let _ = self.control.kill().await;
+                return Err(ProviderError::InvalidEvent(
+                    "Claude Code emitted too many startup hook frames before the first turn prompt"
+                        .to_owned(),
+                ));
+            }
+            let message = match process
+                .next_message(Duration::from_millis(50), "Claude Code startup frame")
+                .await
+            {
+                Ok(message) => message,
+                Err(ProviderError::Timeout { .. }) => {
+                    let _ = self.control.kill().await;
+                    return Err(ProviderError::InvalidEvent(
+                        "Claude Code emitted a partial frame before the first turn prompt"
+                            .to_owned(),
+                    ));
+                }
+                Err(error) => return Err(error),
+            };
+            if !is_startup_hook(&message, &self.session_id) {
+                let _ = self.control.kill().await;
+                return Err(ProviderError::InvalidEvent(
+                    "Claude Code emitted an unsupported frame before the first turn prompt"
+                        .to_owned(),
+                ));
+            }
+            frames += 1;
+        }
+        Ok(())
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn handle_control_request(
+        &self,
+        message: &Value,
+        observer: Option<&dyn TurnEventObserver>,
+        turn: &TurnRequest,
+        started: Instant,
+        permission_ids: &mut HashSet<String>,
+        tool_use_ids: &mut HashSet<String>,
+        permission_responses: &mut HashMap<String, Value>,
+    ) -> Result<Option<ProviderEvent>, ProviderError> {
+        let request_id = message
+            .get("request_id")
+            .and_then(Value::as_str)
+            .filter(|id| !id.is_empty())
+            .map(str::to_owned);
+        if let Some(response) = request_id
+            .as_ref()
+            .and_then(|request_id| permission_responses.get(request_id))
+        {
+            self.control.send(response).await?;
+            return Ok(None);
+        }
+        let request = message.get("request").and_then(Value::as_object);
+        let permission = request_id
+            .as_deref()
+            .zip(request)
+            .and_then(|(id, request)| (!permission_ids.contains(id)).then_some((id, request)))
+            .and_then(|(id, request)| {
+                normalize_claude_permission_request(id, request, &self.session_id, turn).ok()
+            })
+            .filter(|permission| {
+                permission
+                    .detail
+                    .get("toolUseId")
+                    .and_then(Value::as_str)
+                    .is_some_and(|tool_use_id| !tool_use_ids.contains(tool_use_id))
+            });
+        if let Some(permission) = &permission {
+            permission_ids.insert(permission.request_id.clone());
+            if let Some(tool_use_id) = permission.detail.get("toolUseId").and_then(Value::as_str) {
+                tool_use_ids.insert(tool_use_id.to_owned());
+            }
+        }
+        let decision = match (observer, permission.as_ref()) {
+            (Some(observer), Some(permission))
+                if !self.cancel_requested.load(Ordering::Acquire) =>
+            {
+                self.await_permission(observer, permission, started).await
+            }
+            _ => PermissionDecision::Decline,
+        };
+        let decision = if self.cancel_requested.load(Ordering::Acquire) {
+            PermissionDecision::Decline
+        } else {
+            decision
+        };
+        let response = if matches!(decision, PermissionDecision::Approve) && permission.is_some() {
+            json!({"type":"control_response", "response": {"subtype":"success", "request_id": request_id, "response": {"behavior":"allow", "updatedInput": request.and_then(|request| request.get("input")).cloned().unwrap_or(Value::Null)}}})
+        } else if let Some(ref request_id) = request_id {
+            json!({"type":"control_response", "response": {"subtype":"success", "request_id": request_id, "response": {"behavior":"deny", "message":"Lazoo declined this native permission request"}}})
+        } else {
+            return Err(ProviderError::InvalidEvent(
+                "Claude control request omitted request_id".to_owned(),
+            ));
+        };
+        if let Some(request_id) = request_id.as_ref() {
+            permission_responses.insert(request_id.clone(), response.clone());
+        }
+        self.control.send(&response).await?;
+        Ok(
+            permission.map(|permission| ProviderEvent::PermissionRequested {
+                provider: ProviderKind::ClaudeCode,
+                session_id: self.session_id.clone(),
+                request_id: Some(permission.request_id),
+                options: vec!["allow_once".to_owned(), "reject_once".to_owned()],
+                // Native input can carry command text or file contents. Do not preserve arbitrary
+                // values in the durable event ledger.
+                raw: None,
+            }),
+        )
+    }
+
+    async fn await_permission(
+        &self,
+        observer: &dyn TurnEventObserver,
+        permission: &PermissionRequest,
+        started: Instant,
+    ) -> PermissionDecision {
+        let Some(remaining) = self.request.turn_timeout().checked_sub(started.elapsed()) else {
+            return PermissionDecision::Decline;
+        };
+        tokio::select! {
+            result = observer.decide_permission(permission) => result.unwrap_or(PermissionDecision::Decline),
+            () = time::sleep(remaining) => PermissionDecision::Decline,
+            () = self.wait_for_cancellation() => PermissionDecision::Decline,
+        }
+    }
+
+    async fn wait_for_cancellation(&self) {
+        loop {
+            let notified = self.cancellation.notified();
+            tokio::pin!(notified);
+            notified.as_mut().enable();
+            if self.cancel_requested.load(Ordering::Acquire) {
+                return;
+            }
+            notified.await;
+            if self.cancel_requested.load(Ordering::Acquire) {
+                return;
+            }
+        }
+    }
+}
+
+fn is_startup_hook(message: &Value, session: &str) -> bool {
+    message.get("type").and_then(Value::as_str) == Some("system")
+        && matches!(
+            message.get("subtype").and_then(Value::as_str),
+            Some("hook_started" | "hook_response")
+        )
+        && session_id(message).as_deref() == Some(session)
+        && message
+            .get("hook_id")
+            .and_then(Value::as_str)
+            .is_some_and(|id| !id.is_empty())
+        && message
+            .get("hook_name")
+            .and_then(Value::as_str)
+            .is_some_and(|name| name.starts_with("SessionStart:"))
+        && message.get("hook_event").and_then(Value::as_str) == Some("SessionStart")
 }
 
 impl ProviderSession for ClaudeSession {
@@ -386,10 +691,25 @@ impl ProviderSession for ClaudeSession {
         Box::pin(async move { self.run_turn(request).await })
     }
 
+    fn turn_observed<'a>(
+        &'a self,
+        request: &'a TurnRequest,
+        observer: &'a dyn TurnEventObserver,
+    ) -> AdapterFuture<'a, Vec<ProviderEvent>> {
+        Box::pin(async move { self.run_turn_observed(request, observer).await })
+    }
+
     fn cancel(&self) -> AdapterFuture<'_, ()> {
         Box::pin(async move {
-            if self.active.load(Ordering::Acquire) {
+            let active = {
+                let active = self.lifecycle.lock().map_err(|_| {
+                    ProviderError::Protocol("Claude Code lifecycle lock is poisoned".to_owned())
+                })?;
+                *active
+            };
+            if active {
                 self.cancel_requested.store(true, Ordering::Release);
+                self.cancellation.notify_waiters();
                 self.stopped.store(true, Ordering::Release);
                 self.control.kill().await?;
             }
@@ -408,6 +728,79 @@ impl ProviderSession for ClaudeSession {
             self.process.lock().await.stop(STOP_TIMEOUT).await
         })
     }
+}
+
+fn claude_event_session_id(event: &ProviderEvent) -> Option<&str> {
+    match event {
+        ProviderEvent::SessionStarted { session_id, .. }
+        | ProviderEvent::TurnStarted { session_id, .. }
+        | ProviderEvent::TextDelta { session_id, .. }
+        | ProviderEvent::ThoughtDelta { session_id, .. }
+        | ProviderEvent::ToolUpdate { session_id, .. }
+        | ProviderEvent::TerminalUpdate { session_id, .. }
+        | ProviderEvent::Usage { session_id, .. }
+        | ProviderEvent::PermissionRequested { session_id, .. }
+        | ProviderEvent::Progress { session_id, .. }
+        | ProviderEvent::TurnCompleted { session_id, .. }
+        | ProviderEvent::Cancelled { session_id, .. } => Some(session_id),
+        ProviderEvent::Error { session_id, .. }
+        | ProviderEvent::ProcessExited { session_id, .. } => session_id.as_deref(),
+    }
+}
+
+/// Converts the documented Claude Agent SDK `control_request/can_use_tool` subset into a
+/// durable approval.  This is intentionally only a bridge for prompts that Claude emits; the
+/// provider's mutable permission settings can still permit actions without emitting one, so
+/// `ClaudeAdapter::capabilities().permission` remains false.
+fn normalize_claude_permission_request(
+    request_id: &str,
+    request: &serde_json::Map<String, Value>,
+    session_id: &str,
+    turn: &TurnRequest,
+) -> Result<PermissionRequest, ProviderError> {
+    if request.get("subtype").and_then(Value::as_str) != Some("can_use_tool") {
+        return Err(ProviderError::InvalidEvent(
+            "unsupported Claude control request subtype".to_owned(),
+        ));
+    }
+    let (kind, action) = match request.get("tool_name").and_then(Value::as_str) {
+        Some("Bash") => (PermissionKind::CommandExecution, "execute a Claude command"),
+        Some("Write" | "Edit") => (PermissionKind::FileChange, "edit Claude files"),
+        _ => {
+            return Err(ProviderError::InvalidEvent(
+                "unsupported Claude permission tool".to_owned(),
+            ));
+        }
+    };
+    let tool_use_id = request
+        .get("tool_use_id")
+        .and_then(Value::as_str)
+        .filter(|id| !id.is_empty())
+        .ok_or_else(|| {
+            ProviderError::InvalidEvent("Claude permission request omitted tool_use_id".to_owned())
+        })?;
+    let input = request
+        .get("input")
+        .and_then(Value::as_object)
+        .ok_or_else(|| {
+            ProviderError::InvalidEvent("Claude permission request omitted input".to_owned())
+        })?;
+    // Inputs can contain source text, tokens, and path-like claims; retain only identity fields.
+    let detail = redact_json(json!({
+        "toolUseId": tool_use_id,
+        "tool": request.get("tool_name").cloned().unwrap_or(Value::Null),
+        "inputKeys": input.keys().collect::<Vec<_>>(),
+    }));
+    Ok(PermissionRequest {
+        provider: ProviderKind::ClaudeCode,
+        session_id: session_id.to_owned(),
+        turn_id: Some(turn.correlation_id.to_string()),
+        request_id: request_id.to_owned(),
+        kind,
+        action: action.to_owned(),
+        scope_expansion: true,
+        detail,
+    })
 }
 
 pub fn normalize_claude_message(message: &Value) -> Result<Vec<ProviderEvent>, ProviderError> {
@@ -585,7 +978,9 @@ fn normalize_result(message: &Value) -> Result<Vec<ProviderEvent>, ProviderError
             provider: ProviderKind::ClaudeCode,
             session_id,
             turn_id: None,
-            status: "success".to_owned(),
+            // The daemon's provider-event state machine accepts only `completed` for a
+            // successful terminal turn; `success` would leave the turn non-terminal.
+            status: "completed".to_owned(),
             output: message
                 .get("result")
                 .and_then(Value::as_str)
@@ -593,22 +988,32 @@ fn normalize_result(message: &Value) -> Result<Vec<ProviderEvent>, ProviderError
             raw,
         });
     } else {
+        let code = message
+            .get("terminal_reason")
+            .or_else(|| message.get("subtype"))
+            .and_then(Value::as_str)
+            .unwrap_or("claude-result")
+            .to_owned();
+        let failure = message
+            .get("result")
+            .or_else(|| message.get("error"))
+            .and_then(Value::as_str)
+            .unwrap_or("Claude Code turn failed")
+            .to_owned();
         events.push(ProviderEvent::Error {
             provider: ProviderKind::ClaudeCode,
-            session_id: Some(session_id),
-            code: message
-                .get("terminal_reason")
-                .or_else(|| message.get("subtype"))
-                .and_then(Value::as_str)
-                .unwrap_or("claude-result")
-                .to_owned(),
-            message: message
-                .get("result")
-                .or_else(|| message.get("error"))
-                .and_then(Value::as_str)
-                .unwrap_or("Claude Code turn failed")
-                .to_owned(),
+            session_id: Some(session_id.clone()),
+            code: code.clone(),
+            message: failure.clone(),
             retryable: false,
+            raw: raw.clone(),
+        });
+        events.push(ProviderEvent::TurnCompleted {
+            provider: ProviderKind::ClaudeCode,
+            session_id,
+            turn_id: None,
+            status: "failed".to_owned(),
+            output: Some(failure),
             raw,
         });
     }
@@ -721,6 +1126,22 @@ async fn read_auth_status(path: &Path) -> Result<Value, ProviderError> {
     .map_err(|_| ProviderError::Timeout {
         phase: "Claude Code auth probe",
     })??;
+    if output.status.code() == Some(1) {
+        let bytes = if output.stdout.is_empty() {
+            &output.stderr
+        } else {
+            &output.stdout
+        };
+        if bytes.len() > MAX_PROBE_BYTES {
+            return Err(ProviderError::Protocol(
+                "Claude Code auth output exceeded the limit".to_owned(),
+            ));
+        }
+        let status: Value = serde_json::from_slice(bytes).map_err(ProviderError::from)?;
+        if status.get("loggedIn").and_then(Value::as_bool) == Some(false) {
+            return Ok(status);
+        }
+    }
     let json = checked_output(&output, "Claude Code auth", MAX_PROBE_BYTES)?;
     serde_json::from_str(&json).map_err(ProviderError::from)
 }

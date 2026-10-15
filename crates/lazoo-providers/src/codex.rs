@@ -1141,6 +1141,18 @@ fn turn_start_params(
             .as_deref()
             .or(session.permission_mode.as_deref()),
     )?;
+    if request.read_only {
+        // Pinned app-server v0.155.1 accepts a per-turn read-only sandbox with networking
+        // disabled. `untrusted` preserves native approval routing for any action that remains.
+        params.insert(
+            "approvalPolicy".to_owned(),
+            Value::String("untrusted".to_owned()),
+        );
+        params.insert(
+            "sandboxPolicy".to_owned(),
+            json!({"type": "readOnly", "networkAccess": false}),
+        );
+    }
     Ok(Value::Object(params))
 }
 

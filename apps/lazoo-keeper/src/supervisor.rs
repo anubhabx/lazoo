@@ -40,6 +40,15 @@ pub async fn run() -> Result<i32, KeeperError> {
     let root = DataRoot::resolve()?;
     root.ensure()?;
     let installation = Installation::load_or_create(&root)?;
+    let _governor = match lazoo_runtime::InfrastructureGovernor::attach_current(
+        installation.id().to_string(),
+    ) {
+        Ok((governor, _, _)) => Some(governor),
+        Err(error) => {
+            eprintln!("infrastructure CPU cap unavailable: {error}");
+            None
+        }
+    };
     let _instance = SingleInstance::acquire(installation.id(), "keeper")?;
     EmergencySpool::new(root.clone()).recover_stale()?;
     supervise(&root, &NativeNotifier).await

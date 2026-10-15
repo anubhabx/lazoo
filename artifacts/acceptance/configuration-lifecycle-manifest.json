@@ -1,0 +1,67 @@
+{
+  "status": "PASS",
+  "startedAt": "2026-10-15T18:27:35.8791117Z",
+  "completedAt": "2026-10-15T18:27:40.8708332Z",
+  "durationMs": 4956,
+  "binarySha256": {
+    "daemon": "c146e61ee80652ccc3006bcc31574de1f0e3821cd8fff9990594081a941b587b",
+    "cli": "02470e82ed3d59928314ee7fc85fd6bc267f4a72815cd12626a2151cc1c7291d"
+  },
+  "codex": {
+    "version": "codex-cli 0.162.0-alpha.17.2",
+    "probe": "version and daemon app-server handshake; no model"
+  },
+  "lifecycle": {
+    "preview": true,
+    "apply": true,
+    "lostReplyReplay": true,
+    "show": true,
+    "rollback": true
+  },
+  "boundaries": {
+    "codexHome": "disposable",
+    "dataRoot": "disposable",
+    "realProviderProfile": "NOT_READ_OR_WRITTEN",
+    "externalMcpConnection": "NOT_STARTED",
+    "modelRequest": "NOT_RUN",
+    "nativeAuth": "NOT_REQUIRED"
+  },
+  "commands": [
+    {
+      "command": "lazooctl --json status",
+      "exitCode": 0,
+      "durationMs": 135
+    },
+    {
+      "command": "lazooctl --json provider config-preview --selection {\"provider\":\"codex\",\"name\":\"acceptance-fixture\",\"command\":\"fixture-mcp\",\"args\":[\"--no-connect\"],\"url\":null,\"enabled\":false,\"replace\":false,\"selectedSecretFields\":[]}",
+      "exitCode": 0,
+      "durationMs": 2319
+    },
+    {
+      "command": "lazooctl --json provider config-apply 56679ae8-5b08-4c05-9da5-c08ff16ac9f9 --expected-revision 1",
+      "exitCode": 0,
+      "durationMs": 2186
+    },
+    {
+      "command": "lazooctl --json provider config-apply 56679ae8-5b08-4c05-9da5-c08ff16ac9f9 --expected-revision 1",
+      "exitCode": 0,
+      "durationMs": 18
+    },
+    {
+      "command": "lazooctl --json provider config-show 56679ae8-5b08-4c05-9da5-c08ff16ac9f9",
+      "exitCode": 0,
+      "durationMs": 20
+    },
+    {
+      "command": "lazooctl --json provider config-rollback 56679ae8-5b08-4c05-9da5-c08ff16ac9f9 --expected-revision 4",
+      "exitCode": 0,
+      "durationMs": 33
+    },
+    {
+      "command": "lazooctl --json system shutdown",
+      "exitCode": 0,
+      "durationMs": 20
+    }
+  ],
+  "failure": null
+}

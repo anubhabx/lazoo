@@ -174,6 +174,14 @@ impl ProviderSession for OpenCodeSession {
         self.0.turn(request)
     }
 
+    fn turn_observed<'a>(
+        &'a self,
+        request: &'a TurnRequest,
+        observer: &'a dyn crate::TurnEventObserver,
+    ) -> AdapterFuture<'a, Vec<ProviderEvent>> {
+        self.0.turn_observed(request, observer)
+    }
+
     fn cancel(&self) -> AdapterFuture<'_, ()> {
         self.0.cancel()
     }

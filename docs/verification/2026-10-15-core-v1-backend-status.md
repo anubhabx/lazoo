@@ -1,0 +1,57 @@
+# Core v1 backend implementation and verification
+
+The owner authorized the core v1 backend on 2026-10-15. Before implementation, `main` was checked out and pulled once (`dfa35f1`), then merged into `codex/core-v1-backend` (`ab00236`). Existing Claude full-autonomy work was retained. The desktop frontend, Tauri surface, and `desktop.snapshot` were not changed.
+
+Status: the backend services below are implemented and tested; full core v1 acceptance is still incomplete. Three live-provider gates and a non-reproduced CLI timeout remain, alongside the explicitly listed integration limits. A passing deterministic gate is not a claim that all native providers, full transcript retention, or the whole-product performance budget are verified.
+
+## Implemented behavior
+
+| Area | Implemented boundary | Material limit |
+| --- | --- | --- |
+| Provider approvals | ACP and Claude command/edit requests reach the existing one-action approval observer. Wrong session, malformed requests, unavailable one-shot choices, observer loss, timeout, and cancellation decline. ACP streams progress before completion. | Native rules may allow an action without emitting a permission request. OpenCode/Grok governed task delivery remains refused. Claude ask/self-decision delivery remains refused; existing full-autonomy behavior is preserved. |
+| IPC | Authentication, first requests, and response writes have deadlines. Bad/early-disconnecting clients do not terminate the daemon. Control connections and terminal connections have independent bounded admission. | Local owner-only Windows named pipes; no network listener. |
+| Terminals | Owner-managed ConPTY start/list/show/resize/stop, contained process trees, binary input/output pipe, boot/revision checks, reconnect offsets and overflow metadata. Eight live/reserved terminals, 1 MiB output per terminal, 64 KiB reads, 16 KiB input. Stopped sessions retain only compact metadata. | This service can launch native CLIs, but it does not take over an already-running protocol provider session or bind the desktop terminal UI. |
+| Memory archive | Compressed, hash-checked, owner-rooted canonical turn archives; default 256 MiB quota and 4 MiB per-source cap; global/project policies; recoverable write/cleanup intents; explicit cleanup preview/apply. Failed intents remain visible and reserve quota. | Canonical turns may already contain bounded/truncated transcript evidence. This does not preserve every raw provider frame or guarantee full session history. |
+| Typed memory | Durable queue, lease/attempt fencing, typed validated records, source citations, FTS and structured scope filters, bounded memory_search tool, and optional context injection. | Context injection currently has a fixed cap of eight facts/2 KiB and generic JSON formatting, rather than per-session model-specific token budgets. |
+| Summary worker | Explicit employee/model/project opt-in, one active job, durable per-scope 60-second admission spacing, four-minute deadline, pre-dispatch backoff, strict JSON validation. Every attempt has an audited turn; a native session is reserved before becoming ready and used once. Interrupted linked work is never automatically resent. | Effective admission is at most one job/minute, even if configured RPM is higher. Summaries receive at most a labelled 64 KiB source excerpt. External API summarizers are not implemented. Native MCP tools remain subject to the employee's provider configuration; Codex read-only/no-network sandbox and denied approval/dynamic calls do not prove all native tools are absent. |
+| Configuration | Server-owned selected MCP preview/apply/show/rollback with redacted metadata, backup, prepared receipt before atomic replacement, re-probe, desired/observed state and crash/lost-reply handling. | Apply admits exact reviewed Codex 0.155.1 and 0.162.0-alpha.17.2 versions. The installed alpha parsed both stdio and URL fixtures in a disposable CODEX_HOME. Other versions, plugin/skill apply and unreviewed formats are refused. Arbitrary external file writers are not covered by an OS compare-and-swap guarantee; drift prevents recovery overwrite. |
+| Resources | Shared owner-protected Windows Job Object for daemon, keeper and CLI; Windows-confirmed 20% hard cap, 15% background threshold, rolling 30-second/five-minute accounting. Provider trees remain separate. | Desktop is explicitly excluded. No whole-product CPU, memory or five-minute loaded-runtime acceptance claim follows from the primitive or daemon-only checks. |
+
+## Verification
+
+The full deterministic gate passed all 37 steps (formatting, warnings-denied clippy, 507 workspace tests, locked release build, and 33 acceptance scripts). Subsequent fresh-profile fixes passed the workspace suite at 508 tests, zero failures and 11 explicitly ignored live tests. Each workspace run also passed one nested governor child-process probe; it is excluded from these counts to avoid counting its parent test twice. The final read-only configuration-show fix passed all three configuration tests; the final Claude authentication-status fix passed all 17 Claude tests (two live tests ignored). Formatting, warnings-denied workspace clippy and the locked workspace release build passed after those changes. Logs: `artifacts/core-v1-gate.log`, `artifacts/core-v1-final-verification.log`, `artifacts/core-v1-configuration-final.log`, `artifacts/core-v1-provider-final.log`, and `artifacts/core-v1-release-final.log`.
+
+The final release passed the complete disposable-profile configuration preview/apply/replay/show/rollback gate and the real-binary memory/terminal/resource controls. It passed 4,096 CLI invocations at concurrency 16; its daemon and CLI SHA-256 hashes match `artifacts/acceptance/cli-stress-f303934cfac745b8b61a3b2247fc67e0.json`. These separate checks are recorded in `configuration-lifecycle-manifest.json` and `core-services-0985a589249e428c8bf9c9150b16e877.json`. The configuration lifecycle script was added after the 37-step gate enumerated its scripts; future full gates include it as an additional step.
+
+The consolidated evidence index is `artifacts/acceptance/core-v1-final-verification.json`. Its overall status retains the open acceptance gates; it does not promote older test runs to checks of the final binary.
+
+One earlier release stress run timed out on `--json status` after 850 successful calls (`cli-stress-9ba572a0bfd4405fac774bcf2891dcd2.json`). The diagnostic harness now drains output asynchronously and records timeout process details; the longer rerun did not reproduce the timeout. Neither that change nor the passing rerun establishes its cause or a causal fix. The older heap-corruption exit also did not reproduce.
+
+Focused regressions already cover provider permission transport, configuration failure/recovery, archive integrity/quota/cleanup, worker completion/invalid output/restart/isolation, terminal lifecycle and stop races, pipe admission/deadlines, and CPU accounting primitives. Independent review found and verified fixes for worker recovery, immutable completed attempts, durable session isolation, and configuration lost-reply replay.
+
+The repository gate excludes live model adapter tests and the separately owned desktop UI. The owner separately authorized five short live model tests on 2026-10-15. Codex and Antigravity passed exact-response gates. OpenCode accepted the request but emitted no progress for 30 seconds; its native log identified the configured `opencode/big-pickle` model and an aborted request, without an authentication error. Grok failed before a prompt: a separate non-model ACP check confirmed `Authentication required`. Claude's first attempt exposed SessionStart hook frames before init and was rejected before sending a prompt. That compatibility fix is fixture-verified; the latest native probe reports logged out and no ready external credential, so the model test remains blocked without sending a prompt. Claude now handles the native CLI's valid exit-1 logged-out response correctly. Current exact outcomes are in `artifacts/acceptance/provider-adapters-manifest.json` and `core-v1-provider-diagnostics.json`. No actual user-provider configuration was changed.
+
+## CLI entry points
+
+```powershell
+lazooctl system budget
+lazooctl terminal --help
+lazooctl memory --help
+lazooctl memory-worker show
+lazooctl provider config-preview --selection '<selected MCP JSON>'
+lazooctl provider config-apply <operation-id> --expected-revision <revision>
+lazooctl provider config-rollback <operation-id> --expected-revision <revision>
+```
+
+Memory retention/injection can be disabled independently. Changing retention does not delete existing evidence. Worker configuration is absent by default; enabling it is an explicit choice to send source excerpts through the selected native employee and its configured provider. Use a dedicated dormant employee: ordinary active sessions defer admission and are never repurposed or stopped for background summaries.
+
+## Remaining core v1 acceptance boundaries
+
+1. Resolve Grok's missing native authentication and OpenCode's configured-model stall, then pass their live gates. Complete Claude's configured external-endpoint gate. Deterministic fixtures and handshakes do not substitute for these gates.
+2. Prove native policy coverage before enabling governed OpenCode/Grok tasks or Claude ask/self-decision. An approval bridge alone cannot control actions a provider auto-allows.
+3. Complete provider-session terminal takeover/UI binding and full raw-history archive requirements if section 24 is being accepted as the whole product, rather than this backend increment.
+4. Verify the aggregate budget with the separately owned desktop and representative memory/terminal workloads; the current cap explicitly covers daemon/keeper/CLI only.
+5. Extend configuration apply beyond the verified Codex MCP format only with exact version/schema evidence.
+6. Investigate the intermittent CLI timeout and previously observed Windows heap-corruption exit. Neither is causally fixed. The longer stress pass is evidence of the tested run only; governor initialization and ordinary RPC receipt currently have unbounded waits and are diagnostic candidates, not proven causes.
+
+Connectors, vector retrieval, and voice remain outside this request.

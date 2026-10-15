@@ -1,10 +1,13 @@
 mod approval;
+mod configuration;
 mod conversation;
 mod delivery;
 mod emergency;
 mod employee;
 mod inbox;
 mod incident;
+mod memory;
+mod memory_worker;
 mod message;
 mod migration;
 mod session;
@@ -28,6 +31,10 @@ use uuid::Uuid;
 pub use approval::{
     CloseApprovalInput, DecideApprovalInput, ListApprovalsInput, RequestApprovalInput,
 };
+pub use configuration::{
+    BeginConfigurationApplyInput, CONFIGURATION_PREVIEW_TTL, ConfigurationOperation,
+    ConfigurationOperationState, CreateConfigurationPreviewInput, RecordConfigurationReceiptInput,
+};
 pub use conversation::{
     BeginTurnSubmissionInput, CreateConversationInput, FailTurnInput, FinishTurnCancelInput,
     MarkTurnUncertainInput, ObserveTurnInput, RecordTurnInput, RenameConversationInput,
@@ -47,6 +54,11 @@ pub use incident::{
     ApplyIncidentRemedyInput, IncidentRemedyAction, IncidentRemedyResult, ListIncidentsInput,
     RaiseIncidentInput, SetIncidentThresholdInput, SettleIncidentInput, dead_letter_incident_key,
 };
+pub use memory::{
+    ArchiveMemoryTurnInput, CompleteMemorySummaryInput, CreateMemoryRecordInput,
+    FailMemorySummaryInput, MemoryArchiveCandidate, MemoryArchiveError, SetMemoryPolicyInput,
+};
+pub use memory_worker::{MemorySummaryAttempt, MemoryWorkerSettings, SetMemoryWorkerSettingsInput};
 pub use message::{
     AcknowledgeMessageInput, CancelMessageInput, ClaimMessageInput, FailMessageInput,
     RetryMessageInput, SendMessageInput,
@@ -93,6 +105,20 @@ pub struct StoreStatus {
 
 #[derive(Debug, Error)]
 pub enum StoreError {
+    #[error("configuration operation {id} was not found")]
+    ConfigurationNotFound { id: Uuid },
+    #[error("configuration operation {id} changed; current revision is {current_revision}")]
+    ConfigurationStale { id: Uuid, current_revision: u64 },
+    #[error("configuration operation {id} is {state}; expected {expected}")]
+    ConfigurationState {
+        id: Uuid,
+        state: String,
+        expected: &'static str,
+    },
+    #[error("configuration preview {id} expired")]
+    ConfigurationPreviewExpired { id: Uuid },
+    #[error("configuration preview capacity reached")]
+    ConfigurationPreviewCap,
     #[error("SQLite operation failed: {0}")]
     Database(#[from] rusqlite::Error),
     #[error("store JSON is invalid: {0}")]

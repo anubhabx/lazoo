@@ -1,14 +1,98 @@
 use std::{
     ffi::OsString,
     path::{Path, PathBuf},
+    sync::{
+        Mutex,
+        atomic::{AtomicBool, AtomicUsize, Ordering},
+    },
     time::{Duration, Instant},
 };
 
 use lazoo_providers::{
-    DiscoveryEnvironment, OpenCodeAdapter, ProgressDeadline, ProviderAdapter, ProviderError,
-    ProviderEvent, ProviderKind, ProviderSession, ProviderVerification, SessionRequest,
-    TurnRequest, normalize_acp_message,
+    AdapterFuture, DiscoveryEnvironment, OpenCodeAdapter, PermissionDecision, PermissionRequest,
+    ProgressDeadline, ProviderAdapter, ProviderError, ProviderEvent, ProviderKind, ProviderSession,
+    ProviderVerification, SessionRequest, TurnEventObserver, TurnRequest, normalize_acp_message,
 };
+use tempfile::tempdir;
+use tokio::{sync::Notify, time::timeout};
+
+struct GateObserver {
+    events: Mutex<Vec<ProviderEvent>>,
+    requests: Mutex<Vec<PermissionRequest>>,
+    entered: Notify,
+    release: Notify,
+    approve: AtomicBool,
+    decisions: AtomicUsize,
+}
+
+impl GateObserver {
+    fn approving() -> Self {
+        Self {
+            events: Mutex::new(Vec::new()),
+            requests: Mutex::new(Vec::new()),
+            entered: Notify::new(),
+            release: Notify::new(),
+            approve: AtomicBool::new(true),
+            decisions: AtomicUsize::new(0),
+        }
+    }
+}
+
+impl TurnEventObserver for GateObserver {
+    fn observe(&self, event: &ProviderEvent) -> Result<(), ProviderError> {
+        self.events.lock().unwrap().push(event.clone());
+        Ok(())
+    }
+
+    fn decide_permission<'a>(
+        &'a self,
+        request: &'a PermissionRequest,
+    ) -> AdapterFuture<'a, PermissionDecision> {
+        Box::pin(async move {
+            self.requests.lock().unwrap().push(request.clone());
+            self.decisions.fetch_add(1, Ordering::SeqCst);
+            self.entered.notify_one();
+            self.release.notified().await;
+            Ok(if self.approve.load(Ordering::SeqCst) {
+                PermissionDecision::Approve
+            } else {
+                PermissionDecision::Decline
+            })
+        })
+    }
+}
+
+struct ErrorObserver;
+
+impl TurnEventObserver for ErrorObserver {
+    fn observe(&self, _event: &ProviderEvent) -> Result<(), ProviderError> {
+        Ok(())
+    }
+
+    fn decide_permission<'a>(
+        &'a self,
+        _request: &'a PermissionRequest,
+    ) -> AdapterFuture<'a, PermissionDecision> {
+        Box::pin(async { Err(ProviderError::Observer("approval store failed".to_owned())) })
+    }
+}
+
+fn fake_acp() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/acp/fake-acp.cmd")
+}
+
+fn response(directory: &Path, name: &str) -> serde_json::Value {
+    let path = directory.join(name);
+    let text = std::fs::read_to_string(&path).unwrap_or_else(|error| {
+        let names = std::fs::read_dir(directory)
+            .unwrap()
+            .filter_map(Result::ok)
+            .map(|entry| entry.file_name().to_string_lossy().into_owned())
+            .collect::<Vec<_>>();
+        panic!("missing {} ({error}); files: {names:?}", path.display());
+    });
+    serde_json::from_str(text.trim_start_matches('\u{feff}').trim()).unwrap()
+}
 
 #[test]
 fn opencode_launches_acp_for_the_requested_workspace() {
@@ -65,6 +149,207 @@ fn opencode_acceptance_without_progress_becomes_stalled() {
         deadline.check_at(now),
         Err(ProviderError::Stalled { millis: 30_000 })
     ));
+}
+
+#[tokio::test]
+async fn observed_acp_turn_streams_before_completion_and_selects_the_offered_numeric_allow_once() {
+    let temporary = tempdir().unwrap();
+    let session = OpenCodeAdapter::with_executable(fake_acp())
+        .start(&SessionRequest::new(temporary.path()))
+        .await
+        .unwrap();
+    let observer = GateObserver::approving();
+    let request = TurnRequest::new("NUMERIC_ID");
+    let turn = session.turn_observed(&request, &observer);
+    tokio::pin!(turn);
+    timeout(Duration::from_secs(2), async {
+        tokio::select! {
+            () = observer.entered.notified() => {},
+            result = &mut turn => panic!("turn completed before approval gate: {result:?}"),
+        }
+    })
+    .await
+    .unwrap();
+    assert!(temporary.path().join("fake-acp-pending.txt").exists());
+    assert!(!temporary.path().join("fake-acp-response-1.json").exists());
+    assert!(observer.events.lock().unwrap().iter().any(
+        |event| matches!(event, ProviderEvent::TextDelta { text, .. } if text == "before approval")
+    ));
+    assert!(observer.events.lock().unwrap().iter().all(
+        |event| !matches!(event, ProviderEvent::TextDelta { text, .. } if text == "stale-before-turn")
+    ));
+    observer.release.notify_one();
+    let returned = timeout(Duration::from_secs(2), &mut turn)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(*observer.events.lock().unwrap(), returned);
+    let wire = response(temporary.path(), "fake-acp-response-1.json");
+    assert_eq!(wire["id"], 77);
+    assert_eq!(wire["result"]["outcome"]["outcome"], "selected");
+    assert_eq!(wire["result"]["outcome"]["optionId"], "allow-one");
+    assert_eq!(observer.requests.lock().unwrap().len(), 1);
+    session.stop().await.unwrap();
+}
+
+#[tokio::test]
+async fn observed_acp_refuses_malformed_and_duplicate_requests_without_reauthorizing() {
+    for prompt in ["MISMATCH", "MISSING_ONCE", "UNKNOWN_KIND"] {
+        let temporary = tempdir().unwrap();
+        let session = OpenCodeAdapter::with_executable(fake_acp())
+            .start(&SessionRequest::new(temporary.path()))
+            .await
+            .unwrap();
+        let observer = GateObserver::approving();
+        let events = session
+            .turn_observed(&TurnRequest::new(prompt), &observer)
+            .await
+            .unwrap();
+        assert!(
+            events
+                .iter()
+                .all(|event| !matches!(event, ProviderEvent::PermissionRequested { .. }))
+        );
+        assert_eq!(
+            response(temporary.path(), "fake-acp-response-1.json")["result"]["outcome"]["outcome"],
+            "cancelled"
+        );
+        assert_eq!(observer.decisions.load(Ordering::SeqCst), 0);
+        session.stop().await.unwrap();
+    }
+
+    let temporary = tempdir().unwrap();
+    let session = OpenCodeAdapter::with_executable(fake_acp())
+        .start(&SessionRequest::new(temporary.path()))
+        .await
+        .unwrap();
+    let observer = GateObserver::approving();
+    let request = TurnRequest::new("DUPLICATE NEW_ID");
+    let turn = session.turn_observed(&request, &observer);
+    tokio::pin!(turn);
+    timeout(Duration::from_secs(2), async { tokio::select! { () = observer.entered.notified() => {}, result = &mut turn => panic!("turn completed early: {result:?}"), } }).await.unwrap();
+    observer.release.notify_one();
+    turn.await.unwrap();
+    assert_eq!(observer.decisions.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        response(temporary.path(), "fake-acp-response-2.json")["result"]["outcome"]["outcome"],
+        "cancelled"
+    );
+    session.stop().await.unwrap();
+}
+
+#[tokio::test]
+async fn observed_acp_permission_titles_are_not_durable_and_cannot_be_reauthorized() {
+    let temporary = tempdir().unwrap();
+    let session = OpenCodeAdapter::with_executable(fake_acp())
+        .start(&SessionRequest::new(temporary.path()))
+        .await
+        .unwrap();
+    let observer = GateObserver::approving();
+    let request = TurnRequest::new("SECRET_TITLE DUPLICATE NEW_ID");
+    let turn = session.turn_observed(&request, &observer);
+    tokio::pin!(turn);
+    timeout(Duration::from_secs(2), async {
+        tokio::select! {
+            () = observer.entered.notified() => {},
+            result = &mut turn => panic!("turn completed early: {result:?}"),
+        }
+    })
+    .await
+    .unwrap();
+    observer.release.notify_one();
+    turn.await.unwrap();
+    let requests = observer.requests.lock().unwrap().clone();
+    assert_eq!(requests.len(), 1);
+    assert!(!requests[0].action.contains("secret-title-token"));
+    assert!(
+        !requests[0]
+            .detail
+            .to_string()
+            .contains("secret-title-token")
+    );
+    assert_eq!(observer.decisions.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        response(temporary.path(), "fake-acp-response-2.json")["result"]["outcome"]["outcome"],
+        "cancelled"
+    );
+    session.stop().await.unwrap();
+}
+
+#[tokio::test]
+async fn acp_native_cancellation_missing_observer_and_deadline_all_reply_cancelled() {
+    let temporary = tempdir().unwrap();
+    let session = OpenCodeAdapter::with_executable(fake_acp())
+        .start(&SessionRequest::new(temporary.path()))
+        .await
+        .unwrap();
+    session.turn(&TurnRequest::new("EXECUTE")).await.unwrap();
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert_eq!(
+        response(temporary.path(), "fake-acp-response-1.json")["result"]["outcome"]["outcome"],
+        "cancelled"
+    );
+    session.stop().await.unwrap();
+
+    let temporary = tempdir().unwrap();
+    let session = OpenCodeAdapter::with_executable(fake_acp())
+        .start(&SessionRequest::new(temporary.path()))
+        .await
+        .unwrap();
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    session
+        .turn_observed(&TurnRequest::new("EXECUTE"), &ErrorObserver)
+        .await
+        .unwrap();
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert_eq!(
+        response(temporary.path(), "fake-acp-response-1.json")["result"]["outcome"]["outcome"],
+        "cancelled"
+    );
+    session.stop().await.unwrap();
+
+    let temporary = tempdir().unwrap();
+    let session = OpenCodeAdapter::with_executable(fake_acp())
+        .start(&SessionRequest::new(temporary.path()))
+        .await
+        .unwrap();
+    let observer = GateObserver::approving();
+    let request = TurnRequest::new("EXECUTE");
+    let turn = session.turn_observed(&request, &observer);
+    tokio::pin!(turn);
+    timeout(Duration::from_secs(2), async { tokio::select! { () = observer.entered.notified() => {}, result = &mut turn => panic!("turn completed early: {result:?}"), } }).await.unwrap();
+    session.cancel().await.unwrap();
+    turn.await.unwrap();
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert!(temporary.path().join("fake-acp-cancel.txt").exists());
+    assert_eq!(
+        response(temporary.path(), "fake-acp-response-1.json")["result"]["outcome"]["outcome"],
+        "cancelled"
+    );
+    session.stop().await.unwrap();
+
+    let temporary = tempdir().unwrap();
+    let mut session_request = SessionRequest::new(temporary.path());
+    session_request.turn_timeout_millis = 1_000;
+    let session = OpenCodeAdapter::with_executable(fake_acp())
+        .start(&session_request)
+        .await
+        .unwrap();
+    let observer = GateObserver::approving();
+    let request = TurnRequest::new("EXECUTE");
+    let outcome = timeout(
+        Duration::from_secs(3),
+        session.turn_observed(&request, &observer),
+    )
+    .await
+    .expect("approval waiting must not outlive the turn deadline");
+    assert!(matches!(outcome, Err(ProviderError::Timeout { .. })));
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert_eq!(
+        response(temporary.path(), "fake-acp-response-1.json")["result"]["outcome"]["outcome"],
+        "cancelled"
+    );
+    session.stop().await.unwrap();
 }
 
 #[tokio::test]

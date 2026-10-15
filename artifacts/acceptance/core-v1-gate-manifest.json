@@ -1,0 +1,238 @@
+{
+  "status": "PASS",
+  "startedAt": "2026-10-15T18:06:43.7858940Z",
+  "durationMs": 517591,
+  "acceptanceOnly": false,
+  "skipBuild": true,
+  "provider": "codex",
+  "excluded": [
+    "provider-adapters",
+    "desktop-shell"
+  ],
+  "stoppedAtCargoStep": false,
+  "steps": [
+    {
+      "step": "format",
+      "command": "cargo fmt --all -- --check",
+      "exitCode": 0,
+      "durationMs": 1170
+    },
+    {
+      "step": "clippy",
+      "command": "cargo clippy --workspace --all-targets --locked -- -D warnings",
+      "exitCode": 0,
+      "durationMs": 6700
+    },
+    {
+      "step": "test",
+      "command": "cargo test --workspace --locked",
+      "exitCode": 0,
+      "durationMs": 160855
+    },
+    {
+      "step": "release",
+      "command": "cargo build --workspace --release --locked",
+      "exitCode": 0,
+      "durationMs": 676
+    },
+    {
+      "step": "activation-policy",
+      "command": "activation-policy.ps1",
+      "exitCode": 0,
+      "durationMs": 27904
+    },
+    {
+      "step": "approval-gate",
+      "command": "approval-gate.ps1",
+      "exitCode": 0,
+      "durationMs": 17133
+    },
+    {
+      "step": "automatic-task-dispatch",
+      "command": "automatic-task-dispatch.ps1",
+      "exitCode": 0,
+      "durationMs": 5212
+    },
+    {
+      "step": "claude-full-autonomy",
+      "command": "claude-full-autonomy.ps1",
+      "exitCode": 0,
+      "durationMs": 2519
+    },
+    {
+      "step": "coalesced-notices",
+      "command": "coalesced-notices.ps1",
+      "exitCode": 0,
+      "durationMs": 6199
+    },
+    {
+      "step": "collaboration-bus",
+      "command": "collaboration-bus.ps1 -SkipBuild",
+      "exitCode": 0,
+      "durationMs": 10643
+    },
+    {
+      "step": "collaboration-tools",
+      "command": "collaboration-tools.ps1",
+      "exitCode": 0,
+      "durationMs": 14057
+    },
+    {
+      "step": "configurable-thresholds",
+      "command": "configurable-thresholds.ps1",
+      "exitCode": 0,
+      "durationMs": 3487
+    },
+    {
+      "step": "conversation-delivery",
+      "command": "conversation-delivery.ps1 -SkipBuild -Provider codex",
+      "exitCode": 0,
+      "durationMs": 25308
+    },
+    {
+      "step": "conversation-rename",
+      "command": "conversation-rename.ps1",
+      "exitCode": 0,
+      "durationMs": 2751
+    },
+    {
+      "step": "core-scenario",
+      "command": "core-scenario.ps1",
+      "exitCode": 0,
+      "durationMs": 5322
+    },
+    {
+      "step": "core-services",
+      "command": "core-services.ps1 -SkipBuild",
+      "exitCode": 0,
+      "durationMs": 2026
+    },
+    {
+      "step": "desktop-inbox",
+      "command": "desktop-inbox.ps1",
+      "exitCode": 0,
+      "durationMs": 4735
+    },
+    {
+      "step": "employee-roster",
+      "command": "employee-roster.ps1 -SkipBuild",
+      "exitCode": 0,
+      "durationMs": 10829
+    },
+    {
+      "step": "first-slice",
+      "command": "first-slice.ps1 -SkipBuild",
+      "exitCode": 0,
+      "durationMs": 10739
+    },
+    {
+      "step": "idle-suspension",
+      "command": "idle-suspension.ps1",
+      "exitCode": 0,
+      "durationMs": 5896
+    },
+    {
+      "step": "incident-thresholds",
+      "command": "incident-thresholds.ps1",
+      "exitCode": 0,
+      "durationMs": 4691
+    },
+    {
+      "step": "lead-remediation",
+      "command": "lead-remediation.ps1",
+      "exitCode": 0,
+      "durationMs": 7264
+    },
+    {
+      "step": "message-arrival",
+      "command": "message-arrival.ps1",
+      "exitCode": 0,
+      "durationMs": 3146
+    },
+    {
+      "step": "message-priority",
+      "command": "message-priority.ps1",
+      "exitCode": 0,
+      "durationMs": 5296
+    },
+    {
+      "step": "minimum-incidents",
+      "command": "minimum-incidents.ps1",
+      "exitCode": 0,
+      "durationMs": 6868
+    },
+    {
+      "step": "native-session-ownership",
+      "command": "native-session-ownership.ps1 -SkipBuild -Provider codex",
+      "exitCode": 0,
+      "durationMs": 16310
+    },
+    {
+      "step": "peer-messaging",
+      "command": "peer-messaging.ps1",
+      "exitCode": 0,
+      "durationMs": 6375
+    },
+    {
+      "step": "provider-config-discovery",
+      "command": "provider-config-discovery.ps1",
+      "exitCode": 0,
+      "durationMs": 4130
+    },
+    {
+      "step": "provider-migration-preview",
+      "command": "provider-migration-preview.ps1",
+      "exitCode": 0,
+      "durationMs": 3821
+    },
+    {
+      "step": "resource-accounting",
+      "command": "resource-accounting.ps1",
+      "exitCode": 0,
+      "durationMs": 2602
+    },
+    {
+      "step": "resource-budget",
+      "command": "resource-budget.ps1 -SkipBuild",
+      "exitCode": 0,
+      "durationMs": 100821
+    },
+    {
+      "step": "result-delivery",
+      "command": "result-delivery.ps1",
+      "exitCode": 0,
+      "durationMs": 7389
+    },
+    {
+      "step": "task-delegation-graph",
+      "command": "task-delegation-graph.ps1 -SkipBuild",
+      "exitCode": 0,
+      "durationMs": 11675
+    },
+    {
+      "step": "user-notifications",
+      "command": "user-notifications.ps1",
+      "exitCode": 0,
+      "durationMs": 3780
+    },
+    {
+      "step": "workspace-actions",
+      "command": "workspace-actions.ps1",
+      "exitCode": 0,
+      "durationMs": 2896
+    },
+    {
+      "step": "workspace-conversation",
+      "command": "workspace-conversation.ps1",
+      "exitCode": 0,
+      "durationMs": 3265
+    },
+    {
+      "step": "workspace-read-models",
+      "command": "workspace-read-models.ps1",
+      "exitCode": 0,
+      "durationMs": 2960
+    }
+  ],
+  "failed": []
+}

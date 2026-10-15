@@ -1,24 +1,24 @@
 {
   "status": "PASS",
-  "schemaVersion": 15,
+  "schemaVersion": 18,
   "mode": "deterministic-fake-transport",
-  "startedAt": "2026-10-13T01:01:02.5559796Z",
-  "durationMs": 2502,
+  "startedAt": "2026-10-15T18:12:20.3400984Z",
+  "durationMs": 2753,
   "commands": [
     {
       "command": "cargo test -p lazood --test daemon tool_waits_wake_on_the_store_write_instead_of_polling --locked -- --exact",
       "exitCode": 0,
-      "durationMs": 647
+      "durationMs": 741
     },
     {
       "command": "cargo test -p lazood --test daemon task_wait_returns_early_with_a_peer_question_so_the_lead_answers_in_turn --locked -- --exact",
       "exitCode": 0,
-      "durationMs": 702
+      "durationMs": 748
     },
     {
       "command": "cargo test -p lazood --test daemon task_wait_consumes_child_results_so_no_notice_turn_follows --locked -- --exact",
       "exitCode": 0,
-      "durationMs": 638
+      "durationMs": 709
     },
     {
       "command": "Select-String WAIT_POLL_INTERVAL apps/lazood/src/app/tools.rs",
@@ -28,7 +28,7 @@
     {
       "command": "cargo test -p lazoo-store --test store store_enables_wal_foreign_keys_and_schema_version --locked -- --exact",
       "exitCode": 0,
-      "durationMs": 422
+      "durationMs": 455
     },
     {
       "command": "git diff --quiet and git diff --cached --quiet -- apps/lazoo-desktop",

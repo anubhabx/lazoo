@@ -2,19 +2,19 @@
   "schemaVersion": 1,
   "databaseSchemaVersion": 11,
   "status": "PASS",
-  "startedAt": "2026-10-13T01:00:36.5779049Z",
-  "completedAt": "2026-10-13T01:00:46.8194504Z",
-  "durationMs": 10238,
+  "startedAt": "2026-10-15T18:11:51.7293085Z",
+  "completedAt": "2026-10-15T18:12:01.9485234Z",
+  "durationMs": 10215,
   "platform": "Microsoft Windows NT 10.0.26200.0",
   "rustcVersion": "rustc 1.98.0 (88d9e12ae 2026-08-18)",
   "cargoVersion": "cargo 1.98.0 (797e8a9bc 2026-08-05)",
   "repositoryRoot": "C:\\workspace\\Orchestrator",
-  "isolatedDataRoot": "C:\\Users\\anubhab\\AppData\\Local\\Temp\\lazoo-acceptance-b1fdad7955344d16b9e1be619a822663\\data",
-  "temporaryProject": "C:\\Users\\anubhab\\AppData\\Local\\Temp\\lazoo-acceptance-b1fdad7955344d16b9e1be619a822663\\repository",
+  "isolatedDataRoot": "C:\\Users\\anubhab\\AppData\\Local\\Temp\\lazoo-acceptance-26cc4979b1334e9bb7651cfe80c3b49c\\data",
+  "temporaryProject": "C:\\Users\\anubhab\\AppData\\Local\\Temp\\lazoo-acceptance-26cc4979b1334e9bb7651cfe80c3b49c\\repository",
   "artifacts": {
     "manifest": "C:\\workspace\\Orchestrator\\artifacts\\acceptance\\first-slice-manifest.json",
-    "runLogs": "C:\\Users\\anubhab\\AppData\\Local\\Temp\\lazoo-acceptance-b1fdad7955344d16b9e1be619a822663",
-    "database": "C:\\Users\\anubhab\\AppData\\Local\\Temp\\lazoo-acceptance-b1fdad7955344d16b9e1be619a822663\\data\\state\\lazoo.db"
+    "runLogs": "C:\\Users\\anubhab\\AppData\\Local\\Temp\\lazoo-acceptance-26cc4979b1334e9bb7651cfe80c3b49c",
+    "database": "C:\\Users\\anubhab\\AppData\\Local\\Temp\\lazoo-acceptance-26cc4979b1334e9bb7651cfe80c3b49c\\data\\state\\lazoo.db"
   },
   "commands": [
     {
@@ -28,64 +28,64 @@
       "durationMs": 123
     },
     {
-      "command": "lazooctl --json project register C:\\Users\\anubhab\\AppData\\Local\\Temp\\lazoo-acceptance-b1fdad7955344d16b9e1be619a822663\\repository --idempotency-key acceptance-b1fdad7955344d16b9e1be619a822663",
+      "command": "lazooctl --json project register C:\\Users\\anubhab\\AppData\\Local\\Temp\\lazoo-acceptance-26cc4979b1334e9bb7651cfe80c3b49c\\repository --idempotency-key acceptance-26cc4979b1334e9bb7651cfe80c3b49c",
       "exitCode": 0,
-      "durationMs": 90
+      "durationMs": 84
     },
     {
-      "command": "lazooctl --json project register C:\\Users\\anubhab\\AppData\\Local\\Temp\\lazoo-acceptance-b1fdad7955344d16b9e1be619a822663\\repository --idempotency-key acceptance-b1fdad7955344d16b9e1be619a822663",
+      "command": "lazooctl --json project register C:\\Users\\anubhab\\AppData\\Local\\Temp\\lazoo-acceptance-26cc4979b1334e9bb7651cfe80c3b49c\\repository --idempotency-key acceptance-26cc4979b1334e9bb7651cfe80c3b49c",
       "exitCode": 0,
-      "durationMs": 86
-    },
-    {
-      "command": "lazooctl --json project list",
-      "exitCode": 0,
-      "durationMs": 21
-    },
-    {
-      "command": "lazooctl --json events list --after 0 --limit 100",
-      "exitCode": 0,
-      "durationMs": 21
-    },
-    {
-      "command": "lazooctl --json status",
-      "exitCode": 0,
-      "durationMs": 1071
+      "durationMs": 71
     },
     {
       "command": "lazooctl --json project list",
       "exitCode": 0,
-      "durationMs": 14
+      "durationMs": 19
     },
     {
       "command": "lazooctl --json events list --after 0 --limit 100",
       "exitCode": 0,
-      "durationMs": 13
-    },
-    {
-      "command": "lazooctl --json system shutdown",
-      "exitCode": 0,
-      "durationMs": 15
+      "durationMs": 18
     },
     {
       "command": "lazooctl --json status",
       "exitCode": 0,
-      "durationMs": 77
+      "durationMs": 1055
+    },
+    {
+      "command": "lazooctl --json project list",
+      "exitCode": 0,
+      "durationMs": 19
+    },
+    {
+      "command": "lazooctl --json events list --after 0 --limit 100",
+      "exitCode": 0,
+      "durationMs": 18
     },
     {
       "command": "lazooctl --json system shutdown",
       "exitCode": 0,
-      "durationMs": 13
+      "durationMs": 19
     },
     {
       "command": "lazooctl --json status",
       "exitCode": 0,
-      "durationMs": 54
+      "durationMs": 87
     },
     {
       "command": "lazooctl --json system shutdown",
       "exitCode": 0,
-      "durationMs": 13
+      "durationMs": 18
+    },
+    {
+      "command": "lazooctl --json status",
+      "exitCode": 0,
+      "durationMs": 46
+    },
+    {
+      "command": "lazooctl --json system shutdown",
+      "exitCode": 0,
+      "durationMs": 18
     }
   ],
   "gates": {

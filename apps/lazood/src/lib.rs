@@ -1,5 +1,6 @@
 mod app;
 mod server;
+mod terminal_server;
 
 pub use app::{
     App, EventSubscription, ManagedSession, SessionBackend, SessionBackendFuture, UserNotifier,

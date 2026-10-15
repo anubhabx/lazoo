@@ -3,6 +3,7 @@ mod antigravity;
 mod claude;
 mod codex;
 mod config;
+mod config_apply;
 mod contract;
 mod discovery;
 mod grok;
@@ -24,6 +25,14 @@ pub use config::{
     ConfigurationFormat, DiscoveredIntegration, IntegrationKind, IntegrationTransport,
     PROVIDER_CONFIGURATION_V1, ProviderConfigurationFile, ProviderConfigurationReport,
     discover_provider_configuration,
+};
+pub use config_apply::{
+    ConfigurationApplyError, ConfigurationApplyPreview, ConfigurationApplyReceipt,
+    ConfigurationApplyStatus, ConfigurationCompatibility, ConfigurationPreviewMetadata,
+    ConfigurationRecoveryState, PROVIDER_CONFIGURATION_APPLY_V1, ProviderVersionValidation,
+    SelectedMcpIntegration, apply_configuration_preview, apply_configuration_preview_with_intent,
+    inspect_configuration_apply_recovery, preview_configuration_apply,
+    rollback_configuration_apply,
 };
 pub use contract::{
     ADAPTER_CONTRACT_V1, AdapterFuture, AuthenticationEvidence, AuthenticationState, CommandSpec,

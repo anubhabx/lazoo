@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use tokio::{
     io::{AsyncRead, AsyncWrite},
     net::windows::named_pipe::{ClientOptions, NamedPipeClient, NamedPipeServer, ServerOptions},
-    time::{Instant, sleep},
+    time::{Instant, sleep, timeout},
 };
 use uuid::Uuid;
 
@@ -35,6 +35,14 @@ impl std::fmt::Debug for AuthenticatedConnection {
 }
 
 impl AuthenticatedConnection {
+    pub async fn send_bytes(&mut self, bytes: &[u8]) -> Result<(), IpcError> {
+        write_frame(&mut self.stream, bytes).await
+    }
+
+    pub async fn receive_bytes(&mut self, maximum: usize) -> Result<Vec<u8>, IpcError> {
+        crate::read_frame_bounded(&mut self.stream, maximum).await
+    }
+
     pub async fn send_json<T: Serialize>(&mut self, value: &T) -> Result<(), IpcError> {
         let payload = serde_json::to_vec(value)?;
         write_frame(&mut self.stream, &payload).await
@@ -60,13 +68,59 @@ pub struct PipeServer {
     nonce: Vec<u8>,
 }
 
+/// An accepted pipe whose peer has not yet authenticated. Keeping authentication separate
+/// lets the listener accept healthy clients while another peer is slow or malformed.
+pub struct PendingConnection {
+    stream: NamedPipeServer,
+    owner_sid: String,
+    installation_id: Uuid,
+    nonce: Vec<u8>,
+}
+
+impl PendingConnection {
+    pub async fn authenticate(self) -> Result<AuthenticatedConnection, IpcError> {
+        verify_client_owner(&self.stream, &self.owner_sid)?;
+        timeout(
+            Duration::from_secs(5),
+            server_handshake(self.stream, self.installation_id, &self.nonce),
+        )
+        .await
+        .map_err(|_| {
+            IpcError::Io(io::Error::new(
+                io::ErrorKind::TimedOut,
+                "pipe handshake timed out",
+            ))
+        })?
+    }
+}
+
 impl PipeServer {
     pub fn bind(installation: &Installation, owner: &OwnerSecurity) -> Result<Self, IpcError> {
+        Self::bind_name(installation, owner, installation.pipe_name().to_owned())
+    }
+
+    /// Terminal bytes use a distinct listener and connection budget from control RPCs.
+    pub fn bind_terminal(
+        installation: &Installation,
+        owner: &OwnerSecurity,
+    ) -> Result<Self, IpcError> {
+        Self::bind_name(
+            installation,
+            owner,
+            format!("{}.terminal.v1", installation.pipe_name()),
+        )
+    }
+
+    fn bind_name(
+        installation: &Installation,
+        owner: &OwnerSecurity,
+        pipe_name: String,
+    ) -> Result<Self, IpcError> {
         let security = Arc::new(PipeSecurity::new(owner)?);
-        let pending = create_server(installation.pipe_name(), &security, true)?;
+        let pending = create_server(&pipe_name, &security, true)?;
         Ok(Self {
             pending: Some(pending),
-            pipe_name: installation.pipe_name().to_owned(),
+            pipe_name,
             security,
             owner_sid: owner.sid().to_owned(),
             installation_id: installation.id(),
@@ -75,13 +129,33 @@ impl PipeServer {
     }
 
     pub async fn accept(&mut self) -> Result<AuthenticatedConnection, IpcError> {
-        let connected = self.pending.take().ok_or_else(|| {
-            IpcError::Io(io::Error::other("pipe listener has no pending instance"))
-        })?;
-        connected.connect().await?;
-        self.pending = Some(create_server(&self.pipe_name, &self.security, false)?);
-        verify_client_owner(&connected, &self.owner_sid)?;
-        server_handshake(connected, self.installation_id, &self.nonce).await
+        self.accept_pending().await?.authenticate().await
+    }
+
+    /// Cancellation before a connection arrives leaves the listening instance intact.
+    pub async fn accept_pending(&mut self) -> Result<PendingConnection, IpcError> {
+        loop {
+            let listening = self.pending.as_ref().ok_or_else(|| {
+                IpcError::Io(io::Error::other("pipe listener has no pending instance"))
+            })?;
+            let result = listening.connect().await;
+            let connected = self.pending.take().expect("listening instance");
+            self.pending = Some(create_server(&self.pipe_name, &self.security, false)?);
+            match result {
+                Ok(()) => {
+                    return Ok(PendingConnection {
+                        stream: connected,
+                        owner_sid: self.owner_sid.clone(),
+                        installation_id: self.installation_id,
+                        nonce: self.nonce.clone(),
+                    });
+                }
+                // A peer may open and close before ConnectNamedPipe completes. That consumes
+                // this pipe instance, not the listener; keep the fresh instance for the next peer.
+                Err(error) if matches!(error.raw_os_error(), Some(109 | 232 | 233)) => {}
+                Err(error) => return Err(error.into()),
+            }
+        }
     }
 
     pub fn effective_sddl(&self) -> Result<String, IpcError> {
@@ -95,6 +169,22 @@ impl PipeServer {
 pub struct PipeClient;
 
 impl PipeClient {
+    pub async fn connect_terminal(
+        installation: &Installation,
+        client_name: &str,
+        client_version: &str,
+    ) -> Result<AuthenticatedConnection, IpcError> {
+        Self::connect_using(
+            &format!("{}.terminal.v1", installation.pipe_name()),
+            installation.id(),
+            &installation.unprotect_nonce()?,
+            client_name,
+            client_version,
+            &[PROTOCOL_V1],
+        )
+        .await
+    }
+
     pub async fn connect(
         installation: &Installation,
         client_name: &str,
@@ -121,15 +211,24 @@ impl PipeClient {
         offered_versions: &[u32],
     ) -> Result<AuthenticatedConnection, IpcError> {
         let stream = open_client(pipe_name).await?;
-        client_handshake(
-            stream,
-            installation_id,
-            nonce,
-            client_name,
-            client_version,
-            offered_versions,
+        timeout(
+            Duration::from_secs(5),
+            client_handshake(
+                stream,
+                installation_id,
+                nonce,
+                client_name,
+                client_version,
+                offered_versions,
+            ),
         )
         .await
+        .map_err(|_| {
+            IpcError::Io(io::Error::new(
+                io::ErrorKind::TimedOut,
+                "server handshake timed out",
+            ))
+        })?
     }
 }
 

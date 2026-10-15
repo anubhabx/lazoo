@@ -1,3 +1,11 @@
+mod configuration;
+mod memory;
+mod memory_worker;
+mod terminal;
+pub use memory::MemoryCommand;
+pub use memory_worker::MemoryWorkerCommand;
+pub use terminal::TerminalCommand;
+
 use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
@@ -24,6 +32,8 @@ pub struct Cli {
 
 #[derive(Debug, Subcommand)]
 pub enum Command {
+    #[command(subcommand)]
+    MemoryWorker(MemoryWorkerCommand),
     Status,
     #[command(subcommand)]
     Project(ProjectCommand),
@@ -55,6 +65,10 @@ pub enum Command {
     Workspace(WorkspaceCommand),
     #[command(subcommand)]
     System(SystemCommand),
+    #[command(subcommand)]
+    Terminal(TerminalCommand),
+    #[command(subcommand)]
+    Memory(MemoryCommand),
 }
 
 #[derive(Debug, Subcommand)]
@@ -229,6 +243,8 @@ pub enum EventsCommand {
 
 #[derive(Debug, Subcommand)]
 pub enum SystemCommand {
+    /// Infrastructure CPU cap and rolling aggregate measurements.
+    Budget,
     Shutdown,
     /// The daemon's own CPU time, working set, and handle count.
     Resources,
@@ -236,6 +252,24 @@ pub enum SystemCommand {
 
 #[derive(Debug, Subcommand)]
 pub enum ProviderCommand {
+    /// Preview one explicitly selected MCP entry without changing provider files.
+    ConfigPreview {
+        #[arg(long, value_parser = parse_json_value)]
+        selection: Value,
+    },
+    ConfigApply {
+        operation_id: Uuid,
+        #[arg(long)]
+        expected_revision: u64,
+    },
+    ConfigRollback {
+        operation_id: Uuid,
+        #[arg(long)]
+        expected_revision: u64,
+    },
+    ConfigShow {
+        operation_id: Uuid,
+    },
     List,
     /// Read every known provider configuration file, with secrets redacted, and name
     /// duplicate and conflicting integrations across providers. Writes nothing.
@@ -681,6 +715,22 @@ pub async fn execute(cli: &Cli) -> Result<Vec<String>, CliError> {
 pub async fn execute_with(cli: &Cli, mut emit: impl FnMut(String)) -> Result<(), CliError> {
     let root = DataRoot::resolve()?;
     let installation = Installation::load_or_create(&root)?;
+    if let Command::Terminal(
+        command @ (TerminalCommand::Read { .. } | TerminalCommand::Write { .. }),
+    ) = &cli.command
+    {
+        let output = terminal::execute_io(command, &installation)
+            .await
+            .map_err(|message| {
+                CliError::Rpc(RpcError {
+                    code: "LZ-TERMINAL-IO".to_owned(),
+                    message,
+                    data: None,
+                })
+            })?;
+        emit(render_result(&output, cli.json)?);
+        return Ok(());
+    }
     let (method, params, follows) = command_request(&cli.command);
     let mut connection =
         PipeClient::connect(&installation, "lazooctl", env!("CARGO_PKG_VERSION")).await?;
@@ -707,6 +757,9 @@ pub async fn execute_with(cli: &Cli, mut emit: impl FnMut(String)) -> Result<(),
 #[must_use]
 pub fn command_request(command: &Command) -> (&'static str, Value, bool) {
     match command {
+        Command::MemoryWorker(command) => memory_worker::command_request(command),
+        Command::Terminal(command) => terminal::command_request(command),
+        Command::Memory(command) => memory::command_request(command),
         Command::Status => ("system.status", json!({}), false),
         Command::Project(ProjectCommand::Register {
             path,
@@ -735,6 +788,29 @@ pub fn command_request(command: &Command) -> (&'static str, Value, bool) {
             true,
         ),
         Command::Provider(ProviderCommand::List) => ("provider.list", json!({}), false),
+        Command::Provider(ProviderCommand::ConfigPreview { selection }) => {
+            let (method, params) = configuration::preview_request(selection);
+            (method, params, false)
+        }
+        Command::Provider(ProviderCommand::ConfigApply {
+            operation_id,
+            expected_revision,
+        }) => {
+            let (method, params) = configuration::apply_request(*operation_id, *expected_revision);
+            (method, params, false)
+        }
+        Command::Provider(ProviderCommand::ConfigRollback {
+            operation_id,
+            expected_revision,
+        }) => {
+            let (method, params) =
+                configuration::rollback_request(*operation_id, *expected_revision);
+            (method, params, false)
+        }
+        Command::Provider(ProviderCommand::ConfigShow { operation_id }) => {
+            let (method, params) = configuration::show_request(*operation_id);
+            (method, params, false)
+        }
         Command::Provider(ProviderCommand::Config) => ("provider.config", json!({}), false),
         Command::Provider(ProviderCommand::Preview) => {
             ("provider.config.preview", json!({}), false)
@@ -767,6 +843,7 @@ pub fn command_request(command: &Command) -> (&'static str, Value, bool) {
         Command::Workspace(command) => workspace_request(command),
         Command::System(SystemCommand::Shutdown) => ("system.shutdown", json!({}), false),
         Command::System(SystemCommand::Resources) => ("system.resources", json!({}), false),
+        Command::System(SystemCommand::Budget) => ("system.budget", json!({}), false),
     }
 }
 

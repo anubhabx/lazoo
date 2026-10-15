@@ -1,0 +1,21 @@
+{
+  "status": "FAIL",
+  "runId": "9ba572a0bfd4405fac774bcf2891dcd2",
+  "invocationsRequested": 2048,
+  "concurrency": 16,
+  "binarySha256": {
+    "daemon": "C3432EF6DAF2104102035AC800EC1CDB59E28F2CC78BFCF0674A86E9B4D9768F",
+    "cli": "02470E82ED3D59928314EE7FC85FD6BC267F4A72815CD12626A2151CC1C7291D"
+  },
+  "successful": 850,
+  "failures": [],
+  "exitCodes": [
+    {
+      "code": 0,
+      "count": 850
+    }
+  ],
+  "failure": "CLI command timed out: --json status",
+  "daemonStdout": "",
+  "daemonStderr": ""
+}

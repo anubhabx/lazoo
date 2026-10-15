@@ -299,6 +299,8 @@ pub struct TurnRequest {
     pub correlation_id: Uuid,
     pub prompt: String,
     pub permission_mode: Option<String>,
+    #[serde(default)]
+    pub read_only: bool,
 }
 
 impl TurnRequest {
@@ -308,12 +310,19 @@ impl TurnRequest {
             correlation_id: Uuid::new_v4(),
             prompt: prompt.into(),
             permission_mode: None,
+            read_only: false,
         }
     }
 
     #[must_use]
     pub fn with_permission_mode(mut self, mode: impl Into<String>) -> Self {
         self.permission_mode = Some(mode.into());
+        self
+    }
+
+    #[must_use]
+    pub const fn read_only(mut self) -> Self {
+        self.read_only = true;
         self
     }
 }

@@ -1,5 +1,6 @@
 use std::{
     cmp,
+    collections::HashSet,
     sync::atomic::{AtomicBool, Ordering},
     time::{Duration, Instant},
 };
@@ -9,21 +10,28 @@ use agent_client_protocol::schema::{
     v1::{
         CancelNotification, CloseSessionRequest, ContentBlock, Implementation, InitializeRequest,
         InitializeResponse, LoadSessionRequest, NewSessionRequest, NewSessionResponse,
-        PromptRequest, RequestPermissionOutcome, RequestPermissionResponse, TextContent,
+        PromptRequest, RequestPermissionOutcome, RequestPermissionResponse,
+        SelectedPermissionOutcome, TextContent,
     },
 };
 use serde::Serialize;
 use serde_json::{Value, json};
-use tokio::sync::Mutex;
+use tokio::{
+    sync::{Mutex, Notify},
+    time,
+};
 
 use crate::{
-    AdapterFuture, CommandSpec, ProviderError, ProviderEvent, ProviderKind, ProviderSession,
-    SessionRequest, TurnRequest,
+    AdapterFuture, CommandSpec, PermissionDecision, PermissionKind, PermissionRequest,
+    ProviderError, ProviderEvent, ProviderKind, ProviderSession, SessionRequest, TurnEventObserver,
+    TurnRequest,
     json_rpc::{JsonRpcControl, JsonRpcProcess, response_id},
     redact_json,
 };
 
 const STOP_TIMEOUT: Duration = Duration::from_secs(2);
+const MAX_PERMISSION_ACTION_BYTES: usize = 1024;
+const MAX_PERMISSION_DETAIL_BYTES: usize = 4096;
 
 #[derive(Clone, Copy, Debug)]
 pub struct ProgressDeadline {
@@ -155,6 +163,9 @@ pub(crate) async fn start_acp_session(
             )
             .await?;
         let response: NewSessionResponse = serde_json::from_value(response)?;
+        // ACP agents may emit session/update notifications while answering session/new. They
+        // precede any Lazoo turn and must not be attributed to the first prompt.
+        process.discard_queued();
         response.session_id.to_string()
     };
     let close_supported = handshake
@@ -179,6 +190,8 @@ pub(crate) async fn start_acp_session(
             close_supported,
             session_event_pending: AtomicBool::new(true),
             active: AtomicBool::new(false),
+            cancelled: AtomicBool::new(false),
+            cancellation: Notify::new(),
             stopped: AtomicBool::new(false),
         },
         handshake,
@@ -216,31 +229,74 @@ pub(crate) struct AcpSession {
     close_supported: bool,
     session_event_pending: AtomicBool,
     active: AtomicBool,
+    cancelled: AtomicBool,
+    cancellation: Notify,
     stopped: AtomicBool,
 }
 
 impl AcpSession {
     async fn run_turn(&self, request: &TurnRequest) -> Result<Vec<ProviderEvent>, ProviderError> {
+        if request.read_only {
+            return Err(ProviderError::Unsupported {
+                provider: self.provider,
+                capability: "read-only turns",
+            });
+        }
         if self.stopped.load(Ordering::Acquire) {
             return Err(ProviderError::Protocol(
                 "ACP session has already stopped".to_owned(),
             ));
         }
         let mut process = self.process.lock().await;
+        // Clear cancellation while this session is known idle, before making the turn visible to
+        // cancel(). A cancellation that observes active=true can therefore never be cleared.
+        self.cancelled.store(false, Ordering::Release);
         if self.active.swap(true, Ordering::AcqRel) {
             return Err(ProviderError::Protocol(
                 "ACP session already has an active turn".to_owned(),
             ));
         }
-        let outcome = self.collect_turn(&mut process, request).await;
+        let outcome = self.collect_turn(&mut process, request, None).await;
         self.active.store(false, Ordering::Release);
         outcome
     }
 
+    async fn run_turn_observed(
+        &self,
+        request: &TurnRequest,
+        observer: &dyn TurnEventObserver,
+    ) -> Result<Vec<ProviderEvent>, ProviderError> {
+        if request.read_only {
+            return Err(ProviderError::Unsupported {
+                provider: self.provider,
+                capability: "read-only turns",
+            });
+        }
+        if self.stopped.load(Ordering::Acquire) {
+            return Err(ProviderError::Protocol(
+                "ACP session has already stopped".to_owned(),
+            ));
+        }
+        let mut process = self.process.lock().await;
+        self.cancelled.store(false, Ordering::Release);
+        if self.active.swap(true, Ordering::AcqRel) {
+            return Err(ProviderError::Protocol(
+                "ACP session already has an active turn".to_owned(),
+            ));
+        }
+        let outcome = self
+            .collect_turn(&mut process, request, Some(observer))
+            .await;
+        self.active.store(false, Ordering::Release);
+        outcome
+    }
+
+    #[allow(clippy::too_many_lines)]
     async fn collect_turn(
         &self,
         process: &mut JsonRpcProcess,
         request: &TurnRequest,
+        observer: Option<&dyn TurnEventObserver>,
     ) -> Result<Vec<ProviderEvent>, ProviderError> {
         let prompt = PromptRequest::new(
             self.session_id.clone(),
@@ -269,6 +325,13 @@ impl AcpSession {
             turn_id: Some(request.correlation_id.to_string()),
             raw: None,
         });
+        if let Some(observer) = observer {
+            for event in &events {
+                observer.observe(event)?;
+            }
+        }
+        let mut permission_ids = HashSet::new();
+        let mut authorization_keys = HashSet::new();
 
         loop {
             let now = Instant::now();
@@ -318,21 +381,47 @@ impl AcpSession {
                         raw: Some(redact_json(result)),
                     });
                 }
+                if let Some(observer) = observer {
+                    observer.observe(events.last().expect("terminal event was appended"))?;
+                }
                 return Ok(events);
             }
 
-            if let Some(permission) = self.handle_permission_request(&message).await? {
-                progress.progress_at(Instant::now());
-                events.push(permission);
+            if message.get("method").and_then(Value::as_str) == Some("session/request_permission") {
+                if let Some(permission) = self
+                    .handle_permission_request(
+                        &message,
+                        observer,
+                        request,
+                        started,
+                        &mut permission_ids,
+                        &mut authorization_keys,
+                    )
+                    .await?
+                {
+                    progress.progress_at(Instant::now());
+                    if let Some(observer) = observer {
+                        observer.observe(&permission)?;
+                    }
+                    events.push(permission);
+                }
                 continue;
             }
             let Some(event) = normalize_acp_message(self.provider, &message)? else {
                 continue;
             };
+            if event_session_id(&event) != Some(self.session_id.as_str()) {
+                return Err(ProviderError::InvalidEvent(
+                    "ACP event targeted a different session".to_owned(),
+                ));
+            }
             if let ProviderEvent::TextDelta { text, .. } = &event {
                 output.push_str(text);
             }
             progress.progress_at(Instant::now());
+            if let Some(observer) = observer {
+                observer.observe(&event)?;
+            }
             events.push(event);
         }
     }
@@ -340,23 +429,134 @@ impl AcpSession {
     async fn handle_permission_request(
         &self,
         message: &Value,
+        observer: Option<&dyn TurnEventObserver>,
+        turn: &TurnRequest,
+        started: Instant,
+        permission_ids: &mut HashSet<String>,
+        authorization_keys: &mut HashSet<(String, String, String)>,
     ) -> Result<Option<ProviderEvent>, ProviderError> {
         if message.get("method").and_then(Value::as_str) != Some("session/request_permission") {
             return Ok(None);
         }
         let Some(id) = message.get("id").cloned() else {
-            return Err(ProviderError::InvalidEvent(
-                "ACP permission request omitted its JSON-RPC id".to_owned(),
-            ));
+            return Ok(None);
         };
-        let event = normalize_acp_message(self.provider, message)?.ok_or_else(|| {
-            ProviderError::InvalidEvent("ACP permission request did not normalize".to_owned())
-        })?;
-        let response = RequestPermissionResponse::new(RequestPermissionOutcome::Cancelled);
+        let request_id = permission_request_id(&id);
+        let permission = request_id
+            .as_ref()
+            .and_then(|(key, request_id)| {
+                (!permission_ids.contains(key)).then(|| {
+                    normalize_acp_permission_request(
+                        self.provider,
+                        request_id,
+                        message,
+                        &self.session_id,
+                        turn,
+                    )
+                })
+            })
+            .transpose()
+            .ok()
+            .flatten();
+        let authorization_key = permission.as_ref().and_then(permission_authorization_key);
+        let permission = authorization_key
+            .as_ref()
+            .filter(|key| !authorization_keys.contains(*key))
+            .and(permission);
+        if let (Some((request_key, _)), Some(authorization_key), Some(_)) =
+            (&request_id, &authorization_key, &permission)
+        {
+            permission_ids.insert(request_key.clone());
+            authorization_keys.insert(authorization_key.clone());
+        }
+        let decision = match (observer, permission.as_ref()) {
+            (Some(observer), Some(permission)) if !self.cancelled.load(Ordering::Acquire) => {
+                let remaining = self.request.turn_timeout().checked_sub(started.elapsed());
+                match remaining {
+                    Some(remaining) => tokio::select! {
+                        result = observer.decide_permission(permission) => result.unwrap_or(PermissionDecision::Decline),
+                        () = time::sleep(remaining) => PermissionDecision::Decline,
+                        () = self.wait_for_cancellation() => PermissionDecision::Decline,
+                    },
+                    None => PermissionDecision::Decline,
+                }
+            }
+            _ => PermissionDecision::Decline,
+        };
+        let valid_permission = permission.is_some();
+        let decision = if self.cancelled.load(Ordering::Acquire) {
+            PermissionDecision::Decline
+        } else {
+            decision
+        };
+        let response = match decision {
+            PermissionDecision::Approve => permission
+                .as_ref()
+                .and_then(|_| {
+                    allow_once_option(message).map(|option_id| {
+                        RequestPermissionResponse::new(RequestPermissionOutcome::Selected(
+                            SelectedPermissionOutcome::new(option_id),
+                        ))
+                    })
+                })
+                .unwrap_or_else(|| {
+                    RequestPermissionResponse::new(RequestPermissionOutcome::Cancelled)
+                }),
+            PermissionDecision::Decline => {
+                RequestPermissionResponse::new(RequestPermissionOutcome::Cancelled)
+            }
+        };
         self.control
             .respond(id, Ok(serialize_params(&response)?))
             .await?;
-        Ok(Some(event))
+        // A malformed or duplicate permission request is answered above but is not admitted to
+        // the ledger, and therefore cannot be mistaken for an approval request by the observer.
+        if valid_permission {
+            normalize_acp_message(self.provider, message)
+        } else {
+            Ok(None)
+        }
+    }
+
+    async fn wait_for_cancellation(&self) {
+        loop {
+            let notified = self.cancellation.notified();
+            tokio::pin!(notified);
+            notified.as_mut().enable();
+            if self.cancelled.load(Ordering::Acquire) {
+                return;
+            }
+            notified.await;
+            if self.cancelled.load(Ordering::Acquire) {
+                return;
+            }
+        }
+    }
+}
+
+fn event_session_id(event: &ProviderEvent) -> Option<&str> {
+    match event {
+        ProviderEvent::SessionStarted { session_id, .. }
+        | ProviderEvent::TurnStarted { session_id, .. }
+        | ProviderEvent::TextDelta { session_id, .. }
+        | ProviderEvent::ThoughtDelta { session_id, .. }
+        | ProviderEvent::ToolUpdate { session_id, .. }
+        | ProviderEvent::TerminalUpdate { session_id, .. }
+        | ProviderEvent::Usage { session_id, .. }
+        | ProviderEvent::PermissionRequested { session_id, .. }
+        | ProviderEvent::Progress { session_id, .. }
+        | ProviderEvent::TurnCompleted { session_id, .. }
+        | ProviderEvent::Cancelled { session_id, .. } => Some(session_id),
+        ProviderEvent::Error { session_id, .. }
+        | ProviderEvent::ProcessExited { session_id, .. } => session_id.as_deref(),
+    }
+}
+
+fn permission_request_id(id: &Value) -> Option<(String, String)> {
+    match id {
+        Value::String(value) if !value.is_empty() => Some((format!("s:{value}"), value.clone())),
+        Value::Number(value) => Some((format!("n:{value}"), value.to_string())),
+        _ => None,
     }
 }
 
@@ -377,9 +577,19 @@ impl ProviderSession for AcpSession {
         Box::pin(async move { self.run_turn(request).await })
     }
 
+    fn turn_observed<'a>(
+        &'a self,
+        request: &'a TurnRequest,
+        observer: &'a dyn TurnEventObserver,
+    ) -> AdapterFuture<'a, Vec<ProviderEvent>> {
+        Box::pin(async move { self.run_turn_observed(request, observer).await })
+    }
+
     fn cancel(&self) -> AdapterFuture<'_, ()> {
         Box::pin(async move {
             if self.active.load(Ordering::Acquire) {
+                self.cancelled.store(true, Ordering::Release);
+                self.cancellation.notify_waiters();
                 let cancel = CancelNotification::new(self.session_id.clone());
                 self.control
                     .notify("session/cancel", Some(serialize_params(&cancel)?))
@@ -625,6 +835,213 @@ fn stop_reason_string(value: &Value) -> String {
         .map_or_else(|| value.to_string(), str::to_owned)
 }
 
+/// Converts the small, understood ACP v1 permission subset into the durable approval shape.
+/// ACP tool-call arguments have no portable confinement proof, so every accepted request is
+/// conservatively marked as a scope expansion.
+fn normalize_acp_permission_request(
+    provider: ProviderKind,
+    request_id: &str,
+    message: &Value,
+    active_session_id: &str,
+    turn: &TurnRequest,
+) -> Result<PermissionRequest, ProviderError> {
+    if request_id.is_empty() {
+        return Err(ProviderError::InvalidEvent(
+            "ACP permission request id must be a nonempty string".to_owned(),
+        ));
+    }
+    let params = message.get("params").ok_or_else(|| {
+        ProviderError::InvalidEvent("ACP permission request omitted params".to_owned())
+    })?;
+    let session_id = params
+        .get("sessionId")
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| {
+            ProviderError::InvalidEvent("ACP permission request omitted sessionId".to_owned())
+        })?;
+    if session_id != active_session_id {
+        return Err(ProviderError::InvalidEvent(
+            "ACP permission request targeted a different session".to_owned(),
+        ));
+    }
+    let tool_call = params
+        .get("toolCall")
+        .and_then(Value::as_object)
+        .ok_or_else(|| {
+            ProviderError::InvalidEvent("ACP permission request omitted toolCall".to_owned())
+        })?;
+    let kind = match tool_call.get("kind").and_then(Value::as_str) {
+        Some("execute") => PermissionKind::CommandExecution,
+        Some("edit") => PermissionKind::FileChange,
+        _ => {
+            return Err(ProviderError::InvalidEvent(
+                "ACP permission request has an unsupported tool kind".to_owned(),
+            ));
+        }
+    };
+    let _tool_call_id = tool_call
+        .get("toolCallId")
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| {
+            ProviderError::InvalidEvent("ACP permission request omitted toolCallId".to_owned())
+        })?;
+    allow_once_option(message).ok_or_else(|| {
+        ProviderError::InvalidEvent(
+            "ACP permission request did not offer one unambiguous allow_once option".to_owned(),
+        )
+    })?;
+    let mut action = match kind {
+        PermissionKind::CommandExecution => "execute an ACP command".to_owned(),
+        PermissionKind::FileChange => "edit ACP files".to_owned(),
+    };
+    truncate_utf8(&mut action, MAX_PERMISSION_ACTION_BYTES);
+    let mut detail = json!({
+        "toolCallId": tool_call.get("toolCallId").cloned().unwrap_or(Value::Null),
+        "kind": tool_call.get("kind").cloned().unwrap_or(Value::Null),
+        "status": tool_call.get("status").cloned().unwrap_or(Value::Null),
+    });
+    detail = redact_json(detail);
+    bound_json(&mut detail, MAX_PERMISSION_DETAIL_BYTES);
+    Ok(PermissionRequest {
+        provider,
+        session_id: session_id.to_owned(),
+        turn_id: Some(turn.correlation_id.to_string()),
+        request_id: request_id.to_owned(),
+        kind,
+        action,
+        scope_expansion: true,
+        detail,
+    })
+}
+
+fn permission_authorization_key(request: &PermissionRequest) -> Option<(String, String, String)> {
+    Some((
+        request.session_id.clone(),
+        request.turn_id.clone()?,
+        request.detail.get("toolCallId")?.as_str()?.to_owned(),
+    ))
+}
+
+/// Returns the sole offered one-shot option. All option ids must be nonempty strings, and an
+/// unknown/malformed option is a refusal rather than an opportunity to broaden authority.
+fn allow_once_option(message: &Value) -> Option<String> {
+    let options = message.get("params")?.get("options")?.as_array()?;
+    let mut allow_once = None;
+    let mut ids = HashSet::new();
+    for option in options {
+        let option = option.as_object()?;
+        let id = option.get("optionId")?.as_str()?.trim();
+        let name = option.get("name")?.as_str()?.trim();
+        let kind = option.get("kind")?.as_str()?;
+        if id.is_empty() || name.is_empty() || !ids.insert(id.to_owned()) {
+            return None;
+        }
+        match kind {
+            "allow_once" => {
+                if allow_once.replace(id.to_owned()).is_some() {
+                    return None;
+                }
+            }
+            "allow_always" | "reject_once" | "reject_always" => {}
+            _ => return None,
+        }
+    }
+    allow_once
+}
+
+fn truncate_utf8(value: &mut String, maximum: usize) {
+    if value.len() <= maximum {
+        return;
+    }
+    let mut end = maximum;
+    while !value.is_char_boundary(end) {
+        end -= 1;
+    }
+    value.truncate(end);
+}
+
+fn bound_json(value: &mut Value, maximum: usize) {
+    if serde_json::to_vec(value).map_or(true, |encoded| encoded.len() > maximum) {
+        *value = json!({"truncated": true});
+    }
+}
+
 fn serialize_params<T: Serialize>(value: &T) -> Result<Value, ProviderError> {
     serde_json::to_value(value).map_err(ProviderError::from)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn permission(kind: &str, options: &Value) -> Value {
+        json!({
+            "jsonrpc": "2.0", "id": "permission-1", "method": "session/request_permission",
+            "params": {"sessionId": "session-1", "toolCall": {"toolCallId": "call-1", "title": "Write file", "kind": kind}, "options": options}
+        })
+    }
+
+    #[test]
+    fn acp_permission_requires_a_single_valid_one_shot_option_and_typed_kind() {
+        let message = permission(
+            "edit",
+            &json!([
+                {"optionId":"allow-one", "name":"Allow once", "kind":"allow_once"},
+                {"optionId":"always", "name":"Always", "kind":"allow_always"}
+            ]),
+        );
+        let request = normalize_acp_permission_request(
+            ProviderKind::OpenCode,
+            "permission-1",
+            &message,
+            "session-1",
+            &TurnRequest::new("x"),
+        )
+        .unwrap();
+        assert_eq!(request.kind, PermissionKind::FileChange);
+        assert_eq!(allow_once_option(&message).as_deref(), Some("allow-one"));
+        assert!(request.scope_expansion);
+
+        let unknown = permission(
+            "network",
+            &json!([{"optionId":"allow-one", "kind":"allow_once"}]),
+        );
+        assert!(
+            normalize_acp_permission_request(
+                ProviderKind::OpenCode,
+                "permission-1",
+                &unknown,
+                "session-1",
+                &TurnRequest::new("x"),
+            )
+            .is_err()
+        );
+        let ambiguous = permission(
+            "edit",
+            &json!([
+                {"optionId":"a", "kind":"allow_once"}, {"optionId":"b", "kind":"allow_once"}
+            ]),
+        );
+        assert!(allow_once_option(&ambiguous).is_none());
+    }
+
+    #[test]
+    fn acp_permission_rejects_another_active_session() {
+        let message = permission(
+            "execute",
+            &json!([{"optionId":"allow-one", "kind":"allow_once"}]),
+        );
+        assert!(
+            normalize_acp_permission_request(
+                ProviderKind::GrokBuild,
+                "permission-1",
+                &message,
+                "other-session",
+                &TurnRequest::new("x"),
+            )
+            .is_err()
+        );
+    }
 }

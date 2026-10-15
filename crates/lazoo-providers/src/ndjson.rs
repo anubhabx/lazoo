@@ -1,4 +1,6 @@
-use std::{collections::VecDeque, sync::Arc, time::Duration};
+use std::{
+    collections::VecDeque, future::poll_fn, pin::Pin, sync::Arc, task::Poll, time::Duration,
+};
 
 use lazoo_runtime::{JobChild, JobCommand};
 use serde_json::Value;
@@ -90,6 +92,29 @@ impl NdjsonProcess {
 
     pub(crate) fn control(&self) -> NdjsonControl {
         self.control.clone()
+    }
+
+    /// Waits briefly for unsolicited bytes without consuming them. Unlike `next_message`, a
+    /// timeout preserves a partially received line in the reader buffer.
+    pub(crate) async fn wait_for_ready_output(
+        &mut self,
+        wait: Duration,
+    ) -> Result<bool, ProviderError> {
+        match timeout(
+            wait,
+            poll_fn(
+                |context| match Pin::new(&mut self.stdout).poll_fill_buf(context) {
+                    Poll::Ready(Ok(bytes)) => Poll::Ready(Ok(!bytes.is_empty())),
+                    Poll::Ready(Err(error)) => Poll::Ready(Err(ProviderError::Io(error))),
+                    Poll::Pending => Poll::Pending,
+                },
+            ),
+        )
+        .await
+        {
+            Ok(result) => result,
+            Err(_) => Ok(false),
+        }
     }
 
     pub(crate) fn native_host_pid(&self) -> Option<u32> {

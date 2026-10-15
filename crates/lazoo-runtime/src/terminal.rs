@@ -1,0 +1,657 @@
+//! Private `ConPTY` transport for the daemon's terminal protocol.  This module deliberately has
+//! no persistence or tracing of terminal bytes: callers own any audit policy above this layer.
+
+use std::{
+    collections::VecDeque,
+    ffi::{OsStr, OsString, c_void},
+    os::windows::ffi::OsStrExt,
+    path::PathBuf,
+    sync::{
+        Arc, Mutex,
+        mpsc::{self, SyncSender, TrySendError},
+    },
+    thread::{self, JoinHandle},
+};
+
+use thiserror::Error;
+use uuid::Uuid;
+use windows::{
+    Win32::{
+        Foundation::{
+            CloseHandle, DUPLICATE_SAME_ACCESS, DuplicateHandle, HANDLE, STILL_ACTIVE,
+            WAIT_OBJECT_0, WAIT_TIMEOUT,
+        },
+        Storage::FileSystem::{ReadFile, WriteFile},
+        System::{
+            Console::{COORD, ClosePseudoConsole, CreatePseudoConsole, HPCON, ResizePseudoConsole},
+            IO::CancelSynchronousIo,
+            JobObjects::{
+                AssignProcessToJobObject, CreateJobObjectW, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+                JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JobObjectExtendedLimitInformation,
+                SetInformationJobObject, TerminateJobObject,
+            },
+            Pipes::CreatePipe,
+            Threading::{
+                CREATE_SUSPENDED, CreateProcessW, DeleteProcThreadAttributeList,
+                EXTENDED_STARTUPINFO_PRESENT, GetCurrentProcess, GetCurrentThread,
+                GetExitCodeProcess, InitializeProcThreadAttributeList,
+                LPPROC_THREAD_ATTRIBUTE_LIST, PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE,
+                PROCESS_INFORMATION, ResumeThread, STARTF_USESTDHANDLES, STARTUPINFOEXW,
+                TerminateProcess, UpdateProcThreadAttribute, WaitForSingleObject,
+            },
+        },
+    },
+    core::{PCWSTR, PWSTR},
+};
+
+const MAX_DIMENSION: u16 = 1000;
+const MAX_INPUT: usize = 16 * 1024;
+const MAX_READ: usize = 64 * 1024;
+const OUTPUT_CAPACITY: usize = 1024 * 1024;
+const INPUT_QUEUE_CAPACITY: usize = 32;
+const SHUTDOWN_WAIT_MS: u32 = 2_000;
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TerminalCommand {
+    executable: PathBuf,
+    arguments: Vec<OsString>,
+    cwd: PathBuf,
+    cols: u16,
+    rows: u16,
+}
+
+impl TerminalCommand {
+    pub fn new(
+        executable: impl Into<PathBuf>,
+        cwd: impl Into<PathBuf>,
+        cols: u16,
+        rows: u16,
+    ) -> Self {
+        Self {
+            executable: executable.into(),
+            arguments: Vec::new(),
+            cwd: cwd.into(),
+            cols,
+            rows,
+        }
+    }
+    #[must_use]
+    pub fn arg(mut self, argument: impl Into<OsString>) -> Self {
+        self.arguments.push(argument.into());
+        self
+    }
+    #[must_use]
+    pub fn args(mut self, arguments: impl IntoIterator<Item = impl Into<OsString>>) -> Self {
+        self.arguments.extend(arguments.into_iter().map(Into::into));
+        self
+    }
+    #[must_use]
+    pub fn executable(&self) -> &std::path::Path {
+        &self.executable
+    }
+    #[must_use]
+    pub fn cwd(&self) -> &std::path::Path {
+        &self.cwd
+    }
+}
+
+#[derive(Debug, Error)]
+pub enum TerminalError {
+    #[error("terminal dimensions must be in 1..={MAX_DIMENSION}")]
+    InvalidDimensions,
+    #[error("terminal input exceeds {MAX_INPUT} bytes")]
+    InputTooLarge,
+    #[error("terminal output request exceeds {MAX_READ} bytes")]
+    ReadTooLarge,
+    #[error("terminal input queue is full")]
+    InputBackpressure,
+    #[error("terminal is stopped")]
+    Stopped,
+    #[error("terminal process did not exit within {SHUTDOWN_WAIT_MS}ms")]
+    ShutdownTimeout,
+    #[error("Windows operation failed: {0}")]
+    Windows(#[from] windows::core::Error),
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TerminalOutput {
+    pub start: u64,
+    pub end: u64,
+    pub bytes: Vec<u8>,
+    pub gap: bool,
+}
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct TerminalExitStatus {
+    pub live: bool,
+    pub exit_code: Option<u32>,
+}
+
+#[derive(Debug)]
+pub struct TerminalSession {
+    inner: Arc<Inner>,
+}
+#[derive(Debug)]
+struct Inner {
+    id: Uuid,
+    pid: u32,
+    process: HANDLE,
+    job: HANDLE,
+    pty: Mutex<Option<PseudoConsole>>,
+    input: Mutex<Option<SyncSender<Vec<u8>>>>,
+    output: Arc<Mutex<OutputRing>>,
+    writer_thread: OwnedHandle,
+    workers: Mutex<Vec<JoinHandle<()>>>,
+}
+// Windows handles can be used from multiple threads. Mutable pseudo-console state is locked.
+unsafe impl Send for Inner {}
+unsafe impl Sync for Inner {}
+
+impl TerminalSession {
+    pub fn spawn(command: TerminalCommand) -> Result<Self, TerminalError> {
+        let TerminalCommand {
+            executable,
+            arguments,
+            cwd,
+            cols,
+            rows,
+        } = command;
+        validate_dimensions(cols, rows)?;
+        // These are the application-facing ends.  ConPTY owns the opposite ends after creation.
+        let (input_read, input_write) = pipe()?;
+        let (output_read, output_write) = pipe()?;
+        let pty = PseudoConsole(unsafe {
+            CreatePseudoConsole(
+                COORD {
+                    X: i16::try_from(cols).expect("validated terminal columns fit i16"),
+                    Y: i16::try_from(rows).expect("validated terminal rows fit i16"),
+                },
+                input_read.0,
+                output_write.0,
+                0,
+            )
+        }?);
+        let attribute_list = AttributeList::new(pty.0)?;
+        let mut startup = STARTUPINFOEXW::default();
+        startup.StartupInfo.cb =
+            u32::try_from(size_of::<STARTUPINFOEXW>()).expect("STARTUPINFOEXW size fits u32");
+        startup.lpAttributeList = attribute_list.0;
+        // Do not let an inherited parent console bypass ConPTY (notably under test runners).
+        startup.StartupInfo.hStdInput = HANDLE::default();
+        startup.StartupInfo.hStdOutput = HANDLE::default();
+        startup.StartupInfo.hStdError = HANDLE::default();
+        startup.StartupInfo.dwFlags |= STARTF_USESTDHANDLES;
+        let mut process_info = PROCESS_INFORMATION::default();
+        let application = wide(executable.as_os_str());
+        let cwd = wide(cwd.as_os_str());
+        let mut line = command_line(&executable, &arguments);
+        unsafe {
+            CreateProcessW(
+                PCWSTR(application.as_ptr()),
+                Some(PWSTR(line.as_mut_ptr())),
+                None,
+                None,
+                false,
+                CREATE_SUSPENDED | EXTENDED_STARTUPINFO_PRESENT,
+                None,
+                PCWSTR(cwd.as_ptr()),
+                (&raw const startup).cast(),
+                &raw mut process_info,
+            )?;
+        }
+        // ConPTY requires these ends to stay open through CreateProcessW.
+        drop(input_read);
+        drop(output_write);
+        let process = OwnedHandle(process_info.hProcess);
+        let thread = OwnedHandle(process_info.hThread);
+        let job = match create_kill_on_close_job() {
+            Ok(job) => job,
+            Err(error) => {
+                terminate_and_wait(process.0);
+                return Err(error);
+            }
+        };
+        if let Err(error) = unsafe { AssignProcessToJobObject(job.0, process.0) } {
+            terminate_and_wait(process.0);
+            return Err(error.into());
+        }
+        // The process cannot run until containment has succeeded.
+        if unsafe { ResumeThread(thread.0) } == u32::MAX {
+            let error = windows::core::Error::from_thread();
+            terminate_and_wait(process.0);
+            return Err(error.into());
+        }
+
+        let output = Arc::new(Mutex::new(OutputRing::new(OUTPUT_CAPACITY)));
+        let (tx, rx) = mpsc::sync_channel(INPUT_QUEUE_CAPACITY);
+        let output_for_reader = Arc::clone(&output);
+        let reader = thread::spawn(move || read_worker(output_read, output_for_reader));
+        let (writer_ready, writer_thread) = mpsc::sync_channel(1);
+        let writer = thread::spawn(move || write_worker(input_write, rx, writer_ready));
+        let writer_thread = writer_thread.recv().map_err(|_| TerminalError::Stopped)?;
+        Ok(Self {
+            inner: Arc::new(Inner {
+                id: Uuid::new_v4(),
+                pid: process_info.dwProcessId,
+                process: process.into_raw(),
+                job: job.into_raw(),
+                pty: Mutex::new(Some(pty)),
+                input: Mutex::new(Some(tx)),
+                output,
+                writer_thread,
+                workers: Mutex::new(vec![reader, writer]),
+            }),
+        })
+    }
+    #[must_use]
+    pub fn id(&self) -> Uuid {
+        self.inner.id
+    }
+    #[must_use]
+    pub fn pid(&self) -> u32 {
+        self.inner.pid
+    }
+    pub fn resize(&self, cols: u16, rows: u16) -> Result<(), TerminalError> {
+        validate_dimensions(cols, rows)?;
+        let guard = self.inner.pty.lock().expect("terminal pty mutex poisoned");
+        let pty = guard.as_ref().ok_or(TerminalError::Stopped)?;
+        unsafe {
+            ResizePseudoConsole(
+                pty.0,
+                COORD {
+                    X: i16::try_from(cols).expect("validated terminal columns fit i16"),
+                    Y: i16::try_from(rows).expect("validated terminal rows fit i16"),
+                },
+            )?;
+        }
+        Ok(())
+    }
+    pub fn write_input(&self, bytes: impl AsRef<[u8]>) -> Result<(), TerminalError> {
+        let bytes = bytes.as_ref();
+        if bytes.len() > MAX_INPUT {
+            return Err(TerminalError::InputTooLarge);
+        }
+        let guard = self
+            .inner
+            .input
+            .lock()
+            .expect("terminal input mutex poisoned");
+        let sender = guard.as_ref().ok_or(TerminalError::Stopped)?;
+        sender
+            .try_send(bytes.to_vec())
+            .map_err(|error| match error {
+                TrySendError::Full(_) => TerminalError::InputBackpressure,
+                TrySendError::Disconnected(_) => TerminalError::Stopped,
+            })
+    }
+    pub fn read_output(
+        &self,
+        after: u64,
+        max_bytes: usize,
+    ) -> Result<TerminalOutput, TerminalError> {
+        if max_bytes > MAX_READ {
+            return Err(TerminalError::ReadTooLarge);
+        }
+        Ok(self
+            .inner
+            .output
+            .lock()
+            .expect("terminal output mutex poisoned")
+            .read(after, max_bytes))
+    }
+    pub fn exit_status(&self) -> Result<TerminalExitStatus, TerminalError> {
+        let mut code = 0;
+        unsafe {
+            GetExitCodeProcess(self.inner.process, &raw mut code)?;
+        }
+        let active = STILL_ACTIVE.0 as u32;
+        Ok(TerminalExitStatus {
+            live: code == active,
+            exit_code: (code != active).then_some(code),
+        })
+    }
+    pub fn stop(&self) -> Result<(), TerminalError> {
+        self.shutdown()
+    }
+    fn shutdown(&self) -> Result<(), TerminalError> {
+        self.inner
+            .input
+            .lock()
+            .expect("terminal input mutex poisoned")
+            .take();
+        unsafe {
+            let _ = TerminateJobObject(self.inner.job, 1);
+            let _ = CancelSynchronousIo(self.inner.writer_thread.0);
+        }
+        let wait = unsafe { WaitForSingleObject(self.inner.process, SHUTDOWN_WAIT_MS) };
+        if wait == WAIT_TIMEOUT {
+            return Err(TerminalError::ShutdownTimeout);
+        }
+        if wait != WAIT_OBJECT_0 {
+            return Err(TerminalError::Windows(windows::core::Error::from_thread()));
+        }
+        // Closing ConPTY after termination closes its pipe ends; the reader keeps draining until EOF.
+        if let Some(pty) = self
+            .inner
+            .pty
+            .lock()
+            .expect("terminal pty mutex poisoned")
+            .take()
+        {
+            drop(pty);
+        }
+        for worker in self
+            .inner
+            .workers
+            .lock()
+            .expect("terminal workers mutex poisoned")
+            .drain(..)
+        {
+            let _ = worker.join();
+        }
+        Ok(())
+    }
+}
+impl Clone for TerminalSession {
+    fn clone(&self) -> Self {
+        Self {
+            inner: Arc::clone(&self.inner),
+        }
+    }
+}
+impl Drop for TerminalSession {
+    fn drop(&mut self) {
+        if Arc::strong_count(&self.inner) == 1 {
+            let _ = self.shutdown();
+            unsafe {
+                let _ = CloseHandle(self.inner.process);
+                let _ = CloseHandle(self.inner.job);
+            }
+        }
+    }
+}
+
+fn validate_dimensions(cols: u16, rows: u16) -> Result<(), TerminalError> {
+    if cols == 0 || rows == 0 || cols > MAX_DIMENSION || rows > MAX_DIMENSION {
+        Err(TerminalError::InvalidDimensions)
+    } else {
+        Ok(())
+    }
+}
+fn wide(value: &OsStr) -> Vec<u16> {
+    value.encode_wide().chain(Some(0)).collect()
+}
+fn command_line(executable: &std::path::Path, arguments: &[OsString]) -> Vec<u16> {
+    let mut line = Vec::new();
+    append_windows_argument(&mut line, executable.as_os_str());
+    for argument in arguments {
+        line.push(u16::from(b' '));
+        append_windows_argument(&mut line, argument);
+    }
+    line.push(0);
+    line
+}
+fn append_windows_argument(output: &mut Vec<u16>, argument: &OsStr) {
+    let argument: Vec<u16> = argument.encode_wide().collect();
+    if !argument.is_empty() && !argument.iter().any(|unit| matches!(*unit, 9 | 32 | 34)) {
+        output.extend(argument);
+        return;
+    }
+    output.push(u16::from(b'"'));
+    let mut backslashes = 0;
+    for unit in argument {
+        if unit == u16::from(b'\\') {
+            backslashes += 1;
+            continue;
+        }
+        if unit == u16::from(b'"') {
+            output.extend(std::iter::repeat_n(u16::from(b'\\'), backslashes * 2 + 1));
+            output.push(unit);
+        } else {
+            output.extend(std::iter::repeat_n(u16::from(b'\\'), backslashes));
+            output.push(unit);
+        }
+        backslashes = 0;
+    }
+    output.extend(std::iter::repeat_n(u16::from(b'\\'), backslashes * 2));
+    output.push(u16::from(b'"'));
+}
+fn terminate_and_wait(process: HANDLE) {
+    unsafe {
+        let _ = TerminateProcess(process, 1);
+        let _ = WaitForSingleObject(process, SHUTDOWN_WAIT_MS);
+    }
+}
+fn pipe() -> Result<(OwnedHandle, OwnedHandle), TerminalError> {
+    let mut read = HANDLE::default();
+    let mut write = HANDLE::default();
+    unsafe {
+        CreatePipe(&raw mut read, &raw mut write, None, 0)?;
+    }
+    Ok((OwnedHandle(read), OwnedHandle(write)))
+}
+fn create_kill_on_close_job() -> Result<OwnedHandle, TerminalError> {
+    let job = unsafe { CreateJobObjectW(None, None) }?;
+    let job = OwnedHandle(job);
+    let mut limits = JOBOBJECT_EXTENDED_LIMIT_INFORMATION::default();
+    limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+    unsafe {
+        SetInformationJobObject(
+            job.0,
+            JobObjectExtendedLimitInformation,
+            (&raw const limits).cast::<c_void>(),
+            u32::try_from(size_of_val(&limits)).expect("job limits size fits u32"),
+        )?;
+    }
+    Ok(job)
+}
+fn read_worker(handle: OwnedHandle, ring: Arc<Mutex<OutputRing>>) {
+    let mut buffer = [0_u8; 8192];
+    loop {
+        let mut read = 0;
+        if unsafe { ReadFile(handle.0, Some(&mut buffer), Some(&raw mut read), None) }.is_err()
+            || read == 0
+        {
+            break;
+        }
+        ring.lock()
+            .expect("terminal output mutex poisoned")
+            .push(&buffer[..read as usize]);
+    }
+    drop(ring);
+    drop(handle);
+}
+fn write_worker(
+    handle: OwnedHandle,
+    receiver: mpsc::Receiver<Vec<u8>>,
+    ready: mpsc::SyncSender<OwnedHandle>,
+) {
+    let Ok(thread) = duplicate_current_thread() else {
+        return;
+    };
+    if ready.send(thread).is_err() {
+        return;
+    }
+    drop(ready);
+    for bytes in receiver {
+        let mut written = 0;
+        if unsafe { WriteFile(handle.0, Some(&bytes), Some(&raw mut written), None) }.is_err()
+            || written != u32::try_from(bytes.len()).expect("terminal input is bounded to 16 KiB")
+        {
+            break;
+        }
+    }
+    drop(handle);
+}
+
+fn duplicate_current_thread() -> Result<OwnedHandle, TerminalError> {
+    let mut duplicate = HANDLE::default();
+    unsafe {
+        DuplicateHandle(
+            GetCurrentProcess(),
+            GetCurrentThread(),
+            GetCurrentProcess(),
+            &raw mut duplicate,
+            0,
+            false,
+            DUPLICATE_SAME_ACCESS,
+        )?;
+    }
+    Ok(OwnedHandle(duplicate))
+}
+
+#[derive(Debug)]
+struct OwnedHandle(HANDLE);
+// A HANDLE has no Rust aliasing semantics. Ownership transfers exactly once into each worker.
+unsafe impl Send for OwnedHandle {}
+impl OwnedHandle {
+    fn into_raw(self) -> HANDLE {
+        let handle = self.0;
+        std::mem::forget(self);
+        handle
+    }
+}
+impl Drop for OwnedHandle {
+    fn drop(&mut self) {
+        unsafe {
+            let _ = CloseHandle(self.0);
+        }
+    }
+}
+#[derive(Debug)]
+struct PseudoConsole(HPCON);
+impl Drop for PseudoConsole {
+    fn drop(&mut self) {
+        unsafe {
+            ClosePseudoConsole(self.0);
+        }
+    }
+}
+#[derive(Debug)]
+struct AttributeList(LPPROC_THREAD_ATTRIBUTE_LIST, #[allow(dead_code)] Vec<usize>);
+impl AttributeList {
+    fn new(pty: HPCON) -> Result<Self, TerminalError> {
+        let mut bytes = 0;
+        unsafe {
+            let _ = InitializeProcThreadAttributeList(None, 1, None, &raw mut bytes);
+        }
+        let words = bytes.div_ceil(size_of::<usize>());
+        let mut storage = vec![0usize; words];
+        let list = LPPROC_THREAD_ATTRIBUTE_LIST(storage.as_mut_ptr().cast());
+        unsafe {
+            InitializeProcThreadAttributeList(Some(list), 1, None, &raw mut bytes)?;
+            UpdateProcThreadAttribute(
+                list,
+                0,
+                PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE as usize,
+                // The attribute value is the opaque HPCON value itself, not an address of it.
+                Some(pty.0 as *const c_void),
+                size_of::<HPCON>(),
+                None,
+                None,
+            )?;
+        }
+        Ok(Self(list, storage))
+    }
+}
+impl Drop for AttributeList {
+    fn drop(&mut self) {
+        unsafe {
+            DeleteProcThreadAttributeList(self.0);
+        }
+    }
+}
+
+#[derive(Debug)]
+struct OutputRing {
+    bytes: VecDeque<u8>,
+    start: u64,
+    end: u64,
+    capacity: usize,
+}
+impl OutputRing {
+    fn new(capacity: usize) -> Self {
+        Self {
+            bytes: VecDeque::new(),
+            start: 0,
+            end: 0,
+            capacity,
+        }
+    }
+    fn push(&mut self, incoming: &[u8]) {
+        self.bytes.extend(incoming);
+        self.end += incoming.len() as u64;
+        while self.bytes.len() > self.capacity {
+            self.bytes.pop_front();
+            self.start += 1;
+        }
+    }
+    fn read(&self, after: u64, max: usize) -> TerminalOutput {
+        let gap = after < self.start;
+        let start = after.max(self.start).min(self.end);
+        let offset = usize::try_from(start - self.start).expect("output ring offset fits usize");
+        let count = max.min(self.bytes.len().saturating_sub(offset));
+        let bytes = self
+            .bytes
+            .iter()
+            .skip(offset)
+            .take(count)
+            .copied()
+            .collect::<Vec<_>>();
+        TerminalOutput {
+            start,
+            end: start + bytes.len() as u64,
+            bytes,
+            gap,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::{os::windows::ffi::OsStringExt, slice};
+    use windows::Win32::{
+        Foundation::{HLOCAL, LocalFree},
+        UI::Shell::CommandLineToArgvW,
+    };
+    #[test]
+    fn output_ring_reports_dropped_prefix() {
+        let mut ring = OutputRing::new(3);
+        ring.push(b"abcd");
+        let output = ring.read(0, 3);
+        assert!(output.gap);
+        assert_eq!(output.start, 1);
+        assert_eq!(output.bytes, b"bcd");
+    }
+
+    #[test]
+    fn command_line_round_trips_quotes_backslashes_spaces_and_empty_values() {
+        let executable = PathBuf::from(r"C:\Program Files\Lazoo\runner.exe");
+        let arguments = [
+            OsString::from("plain"),
+            OsString::from("space value"),
+            OsString::from("quote\"value"),
+            OsString::from("trailing\\"),
+            OsString::new(),
+        ];
+        let command_line = command_line(&executable, &arguments);
+        let mut count = 0;
+        let argv = unsafe { CommandLineToArgvW(PCWSTR(command_line.as_ptr()), &raw mut count) };
+        assert!(!argv.is_null());
+        let actual = unsafe { slice::from_raw_parts(argv, usize::try_from(count).unwrap()) }
+            .iter()
+            .map(|argument| {
+                let mut length = 0;
+                while unsafe { *argument.0.add(length) } != 0 {
+                    length += 1;
+                }
+                OsString::from_wide(unsafe { slice::from_raw_parts(argument.0, length) })
+            })
+            .collect::<Vec<_>>();
+        unsafe {
+            let _ = LocalFree(Some(HLOCAL(argv.cast())));
+        }
+        assert_eq!(actual[0], executable.into_os_string());
+        assert_eq!(&actual[1..], &arguments);
+    }
+}

@@ -35,6 +35,65 @@ fn git_init(path: &Path) {
     assert!(status.success());
 }
 
+#[tokio::test]
+async fn provider_completed_and_failed_terminal_events_finish_governed_turns() {
+    for (status, expected) in [
+        ("completed", TurnState::Completed),
+        ("failed", TurnState::TerminalFailed),
+    ] {
+        let (_temporary, harness) = approval_harness(
+            AuthorityMode::Ask,
+            Duration::from_secs(1),
+            Vec::new(),
+            status,
+        );
+        warm_lead(&harness).await;
+        let response = submit_governed_turn(&harness, "ask").await.unwrap();
+        assert!(response.error.is_none(), "{response:?}");
+        let result = response.result.unwrap();
+        assert_eq!(
+            result["turn"]["state"],
+            serde_json::to_value(expected).unwrap()
+        );
+    }
+}
+
+#[tokio::test]
+async fn dropped_provider_approval_observer_closes_pending_record() {
+    let (_temporary, harness) = approval_harness(
+        AuthorityMode::Ask,
+        Duration::from_secs(60),
+        vec![permission_request(
+            PermissionKind::CommandExecution,
+            "cargo test",
+            false,
+        )],
+        "completed",
+    );
+    warm_lead(&harness).await;
+    let submission = submit_governed_turn(&harness, "ask");
+    let pending = wait_for_pending_approval(&harness).await;
+    let approval_id: uuid::Uuid = pending["id"].as_str().unwrap().parse().unwrap();
+    submission.abort();
+    let _ = submission.await;
+    let closed = timeout(Duration::from_secs(2), async {
+        loop {
+            let approval = harness.store.get_approval(approval_id).unwrap();
+            if approval.state != lazoo_protocol::ApprovalState::Pending {
+                return approval;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    assert_eq!(closed.state, lazoo_protocol::ApprovalState::Cancelled);
+    assert_eq!(
+        closed.failure_code.as_deref(),
+        Some("LZ-APPROVAL-OBSERVER-DROPPED")
+    );
+}
+
 fn git(path: &Path, args: &[&str]) {
     let status = Command::new("git")
         .arg("-C")
@@ -3580,7 +3639,7 @@ async fn status_reports_protocol_store_and_boot_identity() {
     let result = response.result.unwrap();
 
     assert_eq!(result["protocolVersion"], 1);
-    assert_eq!(result["schemaVersion"], 15);
+    assert_eq!(result["schemaVersion"], 18);
     assert_eq!(result["journalMode"], "wal");
     assert!(
         result["bootId"]
@@ -4324,7 +4383,7 @@ fn employee_roster_acceptance_contract_is_backend_only() {
         "roster', 'refresh",
         "LZ-EMPLOYEE-STALE",
         "restartDurability",
-        "schemaVersion 15",
+        "schemaVersion 18",
         "providerSmokeAbsent",
     ] {
         assert!(
@@ -4362,7 +4421,7 @@ fn native_session_acceptance_contract_covers_containment_and_owner_loss() {
         "completeTreeTerminated",
         "nativeHostPid",
         "providerSmokeAbsent",
-        "schemaVersion 15",
+        "schemaVersion 18",
     ] {
         assert!(
             script.contains(required),
@@ -4392,7 +4451,7 @@ fn collaboration_bus_acceptance_contract_is_backend_only() {
         "deadLetterEvidence",
         "restartDurability",
         "auditOutboxEvidence",
-        "schemaVersion 15",
+        "schemaVersion 18",
         "providerSmokeAbsent",
         "desktopCapabilityExpansionAbsent",
     ] {
@@ -4528,7 +4587,7 @@ fn task_graph_acceptance_executes_backend_only_contract() {
     )
     .unwrap();
     assert_eq!(manifest["status"], "PASS");
-    assert_eq!(manifest["schemaVersion"], 15);
+    assert_eq!(manifest["schemaVersion"], 18);
     assert_eq!(manifest["mode"], "deterministic-fixture");
     for field in [
         "rootIdentity",
@@ -5141,15 +5200,16 @@ async fn pending_approvals_from_a_previous_boot_expire_with_owner_loss_on_restar
     warm_lead(&harness).await;
     let submission = submit_governed_turn(&harness, "ask");
     let pending = wait_for_pending_approval(&harness).await;
-    submission.abort();
-    let _ = submission.await;
-
+    // A process crash cannot run the observer's Drop guard. Reconcile while it is still
+    // pending, then drop the old future; a deliberate abort is tested separately as Cancelled.
     let restarted = App::new_with_provider_environment(
         harness.store.clone(),
         harness.app.data_root().clone(),
         DiscoveryEnvironment::empty(),
     )
     .unwrap();
+    submission.abort();
+    let _ = submission.await;
     let shown = restarted
         .handle(request(
             "show-restarted-approval",
@@ -5369,6 +5429,7 @@ async fn lead_turn_lists_employees_delegates_and_waits_through_collaboration_too
     assert_eq!(
         declared[0],
         vec![
+            "memory_search",
             "employees_list",
             "task_delegate",
             "task_wait",
@@ -5707,7 +5768,7 @@ fn collaboration_tools_acceptance_contract_is_deterministic_and_backend_only() {
         "worker_turn_reports_failure_through_task_report_before_native_completion",
         "collaboration-tools-manifest.json",
         "deterministic-fake-transport",
-        "schemaVersion = 15",
+        "schemaVersion = 18",
     ] {
         assert!(
             script.contains(required),
@@ -6244,7 +6305,7 @@ async fn restart_owner_loss_and_emergency_spool_fold_into_startup_incidents_once
         .await
         .result
         .unwrap();
-    assert_eq!(status["schemaVersion"], 15);
+    assert_eq!(status["schemaVersion"], 18);
     assert_eq!(status["emergencyIncidentCount"], 1);
 }
 
@@ -6347,7 +6408,7 @@ fn minimum_incidents_acceptance_contract_is_deterministic_and_backend_only() {
         "incident_errors_use_exit_code_fifteen",
         "minimum-incidents-manifest.json",
         "deterministic-fake-transport",
-        "schemaVersion = 15",
+        "schemaVersion = 18",
     ] {
         assert!(
             script.contains(required),
@@ -6817,7 +6878,7 @@ fn result_delivery_acceptance_contract_is_deterministic_and_backend_only() {
         "externalModelUseAbsent",
         "uiChangesAbsent",
         "deterministic-fake-transport",
-        "schemaVersion = 15",
+        "schemaVersion = 18",
     ] {
         assert!(
             script.contains(required),
@@ -7324,7 +7385,7 @@ fn peer_messaging_acceptance_contract_is_deterministic_and_backend_only() {
         "externalModelUseAbsent",
         "uiChangesAbsent",
         "deterministic-fake-transport",
-        "schemaVersion = 15",
+        "schemaVersion = 18",
     ] {
         assert!(
             script.contains(required),
@@ -7447,7 +7508,7 @@ fn coalesced_notices_acceptance_contract_is_deterministic_and_backend_only() {
         "externalModelUseAbsent",
         "uiChangesAbsent",
         "deterministic-fake-transport",
-        "schemaVersion = 15",
+        "schemaVersion = 18",
     ] {
         assert!(
             script.contains(required),
@@ -7686,7 +7747,7 @@ fn activation_policy_acceptance_contract_is_deterministic_and_backend_only() {
         "externalModelUseAbsent",
         "uiChangesAbsent",
         "deterministic-fake-transport",
-        "schemaVersion = 15",
+        "schemaVersion = 18",
     ] {
         assert!(
             script.contains(required),
@@ -8053,7 +8114,7 @@ fn idle_suspension_acceptance_contract_is_deterministic_and_backend_only() {
         "externalModelUseAbsent",
         "uiChangesAbsent",
         "deterministic-fake-transport",
-        "schemaVersion = 15",
+        "schemaVersion = 18",
     ] {
         assert!(
             script.contains(required),
@@ -8340,7 +8401,7 @@ fn lead_remediation_acceptance_contract_is_deterministic_and_backend_only() {
         "externalModelUseAbsent",
         "uiChangesAbsent",
         "deterministic-fake-transport",
-        "schemaVersion = 15",
+        "schemaVersion = 18",
     ] {
         assert!(
             script.contains(required),
@@ -8382,7 +8443,7 @@ fn incident_thresholds_acceptance_contract_is_deterministic_and_backend_only() {
         "externalModelUseAbsent",
         "uiChangesAbsent",
         "deterministic-fake-transport",
-        "schemaVersion = 15",
+        "schemaVersion = 18",
     ] {
         assert!(
             script.contains(required),
@@ -8591,7 +8652,7 @@ fn user_notifications_acceptance_contract_is_deterministic_and_backend_only() {
         "externalModelUseAbsent",
         "uiChangesAbsent",
         "deterministic-fake-transport",
-        "schemaVersion = 15",
+        "schemaVersion = 18",
     ] {
         assert!(
             script.contains(required),
@@ -8685,7 +8746,7 @@ fn message_arrival_acceptance_contract_is_deterministic_and_backend_only() {
         "externalModelUseAbsent",
         "uiChangesAbsent",
         "deterministic-fake-transport",
-        "schemaVersion = 15",
+        "schemaVersion = 18",
     ] {
         assert!(
             script.contains(required),
@@ -8907,7 +8968,7 @@ fn message_priority_acceptance_contract_is_deterministic_and_backend_only() {
         "externalModelUseAbsent",
         "uiChangesAbsent",
         "deterministic-fake-transport",
-        "schemaVersion = 15",
+        "schemaVersion = 18",
     ] {
         assert!(
             script.contains(required),
@@ -9096,7 +9157,7 @@ fn configurable_thresholds_acceptance_contract_is_deterministic_and_backend_only
         "externalModelUseAbsent",
         "uiChangesAbsent",
         "deterministic-fake-transport",
-        "schemaVersion = 15",
+        "schemaVersion = 18",
     ] {
         assert!(
             script.contains(required),
@@ -9625,7 +9686,7 @@ fn desktop_inbox_acceptance_contract_is_deterministic_and_backend_only() {
         "externalModelUseAbsent",
         "uiChangesAbsent",
         "deterministic-fake-transport",
-        "schemaVersion = 15",
+        "schemaVersion = 18",
     ] {
         assert!(
             script.contains(required),
@@ -9807,7 +9868,7 @@ fn resource_accounting_acceptance_contract_is_deterministic_and_backend_only() {
         "externalModelUseAbsent",
         "uiChangesAbsent",
         "deterministic-fake-transport",
-        "schemaVersion = 15",
+        "schemaVersion = 18",
     ] {
         assert!(
             script.contains(required),
@@ -9844,7 +9905,7 @@ fn resource_budget_acceptance_contract_measures_lazoo_itself_without_a_provider(
         "$idleCpuCeiling = 0.01",
         "$routingCpuCeiling = 0.05",
         "$idleMemoryCeilingBytes = 350MB",
-        "schemaVersion = 15",
+        "schemaVersion = 18",
         "real-binaries-no-provider",
     ] {
         assert!(
@@ -10016,7 +10077,7 @@ fn conversation_rename_acceptance_contract_is_deterministic_and_backend_only() {
         "externalModelUseAbsent",
         "uiChangesAbsent",
         "deterministic-fake-transport",
-        "schemaVersion = 15",
+        "schemaVersion = 18",
     ] {
         assert!(
             script.contains(required),
@@ -10129,7 +10190,7 @@ fn provider_config_acceptance_contract_is_read_only_and_backend_only() {
         "externalModelUseAbsent",
         "uiChangesAbsent",
         "deterministic-fake-transport",
-        "schemaVersion = 15",
+        "schemaVersion = 18",
     ] {
         assert!(
             script.contains(required),
@@ -10961,7 +11022,7 @@ fn core_scenario_acceptance_contract_maps_every_step_to_evidence() {
         "externalModelUseAbsent",
         "uiChangesAbsent",
         "deterministic-fake-transport",
-        "schemaVersion = 15",
+        "schemaVersion = 18",
     ] {
         assert!(
             script.contains(required),
@@ -11313,7 +11374,7 @@ fn workspace_read_models_acceptance_contract_is_deterministic_and_backend_only()
         "externalModelUseAbsent",
         "uiChangesAbsent",
         "deterministic-fake-transport",
-        "schemaVersion = 15",
+        "schemaVersion = 18",
     ] {
         assert!(
             script.contains(required),
@@ -11625,7 +11686,7 @@ fn workspace_conversation_acceptance_contract_is_deterministic_and_backend_only(
         "externalModelUseAbsent",
         "uiChangesAbsent",
         "deterministic-fake-transport",
-        "schemaVersion = 15",
+        "schemaVersion = 18",
     ] {
         assert!(
             script.contains(required),
@@ -11789,7 +11850,7 @@ fn workspace_actions_acceptance_contract_is_deterministic_and_backend_only() {
         "externalModelUseAbsent",
         "uiChangesAbsent",
         "deterministic-fake-transport",
-        "schemaVersion = 15",
+        "schemaVersion = 18",
     ] {
         assert!(
             script.contains(required),
@@ -11927,7 +11988,7 @@ fn provider_migration_preview_acceptance_contract_is_deterministic_and_backend_o
         "externalModelUseAbsent",
         "uiChangesAbsent",
         "deterministic-fake-transport",
-        "schemaVersion = 15",
+        "schemaVersion = 18",
     ] {
         assert!(
             script.contains(required),
@@ -12448,7 +12509,7 @@ fn claude_full_autonomy_acceptance_contract_is_deterministic_and_backend_only() 
         "externalModelUseAbsent",
         "uiChangesAbsent",
         "deterministic-fake-transport",
-        "schemaVersion = 15",
+        "schemaVersion = 18",
     ] {
         assert!(
             script.contains(required),

@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "status": "BLOCKED",
-  "generatedAt": "2026-08-30T10:05:14.4123928Z",
+  "generatedAt": "2026-10-15T18:26:29.1368745Z",
   "platform": "Microsoft Windows NT 10.0.26200.0",
   "rustcVersion": "rustc 1.98.0 (88d9e12ae 2026-08-18)",
   "cargoVersion": "cargo 1.98.0 (797e8a9bc 2026-08-05)",
@@ -9,15 +9,19 @@
     "codex": {
       "provider": "codex",
       "status": "PASS",
-      "startedAt": "2026-08-30T10:03:27.577635Z",
-      "completedAt": "2026-08-30T10:03:48.1428032Z",
-      "durationMs": 20565,
+      "startedAt": "2026-10-15T18:00:40.4890336Z",
+      "completedAt": "2026-10-15T18:00:57.0802067Z",
+      "durationMs": 16592,
+      "binaries": {
+        "daemonSha256": "E04C951C8BA788E6EE8701334E393CDA2D53C61E9F9A92BFABDA847DBD876FFA",
+        "cliSha256": "F93445FF6C9C7AF59BBDAE31E82DE31906A38DB3AB12D63CD0363C9617AFDD4F"
+      },
       "executable": {
         "detected": true,
         "fileName": "codex.exe",
-        "pathSha256": "30edd846c0b6aeeb3998d2bed46b27e22b31e3a6c80b830ab042e3a4ea84cc8a",
+        "pathSha256": "d8ea5345c781e125990e3d048c265127c0e2d99f800a7d54f2cabb29f3ed4dde",
         "discoverySource": "inherited-path",
-        "version": "codex-cli 0.150.0-alpha.12.2"
+        "version": "codex-cli 0.162.0-alpha.17.2"
       },
       "handshake": {
         "status": "PASS",
@@ -29,17 +33,17 @@
         "status": "PASS",
         "outputMatched": true,
         "eventTypes": [
-          "sessionStarted",
           "progress",
+          "sessionStarted",
           "turnStarted",
           "textDelta",
           "usage",
           "turnCompleted"
         ],
         "usage": {
-          "inputTokens": 23584,
+          "inputTokens": 25303,
           "outputTokens": 10,
-          "totalTokens": 23594,
+          "totalTokens": 25313,
           "costUsd": null
         },
         "blocker": null
@@ -64,38 +68,37 @@
       },
       "commands": [
         {
-          "command": "cargo build -p lazood -p lazooctl --release --locked",
-          "exitCode": 0,
-          "durationMs": 4477
-        },
-        {
           "command": "lazooctl --json status",
           "exitCode": 0,
-          "durationMs": 72
+          "durationMs": 173
         },
         {
           "command": "lazooctl --json provider list",
           "exitCode": 0,
-          "durationMs": 32
+          "durationMs": 41
         },
         {
           "command": "lazooctl --json provider probe codex",
           "exitCode": 0,
-          "durationMs": 2213
+          "durationMs": 3835
         },
         {
           "command": "lazooctl --json provider smoke codex --prompt <conformance-prompt>",
           "exitCode": 0,
-          "durationMs": 13536
+          "durationMs": 12304
         }
       ]
     },
     "opencode": {
       "provider": "opencode",
-      "status": "PASS",
-      "startedAt": "2026-08-30T10:03:57.3030349Z",
-      "completedAt": "2026-08-30T10:04:10.2910418Z",
-      "durationMs": 12988,
+      "status": "BLOCKED",
+      "startedAt": "2026-10-15T18:00:58.4418996Z",
+      "completedAt": "2026-10-15T18:01:39.9144331Z",
+      "durationMs": 41471,
+      "binaries": {
+        "daemonSha256": "E04C951C8BA788E6EE8701334E393CDA2D53C61E9F9A92BFABDA847DBD876FFA",
+        "cliSha256": "F93445FF6C9C7AF59BBDAE31E82DE31906A38DB3AB12D63CD0363C9617AFDD4F"
+      },
       "executable": {
         "detected": true,
         "fileName": "opencode.exe",
@@ -110,23 +113,11 @@
         "blocker": null
       },
       "modelBacked": {
-        "status": "PASS",
-        "outputMatched": true,
-        "eventTypes": [
-          "sessionStarted",
-          "turnStarted",
-          "progress",
-          "textDelta",
-          "usage",
-          "turnCompleted"
-        ],
-        "usage": {
-          "inputTokens": null,
-          "outputTokens": null,
-          "totalTokens": 25260,
-          "costUsd": null
-        },
-        "blocker": null
+        "status": "BLOCKED",
+        "outputMatched": false,
+        "eventTypes": [],
+        "usage": null,
+        "blocker": "RPC request failed: RpcError { code: \"LZ-PROVIDER-TIMEOUT\", message: \"provider accepted work but emitted no progress for 30000 ms\", data: None }"
       },
       "authentication": {
         "native": "unknown",
@@ -148,38 +139,37 @@
       },
       "commands": [
         {
-          "command": "cargo build -p lazood -p lazooctl --release --locked",
-          "exitCode": 0,
-          "durationMs": 407
-        },
-        {
           "command": "lazooctl --json status",
           "exitCode": 0,
-          "durationMs": 66
+          "durationMs": 264
         },
         {
           "command": "lazooctl --json provider list",
           "exitCode": 0,
-          "durationMs": 31
+          "durationMs": 65
         },
         {
           "command": "lazooctl --json provider probe opencode",
           "exitCode": 0,
-          "durationMs": 4056
+          "durationMs": 5651
         },
         {
           "command": "lazooctl --json provider smoke opencode --prompt <conformance-prompt>",
-          "exitCode": 0,
-          "durationMs": 8298
+          "exitCode": 8,
+          "durationMs": 35275
         }
       ]
     },
     "grok-build": {
       "provider": "grok-build",
-      "status": "PASS",
-      "startedAt": "2026-08-30T10:04:15.7809224Z",
-      "completedAt": "2026-08-30T10:04:28.7789901Z",
-      "durationMs": 12998,
+      "status": "BLOCKED",
+      "startedAt": "2026-10-15T18:01:40.5325072Z",
+      "completedAt": "2026-10-15T18:01:44.1775598Z",
+      "durationMs": 3645,
+      "binaries": {
+        "daemonSha256": "E04C951C8BA788E6EE8701334E393CDA2D53C61E9F9A92BFABDA847DBD876FFA",
+        "cliSha256": "F93445FF6C9C7AF59BBDAE31E82DE31906A38DB3AB12D63CD0363C9617AFDD4F"
+      },
       "executable": {
         "detected": true,
         "fileName": "grok.exe",
@@ -194,18 +184,11 @@
         "blocker": null
       },
       "modelBacked": {
-        "status": "PASS",
-        "outputMatched": true,
-        "eventTypes": [
-          "sessionStarted",
-          "turnStarted",
-          "progress",
-          "thoughtDelta",
-          "textDelta",
-          "turnCompleted"
-        ],
+        "status": "BLOCKED",
+        "outputMatched": false,
+        "eventTypes": [],
         "usage": null,
-        "blocker": null
+        "blocker": "RPC request failed: RpcError { code: \"LZ-PROVIDER\", message: \"provider protocol error: provider request session/new failed with code -32000\", data: None }"
       },
       "authentication": {
         "native": "unknown",
@@ -227,44 +210,43 @@
       },
       "commands": [
         {
-          "command": "cargo build -p lazood -p lazooctl --release --locked",
-          "exitCode": 0,
-          "durationMs": 390
-        },
-        {
           "command": "lazooctl --json status",
           "exitCode": 0,
-          "durationMs": 61
+          "durationMs": 161
         },
         {
           "command": "lazooctl --json provider list",
           "exitCode": 0,
-          "durationMs": 31
+          "durationMs": 33
         },
         {
           "command": "lazooctl --json provider probe grok-build",
           "exitCode": 0,
-          "durationMs": 2561
+          "durationMs": 2362
         },
         {
           "command": "lazooctl --json provider smoke grok-build --prompt <conformance-prompt>",
-          "exitCode": 0,
-          "durationMs": 9841
+          "exitCode": 8,
+          "durationMs": 975
         }
       ]
     },
     "antigravity": {
       "provider": "antigravity",
       "status": "PASS",
-      "startedAt": "2026-08-30T10:04:32.805927Z",
-      "completedAt": "2026-08-30T10:04:58.9565493Z",
-      "durationMs": 26150,
+      "startedAt": "2026-10-15T18:01:44.8655971Z",
+      "completedAt": "2026-10-15T18:02:15.9642907Z",
+      "durationMs": 31099,
+      "binaries": {
+        "daemonSha256": "E04C951C8BA788E6EE8701334E393CDA2D53C61E9F9A92BFABDA847DBD876FFA",
+        "cliSha256": "F93445FF6C9C7AF59BBDAE31E82DE31906A38DB3AB12D63CD0363C9617AFDD4F"
+      },
       "executable": {
         "detected": true,
         "fileName": "agy.exe",
         "pathSha256": "98e79b157fddf07fb1f032b78fedc5843e7c6134143a1231c1dbf2babba7c464",
         "discoverySource": "inherited-path",
-        "version": "1.1.22"
+        "version": "1.3.6"
       },
       "handshake": {
         "status": "PASS",
@@ -283,9 +265,9 @@
           "turnCompleted"
         ],
         "usage": {
-          "inputTokens": 15966,
-          "outputTokens": 126,
-          "totalTokens": 16092,
+          "inputTokens": 13918,
+          "outputTokens": 168,
+          "totalTokens": 14086,
           "costUsd": null
         },
         "blocker": null
@@ -310,71 +292,59 @@
       },
       "commands": [
         {
-          "command": "cargo build -p lazood -p lazooctl --release --locked",
-          "exitCode": 0,
-          "durationMs": 389
-        },
-        {
           "command": "lazooctl --json status",
           "exitCode": 0,
-          "durationMs": 56
+          "durationMs": 140
         },
         {
           "command": "lazooctl --json provider list",
           "exitCode": 0,
-          "durationMs": 31
+          "durationMs": 34
         },
         {
           "command": "lazooctl --json provider probe antigravity",
           "exitCode": 0,
-          "durationMs": 11281
+          "durationMs": 14972
         },
         {
           "command": "lazooctl --json provider smoke antigravity --prompt <conformance-prompt>",
           "exitCode": 0,
-          "durationMs": 14259
+          "durationMs": 15810
         }
       ]
     },
     "claude-code": {
       "provider": "claude-code",
       "status": "BLOCKED",
-      "startedAt": "2026-08-30T10:05:03.0531732Z",
-      "completedAt": "2026-08-30T10:05:14.3466693Z",
-      "durationMs": 11293,
+      "startedAt": "2026-10-15T18:26:28.1164255Z",
+      "completedAt": "2026-10-15T18:26:29.0330836Z",
+      "durationMs": 916,
+      "binaries": {
+        "daemonSha256": "C146E61EE80652CCC3006BCC31574DE1F0E3821CD8FFF9990594081A941B587B",
+        "cliSha256": "02470E82ED3D59928314EE7FC85FD6BC267F4A72815CD12626A2151CC1C7291D"
+      },
       "executable": {
         "detected": true,
         "fileName": "claude.exe",
         "pathSha256": "da0e189ed6baa5ea63927cf11f125865d3fa7f0e67d51f2fdfa073e89f442377",
         "discoverySource": "inherited-path",
-        "version": "2.1.241 (Claude Code)"
+        "version": "2.1.296 (Claude Code)"
       },
       "handshake": {
-        "status": "PASS",
-        "verification": "configured",
+        "status": "BLOCKED",
+        "verification": "degraded",
         "protocol": "claude-code/stream-json-v1",
-        "blocker": null
+        "blocker": "no ready authentication channel was detected"
       },
       "modelBacked": {
         "status": "BLOCKED",
         "outputMatched": false,
-        "eventTypes": [
-          "turnStarted",
-          "progress",
-          "sessionStarted",
-          "usage",
-          "error"
-        ],
-        "usage": {
-          "inputTokens": 0,
-          "outputTokens": 0,
-          "totalTokens": 0,
-          "costUsd": 0.0
-        },
-        "blocker": "Your organization has disabled Claude subscription access for Claude Code · Use an Anthropic API key instead, or ask your admin to enable access"
+        "eventTypes": [],
+        "usage": null,
+        "blocker": "readiness probe did not pass"
       },
       "authentication": {
-        "native": "ready",
+        "native": "needs-login",
         "external": "unknown"
       },
       "capabilities": {
@@ -393,29 +363,19 @@
       },
       "commands": [
         {
-          "command": "cargo build -p lazood -p lazooctl --release --locked",
-          "exitCode": 0,
-          "durationMs": 394
-        },
-        {
           "command": "lazooctl --json status",
           "exitCode": 0,
-          "durationMs": 85
+          "durationMs": 174
         },
         {
           "command": "lazooctl --json provider list",
           "exitCode": 0,
-          "durationMs": 31
+          "durationMs": 38
         },
         {
           "command": "lazooctl --json provider probe claude-code",
           "exitCode": 0,
-          "durationMs": 1440
-        },
-        {
-          "command": "lazooctl --json provider smoke claude-code --prompt <conformance-prompt>",
-          "exitCode": 0,
-          "durationMs": 9224
+          "durationMs": 322
         }
       ]
     }

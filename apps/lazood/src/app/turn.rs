@@ -143,7 +143,20 @@ impl TurnEventObserver for AppTurnObserver {
     }
 
     fn call_tool<'a>(&'a self, call: &'a ToolCall) -> AdapterFuture<'a, ToolResult> {
-        Box::pin(async move { Ok(self.app.call_collaboration_tool(self.turn_id, call).await) })
+        Box::pin(async move {
+            if self
+                .app
+                .store
+                .is_memory_summary_turn(self.turn_id)
+                .map_err(|error| observer_error(&error))?
+            {
+                return Ok(ToolResult {
+                    success: false,
+                    content: json!({"error": {"code": "LZ-MEMORY-WORKER-READ-ONLY", "message": "Summary workers use only their supplied source and cannot call tools"}}),
+                });
+            }
+            Ok(self.app.call_collaboration_tool(self.turn_id, call).await)
+        })
     }
 }
 
@@ -350,6 +363,24 @@ impl App {
                 && session.employee_configuration_revision == employee.configuration_revision)
                 .then_some(session.id)
         });
+        // Summary source data must never share native context with an employee's normal work,
+        // or with another project's summary. Every summary starts a fresh session.
+        if let Some(session_id) = current_session_id
+            && (self
+                .store
+                .is_memory_summary_turn(turn.id)
+                .map_err(turn_store_error)?
+                || self
+                    .store
+                    .is_memory_summary_session(session_id)
+                    .map_err(turn_store_error)?)
+        {
+            return Err(turn_failure(
+                "LZ-MEMORY-SESSION-RESERVED",
+                "memory summaries require a fresh dedicated employee session",
+                turn.id,
+            ));
+        }
         Ok(DeliveryTarget {
             employee,
             provider,
@@ -377,6 +408,15 @@ impl App {
                     owner_boot_id: self.boot_id,
                 })
                 .map_err(turn_store_error)?;
+            if self
+                .store
+                .is_memory_summary_turn(turn.id)
+                .map_err(turn_store_error)?
+            {
+                self.store
+                    .reserve_memory_summary_session(turn.id, starting.session.id, self.boot_id)
+                    .map_err(turn_store_error)?;
+            }
             self.publish_events()?;
             let ready = if starting.event_sequence.is_some() {
                 self.start_new_session(target.employee, target.provider, starting, None)
@@ -453,8 +493,12 @@ impl App {
         let observer = AppTurnObserver::new(self.clone(), turn.id);
         let turn_request = TurnRequest {
             correlation_id: turn.correlation_id,
-            prompt: turn.text.clone(),
+            prompt: self.prompt_with_memory(turn),
             permission_mode,
+            read_only: self
+                .store
+                .is_memory_summary_turn(turn.id)
+                .map_err(turn_store_error)?,
         };
         let mut provider_future = live_turn.session.turn_observed(&turn_request, &observer);
         let provider_result = poll_fn(|context| {

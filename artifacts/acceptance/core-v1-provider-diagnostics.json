@@ -1,0 +1,56 @@
+{
+  "schemaVersion": 1,
+  "grokBuild": {
+    "version": "1.0.13 (5e9a58528b76)",
+    "phase": "session/new before any model prompt",
+    "protocol": "acp/v1",
+    "initialize": "PASS",
+    "sessionNew": "BLOCKED",
+    "errorCode": -32000,
+    "errorMessage": "Authentication required",
+    "modelPromptSent": false,
+    "source": "Separate native stdio initialize/session-new diagnostic with the installed grok.exe; no prompt"
+  },
+  "openCode": {
+    "version": "1.18.23",
+    "configuredModel": "opencode/big-pickle",
+    "status": "STALLED",
+    "noProgressTimeoutMillis": 30000,
+    "nativeLogObservedAt": "2026-10-15T18:01:37.673Z",
+    "nativeLogError": "Aborted",
+    "authenticationFailureObserved": false,
+    "note": "The request reached the native build stream. The log does not establish why the configured model emitted no progress. Do not automatically replay potentially accepted work."
+  },
+  "claudeCode": {
+    "version": "2.1.296",
+    "firstAttempt": "Rejected before a model prompt",
+    "observedNativeFrames": [
+      "system/hook_started",
+      "system/hook_response"
+    ],
+    "hookEvent": "SessionStart",
+    "fix": "Accept bounded matching-session SessionStart lifecycle frames only; reject other pre-prompt frames",
+    "followup": "Final post-fix probe is blocked before a prompt: native needs-login and external readiness unknown",
+    "latestNativeAuthStatus": {
+      "exitCode": 1,
+      "loggedIn": false,
+      "authMethod": "none",
+      "apiProvider": "firstParty"
+    },
+    "authStatusCompatibility": "Valid exit-1 logged-out JSON is now classified as needs-login; malformed JSON and other nonzero exit statuses remain refused",
+    "finalFixtureTests": {
+      "passed": 17,
+      "failed": 0,
+      "ignoredLive": 2,
+      "log": "artifacts/core-v1-provider-final.log"
+    },
+    "latestProbe": {
+      "status": "BLOCKED",
+      "verification": "degraded",
+      "protocol": "claude-code/stream-json-v1",
+      "blocker": "no ready authentication channel was detected"
+    },
+    "modelPromptSentAfterAuthRefusal": false
+  },
+  "generatedAt": "2026-10-15T18:34:09.5932498Z"
+}
