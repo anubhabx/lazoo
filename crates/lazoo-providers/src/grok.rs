@@ -195,6 +195,10 @@ impl ProviderSession for GrokSession {
         self.0.native_host_pid()
     }
 
+    fn resources(&self) -> Option<lazoo_runtime::JobAccounting> {
+        self.0.resources()
+    }
+
     fn turn<'a>(&'a self, request: &'a TurnRequest) -> AdapterFuture<'a, Vec<ProviderEvent>> {
         self.0.turn(request)
     }

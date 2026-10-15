@@ -36,6 +36,10 @@ pub struct DiscoveryEnvironment {
     persisted_user_path: Vec<PathBuf>,
     persisted_machine_path: Vec<PathBuf>,
     known_locations: BTreeMap<ProviderKind, Vec<PathBuf>>,
+    /// The user profile that provider configuration files hang off (`USERPROFILE`).
+    config_home: Option<PathBuf>,
+    /// `CODEX_HOME` when set; otherwise Codex lives at `<config_home>/.codex`.
+    codex_home: Option<PathBuf>,
 }
 
 impl DiscoveryEnvironment {
@@ -53,6 +57,8 @@ impl DiscoveryEnvironment {
             persisted_user_path,
             persisted_machine_path,
             known_locations: BTreeMap::new(),
+            config_home: env::var_os("USERPROFILE").map(PathBuf::from),
+            codex_home: env::var_os("CODEX_HOME").map(PathBuf::from),
         };
         environment.add_default_known_locations();
         environment
@@ -65,7 +71,33 @@ impl DiscoveryEnvironment {
             persisted_user_path: Vec::new(),
             persisted_machine_path: Vec::new(),
             known_locations: BTreeMap::new(),
+            config_home: None,
+            codex_home: None,
         }
+    }
+
+    /// The profile directory provider configuration files are read from.
+    #[must_use]
+    pub fn with_config_home(mut self, path: impl Into<PathBuf>) -> Self {
+        self.config_home = Some(path.into());
+        self
+    }
+
+    /// An explicit `CODEX_HOME`.
+    #[must_use]
+    pub fn with_codex_home(mut self, path: impl Into<PathBuf>) -> Self {
+        self.codex_home = Some(path.into());
+        self
+    }
+
+    #[must_use]
+    pub fn config_home(&self) -> Option<&Path> {
+        self.config_home.as_deref()
+    }
+
+    #[must_use]
+    pub fn codex_home(&self) -> Option<&Path> {
+        self.codex_home.as_deref()
     }
 
     #[must_use]

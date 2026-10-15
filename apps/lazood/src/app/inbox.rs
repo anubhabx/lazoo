@@ -86,7 +86,7 @@ impl App {
     }
 }
 
-fn unresolved_items(sources: &InboxSources) -> Vec<InboxItem> {
+pub(super) fn unresolved_items(sources: &InboxSources) -> Vec<InboxItem> {
     let employees = &sources.employees;
     let mut items: Vec<InboxItem> = sources
         .approvals

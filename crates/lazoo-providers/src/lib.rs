@@ -2,6 +2,7 @@ mod acp;
 mod antigravity;
 mod claude;
 mod codex;
+mod config;
 mod contract;
 mod discovery;
 mod grok;
@@ -17,6 +18,11 @@ pub use claude::{ClaudeAdapter, ClaudeExternalAuth, ClaudeSession, normalize_cla
 pub use codex::{
     CodexAdapter, CodexSession, normalize_codex_message, normalize_codex_permission_request,
     normalize_codex_tool_call,
+};
+pub use config::{
+    ConfigurationFormat, DiscoveredIntegration, IntegrationKind, IntegrationTransport,
+    PROVIDER_CONFIGURATION_V1, ProviderConfigurationFile, ProviderConfigurationReport,
+    discover_provider_configuration,
 };
 pub use contract::{
     ADAPTER_CONTRACT_V1, AdapterFuture, AuthenticationEvidence, AuthenticationState, CommandSpec,

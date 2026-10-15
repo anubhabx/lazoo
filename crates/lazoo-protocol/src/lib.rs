@@ -6,6 +6,7 @@ mod message;
 mod rpc;
 mod task;
 mod types;
+mod workspace;
 
 pub use approval::{
     APPROVAL_CONTRACT_V1, ApprovalDecider, ApprovalDecision, ApprovalKind, ApprovalListParams,
@@ -16,8 +17,8 @@ pub use conversation::{
     CONVERSATION_CONTRACT_V1, CancelTurnParams, ConversationDetail, ConversationListParams,
     ConversationMutationResult, ConversationRecord, ConversationShowParams, ConversationSummary,
     ConversationTurnEvent, ConversationTurnRecord, ConversationTurnSummary,
-    CreateConversationParams, RetryTurnParams, SubmitTurnParams, TurnListParams,
-    TurnMutationResult, TurnReconcileResult, TurnShowParams, TurnState,
+    CreateConversationParams, RenameConversationParams, RetryTurnParams, SubmitTurnParams,
+    TurnListParams, TurnMutationResult, TurnReconcileResult, TurnShowParams, TurnState,
 };
 pub use inbox::{
     INBOX_CONTRACT_V1, InboxAction, InboxAttention, InboxCounts, InboxCountsResult, InboxDeadline,
@@ -49,14 +50,23 @@ pub use task::{
     TaskState, TaskSummary, TaskWorkspaceKind,
 };
 pub use types::{
-    ActivationPolicy, AuthorityMode, CheckoutMode, CreateEmployeeParams, DesktopSnapshot,
-    DisableEmployeeParams, EmployeeAvailability, EmployeeCheckoutPolicy, EmployeeMutationResult,
-    EmployeeRecord, EmployeeSessionRecord, EmployeeShowParams, EventSummary, EventsListParams,
-    ProjectRecord, ProviderListEntry, ProviderObservation, ProviderProbeParams,
-    ProviderSmokeParams, ProviderSmokeResult, RegisterProjectParams, RegisterProjectResult,
-    RosterEntry, RosterRefreshParams, RosterRefreshResult, RosterSnapshot, SessionLifecycleState,
-    SessionMutationResult, SessionReconcileResult, SessionShowParams, StopSessionParams,
-    SystemStatus, UpdateEmployeeParams, WarmSessionParams,
+    ActivationPolicy, AuthorityMode, CheckoutMode, CreateEmployeeParams, DaemonResources,
+    DesktopSnapshot, DisableEmployeeParams, EmployeeAvailability, EmployeeCheckoutPolicy,
+    EmployeeMutationResult, EmployeeRecord, EmployeeSessionRecord, EmployeeShowParams,
+    EventSummary, EventsListParams, ProjectRecord, ProviderListEntry, ProviderObservation,
+    ProviderProbeParams, ProviderSmokeParams, ProviderSmokeResult, RegisterProjectParams,
+    RegisterProjectResult, RosterEntry, RosterRefreshParams, RosterRefreshResult, RosterSnapshot,
+    SessionLifecycleState, SessionMutationResult, SessionReconcileResult, SessionResources,
+    SessionResourcesParams, SessionShowParams, StopSessionParams, SystemStatus,
+    UpdateEmployeeParams, WarmSessionParams,
+};
+
+pub use workspace::{
+    ConversationMarker, ConversationRow, LeadCandidate, LeadHeader, LeadLifecycle,
+    LeadSessionSummary, WORKSPACE_CONTRACT_V1, WorkerCard, WorkerCounts, WorkerSessionSummary,
+    WorkerState, WorkerWorkspace, WorkspaceConversationParams, WorkspaceConversationResult,
+    WorkspaceConversationsParams, WorkspaceConversationsResult, WorkspaceLauncherParams,
+    WorkspaceLauncherResult, WorkspaceScope, WorkspaceStartAction,
 };
 
 pub const PROTOCOL_V1: u32 = 1;

@@ -82,18 +82,6 @@ pub const fn validate_inbox_limit(limit: u32) -> Result<(), InboxValidationError
 pub fn approval_inbox_item(approval: &ApprovalRecord, employees: &InboxEmployees) -> InboxItem {
     let pending = approval.state == ApprovalState::Pending;
     let employee = employees.get(&approval.employee_id);
-    let decide = |decision: &str, label: &str| {
-        action(
-            decision,
-            label,
-            "approval.decide",
-            json!({
-                "id": approval.id,
-                "expectedRevision": approval.revision,
-                "decision": decision,
-            }),
-        )
-    };
     InboxItem {
         kind: InboxKind::Approval,
         id: approval.id,
@@ -133,14 +121,30 @@ pub fn approval_inbox_item(approval: &ApprovalRecord, employees: &InboxEmployees
             "detail": approval.detail,
         }),
         actions: if pending {
-            vec![
-                decide("approve", "Approve once"),
-                decide("decline", "Decline"),
-            ]
+            approval_actions(approval)
         } else {
             Vec::new()
         },
     }
+}
+
+/// `approval.decide` once each way, with the revision the user saw.
+pub(crate) fn approval_actions(approval: &ApprovalRecord) -> Vec<InboxAction> {
+    [("approve", "Approve once"), ("decline", "Decline")]
+        .into_iter()
+        .map(|(decision, label)| {
+            action(
+                decision,
+                label,
+                "approval.decide",
+                json!({
+                    "id": approval.id,
+                    "expectedRevision": approval.revision,
+                    "decision": decision,
+                }),
+            )
+        })
+        .collect()
 }
 
 /// A `proposed` task waits for `task.accept`; an `uncertain` one waits for `task.resolve`; a
@@ -227,7 +231,7 @@ pub fn task_inbox_item(
 
 /// `task.accept` or a user `task.cancel` for a proposal; one `task.resolve` per resolution for
 /// an uncertain task.
-fn task_actions(kind: InboxKind, task: &TaskRecord) -> Vec<InboxAction> {
+pub(crate) fn task_actions(kind: InboxKind, task: &TaskRecord) -> Vec<InboxAction> {
     let with = |extra: Value| {
         let mut params = json!({"id": task.id, "expectedRevision": task.revision});
         params
@@ -439,7 +443,7 @@ fn deadline_key(item: &InboxItem) -> (bool, &str) {
         .map_or((true, ""), |deadline| (false, deadline.at.as_str()))
 }
 
-fn action(action: &str, label: &str, method: &str, params: Value) -> InboxAction {
+pub(crate) fn action(action: &str, label: &str, method: &str, params: Value) -> InboxAction {
     InboxAction {
         action: action.to_owned(),
         label: label.to_owned(),

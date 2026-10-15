@@ -9,6 +9,7 @@ mod message;
 mod migration;
 mod session;
 mod task;
+mod workspace;
 
 use std::{
     path::{Path, PathBuf},
@@ -29,8 +30,8 @@ pub use approval::{
 };
 pub use conversation::{
     BeginTurnSubmissionInput, CreateConversationInput, FailTurnInput, FinishTurnCancelInput,
-    MarkTurnUncertainInput, ObserveTurnInput, RecordTurnInput, RequestTurnCancelInput,
-    RetryTurnInput,
+    MarkTurnUncertainInput, ObserveTurnInput, RecordTurnInput, RenameConversationInput,
+    RequestTurnCancelInput, RetryTurnInput,
 };
 pub use delivery::{
     ConsumePeerMessageInput, ConsumeTaskResultInput, QueueIncidentNoticeInput,
@@ -59,6 +60,7 @@ pub use task::{
     DelegateTaskInput, FailTaskDispatchInput, ListTasksInput, MarkTaskDispatchWorkspaceReadyInput,
     RecordTaskDispatchTurnInput, ReportTaskInput, ResolveTaskInput, StartTaskInput,
 };
+pub use workspace::{ConversationWorkspace, SpaceConversation, WorkerRow};
 
 use crate::{emergency::import_pending_incidents, migration::apply_migrations};
 
@@ -194,6 +196,11 @@ pub enum StoreError {
     ConversationValidation(#[from] lazoo_domain::ConversationValidationError),
     #[error("conversation {conversation_id} was not found")]
     ConversationNotFound { conversation_id: Uuid },
+    #[error("conversation {conversation_id} changed; current revision is {current_revision}")]
+    ConversationStale {
+        conversation_id: Uuid,
+        current_revision: u64,
+    },
     #[error("turn {turn_id} was not found")]
     TurnNotFound { turn_id: Uuid },
     #[error("employee-authored turns must reference an existing task")]

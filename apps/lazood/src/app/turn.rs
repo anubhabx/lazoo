@@ -8,9 +8,9 @@ use std::{
 
 use lazoo_protocol::{
     CancelTurnParams, ConversationDetail, ConversationListParams, ConversationShowParams,
-    CreateConversationParams, EmployeeAvailability, JsonRpcRequest, MessageSender, RetryTurnParams,
-    RpcError, SessionLifecycleState, SubmitTurnParams, TaskState, TurnListParams,
-    TurnMutationResult, TurnShowParams, TurnState,
+    CreateConversationParams, EmployeeAvailability, JsonRpcRequest, MessageSender,
+    RenameConversationParams, RetryTurnParams, RpcError, SessionLifecycleState, SubmitTurnParams,
+    TaskState, TurnListParams, TurnMutationResult, TurnShowParams, TurnState,
 };
 use lazoo_providers::{
     AdapterFuture, PermissionDecision, PermissionRequest, ProviderError, ProviderEvent,
@@ -18,8 +18,8 @@ use lazoo_providers::{
 };
 use lazoo_store::{
     BeginTurnSubmissionInput, CreateConversationInput, FailTurnInput, FinishTurnCancelInput,
-    MarkTurnUncertainInput, ObserveTurnInput, RecordTurnInput, RequestTurnCancelInput,
-    RetryTurnInput, StoreError,
+    MarkTurnUncertainInput, ObserveTurnInput, RecordTurnInput, RenameConversationInput,
+    RequestTurnCancelInput, RetryTurnInput, StoreError,
 };
 use serde_json::{Value, json};
 use tokio::time::{Duration, sleep};
@@ -158,6 +158,26 @@ impl App {
                 idempotency_key: params.idempotency_key,
                 project_id: params.project_id,
                 lead_employee_id: params.lead_employee_id,
+                title: params.title,
+            })
+            .map_err(conversation_store_error)?;
+        self.publish_events()?;
+        Ok(to_value(result))
+    }
+
+    pub(super) fn rename_conversation(&self, request: &JsonRpcRequest) -> Result<Value, RpcError> {
+        let params: RenameConversationParams = serde_json::from_value(request.params.clone())
+            .map_err(|error| conversation_invalid(error.to_string()))?;
+        if params.expected_revision == 0 {
+            return Err(conversation_invalid(
+                "expectedRevision must be greater than zero",
+            ));
+        }
+        let result = self
+            .store
+            .rename_conversation(&RenameConversationInput {
+                conversation_id: params.id,
+                expected_revision: params.expected_revision,
                 title: params.title,
             })
             .map_err(conversation_store_error)?;
@@ -983,6 +1003,14 @@ fn conversation_store_error(error: StoreError) -> RpcError {
         StoreError::ConversationNotFound { conversation_id } => (
             "LZ-CONVERSATION-NOT-FOUND",
             Some(json!({"conversationId": conversation_id})),
+            error.to_string(),
+        ),
+        StoreError::ConversationStale {
+            conversation_id,
+            current_revision,
+        } => (
+            "LZ-CONVERSATION-STALE",
+            Some(json!({"conversationId": conversation_id, "currentRevision": current_revision})),
             error.to_string(),
         ),
         StoreError::ConversationValidation(_) => {

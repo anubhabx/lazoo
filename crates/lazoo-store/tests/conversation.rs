@@ -1213,3 +1213,109 @@ fn cancellation_truncation_and_owner_loss_are_durable_and_idempotent() {
         .unwrap_err();
     assert!(matches!(uncertain_replay, StoreError::TurnState { .. }));
 }
+
+#[test]
+fn conversation_rename_is_revisioned_naturally_idempotent_and_validated() {
+    use lazoo_store::RenameConversationInput;
+
+    let temporary = tempdir().unwrap();
+    let store = Store::open_path(temporary.path().join("lazoo.db")).unwrap();
+    let lead = store
+        .create_employee(&employee("Rhea", true, true))
+        .unwrap()
+        .employee;
+    let created = create_conversation(&store, "rename-fixture", lead.id, None).conversation;
+    assert_eq!(created.title.as_deref(), Some("First conversation"));
+    assert_eq!(created.revision, 1);
+
+    let renamed = store
+        .rename_conversation(&RenameConversationInput {
+            conversation_id: created.id,
+            expected_revision: 1,
+            title: Some("  Parser fix  ".to_owned()),
+        })
+        .unwrap();
+    assert_eq!(renamed.conversation.title.as_deref(), Some("Parser fix"));
+    assert_eq!(renamed.conversation.revision, 2);
+    assert!(renamed.event_sequence.is_some());
+    assert!(renamed.conversation.updated_at >= created.updated_at);
+
+    // The same title again changes nothing and emits nothing, whatever revision is cited.
+    let replay = store
+        .rename_conversation(&RenameConversationInput {
+            conversation_id: created.id,
+            expected_revision: 1,
+            title: Some("Parser fix".to_owned()),
+        })
+        .unwrap();
+    assert_eq!(replay.conversation, renamed.conversation);
+    assert_eq!(replay.event_sequence, None);
+
+    // A different title at a stale revision is refused and changes nothing.
+    let stale = store
+        .rename_conversation(&RenameConversationInput {
+            conversation_id: created.id,
+            expected_revision: 1,
+            title: Some("Something else".to_owned()),
+        })
+        .unwrap_err();
+    assert!(matches!(
+        stale,
+        StoreError::ConversationStale {
+            current_revision: 2,
+            ..
+        }
+    ));
+    assert_eq!(
+        store.get_conversation(created.id).unwrap().title.as_deref(),
+        Some("Parser fix")
+    );
+
+    // Clearing the title is a rename to nothing; blank titles clear too.
+    let cleared = store
+        .rename_conversation(&RenameConversationInput {
+            conversation_id: created.id,
+            expected_revision: 2,
+            title: Some("   ".to_owned()),
+        })
+        .unwrap();
+    assert_eq!(cleared.conversation.title, None);
+    assert_eq!(cleared.conversation.revision, 3);
+
+    // Validation and existence are checked before anything is written.
+    assert!(matches!(
+        store
+            .rename_conversation(&RenameConversationInput {
+                conversation_id: created.id,
+                expected_revision: 3,
+                title: Some("x".repeat(300)),
+            })
+            .unwrap_err(),
+        StoreError::ConversationValidation(_)
+    ));
+    assert!(matches!(
+        store
+            .rename_conversation(&RenameConversationInput {
+                conversation_id: Uuid::new_v4(),
+                expected_revision: 1,
+                title: Some("Ghost".to_owned()),
+            })
+            .unwrap_err(),
+        StoreError::ConversationNotFound { .. }
+    ));
+    let events: Vec<String> = store
+        .list_events(0, 100)
+        .unwrap()
+        .into_iter()
+        .map(|event| event.event_type)
+        .filter(|kind| kind.starts_with("conversation."))
+        .collect();
+    assert_eq!(
+        events,
+        [
+            "conversation.created",
+            "conversation.renamed",
+            "conversation.renamed"
+        ]
+    );
+}

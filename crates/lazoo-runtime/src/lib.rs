@@ -12,7 +12,8 @@ pub use data_root::DataRoot;
 pub use installation::Installation;
 pub use notification::NativeNotifier;
 pub use process_job::{
-    JobChild, JobCommand, JobObject, LaunchGate, session_host_path, wait_for_launch_gate,
+    JobAccounting, JobChild, JobCommand, JobObject, LaunchGate, ProcessAccounting,
+    current_process_accounting, session_host_path, wait_for_launch_gate,
 };
 pub use security::OwnerSecurity;
 pub use single_instance::SingleInstance;
