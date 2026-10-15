@@ -17,7 +17,8 @@ use crate::{Store, StoreError, conversation, employee, task};
 // expiry policy can replace this constant when the approval Inbox contract lands.
 const MAX_PENDING_TIMEOUT_SECONDS: u64 = 7 * 24 * 60 * 60;
 
-const APPROVAL_COLUMNS: &str = "sequence, contract_version, id, turn_id, task_id, conversation_id,
+pub(crate) const APPROVAL_COLUMNS: &str =
+    "sequence, contract_version, id, turn_id, task_id, conversation_id,
     project_id, employee_id, session_id, owner_boot_id, provider, native_session_id,
     native_turn_id, native_request_id, kind, action, detail_json, fingerprint, authority,
     scope_expansion, state, decider, revision, failure_code, failure_message, created_at,
@@ -541,7 +542,7 @@ type RawApproval = (
     Option<String>,
 );
 
-fn raw_approval(row: &rusqlite::Row<'_>) -> rusqlite::Result<RawApproval> {
+pub(crate) fn raw_approval(row: &rusqlite::Row<'_>) -> rusqlite::Result<RawApproval> {
     Ok((
         row.get(0)?,
         row.get(1)?,
@@ -575,7 +576,7 @@ fn raw_approval(row: &rusqlite::Row<'_>) -> rusqlite::Result<RawApproval> {
     ))
 }
 
-fn approval_from_raw(raw: RawApproval) -> Result<ApprovalRecord, StoreError> {
+pub(crate) fn approval_from_raw(raw: RawApproval) -> Result<ApprovalRecord, StoreError> {
     Ok(ApprovalRecord {
         sequence: unsigned(raw.0)?,
         version: unsigned32(raw.1)?,

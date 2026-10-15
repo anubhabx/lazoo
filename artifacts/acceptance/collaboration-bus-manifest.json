@@ -1,177 +1,177 @@
-﻿{
-    "manifestVersion":  1,
-    "status":  "PASS",
-    "startedAt":  "2026-10-11T17:04:16.4644858Z",
-    "completedAt":  "2026-10-11T17:04:24.9625094Z",
-    "durationMs":  8493,
-    "protocolVersion":  1,
-    "schemaVersion":  15,
-    "isolatedDataRoot":  "C:\\Users\\anubhab\\AppData\\Local\\Temp\\lazoo-collaboration-bus-cf515fba8e2f456a8553022a6954466e\\data",
-    "temporaryDataRetained":  false,
-    "commands":  [
-                     {
-                         "command":  "lazooctl --json status",
-                         "exitCode":  0,
-                         "durationMs":  115
-                     },
-                     {
-                         "command":  "lazooctl --json employee create Rhea --provider codex --role Lead --idempotency-key sender-cf515fba8e2f456a8553022a6954466e",
-                         "exitCode":  0,
-                         "durationMs":  3194
-                     },
-                     {
-                         "command":  "lazooctl --json employee create Ivo --provider codex --role Implementer --idempotency-key recipient-cf515fba8e2f456a8553022a6954466e",
-                         "exitCode":  0,
-                         "durationMs":  3180
-                     },
-                     {
-                         "command":  "lazooctl --json message send e3718058-6903-4f40-acd4-dd3048acd898 bab5d976-2cc1-4157-b00b-3435e1b37274 --kind peer --body {\\\"text\\\":\\\"spacing-token-request\\\"} --references [{\\\"kind\\\":\\\"file\\\",\\\"target\\\":\\\"tokens.css\\\",\\\"metadata\\\":{}}] --idempotency-key send-cf515fba8e2f456a8553022a6954466e",
-                         "exitCode":  0,
-                         "durationMs":  19
-                     },
-                     {
-                         "command":  "lazooctl --json message send e3718058-6903-4f40-acd4-dd3048acd898 bab5d976-2cc1-4157-b00b-3435e1b37274 --kind peer --body {\\\"text\\\":\\\"spacing-token-request\\\"} --references [{\\\"kind\\\":\\\"file\\\",\\\"target\\\":\\\"tokens.css\\\",\\\"metadata\\\":{}}] --idempotency-key send-cf515fba8e2f456a8553022a6954466e",
-                         "exitCode":  0,
-                         "durationMs":  14
-                     },
-                     {
-                         "command":  "lazooctl --json message send bab5d976-2cc1-4157-b00b-3435e1b37274 e3718058-6903-4f40-acd4-dd3048acd898 --kind reply --body {\\\"text\\\":\\\"space-3\\\"} --causation-id b3782d93-6e8b-401f-8bd9-ee8663ee6477 --idempotency-key caused-cf515fba8e2f456a8553022a6954466e",
-                         "exitCode":  0,
-                         "durationMs":  25
-                     },
-                     {
-                         "command":  "lazooctl --json message list --after-sequence 0 --limit 100",
-                         "exitCode":  0,
-                         "durationMs":  16
-                     },
-                     {
-                         "command":  "lazooctl --json message list --after-sequence 1 --limit 100",
-                         "exitCode":  0,
-                         "durationMs":  16
-                     },
-                     {
-                         "command":  "lazooctl --json message claim b3782d93-6e8b-401f-8bd9-ee8663ee6477 --expected-revision 1 --idempotency-key claim-cf515fba8e2f456a8553022a6954466e",
-                         "exitCode":  0,
-                         "durationMs":  19
-                     },
-                     {
-                         "command":  "lazooctl --json message acknowledge b3782d93-6e8b-401f-8bd9-ee8663ee6477 --expected-revision 2 --attempt-id 59f31806-a611-45a3-8fed-cf1914773314 --acknowledgement-key wrong-cf515fba8e2f456a8553022a6954466e --idempotency-key wrong-ack-cf515fba8e2f456a8553022a6954466e",
-                         "exitCode":  11,
-                         "durationMs":  16
-                     },
-                     {
-                         "command":  "lazooctl --json message acknowledge b3782d93-6e8b-401f-8bd9-ee8663ee6477 --expected-revision 2 --attempt-id bc5d9644-0f27-44bd-89ff-9d462c58c91a --acknowledgement-key provider-ack-cf515fba8e2f456a8553022a6954466e --evidence {\\\"progress\\\":true} --idempotency-key ack-cf515fba8e2f456a8553022a6954466e",
-                         "exitCode":  0,
-                         "durationMs":  18
-                     },
-                     {
-                         "command":  "lazooctl --json message acknowledge b3782d93-6e8b-401f-8bd9-ee8663ee6477 --expected-revision 2 --attempt-id bc5d9644-0f27-44bd-89ff-9d462c58c91a --acknowledgement-key provider-ack-cf515fba8e2f456a8553022a6954466e --evidence {\\\"progress\\\":true} --idempotency-key ack-cf515fba8e2f456a8553022a6954466e",
-                         "exitCode":  0,
-                         "durationMs":  15
-                     },
-                     {
-                         "command":  "lazooctl --json message send e3718058-6903-4f40-acd4-dd3048acd898 bab5d976-2cc1-4157-b00b-3435e1b37274 --kind delegation --body {\\\"text\\\":\\\"retry-delivery\\\"} --max-attempts 2 --idempotency-key retry-send-cf515fba8e2f456a8553022a6954466e",
-                         "exitCode":  0,
-                         "durationMs":  18
-                     },
-                     {
-                         "command":  "lazooctl --json message claim af834865-ac99-4601-ad0c-d7095a8aca62 --expected-revision 1 --idempotency-key retry-claim-cf515fba8e2f456a8553022a6954466e",
-                         "exitCode":  0,
-                         "durationMs":  18
-                     },
-                     {
-                         "command":  "lazooctl --json message fail af834865-ac99-4601-ad0c-d7095a8aca62 --expected-revision 2 --attempt-id 15ddefbf-0650-4d8d-a4f1-39001d510044 --retryable true --failure-code LZ-MESSAGE-TIMEOUT --failure-message recipient acknowledgement was not observed --idempotency-key retry-fail-cf515fba8e2f456a8553022a6954466e",
-                         "exitCode":  0,
-                         "durationMs":  18
-                     },
-                     {
-                         "command":  "lazooctl --json message retry af834865-ac99-4601-ad0c-d7095a8aca62 --expected-revision 3 --idempotency-key early-retry-cf515fba8e2f456a8553022a6954466e",
-                         "exitCode":  11,
-                         "durationMs":  16
-                     },
-                     {
-                         "command":  "lazooctl --json message retry af834865-ac99-4601-ad0c-d7095a8aca62 --expected-revision 3 --idempotency-key retry-due-cf515fba8e2f456a8553022a6954466e",
-                         "exitCode":  0,
-                         "durationMs":  19
-                     },
-                     {
-                         "command":  "lazooctl --json message fail af834865-ac99-4601-ad0c-d7095a8aca62 --expected-revision 4 --attempt-id 1a15c03e-69a7-4778-85a2-5439a4e6ba76 --retryable true --failure-code LZ-MESSAGE-TIMEOUT --failure-message recipient acknowledgement was not observed --idempotency-key retry-exhausted-cf515fba8e2f456a8553022a6954466e",
-                         "exitCode":  0,
-                         "durationMs":  20
-                     },
-                     {
-                         "command":  "lazooctl --json message cancel 55329254-6d14-4c06-8880-39cc900e70a6 --expected-revision 1 --idempotency-key cancel-cf515fba8e2f456a8553022a6954466e",
-                         "exitCode":  0,
-                         "durationMs":  19
-                     },
-                     {
-                         "command":  "lazooctl --json message send e3718058-6903-4f40-acd4-dd3048acd898 bab5d976-2cc1-4157-b00b-3435e1b37274 --kind status --body {\\\"text\\\":\\\"survive-daemon-loss\\\"} --idempotency-key restart-send-cf515fba8e2f456a8553022a6954466e",
-                         "exitCode":  0,
-                         "durationMs":  19
-                     },
-                     {
-                         "command":  "lazooctl --json message claim 64abb866-47a1-4bc3-944e-bfbd911932b4 --expected-revision 1 --idempotency-key restart-claim-cf515fba8e2f456a8553022a6954466e",
-                         "exitCode":  0,
-                         "durationMs":  18
-                     },
-                     {
-                         "command":  "lazooctl --json status",
-                         "exitCode":  0,
-                         "durationMs":  74
-                     },
-                     {
-                         "command":  "lazooctl --json message show 64abb866-47a1-4bc3-944e-bfbd911932b4",
-                         "exitCode":  0,
-                         "durationMs":  16
-                     },
-                     {
-                         "command":  "lazooctl --json events list --after 0 --limit 100",
-                         "exitCode":  0,
-                         "durationMs":  17
-                     },
-                     {
-                         "command":  "lazooctl --json status",
-                         "exitCode":  0,
-                         "durationMs":  14
-                     },
-                     {
-                         "command":  "lazooctl --json system shutdown",
-                         "exitCode":  0,
-                         "durationMs":  18
-                     }
-                 ],
-    "gates":  {
-                  "releaseBuild":  "SKIPPED_BY_CALLER",
-                  "schemaVersion":  "PASS",
-                  "recordFirstSend":  "PASS",
-                  "idempotentSend":  "PASS",
-                  "orderedReplay":  "PASS",
-                  "causalCorrelation":  "PASS",
-                  "acknowledgementCorrelation":  "PASS",
-                  "retryNotDueRejected":  "PASS",
-                  "retryExhaustion":  "PASS",
-                  "deadLetterEvidence":  "PASS",
-                  "cancellation":  "PASS",
-                  "restartDurability":  "PASS",
-                  "ownerLossReconciled":  "PASS",
-                  "auditOutboxEvidence":  "PASS",
-                  "providerSmokeAbsent":  "PASS",
-                  "desktopCapabilityExpansionAbsent":  "PASS"
-              },
-    "evidence":  {
-                     "acknowledgedMessageId":  "b3782d93-6e8b-401f-8bd9-ee8663ee6477",
-                     "terminalMessageId":  "af834865-ac99-4601-ad0c-d7095a8aca62",
-                     "reconciledMessageId":  "64abb866-47a1-4bc3-944e-bfbd911932b4",
-                     "eventTypes":  [
-                                        "employee.created",
-                                        "message.queued",
-                                        "message.delivering",
-                                        "message.acknowledged",
-                                        "message.retryable-failed",
-                                        "message.terminal-failed",
-                                        "incident.raised",
-                                        "message.cancelled",
-                                        "messages.reconciled"
-                                    ]
-                 }
+{
+  "manifestVersion": 1,
+  "status": "PASS",
+  "startedAt": "2026-10-12T22:48:01.3735023Z",
+  "completedAt": "2026-10-12T22:48:10.9626912Z",
+  "durationMs": 9586,
+  "protocolVersion": 1,
+  "schemaVersion": 15,
+  "isolatedDataRoot": "C:\\Users\\anubhab\\AppData\\Local\\Temp\\lazoo-collaboration-bus-79dce79d97314da9bfbc0823ccf30278\\data",
+  "temporaryDataRetained": false,
+  "commands": [
+    {
+      "command": "lazooctl --json status",
+      "exitCode": 0,
+      "durationMs": 163
+    },
+    {
+      "command": "lazooctl --json employee create Rhea --provider codex --role Lead --idempotency-key sender-79dce79d97314da9bfbc0823ccf30278",
+      "exitCode": 0,
+      "durationMs": 4499
+    },
+    {
+      "command": "lazooctl --json employee create Ivo --provider codex --role Implementer --idempotency-key recipient-79dce79d97314da9bfbc0823ccf30278",
+      "exitCode": 0,
+      "durationMs": 2975
+    },
+    {
+      "command": "lazooctl --json message send 86ba4cc7-d7d9-4440-9538-8921e74a3543 0694b836-5156-41b9-a9cb-80d9fda1fc8a --kind peer --body {\"text\":\"spacing-token-request\"} --references [{\"kind\":\"file\",\"target\":\"tokens.css\",\"metadata\":{}}] --idempotency-key send-79dce79d97314da9bfbc0823ccf30278",
+      "exitCode": 0,
+      "durationMs": 24
+    },
+    {
+      "command": "lazooctl --json message send 86ba4cc7-d7d9-4440-9538-8921e74a3543 0694b836-5156-41b9-a9cb-80d9fda1fc8a --kind peer --body {\"text\":\"spacing-token-request\"} --references [{\"kind\":\"file\",\"target\":\"tokens.css\",\"metadata\":{}}] --idempotency-key send-79dce79d97314da9bfbc0823ccf30278",
+      "exitCode": 0,
+      "durationMs": 14
+    },
+    {
+      "command": "lazooctl --json message send 0694b836-5156-41b9-a9cb-80d9fda1fc8a 86ba4cc7-d7d9-4440-9538-8921e74a3543 --kind reply --body {\"text\":\"space-3\"} --causation-id aec45cc4-8f63-4e09-b381-21091343545e --idempotency-key caused-79dce79d97314da9bfbc0823ccf30278",
+      "exitCode": 0,
+      "durationMs": 21
+    },
+    {
+      "command": "lazooctl --json message list --after-sequence 0 --limit 100",
+      "exitCode": 0,
+      "durationMs": 15
+    },
+    {
+      "command": "lazooctl --json message list --after-sequence 1 --limit 100",
+      "exitCode": 0,
+      "durationMs": 16
+    },
+    {
+      "command": "lazooctl --json message claim aec45cc4-8f63-4e09-b381-21091343545e --expected-revision 1 --idempotency-key claim-79dce79d97314da9bfbc0823ccf30278",
+      "exitCode": 0,
+      "durationMs": 20
+    },
+    {
+      "command": "lazooctl --json message acknowledge aec45cc4-8f63-4e09-b381-21091343545e --expected-revision 2 --attempt-id 4460cfad-b8e1-41b6-b367-dbb4b63888f5 --acknowledgement-key wrong-79dce79d97314da9bfbc0823ccf30278 --idempotency-key wrong-ack-79dce79d97314da9bfbc0823ccf30278",
+      "exitCode": 11,
+      "durationMs": 16
+    },
+    {
+      "command": "lazooctl --json message acknowledge aec45cc4-8f63-4e09-b381-21091343545e --expected-revision 2 --attempt-id f054823d-8690-4bea-8ad4-0f64f5610183 --acknowledgement-key provider-ack-79dce79d97314da9bfbc0823ccf30278 --evidence {\"progress\":true} --idempotency-key ack-79dce79d97314da9bfbc0823ccf30278",
+      "exitCode": 0,
+      "durationMs": 20
+    },
+    {
+      "command": "lazooctl --json message acknowledge aec45cc4-8f63-4e09-b381-21091343545e --expected-revision 2 --attempt-id f054823d-8690-4bea-8ad4-0f64f5610183 --acknowledgement-key provider-ack-79dce79d97314da9bfbc0823ccf30278 --evidence {\"progress\":true} --idempotency-key ack-79dce79d97314da9bfbc0823ccf30278",
+      "exitCode": 0,
+      "durationMs": 13
+    },
+    {
+      "command": "lazooctl --json message send 86ba4cc7-d7d9-4440-9538-8921e74a3543 0694b836-5156-41b9-a9cb-80d9fda1fc8a --kind delegation --body {\"text\":\"retry-delivery\"} --max-attempts 2 --idempotency-key retry-send-79dce79d97314da9bfbc0823ccf30278",
+      "exitCode": 0,
+      "durationMs": 21
+    },
+    {
+      "command": "lazooctl --json message claim 6ce60768-2b0e-44e2-9ba6-bbdab46528fb --expected-revision 1 --idempotency-key retry-claim-79dce79d97314da9bfbc0823ccf30278",
+      "exitCode": 0,
+      "durationMs": 20
+    },
+    {
+      "command": "lazooctl --json message fail 6ce60768-2b0e-44e2-9ba6-bbdab46528fb --expected-revision 2 --attempt-id 0a56e3fd-ce1a-4324-8f93-feaa2a00b8f6 --retryable true --failure-code LZ-MESSAGE-TIMEOUT --failure-message recipient acknowledgement was not observed --idempotency-key retry-fail-79dce79d97314da9bfbc0823ccf30278",
+      "exitCode": 0,
+      "durationMs": 23
+    },
+    {
+      "command": "lazooctl --json message retry 6ce60768-2b0e-44e2-9ba6-bbdab46528fb --expected-revision 3 --idempotency-key early-retry-79dce79d97314da9bfbc0823ccf30278",
+      "exitCode": 11,
+      "durationMs": 15
+    },
+    {
+      "command": "lazooctl --json message retry 6ce60768-2b0e-44e2-9ba6-bbdab46528fb --expected-revision 3 --idempotency-key retry-due-79dce79d97314da9bfbc0823ccf30278",
+      "exitCode": 0,
+      "durationMs": 22
+    },
+    {
+      "command": "lazooctl --json message fail 6ce60768-2b0e-44e2-9ba6-bbdab46528fb --expected-revision 4 --attempt-id 723cddce-10e6-4bc6-ad66-941894ba87a3 --retryable true --failure-code LZ-MESSAGE-TIMEOUT --failure-message recipient acknowledgement was not observed --idempotency-key retry-exhausted-79dce79d97314da9bfbc0823ccf30278",
+      "exitCode": 0,
+      "durationMs": 28
+    },
+    {
+      "command": "lazooctl --json message cancel a180bce7-d5c6-4c95-bc2b-ef82d83f42f1 --expected-revision 1 --idempotency-key cancel-79dce79d97314da9bfbc0823ccf30278",
+      "exitCode": 0,
+      "durationMs": 21
+    },
+    {
+      "command": "lazooctl --json message send 86ba4cc7-d7d9-4440-9538-8921e74a3543 0694b836-5156-41b9-a9cb-80d9fda1fc8a --kind status --body {\"text\":\"survive-daemon-loss\"} --idempotency-key restart-send-79dce79d97314da9bfbc0823ccf30278",
+      "exitCode": 0,
+      "durationMs": 21
+    },
+    {
+      "command": "lazooctl --json message claim b3faae53-3185-45e3-a638-d308c7a52acb --expected-revision 1 --idempotency-key restart-claim-79dce79d97314da9bfbc0823ccf30278",
+      "exitCode": 0,
+      "durationMs": 21
+    },
+    {
+      "command": "lazooctl --json status",
+      "exitCode": 0,
+      "durationMs": 83
+    },
+    {
+      "command": "lazooctl --json message show b3faae53-3185-45e3-a638-d308c7a52acb",
+      "exitCode": 0,
+      "durationMs": 15
+    },
+    {
+      "command": "lazooctl --json events list --after 0 --limit 100",
+      "exitCode": 0,
+      "durationMs": 19
+    },
+    {
+      "command": "lazooctl --json status",
+      "exitCode": 0,
+      "durationMs": 14
+    },
+    {
+      "command": "lazooctl --json system shutdown",
+      "exitCode": 0,
+      "durationMs": 18
+    }
+  ],
+  "gates": {
+    "releaseBuild": "SKIPPED_BY_CALLER",
+    "schemaVersion": "PASS",
+    "recordFirstSend": "PASS",
+    "idempotentSend": "PASS",
+    "orderedReplay": "PASS",
+    "causalCorrelation": "PASS",
+    "acknowledgementCorrelation": "PASS",
+    "retryNotDueRejected": "PASS",
+    "retryExhaustion": "PASS",
+    "deadLetterEvidence": "PASS",
+    "cancellation": "PASS",
+    "restartDurability": "PASS",
+    "ownerLossReconciled": "PASS",
+    "auditOutboxEvidence": "PASS",
+    "providerSmokeAbsent": "PASS",
+    "desktopCapabilityExpansionAbsent": "PASS"
+  },
+  "evidence": {
+    "acknowledgedMessageId": "aec45cc4-8f63-4e09-b381-21091343545e",
+    "terminalMessageId": "6ce60768-2b0e-44e2-9ba6-bbdab46528fb",
+    "reconciledMessageId": "b3faae53-3185-45e3-a638-d308c7a52acb",
+    "eventTypes": [
+      "employee.created",
+      "message.queued",
+      "message.delivering",
+      "message.acknowledged",
+      "message.retryable-failed",
+      "message.terminal-failed",
+      "incident.raised",
+      "message.cancelled",
+      "messages.reconciled"
+    ]
+  }
 }

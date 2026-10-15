@@ -7,6 +7,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use uuid::Uuid;
 
+use lazoo_runtime::JobAccounting;
+
 use crate::{DiscoveryEnvironment, DiscoverySource};
 
 pub const ADAPTER_CONTRACT_V1: u32 = 1;
@@ -513,6 +515,11 @@ pub trait TurnEventObserver: Send + Sync {
 pub trait ProviderSession: Send + Sync {
     fn id(&self) -> String;
     fn native_host_pid(&self) -> Option<u32>;
+    /// Job Object accounting for the session's native process tree; `None` when the session
+    /// owns no job.
+    fn resources(&self) -> Option<JobAccounting> {
+        None
+    }
     fn turn<'a>(&'a self, request: &'a TurnRequest) -> AdapterFuture<'a, Vec<ProviderEvent>>;
     fn turn_observed<'a>(
         &'a self,

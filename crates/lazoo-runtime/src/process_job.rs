@@ -11,7 +11,7 @@ use tokio::process::{Child, ChildStderr, ChildStdin, ChildStdout, Command};
 use uuid::Uuid;
 use windows::{
     Win32::{
-        Foundation::{CloseHandle, HANDLE, WAIT_OBJECT_0},
+        Foundation::{CloseHandle, FILETIME, HANDLE, WAIT_OBJECT_0},
         System::{
             JobObjects::{
                 AssignProcessToJobObject, CreateJobObjectW, IsProcessInJob,
@@ -20,8 +20,10 @@ use windows::{
                 JobObjectExtendedLimitInformation, QueryInformationJobObject,
                 SetInformationJobObject, TerminateJobObject,
             },
+            ProcessStatus::{K32GetProcessMemoryInfo, PROCESS_MEMORY_COUNTERS},
             Threading::{
-                CreateEventW, INFINITE, OpenEventW, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
+                CreateEventW, GetCurrentProcess, GetProcessHandleCount, GetProcessTimes, INFINITE,
+                OpenEventW, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
                 SYNCHRONIZATION_SYNCHRONIZE, SetEvent, WaitForSingleObject,
             },
         },
@@ -79,6 +81,12 @@ impl JobObject {
     }
 
     pub fn active_processes(&self) -> Result<u32, RuntimeError> {
+        Ok(self.accounting()?.active_processes)
+    }
+
+    /// The job's accounting so far: processes, CPU time, and peak memory, kept by Windows for
+    /// the whole tree and surviving its termination until the job handle closes.
+    pub fn accounting(&self) -> Result<JobAccounting, RuntimeError> {
         let mut accounting = JOBOBJECT_BASIC_ACCOUNTING_INFORMATION::default();
         unsafe {
             QueryInformationJobObject(
@@ -90,7 +98,24 @@ impl JobObject {
                 None,
             )
         }?;
-        Ok(accounting.ActiveProcesses)
+        let mut limits = JOBOBJECT_EXTENDED_LIMIT_INFORMATION::default();
+        unsafe {
+            QueryInformationJobObject(
+                Some(self.handle),
+                JobObjectExtendedLimitInformation,
+                (&raw mut limits).cast::<c_void>(),
+                u32::try_from(size_of_val(&limits)).expect("job limit structure exceeds u32"),
+                None,
+            )
+        }?;
+        Ok(JobAccounting {
+            active_processes: accounting.ActiveProcesses,
+            total_processes: accounting.TotalProcesses,
+            user_cpu_millis: hundred_nanos_to_millis(accounting.TotalUserTime),
+            kernel_cpu_millis: hundred_nanos_to_millis(accounting.TotalKernelTime),
+            peak_process_memory_bytes: bytes(limits.PeakProcessMemoryUsed),
+            peak_job_memory_bytes: bytes(limits.PeakJobMemoryUsed),
+        })
     }
 
     pub fn terminate(&self, exit_code: u32) -> Result<(), RuntimeError> {
@@ -101,6 +126,73 @@ impl JobObject {
 
 unsafe impl Send for JobObject {}
 unsafe impl Sync for JobObject {}
+
+/// Point-in-time accounting for one job: an employee's native process tree. Lazoo displays it
+/// and never counts it against its own ceiling (brief section 20).
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct JobAccounting {
+    pub active_processes: u32,
+    pub total_processes: u32,
+    pub user_cpu_millis: u64,
+    pub kernel_cpu_millis: u64,
+    pub peak_process_memory_bytes: u64,
+    pub peak_job_memory_bytes: u64,
+}
+
+/// Point-in-time accounting for the calling process: the daemon's own share of the machine.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct ProcessAccounting {
+    pub pid: u32,
+    pub user_cpu_millis: u64,
+    pub kernel_cpu_millis: u64,
+    pub working_set_bytes: u64,
+    pub peak_working_set_bytes: u64,
+    pub handle_count: u32,
+}
+
+/// CPU time, working set, and handle count of the calling process.
+pub fn current_process_accounting() -> Result<ProcessAccounting, RuntimeError> {
+    let process = unsafe { GetCurrentProcess() };
+    let mut creation = FILETIME::default();
+    let mut exit = FILETIME::default();
+    let mut kernel = FILETIME::default();
+    let mut user = FILETIME::default();
+    unsafe {
+        GetProcessTimes(
+            process,
+            &raw mut creation,
+            &raw mut exit,
+            &raw mut kernel,
+            &raw mut user,
+        )
+    }?;
+    let mut counters = PROCESS_MEMORY_COUNTERS::default();
+    let size = u32::try_from(size_of_val(&counters)).expect("memory counters exceed u32");
+    counters.cb = size;
+    unsafe { K32GetProcessMemoryInfo(process, &raw mut counters, size) }.ok()?;
+    let mut handle_count = 0u32;
+    unsafe { GetProcessHandleCount(process, &raw mut handle_count) }?;
+    Ok(ProcessAccounting {
+        pid: std::process::id(),
+        user_cpu_millis: filetime_to_millis(user),
+        kernel_cpu_millis: filetime_to_millis(kernel),
+        working_set_bytes: bytes(counters.WorkingSetSize),
+        peak_working_set_bytes: bytes(counters.PeakWorkingSetSize),
+        handle_count,
+    })
+}
+
+fn filetime_to_millis(value: FILETIME) -> u64 {
+    ((u64::from(value.dwHighDateTime) << 32) | u64::from(value.dwLowDateTime)) / 10_000
+}
+
+fn hundred_nanos_to_millis(value: i64) -> u64 {
+    u64::try_from(value).unwrap_or(0) / 10_000
+}
+
+fn bytes(value: usize) -> u64 {
+    u64::try_from(value).unwrap_or(u64::MAX)
+}
 
 impl Drop for JobObject {
     fn drop(&mut self) {

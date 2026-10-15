@@ -3,8 +3,9 @@ use std::path::PathBuf;
 use clap::Parser;
 use lazoo_protocol::{CheckoutMode, MessageKind, RpcError};
 use lazooctl::{
-    Cli, Command, ConversationCommand, EmployeeCommand, MessageCommand, ProjectCommand,
-    RosterCommand, SessionCommand, TurnCommand, command_request, exit_code_for_rpc, render_result,
+    Cli, Command, ConversationCommand, EmployeeCommand, InboxCommand, MessageCommand,
+    ProjectCommand, RosterCommand, SessionCommand, TurnCommand, command_request, exit_code_for_rpc,
+    render_result,
 };
 use serde_json::json;
 
@@ -1237,5 +1238,190 @@ fn incident_cli_maps_threshold_list_set_and_reset() {
         ])
         .is_err(),
         "--occurrences is required"
+    );
+}
+
+#[test]
+fn inbox_cli_maps_list_and_counts() {
+    let request = |args: &[&str]| {
+        let mut argv = vec!["lazooctl", "inbox"];
+        argv.extend_from_slice(args);
+        command_request(&Cli::try_parse_from(argv).unwrap().command)
+    };
+    assert_eq!(
+        request(&["list"]),
+        (
+            "inbox.list",
+            json!({"filter": "all", "limit": 200, "before": null}),
+            false
+        )
+    );
+    assert_eq!(
+        request(&[
+            "list",
+            "--filter",
+            "resolved",
+            "--limit",
+            "20",
+            "--before",
+            "2026-10-13T00:00:00Z|00000000-0000-4000-8000-000000000001"
+        ]),
+        (
+            "inbox.list",
+            json!({
+                "filter": "resolved",
+                "limit": 20,
+                "before": "2026-10-13T00:00:00Z|00000000-0000-4000-8000-000000000001"
+            }),
+            false
+        )
+    );
+    assert_eq!(request(&["counts"]), ("inbox.counts", json!({}), false));
+    assert!(
+        Cli::try_parse_from(["lazooctl", "inbox", "list", "--filter", "everything"]).is_err(),
+        "the filter is one of the five Inbox filters"
+    );
+    let Command::Inbox(InboxCommand::List { filter, .. }) =
+        Cli::try_parse_from(["lazooctl", "inbox", "list", "--filter", "incidents"])
+            .unwrap()
+            .command
+    else {
+        panic!("expected inbox list");
+    };
+    assert_eq!(filter, lazoo_protocol::InboxFilter::Incidents);
+}
+
+#[test]
+fn session_and_system_cli_map_resources() {
+    let request = |args: &[&str]| {
+        let mut argv = vec!["lazooctl"];
+        argv.extend_from_slice(args);
+        command_request(&Cli::try_parse_from(argv).unwrap().command)
+    };
+    assert_eq!(
+        request(&["session", "resources", SESSION_ID]),
+        ("session.resources", json!({"id": SESSION_ID}), false)
+    );
+    assert_eq!(
+        request(&["system", "resources"]),
+        ("system.resources", json!({}), false)
+    );
+    assert!(
+        Cli::try_parse_from(["lazooctl", "session", "resources"]).is_err(),
+        "the session id is required"
+    );
+}
+
+#[test]
+fn conversation_cli_maps_rename_with_and_without_a_title() {
+    let request = |args: &[&str]| {
+        let mut argv = vec!["lazooctl", "conversation", "rename"];
+        argv.extend_from_slice(args);
+        command_request(&Cli::try_parse_from(argv).unwrap().command)
+    };
+    assert_eq!(
+        request(&[
+            CONVERSATION_ID,
+            "--expected-revision",
+            "2",
+            "--title",
+            "Parser fix"
+        ]),
+        (
+            "conversation.rename",
+            json!({"id": CONVERSATION_ID, "expectedRevision": 2, "title": "Parser fix"}),
+            false
+        )
+    );
+    assert_eq!(
+        request(&[CONVERSATION_ID, "--expected-revision", "3"]),
+        (
+            "conversation.rename",
+            json!({"id": CONVERSATION_ID, "expectedRevision": 3, "title": null}),
+            false
+        )
+    );
+    assert!(
+        Cli::try_parse_from(["lazooctl", "conversation", "rename", CONVERSATION_ID]).is_err(),
+        "--expected-revision is required"
+    );
+}
+
+#[test]
+fn provider_cli_maps_config() {
+    let cli = Cli::try_parse_from(["lazooctl", "provider", "config"]).unwrap();
+    assert_eq!(
+        command_request(&cli.command),
+        ("provider.config", json!({}), false)
+    );
+}
+
+#[test]
+fn workspace_cli_maps_conversations_and_launcher() {
+    let request = |args: &[&str]| {
+        let mut argv = vec!["lazooctl", "workspace"];
+        argv.extend_from_slice(args);
+        command_request(&Cli::try_parse_from(argv).unwrap().command)
+    };
+    assert_eq!(
+        request(&["conversations"]),
+        (
+            "workspace.conversations",
+            json!({"projectId": null, "limit": 200, "before": null}),
+            false
+        )
+    );
+    assert_eq!(
+        request(&[
+            "conversations",
+            "--project-id",
+            CONVERSATION_ID,
+            "--limit",
+            "20",
+            "--before",
+            "x|y"
+        ]),
+        (
+            "workspace.conversations",
+            json!({"projectId": CONVERSATION_ID, "limit": 20, "before": "x|y"}),
+            false
+        )
+    );
+    assert_eq!(
+        request(&["launcher"]),
+        ("workspace.launcher", json!({"projectId": null}), false)
+    );
+    assert_eq!(
+        request(&["launcher", "--project-id", CONVERSATION_ID]),
+        (
+            "workspace.launcher",
+            json!({"projectId": CONVERSATION_ID}),
+            false
+        )
+    );
+}
+
+#[test]
+fn workspace_cli_maps_show() {
+    let request = |args: &[&str]| {
+        let mut argv = vec!["lazooctl", "workspace", "show"];
+        argv.extend_from_slice(args);
+        command_request(&Cli::try_parse_from(argv).unwrap().command)
+    };
+    assert_eq!(
+        request(&[CONVERSATION_ID]),
+        (
+            "workspace.conversation",
+            json!({"id": CONVERSATION_ID, "turnLimit": 50}),
+            false
+        )
+    );
+    assert_eq!(
+        request(&[CONVERSATION_ID, "--turn-limit", "5"]),
+        (
+            "workspace.conversation",
+            json!({"id": CONVERSATION_ID, "turnLimit": 5}),
+            false
+        )
     );
 }

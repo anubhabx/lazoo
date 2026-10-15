@@ -128,6 +128,16 @@ impl ProviderSession for ProviderSessionHandle {
         }
     }
 
+    fn resources(&self) -> Option<lazoo_runtime::JobAccounting> {
+        match self {
+            Self::Codex(session) => session.resources(),
+            Self::OpenCode(session) => session.resources(),
+            Self::GrokBuild(session) => session.resources(),
+            Self::Antigravity(session) => session.resources(),
+            Self::ClaudeCode(session) => session.resources(),
+        }
+    }
+
     fn turn<'a>(&'a self, request: &'a TurnRequest) -> AdapterFuture<'a, Vec<ProviderEvent>> {
         match self {
             Self::Codex(session) => session.turn(request),

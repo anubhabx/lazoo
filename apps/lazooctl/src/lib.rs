@@ -4,9 +4,9 @@ use clap::{Parser, Subcommand};
 use lazoo_ipc::{IpcError, PipeClient};
 use lazoo_protocol::{
     ActivationPolicy, ApprovalDecision, ApprovalState, AuthorityMode, CheckoutMode,
-    EmployeeCheckoutPolicy, IncidentEscalation, IncidentPriority, IncidentState, JsonRpcRequest,
-    JsonRpcResponse, MessageEndpoint, MessageKind, MessagePriority, MessageSender, RpcError,
-    TaskReportKind, TaskResolution, TaskState, UserMessageEndpoint, UserMessageKind,
+    EmployeeCheckoutPolicy, InboxFilter, IncidentEscalation, IncidentPriority, IncidentState,
+    JsonRpcRequest, JsonRpcResponse, MessageEndpoint, MessageKind, MessagePriority, MessageSender,
+    RpcError, TaskReportKind, TaskResolution, TaskState, UserMessageEndpoint, UserMessageKind,
 };
 use lazoo_runtime::{DataRoot, Installation, RuntimeError};
 use serde_json::{Value, json};
@@ -49,6 +49,10 @@ pub enum Command {
     Approval(ApprovalCommand),
     #[command(subcommand)]
     Incident(IncidentCommand),
+    #[command(subcommand)]
+    Inbox(InboxCommand),
+    #[command(subcommand)]
+    Workspace(WorkspaceCommand),
     #[command(subcommand)]
     System(SystemCommand),
 }
@@ -110,6 +114,51 @@ pub enum IncidentThresholdCommand {
     /// Return CODE to its default threshold.
     Reset {
         code: String,
+    },
+}
+
+/// What needs you, derived from the approval, task, and incident ledgers for the desktop
+/// Inbox; nothing here changes anything.
+#[derive(Debug, Subcommand)]
+pub enum InboxCommand {
+    List {
+        /// all, approvals, permissions, incidents, or resolved (the archive).
+        #[arg(long, default_value = "all", value_parser = parse_inbox_filter)]
+        filter: InboxFilter,
+        #[arg(long, default_value_t = 200)]
+        limit: u32,
+        /// The `nextBefore` of the previous resolved page.
+        #[arg(long)]
+        before: Option<String>,
+    },
+    /// The rail badge: how many items need you right now.
+    Counts,
+}
+
+/// The desktop workspace read models: a space's conversation history with its markers, and
+/// who can lead a new conversation right now. Nothing here changes anything.
+#[derive(Debug, Subcommand)]
+pub enum WorkspaceCommand {
+    Conversations {
+        /// A registered project; omit for Home (projectless conversations).
+        #[arg(long)]
+        project_id: Option<Uuid>,
+        #[arg(long, default_value_t = 200)]
+        limit: u32,
+        /// The `nextBefore` of the previous page.
+        #[arg(long)]
+        before: Option<String>,
+    },
+    Launcher {
+        #[arg(long)]
+        project_id: Option<Uuid>,
+    },
+    /// The active conversation: its lead header, worker dock, attention items, and newest turns.
+    Show {
+        id: Uuid,
+        /// How many of the newest turns to include (1 to 500).
+        #[arg(long, default_value_t = 50)]
+        turn_limit: u32,
     },
 }
 
@@ -181,11 +230,16 @@ pub enum EventsCommand {
 #[derive(Debug, Subcommand)]
 pub enum SystemCommand {
     Shutdown,
+    /// The daemon's own CPU time, working set, and handle count.
+    Resources,
 }
 
 #[derive(Debug, Subcommand)]
 pub enum ProviderCommand {
     List,
+    /// Read every known provider configuration file, with secrets redacted, and name
+    /// duplicate and conflicting integrations across providers. Writes nothing.
+    Config,
     Probe {
         provider: String,
     },
@@ -291,6 +345,10 @@ pub enum SessionCommand {
     },
     List,
     Show {
+        id: Uuid,
+    },
+    /// Process count, CPU time, and peak memory of a live session's native process tree.
+    Resources {
         id: Uuid,
     },
     Stop {
@@ -414,6 +472,14 @@ pub enum ConversationCommand {
     },
     Show {
         id: Uuid,
+    },
+    /// Set or clear (omit --title) the conversation's title at the revision you saw.
+    Rename {
+        id: Uuid,
+        #[arg(long)]
+        expected_revision: u64,
+        #[arg(long)]
+        title: Option<String>,
     },
 }
 
@@ -665,6 +731,7 @@ pub fn command_request(command: &Command) -> (&'static str, Value, bool) {
             true,
         ),
         Command::Provider(ProviderCommand::List) => ("provider.list", json!({}), false),
+        Command::Provider(ProviderCommand::Config) => ("provider.config", json!({}), false),
         Command::Provider(ProviderCommand::Probe { provider }) => {
             ("provider.probe", json!({"provider": provider}), false)
         }
@@ -689,7 +756,10 @@ pub fn command_request(command: &Command) -> (&'static str, Value, bool) {
         Command::Task(command) => task_request(command),
         Command::Approval(command) => approval_request(command),
         Command::Incident(command) => incident_request(command),
+        Command::Inbox(command) => inbox_request(command),
+        Command::Workspace(command) => workspace_request(command),
         Command::System(SystemCommand::Shutdown) => ("system.shutdown", json!({}), false),
+        Command::System(SystemCommand::Resources) => ("system.resources", json!({}), false),
     }
 }
 
@@ -764,6 +834,45 @@ fn incident_request(command: &IncidentCommand) -> (&'static str, Value, bool) {
         IncidentCommand::Threshold(IncidentThresholdCommand::Reset { code }) => {
             ("incident.threshold.reset", json!({"code": code}), false)
         }
+    }
+}
+
+fn inbox_request(command: &InboxCommand) -> (&'static str, Value, bool) {
+    match command {
+        InboxCommand::List {
+            filter,
+            limit,
+            before,
+        } => (
+            "inbox.list",
+            json!({"filter": filter, "limit": limit, "before": before}),
+            false,
+        ),
+        InboxCommand::Counts => ("inbox.counts", json!({}), false),
+    }
+}
+
+fn workspace_request(command: &WorkspaceCommand) -> (&'static str, Value, bool) {
+    match command {
+        WorkspaceCommand::Conversations {
+            project_id,
+            limit,
+            before,
+        } => (
+            "workspace.conversations",
+            json!({"projectId": project_id, "limit": limit, "before": before}),
+            false,
+        ),
+        WorkspaceCommand::Launcher { project_id } => (
+            "workspace.launcher",
+            json!({"projectId": project_id}),
+            false,
+        ),
+        WorkspaceCommand::Show { id, turn_limit } => (
+            "workspace.conversation",
+            json!({"id": id, "turnLimit": turn_limit}),
+            false,
+        ),
     }
 }
 
@@ -858,6 +967,15 @@ fn conversation_request(command: &ConversationCommand) -> (&'static str, Value, 
             false,
         ),
         ConversationCommand::Show { id } => ("conversation.show", json!({"id": id}), false),
+        ConversationCommand::Rename {
+            id,
+            expected_revision,
+            title,
+        } => (
+            "conversation.rename",
+            json!({"id": id, "expectedRevision": expected_revision, "title": title}),
+            false,
+        ),
     }
 }
 
@@ -1313,6 +1431,7 @@ fn session_request(command: &SessionCommand) -> (&'static str, Value, bool) {
         ),
         SessionCommand::List => ("session.list", json!({}), false),
         SessionCommand::Show { id } => ("session.show", json!({"id": id}), false),
+        SessionCommand::Resources { id } => ("session.resources", json!({"id": id}), false),
         SessionCommand::Stop {
             id,
             expected_revision,
@@ -1445,6 +1564,17 @@ pub fn exit_code_for_rpc(error: &RpcError) -> i32 {
         code if code.starts_with("LZ-APPROVAL-") => 14,
         code if code.starts_with("LZ-INCIDENT-") => 15,
         _ => 10,
+    }
+}
+
+fn parse_inbox_filter(value: &str) -> Result<InboxFilter, String> {
+    match value {
+        "all" => Ok(InboxFilter::All),
+        "approvals" => Ok(InboxFilter::Approvals),
+        "permissions" => Ok(InboxFilter::Permissions),
+        "incidents" => Ok(InboxFilter::Incidents),
+        "resolved" => Ok(InboxFilter::Resolved),
+        _ => Err("expected all, approvals, permissions, incidents, or resolved".to_owned()),
     }
 }
 

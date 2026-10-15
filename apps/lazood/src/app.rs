@@ -1,10 +1,13 @@
 mod approval;
 mod delivery;
 mod idle;
+mod inbox;
 mod incident;
+mod resources;
 mod task;
 mod tools;
 mod turn;
+mod workspace;
 
 pub use incident::UserNotifier;
 
@@ -40,7 +43,7 @@ use lazoo_providers::{
     ProviderError, ProviderEvent, ProviderKind, ProviderProbe, ProviderRegistry, ProviderSession,
     ProviderSessionHandle, ProviderVerification, SessionRequest, TurnEventObserver, TurnRequest,
 };
-use lazoo_runtime::DataRoot;
+use lazoo_runtime::{DataRoot, JobAccounting};
 use lazoo_store::{
     AcknowledgeMessageInput, BeginSessionInput, BeginSessionStopInput, CancelMessageInput,
     ClaimMessageInput, CreateEmployeeInput, DisableEmployeeInput, FailMessageInput,
@@ -62,6 +65,10 @@ pub type SessionBackendFuture<'a> =
 pub trait ManagedSession: Send + Sync {
     fn id(&self) -> String;
     fn native_host_pid(&self) -> Option<u32>;
+    /// Job Object accounting for the native process tree; `None` when there is no job.
+    fn resources(&self) -> Option<JobAccounting> {
+        None
+    }
     fn ready_for_turn(
         &self,
     ) -> Pin<Box<dyn Future<Output = Result<(), ProviderError>> + Send + '_>> {
@@ -159,6 +166,10 @@ impl ManagedSession for ProviderSessionHandle {
 
     fn native_host_pid(&self) -> Option<u32> {
         ProviderSession::native_host_pid(self)
+    }
+
+    fn resources(&self) -> Option<JobAccounting> {
+        ProviderSession::resources(self)
     }
 
     fn turn_observed<'a>(
@@ -340,6 +351,7 @@ impl App {
             "events.list" => self.list_events(request.params),
             "desktop.snapshot" => self.desktop_snapshot(&request.params),
             "provider.list" => self.provider_list(&request.params),
+            "provider.config" => self.provider_config(&request.params),
             "provider.probe" => self.provider_probe(request.params).await,
             "provider.smoke" => self.provider_smoke(request.params).await,
             "employee.create" => self.create_employee(&request).await,
@@ -353,9 +365,11 @@ impl App {
             "session.list" => self.session_list(&request.params),
             "session.show" => self.session_show(request.params),
             "session.stop" => self.stop_session(&request).await,
+            "session.resources" => self.session_resources(&request.params).await,
             "conversation.create" => self.create_conversation(&request),
             "conversation.list" => self.conversation_list(request.params),
             "conversation.show" => self.conversation_show(request.params),
+            "conversation.rename" => self.rename_conversation(&request),
             "turn.submit" => self.submit_turn(&request).await,
             "turn.retry" => self.retry_turn(&request).await,
             "turn.cancel" => self.cancel_turn(&request).await,
@@ -372,6 +386,11 @@ impl App {
             "approval.decide" => self.decide_approval(&request),
             "approval.list" => self.approval_list(&request.params),
             "approval.show" => self.approval_show(&request.params),
+            "inbox.list" => self.inbox_list(&request.params),
+            "inbox.counts" => self.inbox_counts(&request.params),
+            "workspace.conversations" => self.workspace_conversations(&request.params),
+            "workspace.launcher" => self.workspace_launcher(&request.params),
+            "workspace.conversation" => self.workspace_conversation(&request.params),
             "incident.list" => self.incident_list(&request.params),
             "incident.show" => self.incident_show(&request.params),
             "incident.acknowledge" => self.acknowledge_incident(&request),
@@ -387,6 +406,7 @@ impl App {
             "message.cancel" => self.cancel_message(&request),
             "message.list" => self.message_list(request.params),
             "message.show" => self.message_show(request.params),
+            "system.resources" => self.system_resources(&request.params).await,
             "system.shutdown" => {
                 let _ = self.shutdown.send(true);
                 Ok(json!({"planned": true}))
@@ -533,6 +553,15 @@ impl App {
             })
             .collect::<Vec<_>>();
         Ok(to_value(providers))
+    }
+
+    /// Read-only configuration discovery (brief section 16.1): known files parsed, secrets
+    /// redacted, integrations hashed, duplicates and conflicts named. Nothing is written.
+    fn provider_config(&self, params: &Value) -> Result<Value, RpcError> {
+        require_empty_params(params, "provider.config")?;
+        Ok(to_value(lazoo_providers::discover_provider_configuration(
+            &self.provider_environment,
+        )))
     }
 
     async fn provider_probe(&self, value: Value) -> Result<Value, RpcError> {

@@ -168,6 +168,10 @@ impl JsonRpcProcess {
         self.child.id()
     }
 
+    pub(crate) fn job(&self) -> std::sync::Arc<lazoo_runtime::JobObject> {
+        self.child.job()
+    }
+
     pub(crate) async fn request(
         &mut self,
         method: &str,

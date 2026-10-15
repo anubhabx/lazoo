@@ -2,9 +2,9 @@
 
 **Date:** 2026-10-11
 
-**Status:** Proposed. Design only, for review by the owner and the separately owned desktop UI before any implementation. No code, schema, RPC, Tauri, or desktop change is part of this document.
+**Status:** Implemented on `feat/desktop-inbox` (pull request #11 against `main`) with deterministic acceptance, for owner and UI-owner review before merge. On 2026-10-13 the owner asked to finish as much of the application as possible, so section 9's proposed answers were adopted as defaults and the daemon side (`inbox.list`, `inbox.counts`, `lazooctl inbox`) landed; no schema, Tauri, or desktop change is part of it, and the desktop binding still waits for the UI owner. Implementation plan: `docs/superpowers/plans/2026-10-13-desktop-inbox.md`; verification: `docs/verification/2026-10-13-desktop-inbox.md`.
 
-**Scope:** One typed, daemon-derived read model that the desktop's global Inbox (information architecture, section 9) can bind to, built only from ledgers that already exist at schema 15. It names the rows, the badge, the live-update path, and the actions, each mapped to an existing RPC method. Implementation, the Tauri commands, and the desktop work wait for the UI owner's agreement.
+**Scope:** One typed, daemon-derived read model that the desktop's global Inbox (information architecture, section 9) can bind to, built only from ledgers that already exist at schema 15. It names the rows, the badge, the live-update path, and the actions, each mapped to an existing RPC method. The daemon and CLI side is implemented; the Tauri commands and the desktop work wait for the UI owner's agreement.
 
 ## 1. Why a contract, and why now
 
@@ -168,6 +168,15 @@ The desktop side (Tauri commands such as `load_inbox`, the event subscription in
 5. Is **phase 1 read-only** the right first step for the desktop, with actions after a separate capability review?
 6. Is a 250 ms debounced re-read acceptable, or does the UI owner want typed `inbox.changed` events instead?
 
+**Answers adopted on 2026-10-13.** The owner's direction was to finish as much as possible, so each question took the answer the document proposes, and the implementation encodes them as rules in `lazoo_domain::inbox` (reopening any of them is a rule change, not a schema change):
+
+1. An acknowledged user escalation is `attention: acknowledged`: visible under Incidents, never on the badge; a recurrence reopens it and it counts again.
+2. The Permissions filter is empty and `kind: permission` is reserved; `command-execution` approvals stay under Approvals.
+3. Lead-window incidents appear as `watching` with `deadline: remediation`, and count only once the sweep escalates them to the user.
+4. A task proposal counts toward the badge, with `severity: normal`.
+5. The desktop stays read-only, but `actions` are emitted as data now rather than in a later phase: the daemon grants nothing by naming an RPC the CLI already serves, so phase 2 needs only the desktop capability review. A `resolve-failed` action carries the task's own `failureCode` and `failureMessage` (or Lazoo's words when the row has none), because `task.resolve` requires them.
+6. Debounced re-reads from `eventHighWater`; no `inbox.changed` event exists.
+
 ## 10. Review gate
 
-Agreeing to this document authorizes only an implementation plan for `inbox.list` and `inbox.counts` with the item kinds above. It does not authorize desktop or Tauri changes, a new mutation, or `UI BACKEND CONTRACT: GO`, which waits for the implemented contract's own review.
+Agreeing to this document authorized only an implementation plan for `inbox.list` and `inbox.counts` with the item kinds above, which is now implemented and under review as pull request #11. It does not authorize desktop or Tauri changes, a new mutation, or `UI BACKEND CONTRACT: GO`, which waits for the implemented contract's own review.

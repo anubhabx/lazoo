@@ -633,7 +633,7 @@ pub(crate) fn insert_event(
     Ok(event_sequence)
 }
 
-fn query_employees(connection: &Connection) -> Result<Vec<EmployeeRecord>, StoreError> {
+pub(crate) fn query_employees(connection: &Connection) -> Result<Vec<EmployeeRecord>, StoreError> {
     let mut statement = connection.prepare(
         "SELECT id, name, provider, role, instructions, model, reasoning_effort,
                 native_settings_json, authority_mode, checkout_policy, activation_policy, enabled,

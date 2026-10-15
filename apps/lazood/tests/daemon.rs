@@ -82,6 +82,9 @@ struct FakeSessionBackend {
     turn_requests: Arc<Mutex<Vec<TurnRequest>>>,
     turn_failure: Arc<Mutex<Option<String>>>,
     turn_retryable_failure: Arc<AtomicBool>,
+    /// While set, every turn stalls: the provider accepts the input and then shows no progress
+    /// inside its deadline, as the adapters report it.
+    turn_stall: Arc<AtomicBool>,
     /// Scripted start refusals: each one fails the next `start` before any session is counted.
     fail_starts: Arc<AtomicUsize>,
     working_directories: Arc<Mutex<Vec<PathBuf>>>,
@@ -112,6 +115,7 @@ impl Default for FakeSessionBackend {
             turn_requests: Arc::new(Mutex::new(Vec::new())),
             turn_failure: Arc::new(Mutex::new(None)),
             turn_retryable_failure: Arc::new(AtomicBool::new(false)),
+            turn_stall: Arc::new(AtomicBool::new(false)),
             fail_starts: Arc::new(AtomicUsize::new(0)),
             working_directories: Arc::new(Mutex::new(Vec::new())),
             permission_requests: Arc::new(Mutex::new(Vec::new())),
@@ -137,6 +141,7 @@ struct FakeManagedSession {
     turn_requests: Arc<Mutex<Vec<TurnRequest>>>,
     turn_failure: Arc<Mutex<Option<String>>>,
     turn_retryable_failure: Arc<AtomicBool>,
+    turn_stall: Arc<AtomicBool>,
     permission_requests: Arc<Mutex<Vec<PermissionRequest>>>,
     permission_decisions: Arc<Mutex<Vec<PermissionDecision>>>,
     tool_calls: Arc<Mutex<Vec<ToolCall>>>,
@@ -150,6 +155,17 @@ impl ManagedSession for FakeManagedSession {
 
     fn native_host_pid(&self) -> Option<u32> {
         Some(4242)
+    }
+
+    fn resources(&self) -> Option<lazoo_runtime::JobAccounting> {
+        Some(lazoo_runtime::JobAccounting {
+            active_processes: 2,
+            total_processes: 3,
+            user_cpu_millis: 1500,
+            kernel_cpu_millis: 250,
+            peak_process_memory_bytes: 50 * 1024 * 1024,
+            peak_job_memory_bytes: 80 * 1024 * 1024,
+        })
     }
 
     fn ready_for_turn(
@@ -173,6 +189,9 @@ impl ManagedSession for FakeManagedSession {
             self.turn_requests.lock().unwrap().push(request.clone());
             if self.turn_retryable_failure.load(Ordering::SeqCst) {
                 return Err(ProviderError::Timeout { phase: "fake turn" });
+            }
+            if self.turn_stall.load(Ordering::SeqCst) {
+                return Err(ProviderError::Stalled { millis: 250 });
             }
             let failure = self.turn_failure.lock().unwrap().clone();
             if let Some(message) = failure {
@@ -269,6 +288,7 @@ impl SessionBackend for FakeSessionBackend {
                 turn_requests: Arc::clone(&self.turn_requests),
                 turn_failure: Arc::clone(&self.turn_failure),
                 turn_retryable_failure: Arc::clone(&self.turn_retryable_failure),
+                turn_stall: Arc::clone(&self.turn_stall),
                 permission_requests: Arc::clone(&self.permission_requests),
                 permission_decisions: Arc::clone(&self.permission_decisions),
                 tool_calls: Arc::clone(&self.tool_calls),
@@ -9069,6 +9089,2433 @@ fn configurable_thresholds_acceptance_contract_is_deterministic_and_backend_only
         "overrideAppliesFromNextOccurrence",
         "lossesPromoteWhateverIsConfigured",
         "toolsCannotSeeThresholds",
+        "providerSmokeAbsent",
+        "externalModelUseAbsent",
+        "uiChangesAbsent",
+        "deterministic-fake-transport",
+        "schemaVersion = 15",
+    ] {
+        assert!(
+            script.contains(required),
+            "acceptance script must contain {required}"
+        );
+    }
+    for forbidden in ["provider', 'smoke", "LivePrompt"] {
+        assert!(
+            !script.contains(forbidden),
+            "acceptance script must not contain {forbidden}"
+        );
+    }
+}
+
+/// The user reads the Inbox through the daemon: a pending approval is the only counted item,
+/// its actions name `approval.decide` with the revision the user saw, and the decision moves it
+/// to the archive. The Inbox stores nothing and the desktop snapshot is unchanged.
+#[tokio::test]
+#[allow(clippy::too_many_lines)] // One user session: empty, pending, strict parameters, decided.
+async fn the_inbox_lists_a_pending_approval_and_its_decision_archives_it() {
+    let (_temporary, harness) = approval_harness(
+        AuthorityMode::Ask,
+        Duration::from_secs(60),
+        vec![permission_request(
+            PermissionKind::CommandExecution,
+            "cargo test",
+            false,
+        )],
+        "completed",
+    );
+    let call = |id: &str, method: &str, params: serde_json::Value| {
+        harness.app.handle(request(id, method, params))
+    };
+    let zero =
+        json!({"unresolved": 0, "approvals": 0, "permissions": 0, "incidents": 0, "watching": 0});
+    let empty = call("counts-empty", "inbox.counts", json!({}))
+        .await
+        .result
+        .unwrap();
+    assert_eq!(empty["version"], 1);
+    assert_eq!(empty["counts"], zero);
+
+    warm_lead(&harness).await;
+    let submission = submit_governed_turn(&harness, "ask");
+    let pending = wait_for_pending_approval(&harness).await;
+
+    let counts = call("counts", "inbox.counts", json!({}))
+        .await
+        .result
+        .unwrap();
+    assert_eq!(counts["counts"]["unresolved"], 1);
+    assert_eq!(counts["counts"]["approvals"], 1);
+    assert_eq!(counts["counts"]["incidents"], 0);
+    let listed = call("list", "inbox.list", json!({"filter": "approvals"}))
+        .await
+        .result
+        .unwrap();
+    assert_eq!(listed["version"], 1);
+    assert_eq!(listed["truncated"], false);
+    assert_eq!(listed["nextBefore"], serde_json::Value::Null);
+    assert_eq!(listed["counts"], counts["counts"]);
+    assert_eq!(listed["eventHighWater"], counts["eventHighWater"]);
+    let items = listed["items"].as_array().unwrap();
+    assert_eq!(items.len(), 1);
+    let item = &items[0];
+    assert_eq!(item["kind"], "approval");
+    assert_eq!(item["id"], pending["id"]);
+    assert_eq!(item["revision"], pending["revision"]);
+    assert_eq!(item["attention"], "action-required");
+    assert_eq!(item["severity"], "priority");
+    assert_eq!(item["subtype"], "command-execution");
+    assert_eq!(item["state"], "pending");
+    assert_eq!(item["title"], "Approval requested: cargo test");
+    assert_eq!(item["requiredAction"], "Approve or decline: cargo test");
+    assert_eq!(item["deadline"]["kind"], "expires");
+    assert_eq!(item["deadline"]["at"], pending["expiresAt"]);
+    assert_eq!(item["scope"]["employeeName"], "Rhea");
+    assert_eq!(item["scope"]["provider"], "codex");
+    assert_eq!(
+        item["scope"]["conversationId"],
+        json!(harness.conversation_id)
+    );
+    assert_eq!(item["scope"]["projectId"], serde_json::Value::Null);
+    assert_eq!(item["scope"]["turnId"], pending["turnId"]);
+    assert_eq!(item["detail"]["authority"], "ask");
+    assert_eq!(item["detail"]["detail"]["command"], "cargo test");
+    let approve = &item["actions"][0];
+    assert_eq!(approve["action"], "approve");
+    assert_eq!(approve["method"], "approval.decide");
+    assert_eq!(
+        approve["params"],
+        json!({"id": pending["id"], "expectedRevision": pending["revision"], "decision": "approve"})
+    );
+    assert_eq!(item["actions"][1]["params"]["decision"], "decline");
+    for (filter, expected) in [("all", 1), ("incidents", 0), ("permissions", 0)] {
+        let listed = call(filter, "inbox.list", json!({"filter": filter}))
+            .await
+            .result
+            .unwrap();
+        assert_eq!(
+            listed["items"].as_array().unwrap().len(),
+            expected,
+            "{filter}"
+        );
+    }
+
+    // Parameters are strict: the limit is bounded, only the archive pages, cursors are opaque
+    // but checked, and counts take nothing.
+    for (id, params) in [
+        ("bad-limit", json!({"filter": "all", "limit": 0})),
+        (
+            "bad-filter-cursor",
+            json!({"filter": "all", "before": "x|y"}),
+        ),
+        (
+            "bad-cursor",
+            json!({"filter": "resolved", "before": "nope"}),
+        ),
+        ("bad-unknown", json!({"filter": "all", "unknown": true})),
+    ] {
+        let error = call(id, "inbox.list", params).await.error.unwrap();
+        assert_eq!(error.code, "LZ-INBOX-INVALID", "{id}");
+    }
+    let error = call("bad-counts", "inbox.counts", json!({"filter": "all"}))
+        .await
+        .error
+        .unwrap();
+    assert_eq!(error.code, "LZ-INVALID-PARAMS");
+
+    // The user sends exactly the action's params plus a fresh idempotency key.
+    let mut params = approve["params"].clone();
+    params["idempotencyKey"] = json!("approve-from-inbox");
+    let decided = call("decide", "approval.decide", params)
+        .await
+        .result
+        .unwrap();
+    assert_eq!(decided["approval"]["state"], "approved");
+    let submitted = submission.await.unwrap().result.unwrap();
+    assert_eq!(submitted["turn"]["state"], "completed");
+
+    let after = call("counts-after", "inbox.counts", json!({}))
+        .await
+        .result
+        .unwrap();
+    assert_eq!(after["counts"], zero);
+    let archive = call("archive", "inbox.list", json!({"filter": "resolved"}))
+        .await
+        .result
+        .unwrap();
+    let archived = archive["items"].as_array().unwrap();
+    assert_eq!(archived.len(), 1);
+    assert_eq!(archived[0]["id"], pending["id"]);
+    assert_eq!(archived[0]["attention"], "resolved");
+    assert_eq!(archived[0]["state"], "approved");
+    assert_eq!(archived[0]["revision"], 2);
+    assert_eq!(archived[0]["deadline"], serde_json::Value::Null);
+    assert_eq!(archived[0]["actions"], json!([]));
+    assert_eq!(archive["truncated"], false);
+    assert_eq!(archive["counts"], zero);
+    assert!(
+        call("all-after", "inbox.list", json!({"filter": "all"}))
+            .await
+            .result
+            .unwrap()["items"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+
+    // The Inbox is derived: the high-water mark is the store's own, and reading it wrote
+    // nothing.
+    assert_eq!(
+        after["eventHighWater"],
+        json!(harness.store.status().unwrap().event_high_water)
+    );
+    assert_eq!(
+        approval_event_types(&harness.store),
+        ["approval.requested", "approval.decided"]
+    );
+    assert!(
+        harness
+            .store
+            .list_events(0, 1000)
+            .unwrap()
+            .iter()
+            .all(|event| !event.event_type.starts_with("inbox"))
+    );
+    assert_desktop_is_roster_neutral(&harness.app).await;
+    let snapshot = call("desktop", "desktop.snapshot", json!({}))
+        .await
+        .result
+        .unwrap();
+    assert!(snapshot.get("inbox").is_none());
+    assert!(snapshot.get("approvals").is_none());
+}
+
+/// Proposals, uncertain tasks, and escalated incidents through the daemon: counted items
+/// order first, a lead's window is watched until the sweep hands it to the user, an
+/// acknowledged escalation stays visible but uncounted, each action removes its item through
+/// the RPC it names, and the archive pages newest first. No tool can read the Inbox.
+#[tokio::test]
+#[allow(clippy::too_many_lines)] // One user session over every item kind, in order.
+async fn the_inbox_derives_tasks_and_incidents_and_pages_the_archive() {
+    use chrono::{TimeDelta, Utc};
+    use lazoo_protocol::{IncidentEscalation, IncidentSource};
+
+    let (_temporary, harness) = tool_harness(AuthorityMode::Ask);
+    warm_tool_lead(&harness).await;
+    let roster_revision = harness.store.roster_snapshot().unwrap().revision;
+    harness.backend.tool_calls.lock().unwrap().extend(
+        ["Implement the parser fix", "Write the parser tests"]
+            .into_iter()
+            .enumerate()
+            .map(|(index, objective)| {
+                tool_call(
+                    &format!("call-{}", index + 1),
+                    "task_delegate",
+                    json!({
+                        "employeeId": harness.worker.id,
+                        "objective": objective,
+                        "rosterRevision": roster_revision
+                    }),
+                )
+            }),
+    );
+    let submitted = submit_lead_turn(&harness, "ask").await;
+    assert_eq!(submitted["turn"]["state"], "completed");
+    let results = harness.backend.tool_results.lock().unwrap().clone();
+    let children: Vec<uuid::Uuid> = results[..2]
+        .iter()
+        .map(|result| {
+            assert!(result.success, "{result:?}");
+            assert_eq!(result.content["state"], "proposed");
+            result.content["taskId"].as_str().unwrap().parse().unwrap()
+        })
+        .collect();
+    let (proposal_id, uncertain_id) = (children[0], children[1]);
+    let call = |id: &str, method: &str, params: serde_json::Value| {
+        harness.app.handle(request(id, method, params))
+    };
+
+    // Restart truth marks the second child uncertain; the row stays authoritative and the Inbox
+    // only reads it.
+    harness
+        .store
+        .execute_for_test(&format!(
+            "UPDATE tasks SET state = 'uncertain', failure_code = 'LZ-TURN-OWNER-LOST',
+                    failure_message = 'the daemon restarted during the turn'
+             WHERE id = '{uncertain_id}';
+             INSERT INTO task_evidence (id, task_id, task_revision, kind, actor_kind,
+                                        detail_json, created_at)
+             VALUES ('{}', '{uncertain_id}', 1, 'uncertain', 'user', '{{}}',
+                     '2026-10-13T00:00:00+00:00');",
+            uuid::Uuid::new_v4()
+        ))
+        .unwrap();
+    // One incident with no lead reaches the user at once, one on the proposed child opens the
+    // lead's window, and one more reaches the user and is acknowledged.
+    let stall = raise_scoped(
+        &harness,
+        "stall",
+        "LZ-SESSION-STALLED",
+        IncidentSource::Daemon,
+        Some(harness.worker.id),
+    );
+    assert_eq!(stall.escalation, IncidentEscalation::User);
+    let windowed = promote_child_incident(&harness, "timeout", "LZ-MESSAGE-TIMEOUT", proposal_id);
+    assert_eq!(windowed.escalation, IncidentEscalation::Lead);
+    let crashed = raise_scoped(
+        &harness,
+        "crash",
+        "LZ-DAEMON-UNAVAILABLE",
+        IncidentSource::Daemon,
+        None,
+    );
+    assert_eq!(crashed.escalation, IncidentEscalation::User);
+    call(
+        "ack",
+        "incident.acknowledge",
+        json!({"id": crashed.id, "expectedRevision": crashed.revision, "idempotencyKey": "ack-crash"}),
+    )
+    .await
+    .result
+    .unwrap();
+
+    let listed = call("list", "inbox.list", json!({"filter": "all"}))
+        .await
+        .result
+        .unwrap();
+    let items = listed["items"].as_array().unwrap().clone();
+    let order: Vec<(String, String)> = items
+        .iter()
+        .map(|item| {
+            (
+                item["kind"].as_str().unwrap().to_owned(),
+                item["attention"].as_str().unwrap().to_owned(),
+            )
+        })
+        .collect();
+    assert_eq!(order.len(), 5, "{order:?}");
+    // Both tasks were born in one turn, so they tie on age and may land either way round.
+    assert!(
+        order[..2]
+            .iter()
+            .all(|(_, attention)| attention == "action-required")
+            && order[..2].iter().any(|(kind, _)| kind == "task-proposal")
+            && order[..2].iter().any(|(kind, _)| kind == "task-uncertain"),
+        "{order:?}"
+    );
+    assert_eq!(
+        order[2..],
+        [
+            ("incident".to_owned(), "action-required".to_owned()),
+            ("incident".to_owned(), "watching".to_owned()),
+            ("incident".to_owned(), "acknowledged".to_owned()),
+        ],
+        "{order:?}"
+    );
+    assert_eq!(
+        listed["counts"],
+        json!({"unresolved": 3, "approvals": 1, "permissions": 0, "incidents": 2, "watching": 1})
+    );
+    let by_id = |id: uuid::Uuid| {
+        items
+            .iter()
+            .find(|item| item["id"] == json!(id))
+            .cloned()
+            .unwrap()
+    };
+    let proposal = by_id(proposal_id);
+    assert_eq!(proposal["severity"], "normal");
+    assert_eq!(proposal["scope"]["employeeName"], "Mira");
+    assert_eq!(
+        proposal["scope"]["conversationId"],
+        json!(harness.conversation_id)
+    );
+    assert_eq!(proposal["detail"]["effectiveAuthority"], "ask");
+    assert_eq!(proposal["actions"][0]["method"], "task.accept");
+    assert_eq!(
+        proposal["actions"][1]["params"],
+        json!({"id": proposal_id, "expectedRevision": 1, "actor": {"kind": "user"}})
+    );
+    let uncertain = by_id(uncertain_id);
+    assert_eq!(uncertain["kind"], "task-uncertain");
+    assert_eq!(uncertain["subtype"], "task-uncertain");
+    assert_eq!(uncertain["severity"], "priority");
+    assert_eq!(uncertain["detail"]["failureCode"], "LZ-TURN-OWNER-LOST");
+    let resolve_failed = uncertain["actions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|action| action["action"] == "resolve-failed")
+        .cloned()
+        .unwrap();
+    assert_eq!(resolve_failed["method"], "task.resolve");
+    assert_eq!(
+        resolve_failed["params"]["failureCode"],
+        "LZ-TURN-OWNER-LOST"
+    );
+    let watched = by_id(windowed.id);
+    assert_eq!(watched["subtype"], "LZ-MESSAGE-TIMEOUT");
+    assert_eq!(watched["deadline"]["kind"], "remediation");
+    assert_eq!(
+        watched["deadline"]["at"],
+        json!(windowed.remediation_deadline_at)
+    );
+    assert_eq!(watched["scope"]["taskId"], json!(proposal_id));
+    assert_eq!(
+        watched["scope"]["conversationId"],
+        json!(harness.conversation_id)
+    );
+    assert_eq!(watched["actions"], json!([]));
+    let stalled = by_id(stall.id);
+    assert_eq!(stalled["detail"]["escalationReason"], "no-lead");
+    assert_eq!(stalled["actions"][0]["method"], "incident.acknowledge");
+    assert_eq!(stalled["actions"][1]["method"], "incident.resolve");
+    let acknowledged = by_id(crashed.id);
+    assert_eq!(acknowledged["state"], "acknowledged");
+    assert_eq!(acknowledged["actions"].as_array().unwrap().len(), 1);
+    assert_eq!(acknowledged["actions"][0]["method"], "incident.resolve");
+    for (filter, expected) in [("approvals", 1), ("incidents", 4), ("permissions", 0)] {
+        let listed = call(filter, "inbox.list", json!({"filter": filter}))
+            .await
+            .result
+            .unwrap();
+        assert_eq!(
+            listed["items"].as_array().unwrap().len(),
+            expected,
+            "{filter}"
+        );
+    }
+
+    // Each action removes its item through the RPC it names.
+    let mut accept = proposal["actions"][0]["params"].clone();
+    accept["idempotencyKey"] = json!("accept-from-inbox");
+    assert_eq!(
+        call("accept", "task.accept", accept).await.result.unwrap()["task"]["state"],
+        "accepted"
+    );
+    let mut resolve = resolve_failed["params"].clone();
+    resolve["idempotencyKey"] = json!("resolve-from-inbox");
+    assert_eq!(
+        call("resolve", "task.resolve", resolve)
+            .await
+            .result
+            .unwrap()["task"]["state"],
+        "failed"
+    );
+    let mut settle = stalled["actions"][1]["params"].clone();
+    settle["idempotencyKey"] = json!("resolve-stall-from-inbox");
+    assert_eq!(
+        call("resolve-stall", "incident.resolve", settle)
+            .await
+            .result
+            .unwrap()["incident"]["state"],
+        "resolved"
+    );
+    // The sweep closes the lead's window without a remedy: watched becomes counted.
+    harness
+        .app
+        .escalate_due_incidents_once(Utc::now() + TimeDelta::seconds(301))
+        .unwrap();
+    let counts = call("counts", "inbox.counts", json!({}))
+        .await
+        .result
+        .unwrap();
+    assert_eq!(
+        counts["counts"],
+        json!({"unresolved": 1, "approvals": 0, "permissions": 0, "incidents": 1, "watching": 0})
+    );
+    let remaining = call("remaining", "inbox.list", json!({"filter": "all"}))
+        .await
+        .result
+        .unwrap();
+    let remaining = remaining["items"].as_array().unwrap();
+    assert_eq!(remaining.len(), 2);
+    assert_eq!(remaining[0]["id"], json!(windowed.id));
+    assert_eq!(remaining[0]["attention"], "action-required");
+    assert_eq!(remaining[0]["detail"]["escalationReason"], "no-remedy");
+    assert_eq!(remaining[0]["deadline"], serde_json::Value::Null);
+    assert_eq!(remaining[1]["id"], json!(crashed.id));
+
+    // The archive pages newest first with an opaque cursor; the accepted proposal is not
+    // terminal and so not archived.
+    let first = call(
+        "page-1",
+        "inbox.list",
+        json!({"filter": "resolved", "limit": 1}),
+    )
+    .await
+    .result
+    .unwrap();
+    assert_eq!(first["items"].as_array().unwrap().len(), 1);
+    assert_eq!(first["truncated"], true);
+    assert_eq!(first["counts"], counts["counts"]);
+    let cursor = first["nextBefore"].as_str().unwrap().to_owned();
+    let second = call(
+        "page-2",
+        "inbox.list",
+        json!({"filter": "resolved", "limit": 1, "before": cursor}),
+    )
+    .await
+    .result
+    .unwrap();
+    assert_eq!(second["items"].as_array().unwrap().len(), 1);
+    assert_eq!(second["truncated"], false);
+    assert_ne!(second["items"][0]["id"], first["items"][0]["id"]);
+    let whole = call("archive", "inbox.list", json!({"filter": "resolved"}))
+        .await
+        .result
+        .unwrap();
+    let archived = whole["items"].as_array().unwrap();
+    assert_eq!(archived.len(), 2);
+    assert_eq!(archived[0]["id"], first["items"][0]["id"]);
+    assert_eq!(archived[1]["id"], second["items"][0]["id"]);
+    let archived_task = archived
+        .iter()
+        .find(|item| item["id"] == json!(uncertain_id))
+        .unwrap();
+    assert_eq!(archived_task["kind"], "task-uncertain");
+    assert_eq!(archived_task["state"], "failed");
+    assert_eq!(archived_task["attention"], "resolved");
+    assert_eq!(archived_task["actions"], json!([]));
+    let archived_incident = archived
+        .iter()
+        .find(|item| item["id"] == json!(stall.id))
+        .unwrap();
+    assert_eq!(archived_incident["state"], "resolved");
+
+    // Nothing was stored for the Inbox, and no tool in the catalog can read it.
+    assert!(
+        harness
+            .store
+            .list_events(0, 1000)
+            .unwrap()
+            .iter()
+            .all(|event| !event.event_type.starts_with("inbox"))
+    );
+    let tools = harness.backend.session_tools.lock().unwrap().clone();
+    assert!(!tools.is_empty());
+    assert!(tools.iter().flatten().all(|name| !name.contains("inbox")));
+}
+
+#[test]
+fn desktop_inbox_acceptance_contract_is_deterministic_and_backend_only() {
+    let repository = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let script_path = repository.join("scripts/acceptance/desktop-inbox.ps1");
+    let script = std::fs::read_to_string(&script_path).expect("desktop inbox acceptance script");
+
+    for required in [
+        "inbox_list_params_default_to_two_hundred_and_reject_unknown_fields",
+        "a_pending_approval_needs_the_user_and_a_decided_one_is_the_archive",
+        "only_escalated_incidents_are_items_and_only_user_escalations_count",
+        "counts_filters_and_order_follow_attention_then_deadline_then_age",
+        "cursors_round_trip_and_limits_are_bounded",
+        "inbox_cli_maps_list_and_counts",
+        "the_inbox_lists_a_pending_approval_and_its_decision_archives_it",
+        "the_inbox_derives_tasks_and_incidents_and_pages_the_archive",
+        "store_enables_wal_foreign_keys_and_schema_version",
+        "badgeCountsOnlyActionRequired",
+        "leadWindowWatchedThenCounted",
+        "archivePagesWithCursor",
+        "inboxStoresNothing",
+        "toolsCannotSeeInbox",
+        "providerSmokeAbsent",
+        "externalModelUseAbsent",
+        "uiChangesAbsent",
+        "deterministic-fake-transport",
+        "schemaVersion = 15",
+    ] {
+        assert!(
+            script.contains(required),
+            "acceptance script must contain {required}"
+        );
+    }
+    for forbidden in ["provider', 'smoke", "LivePrompt"] {
+        assert!(
+            !script.contains(forbidden),
+            "acceptance script must not contain {forbidden}"
+        );
+    }
+}
+
+/// The user reads resource use through the daemon: `system.resources` is the daemon's own
+/// process, `session.resources` is a live session's native process tree and refuses one that
+/// is not live, nothing is stored, and the desktop snapshot is unchanged.
+#[tokio::test]
+#[allow(clippy::too_many_lines)] // One user session: the daemon, a warm session, then stopped.
+async fn the_user_reads_resource_use_for_the_daemon_and_a_live_session() {
+    let (_temporary, app, backend, employee_id) = session_test_app();
+    let call =
+        |id: &str, method: &str, params: serde_json::Value| app.handle(request(id, method, params));
+
+    let daemon = call("daemon", "system.resources", json!({}))
+        .await
+        .result
+        .unwrap();
+    assert_eq!(daemon["pid"], std::process::id());
+    assert!(daemon["workingSetBytes"].as_u64().unwrap() > 0, "{daemon}");
+    assert!(
+        daemon["peakWorkingSetBytes"].as_u64().unwrap()
+            >= daemon["workingSetBytes"].as_u64().unwrap(),
+        "{daemon}"
+    );
+    assert!(daemon["handleCount"].as_u64().unwrap() > 0, "{daemon}");
+    assert_eq!(
+        daemon["cpuMillis"],
+        json!(
+            daemon["userCpuMillis"].as_u64().unwrap() + daemon["kernelCpuMillis"].as_u64().unwrap()
+        )
+    );
+    assert_eq!(daemon["liveSessions"], 0);
+    assert!(daemon["sampledAt"].is_string());
+    let status = call("status", "system.status", json!({}))
+        .await
+        .result
+        .unwrap();
+    assert_eq!(daemon["bootId"], status["bootId"]);
+    assert!(status.get("resources").is_none());
+    let refused = call("daemon-params", "system.resources", json!({"pid": 1}))
+        .await
+        .error
+        .unwrap();
+    assert_eq!(refused.code, "LZ-INVALID-PARAMS");
+
+    let warmed = call(
+        "warm",
+        "session.warm",
+        json!({
+            "employeeId": employee_id,
+            "expectedEmployeeRevision": 1,
+            "idempotencyKey": "warm-rhea-resources"
+        }),
+    )
+    .await
+    .result
+    .unwrap();
+    let session_id = warmed["session"]["id"].clone();
+    assert_eq!(backend.starts.load(Ordering::SeqCst), 1);
+    let session = call("session", "session.resources", json!({"id": session_id}))
+        .await
+        .result
+        .unwrap();
+    assert_eq!(session["sessionId"], session_id);
+    assert_eq!(session["employeeId"], json!(employee_id));
+    assert_eq!(session["provider"], "codex");
+    assert_eq!(session["nativeHostPid"], 4242);
+    assert_eq!(session["activeProcesses"], 2);
+    assert_eq!(session["totalProcesses"], 3);
+    assert_eq!(session["userCpuMillis"], 1500);
+    assert_eq!(session["kernelCpuMillis"], 250);
+    assert_eq!(session["cpuMillis"], 1750);
+    assert_eq!(session["peakProcessMemoryBytes"], 52_428_800);
+    assert_eq!(session["peakJobMemoryBytes"], 83_886_080);
+    assert!(session["sampledAt"].is_string());
+    // The provider's use is reported beside the daemon's own, never folded into it.
+    let daemon_live = call("daemon-live", "system.resources", json!({}))
+        .await
+        .result
+        .unwrap();
+    assert_eq!(daemon_live["liveSessions"], 1);
+    assert_eq!(daemon_live["pid"], std::process::id());
+    assert!(daemon_live.get("activeProcesses").is_none());
+    let shown = call("show", "session.show", json!({"id": session_id}))
+        .await
+        .result
+        .unwrap();
+    assert!(shown.get("resources").is_none());
+    assert!(shown.get("activeProcesses").is_none());
+
+    let missing = call(
+        "missing",
+        "session.resources",
+        json!({"id": uuid::Uuid::new_v4()}),
+    )
+    .await
+    .error
+    .unwrap();
+    assert_eq!(missing.code, "LZ-SESSION-NOT-FOUND");
+    let invalid = call(
+        "invalid",
+        "session.resources",
+        json!({"id": session_id, "window": "5m"}),
+    )
+    .await
+    .error
+    .unwrap();
+    assert_eq!(invalid.code, "LZ-INVALID-PARAMS");
+
+    call(
+        "stop",
+        "session.stop",
+        json!({
+            "id": session_id,
+            "expectedRevision": warmed["session"]["revision"],
+            "idempotencyKey": "stop-rhea-resources"
+        }),
+    )
+    .await
+    .result
+    .unwrap();
+    let suspended = call("suspended", "session.resources", json!({"id": session_id}))
+        .await
+        .error
+        .unwrap();
+    assert_eq!(suspended.code, "LZ-SESSION-NOT-LIVE");
+    assert_eq!(suspended.data.unwrap()["state"], "suspended");
+    let daemon_after = call("daemon-after", "system.resources", json!({}))
+        .await
+        .result
+        .unwrap();
+    assert_eq!(daemon_after["liveSessions"], 0);
+
+    // Nothing was stored: no event names a resource sample, and the snapshot is unchanged.
+    let events = app.subscribe(0).unwrap().0;
+    assert!(
+        events
+            .iter()
+            .all(|event| !event.event_type.contains("resource"))
+    );
+    let snapshot = call("desktop", "desktop.snapshot", json!({}))
+        .await
+        .result
+        .unwrap();
+    assert!(snapshot.get("resources").is_none());
+    assert!(snapshot["status"].get("resources").is_none());
+    assert_desktop_is_roster_neutral(&app).await;
+}
+
+#[test]
+fn resource_accounting_acceptance_contract_is_deterministic_and_backend_only() {
+    let repository = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let script_path = repository.join("scripts/acceptance/resource-accounting.ps1");
+    let script =
+        std::fs::read_to_string(&script_path).expect("resource accounting acceptance script");
+
+    for required in [
+        "job_accounting_reports_the_tree_and_survives_its_termination",
+        "current_process_accounting_reports_this_process",
+        "session_and_system_cli_map_resources",
+        "the_user_reads_resource_use_for_the_daemon_and_a_live_session",
+        "store_enables_wal_foreign_keys_and_schema_version",
+        "sessionResourcesOnlyWhileLive",
+        "providerUseSeparateFromDaemonUse",
+        "resourcesNeverStored",
+        "snapshotUnchanged",
+        "providerSmokeAbsent",
+        "externalModelUseAbsent",
+        "uiChangesAbsent",
+        "deterministic-fake-transport",
+        "schemaVersion = 15",
+    ] {
+        assert!(
+            script.contains(required),
+            "acceptance script must contain {required}"
+        );
+    }
+    for forbidden in ["provider', 'smoke", "LivePrompt"] {
+        assert!(
+            !script.contains(forbidden),
+            "acceptance script must not contain {forbidden}"
+        );
+    }
+}
+
+#[test]
+fn resource_budget_acceptance_contract_measures_lazoo_itself_without_a_provider() {
+    let repository = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let script_path = repository.join("scripts/acceptance/resource-budget.ps1");
+    let script = std::fs::read_to_string(&script_path).expect("resource budget acceptance script");
+
+    for required in [
+        "'system', 'resources'",
+        "idleCpuUnderOnePercent",
+        "idleMemoryUnder350MiB",
+        "routingCpuUnderFivePercent",
+        "noProviderProcess",
+        "plannedShutdown",
+        "[Environment]::ProcessorCount",
+        "$idleCpuCeiling = 0.01",
+        "$routingCpuCeiling = 0.05",
+        "$idleMemoryCeilingBytes = 350MB",
+        "schemaVersion = 15",
+        "real-binaries-no-provider",
+    ] {
+        assert!(
+            script.contains(required),
+            "acceptance script must contain {required}"
+        );
+    }
+    for forbidden in ["provider', 'smoke", "session', 'warm", "LivePrompt"] {
+        assert!(
+            !script.contains(forbidden),
+            "acceptance script must not contain {forbidden}"
+        );
+    }
+}
+
+/// The user renames a conversation through the daemon: the title the user saw is replaced at
+/// the revision they saw, a replay changes nothing, a stale revision is refused with the current
+/// one, the list and show read models carry the new title, and the desktop snapshot is unchanged.
+#[tokio::test]
+#[allow(clippy::too_many_lines)] // One user session: create, rename, replay, refusals, read back, clear.
+async fn the_user_renames_a_conversation_through_the_daemon() {
+    let temporary = tempdir().unwrap();
+    let root = DataRoot::from_path(temporary.path().join("data"));
+    root.ensure().unwrap();
+    let store = Store::open_path(root.state_db()).unwrap();
+    let employee = configured_employee(&store);
+    let app =
+        App::new_with_provider_environment(store.clone(), root, DiscoveryEnvironment::empty())
+            .unwrap();
+    let call =
+        |id: &str, method: &str, params: serde_json::Value| app.handle(request(id, method, params));
+
+    let created = call(
+        "create",
+        "conversation.create",
+        json!({
+            "projectId": null,
+            "leadEmployeeId": employee.id,
+            "title": null,
+            "idempotencyKey": "create-untitled"
+        }),
+    )
+    .await
+    .result
+    .unwrap();
+    let id = created["conversation"]["id"].clone();
+    assert_eq!(created["conversation"]["title"], serde_json::Value::Null);
+    assert_eq!(created["conversation"]["revision"], 1);
+
+    let renamed = call(
+        "rename",
+        "conversation.rename",
+        json!({"id": id, "expectedRevision": 1, "title": "Parser fix"}),
+    )
+    .await
+    .result
+    .unwrap();
+    assert_eq!(renamed["conversation"]["title"], "Parser fix");
+    assert_eq!(renamed["conversation"]["revision"], 2);
+    assert!(renamed["eventSequence"].is_number());
+
+    let replay = call(
+        "rename-replay",
+        "conversation.rename",
+        json!({"id": id, "expectedRevision": 1, "title": "Parser fix"}),
+    )
+    .await
+    .result
+    .unwrap();
+    assert_eq!(replay["conversation"], renamed["conversation"]);
+    assert_eq!(replay["eventSequence"], serde_json::Value::Null);
+
+    let stale = call(
+        "rename-stale",
+        "conversation.rename",
+        json!({"id": id, "expectedRevision": 1, "title": "Something else"}),
+    )
+    .await
+    .error
+    .unwrap();
+    assert_eq!(stale.code, "LZ-CONVERSATION-STALE");
+    assert_eq!(stale.data.unwrap()["currentRevision"], 2);
+    for (label, params, code) in [
+        (
+            "zero",
+            json!({"id": id, "expectedRevision": 0, "title": "x"}),
+            "LZ-CONVERSATION-INVALID",
+        ),
+        (
+            "unknown",
+            json!({"id": id, "expectedRevision": 2, "unknown": true}),
+            "LZ-CONVERSATION-INVALID",
+        ),
+        (
+            "too-long",
+            json!({"id": id, "expectedRevision": 2, "title": "x".repeat(300)}),
+            "LZ-CONVERSATION-INVALID",
+        ),
+        (
+            "missing",
+            json!({"id": uuid::Uuid::new_v4(), "expectedRevision": 1, "title": "x"}),
+            "LZ-CONVERSATION-NOT-FOUND",
+        ),
+    ] {
+        let error = call(label, "conversation.rename", params)
+            .await
+            .error
+            .unwrap();
+        assert_eq!(error.code, code, "{label}");
+    }
+
+    let listed = call("list", "conversation.list", json!({}))
+        .await
+        .result
+        .unwrap();
+    assert_eq!(listed[0]["title"], "Parser fix");
+    assert_eq!(listed[0]["revision"], 2);
+    let shown = call("show", "conversation.show", json!({"id": id}))
+        .await
+        .result
+        .unwrap();
+    assert_eq!(shown["conversation"]["title"], "Parser fix");
+
+    let cleared = call(
+        "clear",
+        "conversation.rename",
+        json!({"id": id, "expectedRevision": 2, "title": null}),
+    )
+    .await
+    .result
+    .unwrap();
+    assert_eq!(cleared["conversation"]["title"], serde_json::Value::Null);
+    assert_eq!(cleared["conversation"]["revision"], 3);
+
+    let events: Vec<String> = store
+        .list_events(0, 100)
+        .unwrap()
+        .into_iter()
+        .map(|event| event.event_type)
+        .filter(|kind| kind.starts_with("conversation."))
+        .collect();
+    assert_eq!(
+        events,
+        [
+            "conversation.created",
+            "conversation.renamed",
+            "conversation.renamed"
+        ]
+    );
+    assert_desktop_is_roster_neutral(&app).await;
+}
+
+#[test]
+fn conversation_rename_acceptance_contract_is_deterministic_and_backend_only() {
+    let repository = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let script_path = repository.join("scripts/acceptance/conversation-rename.ps1");
+    let script =
+        std::fs::read_to_string(&script_path).expect("conversation rename acceptance script");
+
+    for required in [
+        "conversation_rename_is_revisioned_naturally_idempotent_and_validated",
+        "conversation_cli_maps_rename_with_and_without_a_title",
+        "the_user_renames_a_conversation_through_the_daemon",
+        "store_enables_wal_foreign_keys_and_schema_version",
+        "renameIsRevisioned",
+        "sameTitleEmitsNoEvent",
+        "staleRevisionRefused",
+        "providerSmokeAbsent",
+        "externalModelUseAbsent",
+        "uiChangesAbsent",
+        "deterministic-fake-transport",
+        "schemaVersion = 15",
+    ] {
+        assert!(
+            script.contains(required),
+            "acceptance script must contain {required}"
+        );
+    }
+    for forbidden in ["provider', 'smoke", "LivePrompt"] {
+        assert!(
+            !script.contains(forbidden),
+            "acceptance script must not contain {forbidden}"
+        );
+    }
+}
+
+/// `provider.config` is read-only discovery: the daemon reports what each provider has
+/// configured, with secrets redacted, and the desktop snapshot is unchanged.
+#[tokio::test]
+async fn provider_config_reports_redacted_integrations_without_changing_the_desktop_snapshot() {
+    let temporary = tempdir().unwrap();
+    let root = DataRoot::from_path(temporary.path().join("data"));
+    root.ensure().unwrap();
+    let home = temporary.path().join("home");
+    std::fs::create_dir_all(home.join(".codex")).unwrap();
+    std::fs::write(
+        home.join(".codex").join("config.toml"),
+        "[mcp_servers.context7]\nurl = \"https://mcp.context7.com/mcp\"\n[mcp_servers.context7.http_headers]\nCONTEXT7_API_KEY = \"ctx7sk-SECRET\"\n",
+    )
+    .unwrap();
+    std::fs::write(
+        home.join(".claude.json"),
+        r#"{"mcpServers": {"context7": {"type": "http", "url": "https://mcp.context7.com/mcp"}}}"#,
+    )
+    .unwrap();
+    let store = Store::open_path(root.state_db()).unwrap();
+    let app = App::new_with_provider_environment(
+        store,
+        root,
+        DiscoveryEnvironment::empty().with_config_home(&home),
+    )
+    .unwrap();
+
+    let report = app
+        .handle(request("config", "provider.config", json!({})))
+        .await
+        .result
+        .unwrap();
+    assert_eq!(report["version"], 1);
+    assert_eq!(report["integrations"].as_array().unwrap().len(), 2);
+    assert_eq!(report["integrations"][0]["provider"], "codex");
+    assert_eq!(report["integrations"][0]["kind"], "mcp-server");
+    assert_eq!(report["integrations"][0]["transport"], "http");
+    assert_eq!(
+        report["integrations"][0]["secretKeys"],
+        json!(["CONTEXT7_API_KEY"])
+    );
+    assert_eq!(
+        report["duplicates"],
+        json!([["claude-code/context7", "codex/context7"]])
+    );
+    assert_eq!(report["conflicts"], json!([]));
+    assert!(!report.to_string().contains("SECRET"));
+    let files = report["files"].as_array().unwrap();
+    assert_eq!(files.len(), 3);
+    assert_eq!(files[0]["provider"], "codex");
+    assert_eq!(files[0]["parsed"], true);
+    assert!(report["unsupported"].as_array().unwrap().len() >= 2);
+
+    let refused = app
+        .handle(request(
+            "config-params",
+            "provider.config",
+            json!({"provider": "codex"}),
+        ))
+        .await
+        .error
+        .unwrap();
+    assert_eq!(refused.code, "LZ-INVALID-PARAMS");
+    let snapshot = app
+        .handle(request("desktop", "desktop.snapshot", json!({})))
+        .await
+        .result
+        .unwrap();
+    assert!(snapshot.get("integrations").is_none());
+    assert!(snapshot.get("configuration").is_none());
+    assert!(
+        home.join(".codex").join("config.toml").is_file(),
+        "nothing was written or moved"
+    );
+}
+
+#[test]
+fn provider_config_acceptance_contract_is_read_only_and_backend_only() {
+    let repository = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let script_path = repository.join("scripts/acceptance/provider-config-discovery.ps1");
+    let script =
+        std::fs::read_to_string(&script_path).expect("provider config discovery acceptance script");
+
+    for required in [
+        "provider_configuration_is_parsed_from_known_formats_redacted_hashed_and_compared",
+        "missing_and_malformed_configuration_is_reported_without_quoting_it_or_failing",
+        "provider_cli_maps_config",
+        "provider_config_reports_redacted_integrations_without_changing_the_desktop_snapshot",
+        "store_enables_wal_foreign_keys_and_schema_version",
+        "knownFormatsParsed",
+        "secretsRedacted",
+        "duplicatesAndConflictsNamed",
+        "malformedFilesReportedNotQuoted",
+        "nothingWritten",
+        "providerSmokeAbsent",
+        "externalModelUseAbsent",
+        "uiChangesAbsent",
+        "deterministic-fake-transport",
+        "schemaVersion = 15",
+    ] {
+        assert!(
+            script.contains(required),
+            "acceptance script must contain {required}"
+        );
+    }
+    for forbidden in ["provider', 'smoke", "LivePrompt"] {
+        assert!(
+            !script.contains(forbidden),
+            "acceptance script must not contain {forbidden}"
+        );
+    }
+}
+
+/// Brief section 21.2, the core end-to-end scenario, on the deterministic provider: steps 1 to
+/// 6, 8, 10, 11, and 14 in one daemon lifetime with a restart in the middle. Peer clarification
+/// (7), stall detection (9), memory records (12), worktree preservation (13), and the resource
+/// budget (15) are proven by their own acceptance scripts, which the core-scenario manifest
+/// names per step.
+#[tokio::test]
+#[allow(clippy::too_many_lines)] // The scenario is one story by definition.
+async fn the_core_scenario_runs_end_to_end_on_the_deterministic_provider() {
+    use chrono::{TimeDelta, Utc};
+    use lazoo_protocol::{
+        IncidentEscalation, IncidentPriority, SessionLifecycleState, TaskState, TaskWorkspaceKind,
+    };
+    use lazoo_store::ListIncidentsInput;
+
+    let (temporary, harness) = tool_harness(AuthorityMode::Ask);
+    let call = |id: &str, method: &str, params: serde_json::Value| {
+        harness.app.handle(request(id, method, params))
+    };
+    let peer = |name: &str, provider: &str| CreateEmployeeInput {
+        request_id: format!("scenario-{name}-request"),
+        idempotency_key: format!("scenario-{name}"),
+        name: name.to_owned(),
+        provider: provider.to_owned(),
+        role: "Worker".to_owned(),
+        instructions: String::new(),
+        model: None,
+        reasoning_effort: None,
+        native_settings: json!({}),
+        authority_mode: AuthorityMode::Ask,
+        checkout_policy: EmployeeCheckoutPolicy::Isolated,
+        activation_policy: lazoo_protocol::ActivationPolicy::Manual,
+        idle_timeout_seconds: 0,
+        enabled: true,
+        provider_observation: Some(ProviderObservation {
+            provider: provider.to_owned(),
+            verification: "configured".to_owned(),
+            version: Some("test".to_owned()),
+            protocol: Some("test".to_owned()),
+            capabilities: json!({"session": true}),
+            authentication: json!({"native": "ready", "external": "unknown"}),
+            degradation_reason: None,
+            checked_at: "2026-10-13T00:00:00Z".to_owned(),
+        }),
+    };
+
+    // 1. Rhea leads; Mira on Codex and three peers on other providers; one peer is disabled.
+    let oren = harness
+        .store
+        .create_employee(&peer("Oren", "opencode"))
+        .unwrap()
+        .employee;
+    let pia = harness
+        .store
+        .create_employee(&peer("Pia", "grok-build"))
+        .unwrap()
+        .employee;
+    let quinn = harness
+        .store
+        .create_employee(&peer("Quinn", "antigravity"))
+        .unwrap()
+        .employee;
+    call(
+        "disable-quinn",
+        "employee.disable",
+        json!({
+            "id": quinn.id,
+            "expectedRevision": quinn.configuration_revision,
+            "idempotencyKey": "scenario-disable-quinn"
+        }),
+    )
+    .await
+    .result
+    .unwrap();
+
+    // 2. Every employee begins dormant; Quinn is disabled.
+    let roster = call("roster", "roster.get", json!({}))
+        .await
+        .result
+        .unwrap();
+    let entries = roster["entries"].as_array().unwrap().clone();
+    assert_eq!(entries.len(), 5);
+    let availability = |id: uuid::Uuid| {
+        entries
+            .iter()
+            .find(|entry| entry["employee"]["id"] == json!(id))
+            .unwrap()["availability"]
+            .clone()
+    };
+    for id in [harness.lead.id, harness.worker.id, oren.id, pia.id] {
+        assert_eq!(availability(id), "dormant");
+    }
+    assert_eq!(availability(quinn.id), "disabled");
+    assert_eq!(harness.backend.starts.load(Ordering::SeqCst), 0);
+
+    // 3 and 4. The user starts a conversation with Rhea, who reads the live roster and proposes
+    // a two-part plan for Mira; 8. the disabled peer cannot be selected.
+    warm_tool_lead(&harness).await;
+    let roster_revision = harness.store.roster_snapshot().unwrap().revision;
+    let delegate = |call_id: &str, employee: uuid::Uuid, objective: &str| {
+        tool_call(
+            call_id,
+            "task_delegate",
+            json!({"employeeId": employee, "objective": objective, "rosterRevision": roster_revision}),
+        )
+    };
+    harness.backend.tool_calls.lock().unwrap().extend([
+        tool_call("call-1", "employees_list", json!({})),
+        delegate("call-2", harness.worker.id, "Implement the parser fix"),
+        delegate("call-3", harness.worker.id, "Write the parser tests"),
+        delegate("call-4", quinn.id, "Review the plan"),
+    ]);
+    let submitted = submit_lead_turn(&harness, "ask").await;
+    assert_eq!(submitted["turn"]["state"], "completed");
+    let root_task_id: uuid::Uuid = submitted["turn"]["taskId"]
+        .as_str()
+        .unwrap()
+        .parse()
+        .unwrap();
+    let results = harness.backend.tool_results.lock().unwrap().clone();
+    assert_eq!(results.len(), 4, "{results:?}");
+    assert!(results[0].success, "{:?}", results[0]);
+    assert!(
+        results[0].content.to_string().contains("Quinn"),
+        "the roster the lead reads names the disabled peer, marked unavailable"
+    );
+    let children: Vec<uuid::Uuid> = results[1..3]
+        .iter()
+        .map(|result| {
+            assert!(result.success, "{result:?}");
+            assert_eq!(result.content["state"], "proposed");
+            result.content["taskId"].as_str().unwrap().parse().unwrap()
+        })
+        .collect();
+    assert!(
+        !results[3].success,
+        "a disabled employee cannot receive dispatch"
+    );
+    assert_eq!(
+        results[3].content["error"]["code"], "LZ-TASK-ASSIGNEE-UNAVAILABLE",
+        "{:?}",
+        results[3]
+    );
+
+    // 5. Under ask, Lazoo presents the delegation approvals; the user accepts both.
+    let inbox = call("inbox", "inbox.list", json!({"filter": "approvals"}))
+        .await
+        .result
+        .unwrap();
+    assert_eq!(inbox["counts"]["approvals"], 2);
+    assert_eq!(inbox["counts"]["unresolved"], 2);
+    for (index, child) in children.iter().enumerate() {
+        let accepted = call(
+            &format!("accept-{index}"),
+            "task.accept",
+            json!({
+                "id": child,
+                "expectedRevision": 1,
+                "idempotencyKey": format!("scenario-accept-{index}")
+            }),
+        )
+        .await
+        .result
+        .unwrap();
+        assert_eq!(accepted["task"]["state"], "accepted");
+    }
+    let counts = call("inbox-after", "inbox.counts", json!({}))
+        .await
+        .result
+        .unwrap();
+    assert_eq!(counts["counts"]["unresolved"], 0);
+
+    // 6. The approved employee activates into independent native sessions and workspaces: each
+    // accepted task runs to completion on a fresh session for Mira, which stops with its turn,
+    // and the next queued task wakes as soon as she is free.
+    harness.app.dispatch_pending_tasks_once().await.unwrap();
+    assert_eq!(
+        harness.backend.starts.load(Ordering::SeqCst),
+        3,
+        "Rhea's session and one per dispatched task"
+    );
+    for child in &children {
+        let detail = harness.store.get_task(*child).unwrap();
+        assert_eq!(detail.task.state, TaskState::Completed);
+        let dispatch = detail.dispatch.unwrap();
+        assert_eq!(
+            dispatch.workspace_kind,
+            Some(TaskWorkspaceKind::Projectless)
+        );
+        let workspace = dispatch.workspace_path.unwrap();
+        assert!(Path::new(&workspace).is_dir(), "{workspace}");
+    }
+    assert!(
+        harness
+            .store
+            .list_sessions()
+            .unwrap()
+            .iter()
+            .filter(|session| session.employee_id == harness.worker.id)
+            .all(|session| session.state == lazoo_protocol::SessionLifecycleState::Suspended),
+        "a worker's dispatch session stops with its turn"
+    );
+    assert_eq!(
+        harness.store.pending_task_results(10).unwrap().len(),
+        2,
+        "both results wait to reach Rhea"
+    );
+    harness.app.deliver_pending_notices_once().await.unwrap();
+    let prompt = last_prompt(&harness.backend);
+    assert!(prompt.contains("[Lazoo task result]"), "{prompt}");
+    assert_eq!(
+        harness.store.get_task(root_task_id).unwrap().task.state,
+        TaskState::Completed,
+        "Rhea's first plan is done once both results reached her"
+    );
+
+    // 3 and 4 again. The user asks for more; Rhea delegates a third task under a new root, the
+    // user accepts it, and it waits in the queue.
+    let roster_revision = harness.store.roster_snapshot().unwrap().revision;
+    harness
+        .backend
+        .tool_calls
+        .lock()
+        .unwrap()
+        .extend([tool_call(
+            "call-5",
+            "task_delegate",
+            json!({
+                "employeeId": harness.worker.id,
+                "objective": "Document the parser",
+                "rosterRevision": roster_revision
+            }),
+        )]);
+    let follow_up = timeout(
+        Duration::from_secs(20),
+        harness.app.handle(request(
+            "submit-scenario-follow-up",
+            "turn.submit",
+            json!({
+                "conversationId": harness.conversation_id,
+                "author": {"kind": "user"},
+                "recipient": null,
+                "authorityMode": "ask",
+                "text": "Also document the parser",
+                "activateIfNeeded": false,
+                "maxAttempts": 3,
+                "idempotencyKey": "submit-scenario-follow-up"
+            }),
+        )),
+    )
+    .await
+    .unwrap()
+    .result
+    .unwrap();
+    assert_eq!(follow_up["turn"]["state"], "completed");
+    let results = harness.backend.tool_results.lock().unwrap().clone();
+    assert_eq!(results.len(), 5, "{results:?}");
+    assert!(results[4].success, "{:?}", results[4]);
+    let third: uuid::Uuid = results[4].content["taskId"]
+        .as_str()
+        .unwrap()
+        .parse()
+        .unwrap();
+    let second_root_id = harness.store.get_task(third).unwrap().task.root_task_id;
+    assert_ne!(
+        second_root_id, root_task_id,
+        "a finished plan is not reopened"
+    );
+    call(
+        "accept-third",
+        "task.accept",
+        json!({"id": third, "expectedRevision": 1, "idempotencyKey": "scenario-accept-third"}),
+    )
+    .await
+    .result
+    .unwrap();
+
+    // 9. Mira's provider stalls after accepting the third task's dispatch: the adapter's
+    // progress deadline surfaces as a stalled turn, the daemon records it as retryable, keeps
+    // the task accepted for a bounded retry by the lead or the user (never automatically),
+    // stops the session, and raises one clean `LZ-SESSION-STALLED` incident on the task.
+    harness.backend.turn_stall.store(true, Ordering::SeqCst);
+    let stalled = harness.app.dispatch_pending_tasks_once().await.unwrap_err();
+    harness.backend.turn_stall.store(false, Ordering::SeqCst);
+    assert_eq!(stalled.code, "LZ-TURN-PROVIDER");
+    let stalled_task = harness.store.get_task(third).unwrap();
+    assert_eq!(stalled_task.task.state, TaskState::Accepted);
+    let stalled_turn = harness
+        .store
+        .get_turn(stalled_task.dispatch.unwrap().turn_id.unwrap())
+        .unwrap();
+    assert_eq!(stalled_turn.state, TurnState::RetryableFailed);
+    assert_eq!(
+        stalled_turn.failure_code.as_deref(),
+        Some("LZ-TURN-PROVIDER")
+    );
+    assert_eq!(
+        harness.backend.starts.load(Ordering::SeqCst),
+        4,
+        "the stalled dispatch ran on its own session"
+    );
+    assert!(
+        harness
+            .store
+            .list_sessions()
+            .unwrap()
+            .iter()
+            .all(|session| session.state != SessionLifecycleState::Idle
+                || session.employee_id == harness.lead.id),
+        "the stalled worker session was stopped"
+    );
+    let stalls: Vec<_> = harness
+        .store
+        .list_incidents(&ListIncidentsInput {
+            code: Some("LZ-SESSION-STALLED".to_owned()),
+            limit: 100,
+            ..ListIncidentsInput::default()
+        })
+        .unwrap();
+    assert_eq!(stalls.len(), 1, "{stalls:?}");
+    let incident = stalls.into_iter().next().unwrap();
+    assert_eq!(incident.task_id, Some(third));
+    assert_eq!(incident.employee_id, Some(harness.worker.id));
+    assert_eq!(incident.occurrences, 1);
+
+    // 10. The stall is promoted at once: Rhea receives the incident with its remediation
+    // window as a notice turn, applies one remedy, and when the stall recurs the closed window
+    // escalates to the user, who sees it in the Inbox.
+    assert_eq!(incident.priority, IncidentPriority::Priority);
+    assert_eq!(incident.escalation, IncidentEscalation::Lead);
+    harness
+        .backend
+        .tool_calls
+        .lock()
+        .unwrap()
+        .extend([tool_call(
+            "call-r1",
+            "incident_remedy",
+            json!({
+                "incidentId": incident.id,
+                "remedy": "cancel-task",
+                "note": "the worker stalled before starting"
+            }),
+        )]);
+    harness.app.deliver_pending_notices_once().await.unwrap();
+    let prompt = last_prompt(&harness.backend);
+    assert!(prompt.contains("[Lazoo incident]"), "{prompt}");
+    assert_eq!(
+        harness.backend.starts.load(Ordering::SeqCst),
+        4,
+        "the notices rode Rhea's idle session"
+    );
+    let remedied = harness.store.get_incident(incident.id).unwrap();
+    assert_eq!(remedied.remedies.len(), 1, "{remedied:?}");
+    assert_eq!(
+        harness.store.get_task(third).unwrap().task.state,
+        TaskState::Cancelled
+    );
+    promote_child_incident(&harness, "stall-again", "LZ-SESSION-STALLED", third);
+    harness
+        .app
+        .escalate_due_incidents_once(Utc::now() + TimeDelta::seconds(301))
+        .unwrap();
+    let escalated = harness.store.get_incident(incident.id).unwrap();
+    assert_eq!(escalated.escalation, IncidentEscalation::User);
+    let inbox = call(
+        "inbox-incident",
+        "inbox.list",
+        json!({"filter": "incidents"}),
+    )
+    .await
+    .result
+    .unwrap();
+    let item = inbox["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|item| item["id"] == json!(incident.id))
+        .cloned()
+        .unwrap();
+    assert_eq!(item["attention"], "action-required");
+    assert_eq!(item["detail"]["escalationReason"], "recurred-after-remedy");
+    let mut acknowledge = item["actions"][0]["params"].clone();
+    acknowledge["idempotencyKey"] = json!("scenario-acknowledge");
+    call("acknowledge", "incident.acknowledge", acknowledge)
+        .await
+        .result
+        .unwrap();
+
+    // 11. Lazoo restarts: the new boot owns none of the prior boot's sessions and adopts none
+    // of its work, and every logical task is still there exactly once.
+    let tasks_before: Vec<uuid::Uuid> = harness
+        .store
+        .list_tasks(&lazoo_store::ListTasksInput {
+            after_sequence: 0,
+            limit: 100,
+            root_task_id: None,
+            parent_task_id: None,
+            conversation_id: None,
+            project_id: None,
+            assigned_employee_id: None,
+            state: None,
+        })
+        .unwrap()
+        .into_iter()
+        .map(|task| task.id)
+        .collect();
+    assert_eq!(tasks_before.len(), 5, "two roots and three children");
+    let restarted = App::new_with_session_backend(
+        harness.store.clone(),
+        DataRoot::from_path(temporary.path().join("data")),
+        DiscoveryEnvironment::empty(),
+        Arc::new(harness.backend.clone()),
+    )
+    .unwrap();
+    let tasks_after: Vec<uuid::Uuid> = harness
+        .store
+        .list_tasks(&lazoo_store::ListTasksInput {
+            after_sequence: 0,
+            limit: 100,
+            root_task_id: None,
+            parent_task_id: None,
+            conversation_id: None,
+            project_id: None,
+            assigned_employee_id: None,
+            state: None,
+        })
+        .unwrap()
+        .into_iter()
+        .map(|task| task.id)
+        .collect();
+    assert_eq!(tasks_after, tasks_before, "no task lost or duplicated");
+    let sessions = restarted
+        .handle(request("sessions", "session.list", json!({})))
+        .await
+        .result
+        .unwrap();
+    assert!(
+        sessions
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|session| session["state"] == "failed" || session["state"] == "suspended"),
+        "the prior boot's sessions are owner-lost, never adopted: {sessions}"
+    );
+    assert_eq!(
+        harness.store.get_incident(incident.id).unwrap().state,
+        lazoo_protocol::IncidentState::Acknowledged,
+        "the user's acknowledgement survives the restart"
+    );
+
+    // 14. On the restarted daemon Mira's idle timeout is one minute: her session warms, stays
+    // idle, and the sweep suspends it once the minute has passed.
+    let mira = harness.store.get_employee(harness.worker.id).unwrap();
+    restarted
+        .handle(request(
+            "mira-idle",
+            "employee.update",
+            json!({
+                "id": mira.id,
+                "expectedRevision": mira.configuration_revision,
+                "idleTimeoutSeconds": 60,
+                "idempotencyKey": "scenario-mira-idle"
+            }),
+        ))
+        .await
+        .result
+        .unwrap();
+    let mira = harness.store.get_employee(mira.id).unwrap();
+    let warmed = restarted
+        .handle(request(
+            "warm-mira",
+            "session.warm",
+            json!({
+                "employeeId": mira.id,
+                "expectedEmployeeRevision": mira.configuration_revision,
+                "idempotencyKey": "scenario-warm-mira"
+            }),
+        ))
+        .await
+        .result
+        .unwrap();
+    assert_eq!(warmed["session"]["state"], "idle");
+    let session_id = warmed["session"]["id"].clone();
+    restarted
+        .suspend_idle_sessions_once(Utc::now() + TimeDelta::seconds(59))
+        .await
+        .unwrap();
+    let still_idle = restarted
+        .handle(request(
+            "show-idle",
+            "session.show",
+            json!({"id": session_id}),
+        ))
+        .await
+        .result
+        .unwrap();
+    assert_eq!(still_idle["state"], "idle");
+    restarted
+        .suspend_idle_sessions_once(Utc::now() + TimeDelta::seconds(61))
+        .await
+        .unwrap();
+    let suspended = restarted
+        .handle(request(
+            "show-suspended",
+            "session.show",
+            json!({"id": session_id}),
+        ))
+        .await
+        .result
+        .unwrap();
+    assert_eq!(suspended["state"], "suspended");
+    let roster = restarted
+        .handle(request("roster-after", "roster.get", json!({})))
+        .await
+        .result
+        .unwrap();
+    let mira_entry = roster["entries"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|entry| entry["employee"]["id"] == json!(mira.id))
+        .cloned()
+        .unwrap();
+    assert_eq!(mira_entry["availability"], "suspended");
+    assert_desktop_is_roster_neutral(&restarted).await;
+}
+
+#[test]
+fn core_scenario_acceptance_contract_maps_every_step_to_evidence() {
+    let repository = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let script_path = repository.join("scripts/acceptance/core-scenario.ps1");
+    let script = std::fs::read_to_string(&script_path).expect("core scenario acceptance script");
+
+    for required in [
+        "the_core_scenario_runs_end_to_end_on_the_deterministic_provider",
+        "project_task_dispatch_uses_an_isolated_worktree_and_preserves_dirty_user_files",
+        "message_restart_reconciles_an_uncertain_attempt",
+        "store_enables_wal_foreign_keys_and_schema_version",
+        "step1",
+        "step2",
+        "step3",
+        "step4",
+        "step5",
+        "step6",
+        "step7",
+        "step8",
+        "step9",
+        "step10",
+        "step11",
+        "step12",
+        "step13",
+        "step14",
+        "step15",
+        "NOT_COVERED",
+        "providerSmokeAbsent",
+        "externalModelUseAbsent",
+        "uiChangesAbsent",
+        "deterministic-fake-transport",
+        "schemaVersion = 15",
+    ] {
+        assert!(
+            script.contains(required),
+            "acceptance script must contain {required}"
+        );
+    }
+    for forbidden in ["provider', 'smoke", "LivePrompt"] {
+        assert!(
+            !script.contains(forbidden),
+            "acceptance script must not contain {forbidden}"
+        );
+    }
+}
+
+/// The desktop's sidebar and launcher through the daemon: Home and a project are separate
+/// spaces, each row carries a derived title and marker that follow the conversation's own
+/// rows, the remembered lead is the newest conversation's, the launcher says who can lead and
+/// why not, and nothing is stored or added to the desktop snapshot.
+#[tokio::test]
+#[allow(clippy::too_many_lines)] // One user session over Home, a project, and the launcher.
+async fn the_user_browses_a_space_and_its_launcher_through_the_daemon() {
+    use lazoo_protocol::TaskState;
+
+    let (temporary, harness) = tool_harness(AuthorityMode::Ask);
+    let call = |id: &str, method: &str, params: serde_json::Value| {
+        harness.app.handle(request(id, method, params))
+    };
+
+    // Home holds the harness conversation; a registered project holds one more.
+    let repository = temporary.path().join("repository");
+    std::fs::create_dir_all(&repository).unwrap();
+    git_init(&repository);
+    let registered = call(
+        "register",
+        "project.register",
+        json!({"path": repository, "idempotencyKey": "workspace-project"}),
+    )
+    .await
+    .result
+    .unwrap();
+    let project_id = registered["project"]["id"].clone();
+    let project_conversation = call(
+        "create-project-conversation",
+        "conversation.create",
+        json!({
+            "projectId": project_id,
+            "leadEmployeeId": harness.worker.id,
+            "title": "Release checklist",
+            "idempotencyKey": "workspace-project-conversation"
+        }),
+    )
+    .await
+    .result
+    .unwrap()["conversation"]["id"]
+        .clone();
+
+    // Home before any turn: one untitled, unmarked row led by Rhea.
+    let home = call("home", "workspace.conversations", json!({}))
+        .await
+        .result
+        .unwrap();
+    assert_eq!(home["version"], 1);
+    assert_eq!(home["projectId"], serde_json::Value::Null);
+    let rows = home["conversations"].as_array().unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0]["id"], json!(harness.conversation_id));
+    assert_eq!(rows[0]["title"], "New work");
+    assert_eq!(rows[0]["titleDerived"], true);
+    assert_eq!(rows[0]["leadName"], "Rhea");
+    assert_eq!(rows[0]["provider"], "codex");
+    assert_eq!(rows[0]["marker"], serde_json::Value::Null);
+    assert_eq!(rows[0]["unresolved"], 0);
+    assert_eq!(home["rememberedLeadId"], json!(harness.lead.id));
+    assert_eq!(home["truncated"], false);
+
+    // The project space is separate, keeps its stored title, and remembers Mira.
+    let project = call(
+        "project",
+        "workspace.conversations",
+        json!({"projectId": project_id}),
+    )
+    .await
+    .result
+    .unwrap();
+    let rows = project["conversations"].as_array().unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0]["id"], project_conversation);
+    assert_eq!(rows[0]["title"], "Release checklist");
+    assert_eq!(rows[0]["titleDerived"], false);
+    assert_eq!(project["rememberedLeadId"], json!(harness.worker.id));
+
+    // The lead's turn delegates under ask: the title derives from the request and the proposal
+    // makes the conversation need attention.
+    warm_tool_lead(&harness).await;
+    let roster_revision = harness.store.roster_snapshot().unwrap().revision;
+    harness
+        .backend
+        .tool_calls
+        .lock()
+        .unwrap()
+        .extend([tool_call(
+            "call-1",
+            "task_delegate",
+            json!({
+                "employeeId": harness.worker.id,
+                "objective": "Implement the parser fix",
+                "rosterRevision": roster_revision
+            }),
+        )]);
+    let submitted = submit_lead_turn(&harness, "ask").await;
+    assert_eq!(submitted["turn"]["state"], "completed");
+    let child_id: uuid::Uuid = harness.backend.tool_results.lock().unwrap()[0].content["taskId"]
+        .as_str()
+        .unwrap()
+        .parse()
+        .unwrap();
+    let home = call("home-proposed", "workspace.conversations", json!({}))
+        .await
+        .result
+        .unwrap();
+    let row = home["conversations"][0].clone();
+    assert_eq!(row["title"], "Coordinate the parser fix");
+    assert_eq!(row["titleDerived"], true);
+    assert_eq!(row["marker"], "needs-attention");
+    assert_eq!(row["markerReason"], "1 item needs you");
+    assert_eq!(row["unresolved"], 1);
+    assert_eq!(
+        row["workers"],
+        json!({"total": 1, "running": 0, "waiting": 1, "failed": 0, "completed": 0})
+    );
+    assert_eq!(row["rootTaskState"], "running");
+    assert_eq!(row["lastTurnState"], "completed");
+
+    // Accepting makes it active (waiting to run); dispatch completes it; the result reaching
+    // the lead completes the plan.
+    call(
+        "accept",
+        "task.accept",
+        json!({"id": child_id, "expectedRevision": 1, "idempotencyKey": "workspace-accept"}),
+    )
+    .await
+    .result
+    .unwrap();
+    let row = call("home-accepted", "workspace.conversations", json!({}))
+        .await
+        .result
+        .unwrap()["conversations"][0]
+        .clone();
+    assert_eq!(row["marker"], "active");
+    assert_eq!(row["markerReason"], "1 waiting to run");
+    harness.app.dispatch_pending_tasks_once().await.unwrap();
+    assert_eq!(
+        harness.store.get_task(child_id).unwrap().task.state,
+        TaskState::Completed
+    );
+    harness.app.deliver_pending_notices_once().await.unwrap();
+    let row = call("home-done", "workspace.conversations", json!({}))
+        .await
+        .result
+        .unwrap()["conversations"][0]
+        .clone();
+    assert_eq!(row["marker"], "completed");
+    assert_eq!(row["rootTaskState"], "completed");
+    assert_eq!(row["workers"]["completed"], 1);
+    assert!(row["lastResultAt"].is_string());
+
+    // A rename is the stored title from then on.
+    call(
+        "rename",
+        "conversation.rename",
+        json!({"id": harness.conversation_id, "expectedRevision": 1, "title": "Parser fix"}),
+    )
+    .await
+    .result
+    .unwrap();
+    let row = call("home-renamed", "workspace.conversations", json!({}))
+        .await
+        .result
+        .unwrap()["conversations"][0]
+        .clone();
+    assert_eq!(row["title"], "Parser fix");
+    assert_eq!(row["titleDerived"], false);
+
+    // Paging: a one-row page is truncated with a cursor; an unknown project is refused.
+    let second = call(
+        "create-second",
+        "conversation.create",
+        json!({
+            "projectId": null,
+            "leadEmployeeId": harness.lead.id,
+            "title": "Second",
+            "idempotencyKey": "workspace-second"
+        }),
+    )
+    .await
+    .result
+    .unwrap()["conversation"]["id"]
+        .clone();
+    let page = call("page-1", "workspace.conversations", json!({"limit": 1}))
+        .await
+        .result
+        .unwrap();
+    assert_eq!(page["conversations"].as_array().unwrap().len(), 1);
+    assert_eq!(page["conversations"][0]["id"], second, "newest first");
+    assert_eq!(page["truncated"], true);
+    let next = call(
+        "page-2",
+        "workspace.conversations",
+        json!({"limit": 1, "before": page["nextBefore"]}),
+    )
+    .await
+    .result
+    .unwrap();
+    assert_eq!(
+        next["conversations"][0]["id"],
+        json!(harness.conversation_id)
+    );
+    assert_eq!(next["truncated"], false);
+    for (label, params, code) in [
+        ("bad-limit", json!({"limit": 0}), "LZ-WORKSPACE-INVALID"),
+        (
+            "bad-cursor",
+            json!({"before": "nope"}),
+            "LZ-WORKSPACE-INVALID",
+        ),
+        (
+            "bad-project",
+            json!({"projectId": uuid::Uuid::new_v4()}),
+            "LZ-WORKSPACE-PROJECT-NOT-FOUND",
+        ),
+    ] {
+        let error = call(label, "workspace.conversations", params)
+            .await
+            .error
+            .unwrap();
+        assert_eq!(error.code, code, "{label}");
+    }
+
+    // The launcher: both employees can lead, Rhea is remembered for Home and Mira for the
+    // project; disabling Mira blocks her with Lazoo's words and the project's remembered lead
+    // says why it no longer works.
+    let launcher = call("launcher", "workspace.launcher", json!({}))
+        .await
+        .result
+        .unwrap();
+    assert_eq!(launcher["version"], 1);
+    assert_eq!(launcher["project"], serde_json::Value::Null);
+    assert_eq!(launcher["rememberedLeadId"], json!(harness.lead.id));
+    assert_eq!(
+        launcher["rememberedLeadBlockingReason"],
+        serde_json::Value::Null
+    );
+    assert_eq!(
+        launcher["authorityModes"],
+        json!(["ask", "self-decision", "full-autonomy"])
+    );
+    let leads = launcher["leads"].as_array().unwrap();
+    assert_eq!(leads.len(), 2);
+    assert_eq!(leads[0]["name"], "Mira");
+    assert_eq!(leads[1]["name"], "Rhea");
+    assert!(
+        leads.iter().all(|lead| lead["startable"] == true),
+        "{leads:?}"
+    );
+    assert_eq!(leads[1]["availability"], "idle");
+    assert_eq!(launcher["start"][0]["method"], "conversation.create");
+    assert_eq!(launcher["start"][1]["method"], "turn.submit");
+    assert_eq!(launcher["start"][1]["params"]["activateIfNeeded"], true);
+    let mira = harness.store.get_employee(harness.worker.id).unwrap();
+    call(
+        "disable-mira",
+        "employee.disable",
+        json!({
+            "id": mira.id,
+            "expectedRevision": mira.configuration_revision,
+            "idempotencyKey": "workspace-disable-mira"
+        }),
+    )
+    .await
+    .result
+    .unwrap();
+    let launcher = call(
+        "launcher-project",
+        "workspace.launcher",
+        json!({"projectId": project_id}),
+    )
+    .await
+    .result
+    .unwrap();
+    assert_eq!(launcher["project"]["id"], project_id);
+    assert_eq!(launcher["rememberedLeadId"], json!(harness.worker.id));
+    assert_eq!(launcher["rememberedLeadBlockingReason"], "Mira is disabled");
+    let mira_lead = launcher["leads"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|lead| lead["employeeId"] == json!(harness.worker.id))
+        .cloned()
+        .unwrap();
+    assert_eq!(mira_lead["startable"], false);
+    assert_eq!(mira_lead["blockingReason"], "Mira is disabled");
+    let refused = call(
+        "launcher-bad",
+        "workspace.launcher",
+        json!({"projectId": uuid::Uuid::new_v4()}),
+    )
+    .await
+    .error
+    .unwrap();
+    assert_eq!(refused.code, "LZ-WORKSPACE-PROJECT-NOT-FOUND");
+
+    // Nothing was stored for the workspace, and the snapshot is unchanged.
+    assert!(
+        harness
+            .store
+            .list_events(0, 1000)
+            .unwrap()
+            .iter()
+            .all(|event| !event.event_type.starts_with("workspace"))
+    );
+    let snapshot = call("desktop", "desktop.snapshot", json!({}))
+        .await
+        .result
+        .unwrap();
+    assert!(snapshot.get("workspace").is_none());
+    assert!(snapshot.get("conversations").is_none());
+    assert_desktop_is_roster_neutral(&harness.app).await;
+}
+
+#[test]
+fn workspace_read_models_acceptance_contract_is_deterministic_and_backend_only() {
+    let repository = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let script_path = repository.join("scripts/acceptance/workspace-read-models.ps1");
+    let script =
+        std::fs::read_to_string(&script_path).expect("workspace read models acceptance script");
+
+    for required in [
+        "the_marker_prefers_attention_then_activity_then_failure_then_completion",
+        "titles_come_from_the_store_then_the_first_request_then_a_default",
+        "startability_follows_roster_availability_with_lazoo_words_for_each_block",
+        "workspace_cli_maps_conversations_and_launcher",
+        "the_user_browses_a_space_and_its_launcher_through_the_daemon",
+        "store_enables_wal_foreign_keys_and_schema_version",
+        "markersFollowTheRows",
+        "rememberedLeadIsTheNewest",
+        "launcherExplainsBlocks",
+        "workspaceStoresNothing",
+        "providerSmokeAbsent",
+        "externalModelUseAbsent",
+        "uiChangesAbsent",
+        "deterministic-fake-transport",
+        "schemaVersion = 15",
+    ] {
+        assert!(
+            script.contains(required),
+            "acceptance script must contain {required}"
+        );
+    }
+    for forbidden in ["provider', 'smoke", "LivePrompt"] {
+        assert!(
+            !script.contains(forbidden),
+            "acceptance script must not contain {forbidden}"
+        );
+    }
+}
+
+/// The active conversation through the daemon: the lead header's lifecycle follows the lead's
+/// session, the root task and its authority appear with the first turn, each worker card takes
+/// the dock state its rows support with Lazoo's words, the conversation's own Inbox items are
+/// embedded, the turns are bounded, and nothing is stored or added to the desktop snapshot.
+#[tokio::test]
+#[allow(clippy::too_many_lines)] // One user session over a conversation's whole life.
+async fn the_user_opens_the_conversation_header_and_worker_dock_through_the_daemon() {
+    let (_temporary, harness) = tool_harness(AuthorityMode::Ask);
+    let call = |id: &str, method: &str, params: serde_json::Value| {
+        harness.app.handle(request(id, method, params))
+    };
+    let show = |id: &'static str| async move {
+        call(
+            id,
+            "workspace.conversation",
+            json!({"id": harness.conversation_id}),
+        )
+        .await
+        .result
+        .unwrap()
+    };
+
+    // Before anything: a dormant lead, no root task, no workers, nothing to attend to.
+    let view = show("fresh").await;
+    assert_eq!(view["version"], 1);
+    assert_eq!(view["conversation"]["id"], json!(harness.conversation_id));
+    assert_eq!(view["title"], "New work");
+    assert_eq!(view["titleDerived"], true);
+    assert_eq!(view["scope"]["projectId"], serde_json::Value::Null);
+    assert_eq!(view["scope"]["projectName"], serde_json::Value::Null);
+    assert_eq!(view["lead"]["employeeId"], json!(harness.lead.id));
+    assert_eq!(view["lead"]["name"], "Rhea");
+    assert_eq!(view["lead"]["role"], "Lead");
+    assert_eq!(view["lead"]["provider"], "codex");
+    assert_eq!(view["lead"]["model"], "test-model");
+    assert_eq!(view["lead"]["availability"], "dormant");
+    assert_eq!(view["lead"]["lifecycle"], "dormant");
+    assert_eq!(view["lead"]["session"], serde_json::Value::Null);
+    assert_eq!(view["lead"]["authority"], serde_json::Value::Null);
+    assert_eq!(view["lead"]["activeTurnId"], serde_json::Value::Null);
+    assert_eq!(view["rootTask"], serde_json::Value::Null);
+    assert_eq!(view["turns"], json!([]));
+    assert_eq!(view["turnsTruncated"], false);
+    assert_eq!(view["workers"], json!([]));
+    assert_eq!(view["attention"], json!([]));
+    assert!(view["eventHighWater"].is_u64());
+
+    // Bad parameters and an unknown conversation are refused with stable codes.
+    for (label, params, code) in [
+        (
+            "bad-limit",
+            json!({"id": harness.conversation_id, "turnLimit": 0}),
+            "LZ-WORKSPACE-INVALID",
+        ),
+        (
+            "bad-field",
+            json!({"id": harness.conversation_id, "nope": 1}),
+            "LZ-WORKSPACE-INVALID",
+        ),
+        (
+            "unknown",
+            json!({"id": uuid::Uuid::new_v4()}),
+            "LZ-CONVERSATION-NOT-FOUND",
+        ),
+    ] {
+        let error = call(label, "workspace.conversation", params)
+            .await
+            .error
+            .unwrap();
+        assert_eq!(error.code, code, "{label}");
+    }
+
+    // A warmed lead is idle, with its session and private working directory in the header.
+    warm_tool_lead(&harness).await;
+    let view = show("warmed").await;
+    assert_eq!(view["lead"]["availability"], "idle");
+    assert_eq!(view["lead"]["lifecycle"], "idle");
+    assert_eq!(view["lead"]["session"]["state"], "idle");
+    let lead_session_id = view["lead"]["session"]["id"].clone();
+    assert!(
+        view["lead"]["session"]["workingDirectory"]
+            .as_str()
+            .unwrap()
+            .contains(lead_session_id.as_str().unwrap())
+    );
+
+    // The lead's first turn delegates two tasks under ask: the root task carries the authority,
+    // both workers are blocked on the user's acceptance, and both proposals are the attention.
+    let roster_revision = harness.store.roster_snapshot().unwrap().revision;
+    harness.backend.tool_calls.lock().unwrap().extend([
+        tool_call(
+            "call-1",
+            "task_delegate",
+            json!({
+                "employeeId": harness.worker.id,
+                "objective": "Implement the parser fix",
+                "rosterRevision": roster_revision
+            }),
+        ),
+        tool_call(
+            "call-2",
+            "task_delegate",
+            json!({
+                "employeeId": harness.worker.id,
+                "objective": "Write the parser tests\nand run them",
+                "rosterRevision": roster_revision
+            }),
+        ),
+    ]);
+    let submitted = submit_lead_turn(&harness, "ask").await;
+    assert_eq!(submitted["turn"]["state"], "completed");
+    let child_ids: Vec<uuid::Uuid> = harness.backend.tool_results.lock().unwrap()[..2]
+        .iter()
+        .map(|result| result.content["taskId"].as_str().unwrap().parse().unwrap())
+        .collect();
+    let view = show("proposed").await;
+    assert_eq!(view["title"], "Coordinate the parser fix");
+    assert_eq!(view["lead"]["lifecycle"], "idle");
+    assert_eq!(view["lead"]["authority"], "ask");
+    assert_eq!(view["lead"]["activeTurnId"], serde_json::Value::Null);
+    assert_eq!(view["rootTask"]["role"], "lead");
+    assert_eq!(view["rootTask"]["state"], "running");
+    assert_eq!(view["rootTask"]["effectiveAuthority"], "ask");
+    let root_task_id = view["rootTask"]["id"].clone();
+    let turns = view["turns"].as_array().unwrap();
+    assert_eq!(turns.len(), 1);
+    assert_eq!(turns[0]["state"], "completed");
+    assert_eq!(turns[0]["recipient"]["employeeId"], json!(harness.lead.id));
+    let workers = view["workers"].as_array().unwrap();
+    assert_eq!(workers.len(), 2, "{workers:?}");
+    for (worker, child_id) in workers.iter().zip(&child_ids) {
+        assert_eq!(worker["taskId"], json!(child_id));
+        assert_eq!(worker["rootTaskId"], root_task_id);
+        assert_eq!(worker["parentTaskId"], root_task_id);
+        assert_eq!(worker["depth"], 1);
+        assert_eq!(worker["employeeId"], json!(harness.worker.id));
+        assert_eq!(worker["name"], "Mira");
+        assert_eq!(worker["provider"], "codex");
+        assert_eq!(worker["model"], "test-model");
+        assert_eq!(worker["state"], "blocked");
+        assert_eq!(worker["stateReason"], "Waiting for you to accept the task");
+        assert_eq!(worker["taskState"], "proposed");
+        assert_eq!(worker["effectiveAuthority"], "ask");
+        assert_eq!(worker["session"], serde_json::Value::Null);
+        assert_eq!(worker["workspace"], serde_json::Value::Null);
+        assert_eq!(worker["terminalAt"], serde_json::Value::Null);
+    }
+    assert_eq!(workers[0]["label"], "Implement the parser fix");
+    assert_eq!(workers[1]["label"], "Write the parser tests");
+    let attention = view["attention"].as_array().unwrap();
+    assert_eq!(attention.len(), 2, "{attention:?}");
+    assert!(attention.iter().all(|item| item["kind"] == "task-proposal"
+        && item["attention"] == "action-required"
+        && item["scope"]["conversationId"] == json!(harness.conversation_id)));
+    assert_eq!(attention[0]["actions"][0]["method"], "task.accept");
+
+    // Accepting the first makes it wait for dispatch; cancelling the second as the user
+    // interrupts it; only one proposal is left to attend to.
+    call(
+        "accept",
+        "task.accept",
+        json!({"id": child_ids[0], "expectedRevision": 1, "idempotencyKey": "dock-accept"}),
+    )
+    .await
+    .result
+    .unwrap();
+    let view = show("accepted").await;
+    assert_eq!(view["workers"][0]["state"], "waiting");
+    assert_eq!(
+        view["workers"][0]["stateReason"],
+        "Waiting to be dispatched when the worker is free"
+    );
+    assert_eq!(view["workers"][0]["taskState"], "accepted");
+    assert_eq!(view["attention"].as_array().unwrap().len(), 1);
+    call(
+        "cancel",
+        "task.cancel",
+        json!({
+            "id": child_ids[1],
+            "expectedRevision": 1,
+            "actor": {"kind": "user"},
+            "idempotencyKey": "dock-cancel"
+        }),
+    )
+    .await
+    .result
+    .unwrap();
+    let view = show("cancelled").await;
+    assert_eq!(view["workers"][1]["state"], "interrupted");
+    assert_eq!(
+        view["workers"][1]["stateReason"],
+        "Interrupted: the task was cancelled"
+    );
+    assert_eq!(view["workers"][1]["taskState"], "cancelled");
+    assert!(view["workers"][1]["terminalAt"].is_string());
+    assert_eq!(view["attention"], json!([]));
+
+    // Dispatch runs the first worker to completion on its own workspace; the worker's turn
+    // joins the conversation's turns, which a small limit bounds newest-first.
+    harness.app.dispatch_pending_tasks_once().await.unwrap();
+    let view = show("dispatched").await;
+    let worker = view["workers"][0].clone();
+    assert_eq!(worker["state"], "complete");
+    assert_eq!(worker["stateReason"], "Completed");
+    assert_eq!(worker["taskState"], "completed");
+    assert_eq!(worker["workspace"]["kind"], "projectless");
+    assert!(worker["workspace"]["path"].is_string());
+    // A terminal task holds no active session or turn any more; its turn is in the list.
+    assert_eq!(worker["session"], serde_json::Value::Null);
+    assert!(worker["terminalAt"].is_string());
+    let turns = view["turns"].as_array().unwrap();
+    assert_eq!(turns.len(), 2);
+    assert_eq!(turns[1]["taskId"], json!(child_ids[0]));
+    assert_eq!(
+        turns[1]["recipient"]["employeeId"],
+        json!(harness.worker.id)
+    );
+    assert_eq!(view["turnsTruncated"], false);
+    let bounded = call(
+        "bounded",
+        "workspace.conversation",
+        json!({"id": harness.conversation_id, "turnLimit": 1}),
+    )
+    .await
+    .result
+    .unwrap();
+    assert_eq!(bounded["turns"].as_array().unwrap().len(), 1);
+    assert_eq!(bounded["turns"][0]["id"], turns[1]["id"], "the newest turn");
+    assert_eq!(bounded["turnsTruncated"], true);
+
+    // The result reaching the lead completes the plan; stopping the lead suspends the header.
+    harness.app.deliver_pending_notices_once().await.unwrap();
+    let view = show("done").await;
+    assert_eq!(view["rootTask"]["state"], "completed");
+    assert_eq!(view["lead"]["lifecycle"], "idle");
+    let lead_session = harness
+        .store
+        .get_session(lead_session_id.as_str().unwrap().parse().unwrap())
+        .unwrap();
+    call(
+        "stop",
+        "session.stop",
+        json!({
+            "id": lead_session.id,
+            "expectedRevision": lead_session.revision,
+            "idempotencyKey": "dock-stop"
+        }),
+    )
+    .await
+    .result
+    .unwrap();
+    let view = show("stopped").await;
+    assert_eq!(view["lead"]["lifecycle"], "suspended");
+    assert_eq!(view["lead"]["availability"], "suspended");
+    assert_eq!(view["lead"]["session"]["state"], "suspended");
+
+    // Nothing was stored for the workspace, and the snapshot is unchanged.
+    assert!(
+        harness
+            .store
+            .list_events(0, 1000)
+            .unwrap()
+            .iter()
+            .all(|event| !event.event_type.starts_with("workspace"))
+    );
+    let snapshot = call("desktop", "desktop.snapshot", json!({}))
+        .await
+        .result
+        .unwrap();
+    assert!(snapshot.get("workspace").is_none());
+    assert!(snapshot.get("lead").is_none());
+    assert_desktop_is_roster_neutral(&harness.app).await;
+}
+
+#[test]
+fn workspace_conversation_acceptance_contract_is_deterministic_and_backend_only() {
+    let repository = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let script_path = repository.join("scripts/acceptance/workspace-conversation.ps1");
+    let script =
+        std::fs::read_to_string(&script_path).expect("workspace conversation acceptance script");
+
+    for required in [
+        "the_lead_lifecycle_follows_the_session_and_its_newest_turn",
+        "worker_cards_take_the_first_state_that_holds_with_lazoo_words",
+        "workspace_cli_maps_show",
+        "the_user_opens_the_conversation_header_and_worker_dock_through_the_daemon",
+        "store_enables_wal_foreign_keys_and_schema_version",
+        "lifecycleFollowsTheSession",
+        "workerCardsFollowTheRows",
+        "attentionIsEmbedded",
+        "workspaceStoresNothing",
+        "providerSmokeAbsent",
+        "externalModelUseAbsent",
+        "uiChangesAbsent",
+        "deterministic-fake-transport",
+        "schemaVersion = 15",
+    ] {
+        assert!(
+            script.contains(required),
+            "acceptance script must contain {required}"
+        );
+    }
+    for forbidden in ["provider', 'smoke", "LivePrompt"] {
+        assert!(
+            !script.contains(forbidden),
+            "acceptance script must not contain {forbidden}"
+        );
+    }
+}
+
+/// The header and each worker card name the actions their rows allow right now, as data for
+/// an existing revision-checked RPC, and sending one exactly as named (plus a fresh
+/// idempotency key) is accepted: accept a proposal from its card, rename from the header,
+/// and stop the idle lead from the header. Nothing is stored for the actions.
+#[tokio::test]
+#[allow(clippy::too_many_lines)] // One user session acting from the header and a card.
+async fn the_user_acts_through_the_actions_the_header_and_cards_name() {
+    let (_temporary, harness) = tool_harness(AuthorityMode::Ask);
+    let call = |id: &str, method: &str, params: serde_json::Value| {
+        harness.app.handle(request(id, method, params))
+    };
+    let show = |id: &'static str| async move {
+        call(
+            id,
+            "workspace.conversation",
+            json!({"id": harness.conversation_id}),
+        )
+        .await
+        .result
+        .unwrap()
+    };
+    let names = |actions: &serde_json::Value| {
+        actions
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|action| action["action"].as_str().unwrap().to_owned())
+            .collect::<Vec<_>>()
+    };
+    // Send an action exactly as the daemon named it, with the caller's idempotency key.
+    let send = |label: &str, action: serde_json::Value, extra: serde_json::Value| {
+        let mut params = action["params"].clone();
+        params["idempotencyKey"] = json!(format!("action-{label}"));
+        for (key, value) in extra.as_object().unwrap() {
+            params[key] = value.clone();
+        }
+        call(label, action["method"].as_str().unwrap(), params)
+    };
+
+    // A dormant lead offers only rename; a warmed one may also be stopped.
+    let view = show("fresh").await;
+    assert_eq!(names(&view["lead"]["actions"]), ["rename"]);
+    warm_tool_lead(&harness).await;
+    let view = show("warmed").await;
+    assert_eq!(names(&view["lead"]["actions"]), ["rename", "stop-session"]);
+
+    // A proposal's card offers accept and cancel; sending accept as named is accepted and the
+    // card then offers only cancel.
+    let roster_revision = harness.store.roster_snapshot().unwrap().revision;
+    harness
+        .backend
+        .tool_calls
+        .lock()
+        .unwrap()
+        .extend([tool_call(
+            "call-1",
+            "task_delegate",
+            json!({
+                "employeeId": harness.worker.id,
+                "objective": "Implement the parser fix",
+                "rosterRevision": roster_revision
+            }),
+        )]);
+    assert_eq!(
+        submit_lead_turn(&harness, "ask").await["turn"]["state"],
+        "completed"
+    );
+    let view = show("proposed").await;
+    assert_eq!(names(&view["lead"]["actions"]), ["rename", "stop-session"]);
+    let card = view["workers"][0].clone();
+    assert_eq!(names(&card["actions"]), ["accept", "cancel"]);
+    assert_eq!(card["actions"][0]["method"], "task.accept");
+    assert_eq!(card["actions"][0]["params"]["expectedRevision"], 1);
+    assert_eq!(
+        card["actions"][1]["params"]["actor"],
+        json!({"kind": "user"})
+    );
+    let accepted = send("accept", card["actions"][0].clone(), json!({}))
+        .await
+        .result
+        .unwrap();
+    assert_eq!(accepted["task"]["state"], "accepted");
+    let view = show("accepted").await;
+    assert_eq!(names(&view["workers"][0]["actions"]), ["cancel"]);
+    assert_eq!(
+        view["workers"][0]["actions"][0]["params"]["expectedRevision"],
+        2
+    );
+
+    // Rename from the header, with the caller's title; the next header cites the new revision.
+    let rename = view["lead"]["actions"][0].clone();
+    assert_eq!(rename["method"], "conversation.rename");
+    assert_eq!(rename["params"]["title"], serde_json::Value::Null);
+    send("rename", rename, json!({"title": "Dock"}))
+        .await
+        .result
+        .unwrap();
+    let view = show("renamed").await;
+    assert_eq!(view["title"], "Dock");
+    assert_eq!(view["titleDerived"], false);
+    assert_eq!(view["lead"]["actions"][0]["params"]["expectedRevision"], 2);
+
+    // A completed card offers nothing; stopping the lead from the header suspends it and
+    // leaves rename alone.
+    harness.app.dispatch_pending_tasks_once().await.unwrap();
+    harness.app.deliver_pending_notices_once().await.unwrap();
+    let view = show("done").await;
+    assert_eq!(view["workers"][0]["state"], "complete");
+    assert_eq!(view["workers"][0]["actions"], json!([]));
+    assert_eq!(view["rootTask"]["state"], "completed");
+    let stop = view["lead"]["actions"][1].clone();
+    assert_eq!(stop["action"], "stop-session");
+    assert_eq!(stop["method"], "session.stop");
+    assert_eq!(stop["params"]["id"], view["lead"]["session"]["id"]);
+    send("stop", stop, json!({})).await.result.unwrap();
+    let view = show("stopped").await;
+    assert_eq!(view["lead"]["lifecycle"], "suspended");
+    assert_eq!(names(&view["lead"]["actions"]), ["rename"]);
+
+    // The actions are derived: no event names the workspace.
+    assert!(
+        harness
+            .store
+            .list_events(0, 1000)
+            .unwrap()
+            .iter()
+            .all(|event| !event.event_type.starts_with("workspace"))
+    );
+}
+
+#[test]
+fn workspace_actions_acceptance_contract_is_deterministic_and_backend_only() {
+    let repository = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let script_path = repository.join("scripts/acceptance/workspace-actions.ps1");
+    let script =
+        std::fs::read_to_string(&script_path).expect("workspace actions acceptance script");
+
+    for required in [
+        "cards_and_the_header_offer_only_the_actions_their_rows_allow",
+        "the_user_acts_through_the_actions_the_header_and_cards_name",
+        "the_user_opens_the_conversation_header_and_worker_dock_through_the_daemon",
+        "store_enables_wal_foreign_keys_and_schema_version",
+        "actionsFollowTheRows",
+        "namedActionsAreAccepted",
+        "workspaceStoresNothing",
         "providerSmokeAbsent",
         "externalModelUseAbsent",
         "uiChangesAbsent",
