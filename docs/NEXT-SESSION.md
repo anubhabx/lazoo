@@ -1,5 +1,9 @@
 # Backend handoff: core v1 implementation, updated 2026-10-16
 
+## Owner checkpoint
+
+On 2026-10-16 the owner requested a PR for the current progress and deferred further implementation to a later date. This is an incomplete core v1 checkpoint. Resume implementation only after a new owner instruction, using the remaining product gates and evidence below. The provider authentication/model smoke blockers are cleared for the four included providers; the broader backend target remains open.
+
 ## Owner scope and source
 
 The owner asked to finish the core v1 backend and explicitly chose core v1 over connectors/vector-search/voice. They also required checking out and pulling main before starting. That was done once: main advanced to `dfa35f1`, then was merged at `ab00236` into `codex/core-v1-backend`, retaining the existing Claude full-autonomy work.
