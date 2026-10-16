@@ -1,5 +1,5 @@
-use lazoo_protocol::{MemoryRecordType, MemorySearchParams, RpcError};
-use lazoo_store::{ArchiveMemoryTurnInput, SetMemoryPolicyInput};
+use lazoo_protocol::{MemoryRecordType, MemorySearchParams, RpcError, TurnState};
+use lazoo_store::{ArchiveMemoryRawFramesInput, ArchiveMemoryTurnInput, SetMemoryPolicyInput};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use tokio::time::Duration;
@@ -157,6 +157,57 @@ impl App {
         Ok(to_value(
             json!({"jobs":jobs,"archiveErrors":archive_errors,"archiveErrorCount":archive_errors.len()}),
         ))
+    }
+    /// The byte cap for buffering a turn's raw provider frames, or `None` when the inherited
+    /// policy has retention off. A failed policy lookup disables capture for this turn only.
+    pub(super) fn raw_frame_cap(&self, conversation_id: Uuid) -> Option<u64> {
+        let policy = self
+            .store
+            .get_conversation(conversation_id)
+            .and_then(|conversation| self.store.inherited_memory_policy(conversation.project_id));
+        match policy {
+            Ok(policy) => policy.retention_enabled.then_some(policy.max_source_bytes),
+            Err(error) => {
+                tracing::warn!(%error, %conversation_id, "memory raw-frame capture disabled for this turn");
+                None
+            }
+        }
+    }
+
+    /// Retains the captured raw frames once the turn ended completed. Every refusal (retention,
+    /// quota, cap, I/O) is logged and never fails the turn, as canonical quota rejections are.
+    pub(super) async fn archive_raw_frames(
+        &self,
+        turn_id: Uuid,
+        (frames, dropped_frames): (Vec<Value>, u64),
+    ) {
+        if frames.is_empty() && dropped_frames == 0 {
+            return;
+        }
+        match self.store.get_turn(turn_id) {
+            Ok(turn) if turn.state == TurnState::Completed => {}
+            Ok(_) => return,
+            Err(error) => {
+                tracing::warn!(%error, source_turn_id = %turn_id, "memory raw-frame archive skipped");
+                return;
+            }
+        }
+        let store = self.store.clone();
+        let input = ArchiveMemoryRawFramesInput {
+            source_turn_id: turn_id,
+            archive_root: self.memory_archive_root(),
+            frames,
+            dropped_frames,
+        };
+        match tokio::task::spawn_blocking(move || store.archive_memory_raw_frames(input)).await {
+            Ok(Ok(_)) => {}
+            Ok(Err(error)) => {
+                tracing::warn!(%error, source_turn_id = %turn_id, "memory raw-frame archive skipped");
+            }
+            Err(error) => {
+                tracing::warn!(%error, source_turn_id = %turn_id, "memory raw-frame archive task join failed");
+            }
+        }
     }
     pub(super) fn memory_recover(&self) -> Result<(), lazoo_store::StoreError> {
         self.store
