@@ -362,6 +362,68 @@ fn session_cli_maps_warm_list_show_and_stop() {
 }
 
 #[test]
+fn session_cli_maps_attach_with_default_terminal_size_and_session_exit_codes() {
+    let request = |args: &[&str]| {
+        let mut argv = vec!["lazooctl", "session", "attach"];
+        argv.extend_from_slice(args);
+        command_request(&Cli::try_parse_from(argv).unwrap().command)
+    };
+    assert_eq!(
+        request(&[
+            SESSION_ID,
+            "--expected-revision",
+            "4",
+            "--idempotency-key",
+            "attach-rhea"
+        ]),
+        (
+            "session.terminal.attach",
+            json!({
+                "id": SESSION_ID,
+                "expectedRevision": 4,
+                "columns": 80,
+                "rows": 25,
+                "idempotencyKey": "attach-rhea"
+            }),
+            false
+        )
+    );
+    let (method, params, _) = request(&[
+        SESSION_ID,
+        "--expected-revision",
+        "4",
+        "--columns",
+        "132",
+        "--rows",
+        "50",
+    ]);
+    assert_eq!(method, "session.terminal.attach");
+    assert_eq!(params["columns"], 132);
+    assert_eq!(params["rows"], 50);
+    assert!(
+        !params["idempotencyKey"].as_str().unwrap().is_empty(),
+        "a key is generated when none is given"
+    );
+    assert!(
+        Cli::try_parse_from(["lazooctl", "session", "attach", SESSION_ID]).is_err(),
+        "the session revision is required"
+    );
+    for code in [
+        "LZ-SESSION-ATTACHED",
+        "LZ-SESSION-ATTACH-UNSUPPORTED",
+        "LZ-SESSION-ATTACH-FAILED",
+        "LZ-SESSION-STATE",
+    ] {
+        let error = RpcError {
+            code: code.to_owned(),
+            message: String::new(),
+            data: None,
+        };
+        assert_eq!(exit_code_for_rpc(&error), 10, "{code}");
+    }
+}
+
+#[test]
 fn provider_cli_maps_list_probe_and_explicit_smoke_commands() {
     let list = Cli::try_parse_from(["lazooctl", "provider", "list"]).unwrap();
     assert_eq!(
