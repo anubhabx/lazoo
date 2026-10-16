@@ -39,7 +39,7 @@ pub use contract::{
     ExecutableCandidate, PermissionDecision, PermissionKind, PermissionRequest, ProviderAdapter,
     ProviderCapabilities, ProviderError, ProviderEvent, ProviderKind, ProviderProbe,
     ProviderSession, ProviderVerification, SessionRequest, ToolCall, ToolResult, ToolSpec,
-    TurnEventObserver, TurnRequest,
+    TurnEventObserver, TurnRequest, attach_args,
 };
 pub use discovery::{DiscoveryEnvironment, DiscoverySource, rank_candidates};
 pub use grok::{GrokAdapter, GrokSession};

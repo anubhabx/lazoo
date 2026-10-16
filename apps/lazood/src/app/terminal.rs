@@ -1,11 +1,19 @@
-use std::{collections::BTreeMap, os::windows::fs::MetadataExt, path::Path, time::Duration};
+use std::{
+    collections::BTreeMap,
+    os::windows::fs::MetadataExt,
+    path::{Path, PathBuf},
+    time::Duration,
+};
 
 use lazoo_protocol::{
-    TerminalInput, TerminalListResult, TerminalOpenParams, TerminalOutput, TerminalOutputRequest,
-    TerminalRecord, TerminalResizeParams, TerminalShowParams, TerminalStopParams,
+    EmployeeSessionRecord, RpcError, SessionLifecycleState, SessionTerminalAttachParams,
+    SessionTerminalAttachResult, TerminalInput, TerminalListResult, TerminalOpenParams,
+    TerminalOutput, TerminalOutputRequest, TerminalRecord, TerminalResizeParams,
+    TerminalShowParams, TerminalStopParams,
 };
+use lazoo_providers::{ProviderError, ProviderKind, attach_args};
 use lazoo_runtime::{TerminalCommand, TerminalError, TerminalSession};
-use serde_json::{Value, to_value};
+use serde_json::{Value, json, to_value};
 use tokio::{sync::watch, time::timeout};
 use uuid::Uuid;
 
@@ -19,6 +27,9 @@ pub(super) struct TerminalState {
     sessions: BTreeMap<Uuid, LiveTerminal>,
     command_keys: BTreeMap<String, CommandKey>,
     reservations: BTreeMap<String, Reservation>,
+    /// Employee session to the owner terminal attached to it; `None` while that attach is still
+    /// opening. The binding is in memory only and dies with the daemon, like every terminal.
+    attachments: BTreeMap<Uuid, Option<Uuid>>,
 }
 struct LiveTerminal {
     command: TerminalOpenParams,
@@ -417,6 +428,176 @@ impl App {
             exit_code: status.exit_code,
         })
     }
+}
+
+impl App {
+    /// `session.terminal.attach`: reopen a suspended Claude Code or Codex session's native
+    /// harness in an owner terminal. Only `suspended` qualifies: every provider keeps a live
+    /// protocol host for the whole time a session is idle, so a second interactive process on
+    /// the same native id would put two writers on one transcript. The TUI runs under the
+    /// owner's own native configuration rather than the employee's authority mode, because the
+    /// owner is at the keyboard; what is typed there never enters Lazoo's turn ledger.
+    pub(super) async fn session_terminal_attach(&self, params: Value) -> Result<Value, RpcError> {
+        let params: SessionTerminalAttachParams = serde_json::from_value(params)
+            .map_err(|error| super::invalid_params(error.to_string()))?;
+        super::require_session_idempotency_key(&params.idempotency_key)?;
+        if params.expected_revision == 0 {
+            return Err(super::session_invalid(
+                "expectedRevision must be greater than zero",
+            ));
+        }
+        let session = self
+            .store
+            .get_session(params.id)
+            .map_err(super::session_store_error)?;
+        if session.revision != params.expected_revision {
+            return Err(super::session_store_error(
+                lazoo_store::StoreError::SessionStale {
+                    session_id: session.id,
+                    current_revision: session.revision,
+                },
+            ));
+        }
+        if session.state != SessionLifecycleState::Suspended {
+            return Err(super::session_store_error(
+                lazoo_store::StoreError::SessionState {
+                    session_id: session.id,
+                    state: state_name(session.state),
+                    expected: "suspended",
+                },
+            ));
+        }
+        if self
+            .store
+            .is_memory_summary_session(session.id)
+            .map_err(super::session_store_error)?
+        {
+            return Err(super::session_failure(
+                "LZ-MEMORY-SESSION-RESERVED",
+                "memory summary sessions are reserved and cannot be taken over",
+                session.id,
+            ));
+        }
+        let open = self.attach_command(&session, &params)?;
+        if let Some(replayed) = self.reserve_attachment(session.id, &open).await? {
+            return Ok(super::to_value(SessionTerminalAttachResult {
+                session_id: session.id,
+                terminal: replayed,
+            }));
+        }
+        let opened = self.terminal_open(open).await;
+        self.complete_attachment(session.id, opened).await
+    }
+
+    /// Resolves the provider executable, native resume arguments and working directory for an
+    /// attach from Lazoo's own records, refusing when any of them is unknown.
+    fn attach_command(
+        &self,
+        session: &EmployeeSessionRecord,
+        params: &SessionTerminalAttachParams,
+    ) -> Result<TerminalOpenParams, RpcError> {
+        let provider = session
+            .provider
+            .parse::<ProviderKind>()
+            .map_err(super::provider_error)?;
+        let native_session_id = session.native_session_id.as_deref().unwrap_or_default();
+        let Some(args) = attach_args(provider, native_session_id) else {
+            return Err(super::session_failure(
+                "LZ-SESSION-ATTACH-UNSUPPORTED",
+                "no proven native resume command exists for this session's provider",
+                session.id,
+            ));
+        };
+        let executable = self
+            .providers
+            .discover(&self.provider_environment)
+            .into_iter()
+            .find(|discovery| discovery.provider == provider)
+            .and_then(|discovery| discovery.candidate)
+            .ok_or(ProviderError::NotDetected(provider))
+            .map_err(super::provider_error)?
+            .path;
+        let cwd = match self
+            .store
+            .task_workspace_for_session(session.id)
+            .map_err(super::session_store_error)?
+        {
+            Some(workspace) => PathBuf::from(workspace),
+            None => self.root.session_working_dir(session.id),
+        };
+        Ok(TerminalOpenParams {
+            executable: executable.to_string_lossy().into_owned(),
+            args,
+            cwd: cwd.to_string_lossy().into_owned(),
+            columns: params.columns,
+            rows: params.rows,
+            // Namespaced so an attach never replays or collides with an ad-hoc terminal.open key.
+            idempotency_key: format!("session-attach:{}:{}", session.id, params.idempotency_key),
+        })
+    }
+
+    /// Takes the session's single attach slot, or returns the terminal an identical earlier
+    /// request already opened. A slot whose terminal exited or was stopped is free again.
+    async fn reserve_attachment(
+        &self,
+        session_id: Uuid,
+        open: &TerminalOpenParams,
+    ) -> Result<Option<TerminalRecord>, RpcError> {
+        let mut state = self.terminals.lock().await;
+        release_exited(&mut state, self.boot_id)
+            .map_err(|error| attach_failed(&error, session_id))?;
+        if let Some(existing) = state.command_keys.get(&open.idempotency_key)
+            && existing.body == *open
+        {
+            return Ok(Some(existing.last.clone()));
+        }
+        if let Some(bound) = state.attachments.get(&session_id).copied()
+            && bound.is_none_or(|terminal_id| state.sessions.contains_key(&terminal_id))
+        {
+            return Err(RpcError {
+                code: "LZ-SESSION-ATTACHED".to_owned(),
+                message: "an owner terminal is already attached to this session".to_owned(),
+                data: Some(json!({"sessionId": session_id, "terminalId": bound})),
+            });
+        }
+        state.attachments.insert(session_id, None);
+        Ok(None)
+    }
+
+    async fn complete_attachment(
+        &self,
+        session_id: Uuid,
+        opened: Result<TerminalRecord, String>,
+    ) -> Result<Value, RpcError> {
+        let terminal = {
+            let mut state = self.terminals.lock().await;
+            match &opened {
+                Ok(terminal) => state.attachments.insert(session_id, Some(terminal.id)),
+                Err(_) => state.attachments.remove(&session_id),
+            };
+            opened
+        }
+        .map_err(|error| attach_failed(&error, session_id))?;
+        self.store
+            .record_session_terminal_attached(session_id, terminal.id)
+            .map_err(super::session_store_error)?;
+        self.publish_events()?;
+        Ok(super::to_value(SessionTerminalAttachResult {
+            session_id,
+            terminal,
+        }))
+    }
+}
+
+fn attach_failed(error: &str, session_id: Uuid) -> RpcError {
+    super::session_failure("LZ-SESSION-ATTACH-FAILED", error, session_id)
+}
+
+fn state_name(state: SessionLifecycleState) -> String {
+    serde_json::to_value(state)
+        .ok()
+        .and_then(|value| value.as_str().map(str::to_owned))
+        .unwrap_or_default()
 }
 
 fn validate_open(params: &TerminalOpenParams) -> Result<(), String> {

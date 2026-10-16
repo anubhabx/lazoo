@@ -399,6 +399,26 @@ impl Store {
         let connection = self.lock()?;
         required_session(&connection, session_id)
     }
+
+    /// Audits the owner's terminal takeover of a suspended session. The session row itself is
+    /// unchanged: the native harness now runs under the owner, outside Lazoo's turn ledger.
+    pub fn record_session_terminal_attached(
+        &self,
+        session_id: Uuid,
+        terminal_id: Uuid,
+    ) -> Result<u64, StoreError> {
+        let mut connection = self.lock()?;
+        let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let now = Utc::now().to_rfc3339();
+        let sequence = employee::insert_event(
+            &transaction,
+            "session.terminal.attached",
+            &json!({"sessionId": session_id, "terminalId": terminal_id}),
+            &now,
+        )?;
+        transaction.commit()?;
+        Ok(sequence)
+    }
 }
 
 pub(crate) fn latest_session_for_employee(

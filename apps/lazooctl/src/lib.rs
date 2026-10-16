@@ -396,6 +396,19 @@ pub enum SessionCommand {
         #[arg(long)]
         idempotency_key: Option<String>,
     },
+    /// Reopen a suspended Claude Code or Codex session's native harness in an owner terminal.
+    /// Use `terminal read`, `terminal write`, and `terminal stop` on the returned terminal.
+    Attach {
+        id: Uuid,
+        #[arg(long)]
+        expected_revision: u64,
+        #[arg(long, default_value_t = 80)]
+        columns: u16,
+        #[arg(long, default_value_t = 25)]
+        rows: u16,
+        #[arg(long)]
+        idempotency_key: Option<String>,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -1525,6 +1538,23 @@ fn session_request(command: &SessionCommand) -> (&'static str, Value, bool) {
             json!({
                 "id": id,
                 "expectedRevision": expected_revision,
+                "idempotencyKey": idempotency_key.clone().unwrap_or_else(|| Uuid::new_v4().to_string()),
+            }),
+            false,
+        ),
+        SessionCommand::Attach {
+            id,
+            expected_revision,
+            columns,
+            rows,
+            idempotency_key,
+        } => (
+            "session.terminal.attach",
+            json!({
+                "id": id,
+                "expectedRevision": expected_revision,
+                "columns": columns,
+                "rows": rows,
                 "idempotencyKey": idempotency_key.clone().unwrap_or_else(|| Uuid::new_v4().to_string()),
             }),
             false,
