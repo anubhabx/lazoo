@@ -10206,10 +10206,11 @@ fn provider_config_acceptance_contract_is_read_only_and_backend_only() {
 }
 
 /// Brief section 21.2, the core end-to-end scenario, on the deterministic provider: steps 1 to
-/// 6, 8, 10, 11, and 14 in one daemon lifetime with a restart in the middle. Peer clarification
-/// (7), stall detection (9), memory records (12), worktree preservation (13), and the resource
-/// budget (15) are proven by their own acceptance scripts, which the core-scenario manifest
-/// names per step.
+/// 14 in one daemon lifetime with a restart in the middle, including the peer clarification
+/// (7), the stall (9), the dirty-work preservation (13), and the concise memory record (12)
+/// written by the memory worker from the completed task's dispatch turn on the restarted boot.
+/// The resource budget (15) is proven by its own acceptance script, which the core-scenario
+/// manifest names per step.
 #[tokio::test]
 #[allow(clippy::too_many_lines)] // The scenario is one story by definition.
 async fn the_core_scenario_runs_end_to_end_on_the_deterministic_provider() {
@@ -10642,8 +10643,10 @@ async fn the_core_scenario_runs_end_to_end_on_the_deterministic_provider() {
 
     // 12. The reported commits and verification are the task's durable evidence, readable
     // through `task.show`; the result notice below links the task; incidents and messages are
-    // ledgers of their own. Memory records wait for Stage 5.
+    // ledgers of their own. The concise memory record is written from this dispatch turn on the
+    // restarted boot, after step 14, so the summary is the story's last provider turn.
     let reported = harness.store.get_task(mira_task).unwrap();
+    let mira_turn_id = reported.dispatch.as_ref().unwrap().turn_id.unwrap();
     let completed = reported
         .evidence
         .iter()
@@ -10988,6 +10991,147 @@ async fn the_core_scenario_runs_end_to_end_on_the_deterministic_provider() {
         .cloned()
         .unwrap();
     assert_eq!(mira_entry["availability"], "suspended");
+
+    // 12, concluded. Sage is a dedicated dormant Codex summary employee: never warmed, never
+    // dispatched. The user opts the project into the memory worker on her and archives Mira's
+    // completed dispatch turn; the worker's one admission summarizes it through a fresh
+    // read-only session into a typed record citing that turn, which `memory.search` finds by
+    // the task. The scripted JSON output stands in for a model: the pipeline is proven here,
+    // summary quality is not. This is the story's last provider turn, because the swapped
+    // output is shared by every later fake turn.
+    let mut sage_input = peer("Sage", "codex");
+    sage_input.model = Some("test-model".to_owned());
+    if let Some(observation) = sage_input.provider_observation.as_mut() {
+        observation.capabilities = json!({"session": true, "permission": true, "mcp": true});
+    }
+    let sage = harness.store.create_employee(&sage_input).unwrap().employee;
+    let configured = restarted
+        .handle(request(
+            "configure-memory-worker",
+            "memory.worker.configure",
+            json!({
+                "projectId": project_id,
+                "employeeId": sage.id,
+                "model": "test-model",
+                "requestsPerMinute": 1,
+                "enabled": true,
+                "expectedRevision": null
+            }),
+        ))
+        .await
+        .result
+        .unwrap();
+    assert_eq!(configured["settings"]["enabled"], true);
+    assert_eq!(configured["provider"], "codex");
+    assert_eq!(configured["model"], "test-model");
+    assert_eq!(
+        configured["projectPermission"]["state"],
+        "nativeEmployeeOnly"
+    );
+    let archived = restarted
+        .handle(request(
+            "archive-mira-turn",
+            "memory.archive",
+            json!({"sourceTurnId": mira_turn_id, "projectId": project_id}),
+        ))
+        .await
+        .result
+        .unwrap();
+    assert_eq!(archived["archive"]["sourceTurnId"], json!(mira_turn_id));
+    assert_eq!(archived["archive"]["projectId"], json!(project_id));
+    assert_eq!(archived["archive"]["truncated"], false);
+    assert_eq!(archived["job"]["sourceTurnId"], json!(mira_turn_id));
+    assert_eq!(archived["job"]["state"], "pending");
+    assert!(
+        temporary
+            .path()
+            .join("data")
+            .join("memory-archives")
+            .join(archived["archive"]["archiveName"].as_str().unwrap())
+            .is_file(),
+        "the compressed source archive is on disk: {archived}"
+    );
+    let summary_text = "Mira fixed the parser in 0123abcd; cargo test -p parser passed";
+    let mut summary_events = completed_turn_events("completed");
+    if let Some(ProviderEvent::TurnCompleted { output, .. }) = summary_events.last_mut() {
+        *output = Some(
+            json!({"records": [{"type": "achievement", "text": summary_text, "confidence": 0.9, "importance": 40}]})
+                .to_string(),
+        );
+    }
+    *harness.backend.turn_events.lock().unwrap() = summary_events;
+    assert_eq!(
+        restarted.summarize_next_memory_job_once().await,
+        Ok(true),
+        "the worker admits and completes the one pending job"
+    );
+    let summary_request = harness
+        .backend
+        .turn_requests
+        .lock()
+        .unwrap()
+        .last()
+        .cloned()
+        .unwrap();
+    assert!(summary_request.read_only, "the summary turn is read-only");
+    assert!(
+        summary_request
+            .prompt
+            .starts_with("[LAZOO_INTERNAL_MEMORY_SUMMARY]"),
+        "{}",
+        summary_request.prompt
+    );
+    let queue = restarted
+        .handle(request(
+            "memory-queue",
+            "memory.queue.status",
+            json!({"projectId": project_id, "limit": 20}),
+        ))
+        .await
+        .result
+        .unwrap();
+    assert_eq!(queue["jobs"][0]["state"], "completed", "{queue}");
+    assert_eq!(queue["archiveErrorCount"], 0);
+    let sessions = restarted
+        .handle(request("sessions-after-summary", "session.list", json!({})))
+        .await
+        .result
+        .unwrap();
+    let sage_sessions: Vec<&serde_json::Value> = sessions
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|session| session["employeeId"] == json!(sage.id))
+        .collect();
+    assert_eq!(
+        sage_sessions.len(),
+        1,
+        "the summary ran on one fresh session for Sage: {sessions}"
+    );
+    assert_eq!(
+        sage_sessions[0]["state"], "suspended",
+        "Sage's summary session is stopped after use, never left idle"
+    );
+    let found = restarted
+        .handle(request(
+            "memory-search",
+            "memory.search",
+            json!({"projectId": project_id, "query": "", "taskId": mira_task, "limit": 10}),
+        ))
+        .await
+        .result
+        .unwrap();
+    let record = found
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|record| record["sourceTurnId"] == json!(mira_turn_id))
+        .cloned()
+        .unwrap_or_else(|| panic!("a typed record cites Mira's dispatch turn: {found}"));
+    assert_eq!(record["sourceHash"], archived["archive"]["sourceHash"]);
+    assert_eq!(record["recordType"], "achievement");
+    assert_eq!(record["active"], true);
+    assert_eq!(record["text"], summary_text);
     assert_desktop_is_roster_neutral(&restarted).await;
 }
 
