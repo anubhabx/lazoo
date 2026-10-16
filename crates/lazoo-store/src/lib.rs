@@ -55,8 +55,9 @@ pub use incident::{
     RaiseIncidentInput, SetIncidentThresholdInput, SettleIncidentInput, dead_letter_incident_key,
 };
 pub use memory::{
-    ArchiveMemoryTurnInput, CompleteMemorySummaryInput, CreateMemoryRecordInput,
-    FailMemorySummaryInput, MemoryArchiveCandidate, MemoryArchiveError, SetMemoryPolicyInput,
+    ArchiveMemoryRawFramesInput, ArchiveMemoryTurnInput, CompleteMemorySummaryInput,
+    CreateMemoryRecordInput, FailMemorySummaryInput, MemoryArchiveCandidate, MemoryArchiveError,
+    SetMemoryPolicyInput,
 };
 pub use memory_worker::{MemorySummaryAttempt, MemoryWorkerSettings, SetMemoryWorkerSettingsInput};
 pub use message::{

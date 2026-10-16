@@ -7,7 +7,7 @@ use std::{
 use chrono::{Duration, Utc};
 use lazoo_protocol::{
     MemoryCleanupPreview, MemoryContextPack, MemoryPolicy, MemoryRecord, MemoryRecordType,
-    MemorySearchParams, MemorySourceArchive, MemorySummaryJob,
+    MemorySearchParams, MemorySourceArchive, MemorySummaryJob, TurnState,
 };
 use rusqlite::{OptionalExtension, TransactionBehavior, params};
 use serde_json::json;
@@ -20,12 +20,35 @@ const DEFAULT_QUOTA: u64 = 256 * 1024 * 1024;
 const DEFAULT_SOURCE_CAP: u64 = 4 * 1024 * 1024;
 const MAX_RESULT: u32 = 100;
 const GLOBAL_SCOPE_KEY: &str = "__global__";
+/// Archive kinds. `turn` is the bounded canonical turn the summary worker reads; `raw-frames`
+/// holds the provider's redacted raw payloads for the same turn and is never summarized.
+const TURN_KIND: &str = "turn";
+const RAW_FRAMES_KIND: &str = "raw-frames";
 
 #[derive(Clone, Debug)]
 pub struct ArchiveMemoryTurnInput {
     pub source_turn_id: Uuid,
     pub project_id: Option<Uuid>,
     pub archive_root: PathBuf,
+}
+/// The raw provider payloads the daemon captured for one completed turn, in observation order.
+/// `dropped_frames` counts payloads the daemon already left out to stay under the policy cap.
+#[derive(Clone, Debug)]
+pub struct ArchiveMemoryRawFramesInput {
+    pub source_turn_id: Uuid,
+    pub archive_root: PathBuf,
+    pub frames: Vec<serde_json::Value>,
+    pub dropped_frames: u64,
+}
+/// One archive write, whichever kind: the source is already redacted and within the cap.
+struct SourceArchiveWrite<'a> {
+    kind: &'static str,
+    source_turn_id: Uuid,
+    scope: Option<Uuid>,
+    source: &'a [u8],
+    truncated: bool,
+    policy: &'a MemoryPolicy,
+    archive_root: &'a Path,
 }
 /// A completed turn awaiting a source archive. Internal summary-worker turns are excluded by
 /// the query that produces these values, so their model output never becomes a source archive.
@@ -91,7 +114,7 @@ impl Store {
         }
         let connection = self.lock()?;
         let mut statement = connection.prepare(
-            "SELECT t.id,c.project_id FROM conversation_turns t JOIN conversations c ON c.id=t.conversation_id LEFT JOIN memory_archives a ON a.source_turn_id=t.id LEFT JOIN memory_archive_intents intent ON intent.source_turn_id=t.id AND intent.state='error' LEFT JOIN memory_summary_attempts attempt ON attempt.turn_id=t.id WHERE t.state='completed' AND a.source_turn_id IS NULL AND intent.source_turn_id IS NULL AND attempt.turn_id IS NULL ORDER BY t.updated_at,t.id LIMIT ?1",
+            "SELECT t.id,c.project_id FROM conversation_turns t JOIN conversations c ON c.id=t.conversation_id LEFT JOIN memory_archives a ON a.source_turn_id=t.id AND a.source_kind='turn' LEFT JOIN memory_archive_intents intent ON intent.source_turn_id=t.id AND intent.source_kind='turn' AND intent.state='error' LEFT JOIN memory_summary_attempts attempt ON attempt.turn_id=t.id WHERE t.state='completed' AND a.source_turn_id IS NULL AND intent.source_turn_id IS NULL AND attempt.turn_id IS NULL ORDER BY t.updated_at,t.id LIMIT ?1",
         )?;
         let rows = statement.query_map([i64::from(limit)], |row| {
             Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?))
@@ -124,41 +147,99 @@ impl Store {
         if !policy.retention_enabled {
             return Err(invalid("memory retention", "source retention is disabled"));
         }
-        let truncated = turn.transcript_truncated;
         if source.len() as u64 > policy.max_source_bytes {
             return Err(invalid(
                 "memory source",
                 "sanitized source exceeds configured byte cap",
             ));
         }
-        let hash = hex_hash(&source);
-        let archive_name = format!("{}-{hash}.zst", scope_filename(scope));
-        let root = validate_archive_root(&input.archive_root)?;
+        self.write_source_archive(&SourceArchiveWrite {
+            kind: TURN_KIND,
+            source_turn_id: input.source_turn_id,
+            scope,
+            source: &source,
+            truncated: turn.transcript_truncated,
+            policy: &policy,
+            archive_root: &input.archive_root,
+        })
+    }
+    /// Retains the provider's raw frames of one completed turn as a `raw-frames` archive: an
+    /// NDJSON header, one redacted line per frame while the policy cap allows, and a trailer
+    /// naming the dropped frames when the cap was reached. It shares the quota, the retention
+    /// opt-out and the integrity path with the canonical archive and is never summarized.
+    pub fn archive_memory_raw_frames(
+        &self,
+        input: ArchiveMemoryRawFramesInput,
+    ) -> Result<Option<MemorySourceArchive>, StoreError> {
+        if input.frames.is_empty() && input.dropped_frames == 0 {
+            return Ok(None);
+        }
+        let turn = self.get_turn(input.source_turn_id)?;
+        if turn.state != TurnState::Completed {
+            return Err(invalid(
+                "memory source",
+                "raw frames are retained for completed turns only",
+            ));
+        }
+        let scope = turn_scope(self, input.source_turn_id)?;
+        let policy = self.inherited_memory_policy(scope)?;
+        if !policy.retention_enabled {
+            return Err(invalid("memory retention", "source retention is disabled"));
+        }
+        let source_turn_id = input.source_turn_id;
+        let archive_root = input.archive_root.clone();
+        let (source, dropped) = raw_frames_source(input, policy.max_source_bytes)?;
+        self.write_source_archive(&SourceArchiveWrite {
+            kind: RAW_FRAMES_KIND,
+            source_turn_id,
+            scope,
+            source: &source,
+            truncated: dropped > 0,
+            policy: &policy,
+            archive_root: &archive_root,
+        })
+        .map(Some)
+    }
+    /// The shared write sequence for every archive kind: hash, compress, reserve quota with a
+    /// `write-pending` intent, place the file, then record the archive and drop the intent.
+    fn write_source_archive(
+        &self,
+        write: &SourceArchiveWrite<'_>,
+    ) -> Result<MemorySourceArchive, StoreError> {
+        let hash = hex_hash(write.source);
+        let archive_name = archive_name(write.kind, write.scope, &hash);
+        let root = validate_archive_root(write.archive_root)?;
         let target = root.join(&archive_name);
-        let compressed = zstd::stream::encode_all(source.as_slice(), 3)
+        let compressed = zstd::stream::encode_all(write.source, 3)
             .map_err(|e| invalid("memory archive", &e.to_string()))?;
         let compressed_bytes = u64::try_from(compressed.len())
             .map_err(|_| invalid("memory archive", "compressed length overflow"))?;
+        let compressed_len = i64::try_from(compressed_bytes)
+            .map_err(|_| invalid("memory archive", "compressed length overflow"))?;
+        let source_len = i64::try_from(write.source.len())
+            .map_err(|_| invalid("memory archive", "source length overflow"))?;
+        let turn_id = write.source_turn_id.to_string();
         let now = Utc::now().to_rfc3339();
         let mut c = self.lock()?;
         let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        if let Some(existing) = archive_from_tx_optional(&tx, input.source_turn_id)? {
+        if let Some(existing) = archive_from_tx_optional(&tx, write.source_turn_id, write.kind)? {
             tx.commit()?;
             return Ok(existing);
         }
+        // Both kinds share one per-scope quota, so raw frames can never exceed it on their own.
         let used: i64 = tx.query_row(
             "SELECT COALESCE((SELECT SUM(compressed_bytes) FROM memory_archives WHERE scope_key=?1),0) + COALESCE((SELECT SUM(compressed_bytes) FROM memory_archive_intents WHERE scope_key=?1 AND state IN ('write-pending','error')),0)",
-            [scope_key(scope)],
+            [scope_key(write.scope)],
             |r| r.get(0),
         )?;
         if u64::try_from(used)
             .map_err(|_| invalid("memory quota", "invalid stored quota"))?
             .saturating_add(compressed_bytes)
-            > policy.quota_bytes
+            > write.policy.quota_bytes
         {
             return Err(invalid("memory quota", "archive quota exceeded"));
         }
-        tx.execute("INSERT OR REPLACE INTO memory_archive_intents(source_turn_id,source_hash,project_id,scope_key,archive_name,compressed_bytes,uncompressed_bytes,truncated,state,created_at) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,'write-pending',?9)", params![input.source_turn_id.to_string(),hash,scope.map(|x| x.to_string()),scope_key(scope),archive_name, i64::try_from(compressed_bytes).map_err(|_| invalid("memory archive", "compressed length overflow"))?, i64::try_from(source.len()).map_err(|_| invalid("memory archive", "source length overflow"))?,i64::from(truncated),now])?;
+        tx.execute("INSERT OR REPLACE INTO memory_archive_intents(source_turn_id,source_kind,source_hash,project_id,scope_key,archive_name,compressed_bytes,uncompressed_bytes,truncated,state,created_at) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,'write-pending',?10)", params![turn_id,write.kind,hash,write.scope.map(|x| x.to_string()),scope_key(write.scope),archive_name,compressed_len,source_len,i64::from(write.truncated),now])?;
         tx.commit()?;
         drop(c);
         if target.exists() {
@@ -169,7 +250,7 @@ impl Store {
                     "existing archive is not a regular file",
                 ));
             }
-            verify_archive(&target, &source, policy.max_source_bytes)?;
+            verify_archive(&target, write.source, write.policy.max_source_bytes)?;
         } else {
             let temp = root.join(format!(".{hash}.{}.tmp", Uuid::new_v4()));
             {
@@ -185,13 +266,18 @@ impl Store {
         }
         let mut c = self.lock()?;
         let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        tx.execute("INSERT INTO memory_archives(source_turn_id,source_hash,project_id,scope_key,archive_name,compressed_bytes,uncompressed_bytes,truncated,created_at) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9)",params![input.source_turn_id.to_string(),hash,scope.map(|x|x.to_string()),scope_key(scope),archive_name,i64::try_from(compressed_bytes).map_err(|_| invalid("memory archive", "compressed length overflow"))?,i64::try_from(source.len()).map_err(|_| invalid("memory archive", "source length overflow"))?,i64::from(truncated),now])?;
+        tx.execute("INSERT INTO memory_archives(source_turn_id,source_kind,source_hash,project_id,scope_key,archive_name,compressed_bytes,uncompressed_bytes,truncated,created_at) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)",params![turn_id,write.kind,hash,write.scope.map(|x|x.to_string()),scope_key(write.scope),archive_name,compressed_len,source_len,i64::from(write.truncated),now])?;
         tx.execute(
-            "DELETE FROM memory_archive_intents WHERE source_turn_id=?1",
-            [input.source_turn_id.to_string()],
+            "DELETE FROM memory_archive_intents WHERE source_turn_id=?1 AND source_kind=?2",
+            params![turn_id, write.kind],
         )?;
-        let rec = archive_from_tx(&tx, input.source_turn_id)?;
-        employee::insert_event(&tx, "memory.archived", &json!({"archive":rec}), &now)?;
+        let rec = archive_from_tx(&tx, write.source_turn_id, write.kind)?;
+        employee::insert_event(
+            &tx,
+            "memory.archived",
+            &json!({"archive":rec,"kind":write.kind}),
+            &now,
+        )?;
         tx.commit()?;
         Ok(rec)
     }
@@ -251,56 +337,68 @@ impl Store {
         let root = validate_archive_root(archive_root)?;
         let mut connection = self.lock()?;
         let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let mut statement = tx.prepare("SELECT source_turn_id,source_hash,project_id,scope_key,archive_name,compressed_bytes,uncompressed_bytes,truncated,created_at FROM memory_archive_intents WHERE state='write-pending'")?;
+        // Intents and archives are keyed by `archive_name` here: it is unique in both tables,
+        // so replaying one kind never touches the other kind's row for the same turn.
+        let mut statement = tx.prepare("SELECT source_turn_id,source_kind,source_hash,project_id,scope_key,archive_name,compressed_bytes,uncompressed_bytes,truncated,created_at FROM memory_archive_intents WHERE state='write-pending'")?;
         let rows = statement
             .query_map([], |row| {
                 Ok((
                     row.get::<_, String>(0)?,
                     row.get::<_, String>(1)?,
-                    row.get::<_, Option<String>>(2)?,
-                    row.get::<_, String>(3)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, Option<String>>(3)?,
                     row.get::<_, String>(4)?,
-                    row.get::<_, i64>(5)?,
+                    row.get::<_, String>(5)?,
                     row.get::<_, i64>(6)?,
                     row.get::<_, i64>(7)?,
-                    row.get::<_, String>(8)?,
+                    row.get::<_, i64>(8)?,
+                    row.get::<_, String>(9)?,
                 ))
             })?
             .collect::<Result<Vec<_>, _>>()?;
         drop(statement);
         let mut count = 0_u64;
-        for (turn, hash, project, scope, name, compressed, uncompressed, truncated, created) in rows
+        for (
+            turn,
+            kind,
+            hash,
+            project,
+            scope,
+            name,
+            compressed,
+            uncompressed,
+            truncated,
+            created,
+        ) in rows
         {
             let path = root.join(&name);
             if !path.exists() {
                 tx.execute(
-                    "DELETE FROM memory_archive_intents WHERE source_turn_id=?1",
-                    [&turn],
+                    "DELETE FROM memory_archive_intents WHERE archive_name=?1",
+                    [&name],
                 )?;
             } else if verify_intent_archive(&path, &hash, compressed, uncompressed)? {
-                tx.execute("INSERT OR IGNORE INTO memory_archives(source_turn_id,source_hash,project_id,scope_key,archive_name,compressed_bytes,uncompressed_bytes,truncated,created_at) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9)", params![turn,hash,project,scope,name,compressed,uncompressed,truncated,created])?;
+                tx.execute("INSERT OR IGNORE INTO memory_archives(source_turn_id,source_kind,source_hash,project_id,scope_key,archive_name,compressed_bytes,uncompressed_bytes,truncated,created_at) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)", params![turn,kind,hash,project,scope,name,compressed,uncompressed,truncated,created])?;
                 tx.execute(
-                    "DELETE FROM memory_archive_intents WHERE source_turn_id=?1",
-                    [&turn],
+                    "DELETE FROM memory_archive_intents WHERE archive_name=?1",
+                    [&name],
                 )?;
             } else {
                 tx.execute(
-                    "UPDATE memory_archive_intents SET state='error' WHERE source_turn_id=?1",
-                    [&turn],
+                    "UPDATE memory_archive_intents SET state='error' WHERE archive_name=?1",
+                    [&name],
                 )?;
             }
             count += 1;
         }
         let mut cleanup_statement = tx.prepare(
-            "SELECT source_turn_id, archive_name FROM memory_archive_intents WHERE state='cleanup-pending'",
+            "SELECT archive_name FROM memory_archive_intents WHERE state='cleanup-pending'",
         )?;
         let cleanup_rows = cleanup_statement
-            .query_map([], |row| {
-                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
-            })?
+            .query_map([], |row| row.get::<_, String>(0))?
             .collect::<Result<Vec<_>, _>>()?;
         drop(cleanup_statement);
-        for (turn, name) in cleanup_rows {
+        for name in cleanup_rows {
             let path = root.join(&name);
             if path.exists() {
                 let metadata = fs::symlink_metadata(&path).map_err(|error| ioerr(&path, error))?;
@@ -312,13 +410,10 @@ impl Store {
                 }
                 fs::remove_file(&path).map_err(|error| ioerr(&path, error))?;
             }
+            tx.execute("DELETE FROM memory_archives WHERE archive_name=?1", [&name])?;
             tx.execute(
-                "DELETE FROM memory_archives WHERE source_turn_id=?1",
-                [&turn],
-            )?;
-            tx.execute(
-                "DELETE FROM memory_archive_intents WHERE source_turn_id=?1",
-                [&turn],
+                "DELETE FROM memory_archive_intents WHERE archive_name=?1",
+                [&name],
             )?;
             count += 1;
         }
@@ -330,11 +425,27 @@ impl Store {
         archive_root: &Path,
         source_turn_id: Uuid,
     ) -> Result<Vec<u8>, StoreError> {
+        self.read_archive(archive_root, source_turn_id, TURN_KIND)
+    }
+    /// The retained raw provider frames of one turn as NDJSON; see `archive_memory_raw_frames`.
+    pub fn read_memory_raw_frames(
+        &self,
+        archive_root: &Path,
+        source_turn_id: Uuid,
+    ) -> Result<Vec<u8>, StoreError> {
+        self.read_archive(archive_root, source_turn_id, RAW_FRAMES_KIND)
+    }
+    fn read_archive(
+        &self,
+        archive_root: &Path,
+        source_turn_id: Uuid,
+        kind: &str,
+    ) -> Result<Vec<u8>, StoreError> {
         let root = validate_archive_root(archive_root)?;
         let connection = self.lock()?;
         let archive: (String, String, i64, i64) = connection.query_row(
-            "SELECT archive_name,source_hash,compressed_bytes,uncompressed_bytes FROM memory_archives WHERE source_turn_id=?1",
-            [source_turn_id.to_string()],
+            "SELECT archive_name,source_hash,compressed_bytes,uncompressed_bytes FROM memory_archives WHERE source_turn_id=?1 AND source_kind=?2",
+            params![source_turn_id.to_string(), kind],
             |row| Ok((row.get(0)?,row.get(1)?,row.get(2)?,row.get(3)?)),
         ).optional()?.ok_or_else(|| invalid("memory source", "archive was not found"))?;
         let path = root.join(&archive.0);
@@ -486,7 +597,7 @@ impl Store {
     ) -> Result<MemorySummaryJob, StoreError> {
         let mut c = self.lock()?;
         let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let archived = archive_from_tx(&tx, a.source_turn_id)?;
+        let archived = archive_from_tx(&tx, a.source_turn_id, TURN_KIND)?;
         if archived.project_id != a.project_id || archived.source_hash != a.source_hash {
             return Err(invalid(
                 "memory archive",
@@ -675,7 +786,7 @@ impl Store {
             if current.as_deref() != Some(name) {
                 return Err(invalid("memory cleanup", "preview is stale"));
             }
-            tx.execute("INSERT OR REPLACE INTO memory_archive_intents(source_turn_id,source_hash,project_id,scope_key,archive_name,compressed_bytes,uncompressed_bytes,truncated,state,created_at) SELECT source_turn_id,source_hash,project_id,scope_key,archive_name,compressed_bytes,uncompressed_bytes,truncated,'cleanup-pending',created_at FROM memory_archives WHERE scope_key=?1 AND source_hash=?2", params![scope_key(preview.project_id), hash])?;
+            tx.execute("INSERT OR REPLACE INTO memory_archive_intents(source_turn_id,source_kind,source_hash,project_id,scope_key,archive_name,compressed_bytes,uncompressed_bytes,truncated,state,created_at) SELECT source_turn_id,source_kind,source_hash,project_id,scope_key,archive_name,compressed_bytes,uncompressed_bytes,truncated,'cleanup-pending',created_at FROM memory_archives WHERE scope_key=?1 AND source_hash=?2", params![scope_key(preview.project_id), hash])?;
         }
         tx.commit()?;
         drop(c);
@@ -709,6 +820,49 @@ impl Store {
     }
 }
 
+/// Builds the bounded NDJSON body: the header that keys the archive to its turn, each redacted
+/// frame that still fits under the cap with room for the trailer, and the trailer whenever a
+/// frame was dropped here or by the daemon's capture. Returns the body and the dropped count.
+fn raw_frames_source(
+    input: ArchiveMemoryRawFramesInput,
+    cap: u64,
+) -> Result<(Vec<u8>, u64), StoreError> {
+    let limit = usize::try_from(cap).map_err(|_| invalid("memory source", "invalid source cap"))?;
+    let trailer = |dropped: u64| {
+        let mut line =
+            json!({"type":"lazoo-raw-frames-truncated","droppedFrames":dropped,"limitBytes":cap})
+                .to_string();
+        line.push('\n');
+        line
+    };
+    let mut source =
+        json!({"type":"lazoo-raw-frames","version":1,"sourceTurnId":input.source_turn_id})
+            .to_string();
+    source.push('\n');
+    // Reserve the widest trailer up front so appending it can never breach the cap.
+    let reserve = trailer(u64::MAX).len();
+    if source.len() + reserve > limit {
+        return Err(invalid(
+            "memory source",
+            "configured byte cap cannot hold the raw-frame header and trailer",
+        ));
+    }
+    let mut dropped = input.dropped_frames;
+    for mut frame in input.frames {
+        redact_value(&mut frame);
+        let line = frame.to_string();
+        if source.len() + line.len() + 1 + reserve > limit {
+            dropped += 1;
+            continue;
+        }
+        source.push_str(&line);
+        source.push('\n');
+    }
+    if dropped > 0 {
+        source.push_str(&trailer(dropped));
+    }
+    Ok((source.into_bytes(), dropped))
+}
 fn turn_scope(s: &Store, id: Uuid) -> Result<Option<Uuid>, StoreError> {
     let c = s.lock()?;
     let x:Option<String>=c.query_row("SELECT c.project_id FROM conversation_turns t JOIN conversations c ON c.id=t.conversation_id WHERE t.id=?1",[id.to_string()],|r|r.get(0)).optional()?.flatten();
@@ -792,13 +946,13 @@ fn insert_record(
     }
     let archived: Option<String> = tx
         .query_row(
-            "SELECT source_hash FROM memory_archives WHERE source_turn_id=?1",
+            "SELECT source_hash FROM memory_archives WHERE source_turn_id=?1 AND source_kind='turn'",
             [i.source_turn_id.to_string()],
             |r| r.get(0),
         )
         .optional()?;
     if archived.as_deref() != Some(&i.source_hash)
-        || archive_scope(tx, i.source_turn_id)? != i.project_id
+        || archive_scope(tx, i.source_turn_id, TURN_KIND)? != i.project_id
     {
         return Err(invalid("memory source", "archive/hash missing"));
     }
@@ -860,23 +1014,37 @@ fn record_from(x: RawMemoryRecord) -> Result<MemoryRecord, StoreError> {
 fn record_by_id(tx: &rusqlite::Transaction<'_>, id: Uuid) -> Result<MemoryRecord, StoreError> {
     record_from(tx.query_row("SELECT id,revision,project_id,source_turn_id,source_hash,record_type,text,confidence,importance,created_at,active,superseded_at FROM memory_records WHERE id=?1",[id.to_string()],raw_record)?)
 }
+fn archive_name(kind: &str, scope: Option<Uuid>, hash: &str) -> String {
+    let scope = scope_filename(scope);
+    if kind == RAW_FRAMES_KIND {
+        format!("{scope}-raw-{hash}.zst")
+    } else {
+        format!("{scope}-{hash}.zst")
+    }
+}
 fn archive_from_tx(
     tx: &rusqlite::Transaction<'_>,
     id: Uuid,
+    kind: &str,
 ) -> Result<MemorySourceArchive, StoreError> {
-    tx.query_row("SELECT source_turn_id,source_hash,project_id,archive_name,compressed_bytes,uncompressed_bytes,truncated,created_at FROM memory_archives WHERE source_turn_id=?1",[id.to_string()],|r|Ok(MemorySourceArchive{source_turn_id:Uuid::parse_str(&r.get::<_,String>(0)?).unwrap(),source_hash:r.get(1)?,project_id:r.get::<_,Option<String>>(2)?.map(|v|Uuid::parse_str(&v).unwrap()),archive_name:r.get(3)?,compressed_bytes:r.get::<_,i64>(4)?.cast_unsigned(),uncompressed_bytes:r.get::<_,i64>(5)?.cast_unsigned(),truncated:r.get::<_,i64>(6)?==1,created_at:r.get(7)?})).map_err(StoreError::from)
+    tx.query_row("SELECT source_turn_id,source_hash,project_id,archive_name,compressed_bytes,uncompressed_bytes,truncated,created_at FROM memory_archives WHERE source_turn_id=?1 AND source_kind=?2",params![id.to_string(),kind],|r|Ok(MemorySourceArchive{source_turn_id:Uuid::parse_str(&r.get::<_,String>(0)?).unwrap(),source_hash:r.get(1)?,project_id:r.get::<_,Option<String>>(2)?.map(|v|Uuid::parse_str(&v).unwrap()),archive_name:r.get(3)?,compressed_bytes:r.get::<_,i64>(4)?.cast_unsigned(),uncompressed_bytes:r.get::<_,i64>(5)?.cast_unsigned(),truncated:r.get::<_,i64>(6)?==1,created_at:r.get(7)?})).map_err(StoreError::from)
 }
 fn archive_from_tx_optional(
     tx: &rusqlite::Transaction<'_>,
     id: Uuid,
+    kind: &str,
 ) -> Result<Option<MemorySourceArchive>, StoreError> {
-    tx.query_row("SELECT source_turn_id,source_hash,project_id,archive_name,compressed_bytes,uncompressed_bytes,truncated,created_at FROM memory_archives WHERE source_turn_id=?1", [id.to_string()], |r| Ok(MemorySourceArchive { source_turn_id: Uuid::parse_str(&r.get::<_, String>(0)?).unwrap(), source_hash: r.get(1)?, project_id: r.get::<_, Option<String>>(2)?.map(|value| Uuid::parse_str(&value).unwrap()), archive_name: r.get(3)?, compressed_bytes: r.get::<_, i64>(4)?.cast_unsigned(), uncompressed_bytes: r.get::<_, i64>(5)?.cast_unsigned(), truncated: r.get::<_, i64>(6)? == 1, created_at: r.get(7)? })).optional().map_err(StoreError::from)
+    tx.query_row("SELECT source_turn_id,source_hash,project_id,archive_name,compressed_bytes,uncompressed_bytes,truncated,created_at FROM memory_archives WHERE source_turn_id=?1 AND source_kind=?2", params![id.to_string(), kind], |r| Ok(MemorySourceArchive { source_turn_id: Uuid::parse_str(&r.get::<_, String>(0)?).unwrap(), source_hash: r.get(1)?, project_id: r.get::<_, Option<String>>(2)?.map(|value| Uuid::parse_str(&value).unwrap()), archive_name: r.get(3)?, compressed_bytes: r.get::<_, i64>(4)?.cast_unsigned(), uncompressed_bytes: r.get::<_, i64>(5)?.cast_unsigned(), truncated: r.get::<_, i64>(6)? == 1, created_at: r.get(7)? })).optional().map_err(StoreError::from)
 }
-fn archive_scope(tx: &rusqlite::Transaction<'_>, id: Uuid) -> Result<Option<Uuid>, StoreError> {
+fn archive_scope(
+    tx: &rusqlite::Transaction<'_>,
+    id: Uuid,
+    kind: &str,
+) -> Result<Option<Uuid>, StoreError> {
     let value: Option<String> = tx
         .query_row(
-            "SELECT project_id FROM memory_archives WHERE source_turn_id=?1",
-            [id.to_string()],
+            "SELECT project_id FROM memory_archives WHERE source_turn_id=?1 AND source_kind=?2",
+            params![id.to_string(), kind],
             |row| row.get(0),
         )
         .optional()?

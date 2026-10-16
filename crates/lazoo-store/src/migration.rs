@@ -67,6 +67,10 @@ const MIGRATIONS: &[(u32, &str)] = &[
         18,
         include_str!("../../../migrations/0018_memory_worker.sql"),
     ),
+    (
+        19,
+        include_str!("../../../migrations/0019_memory_raw_frames.sql"),
+    ),
 ];
 
 pub fn apply_migrations(connection: &mut Connection) -> Result<(), StoreError> {
