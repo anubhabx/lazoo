@@ -94,7 +94,12 @@ try {
     }
     $failures = @($results | Where-Object { $_.exitCode -ne 0 })
     $daemon.Process.Refresh()
-    if ($failures.Count -ne 0) { throw "$($failures.Count) CLI invocations failed" }
+    if ($failures.Count -ne 0) {
+        # A client deadline names its phase on stderr (request write, response read, handshake).
+        $deadlines = @($failures | Where-Object { $_.stderr -match 'timed out' })
+        if ($deadlines.Count -ne 0) { throw "$($deadlines.Count) of $($failures.Count) failed CLI invocations hit a client deadline: $($deadlines[0].stderr.Trim())" }
+        throw "$($failures.Count) CLI invocations failed"
+    }
     if ($daemon.Process.HasExited) { throw "daemon exited during stress with $($daemon.Process.ExitCode)" }
     $status = 'PASS'
 } catch {

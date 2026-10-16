@@ -6,10 +6,10 @@ pub use memory::MemoryCommand;
 pub use memory_worker::MemoryWorkerCommand;
 pub use terminal::TerminalCommand;
 
-use std::path::PathBuf;
+use std::{io, path::PathBuf, time::Duration};
 
 use clap::{Parser, Subcommand};
-use lazoo_ipc::{IpcError, PipeClient};
+use lazoo_ipc::{AuthenticatedConnection, IpcError, PipeClient};
 use lazoo_protocol::{
     ActivationPolicy, ApprovalDecision, ApprovalState, AuthorityMode, CheckoutMode,
     EmployeeCheckoutPolicy, InboxFilter, IncidentEscalation, IncidentPriority, IncidentState,
@@ -19,7 +19,17 @@ use lazoo_protocol::{
 use lazoo_runtime::{DataRoot, Installation, RuntimeError};
 use serde_json::{Value, json};
 use thiserror::Error;
+use tokio::time::timeout;
 use uuid::Uuid;
+
+/// Mirrors the daemon's `REQUEST_TIMEOUT`: a request it has not read within 5 s is dropped there.
+const REQUEST_WRITE_TIMEOUT: Duration = Duration::from_secs(5);
+/// Read-only ledger queries. Kept under the stress harness's 30 s kill so a stalled daemon is a
+/// recorded, labelled failure instead of an opaque harness kill.
+const SHORT_RESPONSE_TIMEOUT: Duration = Duration::from_secs(20);
+/// Every other RPC. Above the 300 s provider turn deadline (`lazoo-providers` contract) plus
+/// native start/stop; raise it only together with that deadline.
+const LONG_RESPONSE_TIMEOUT: Duration = Duration::from_secs(600);
 
 #[derive(Debug, Parser)]
 #[command(name = "lazooctl", version, about = "Lazoo local control client")]
@@ -740,11 +750,11 @@ pub async fn execute_with(cli: &Cli, mut emit: impl FnMut(String)) -> Result<(),
         method: method.to_owned(),
         params,
     };
-    connection.send_json(&request).await?;
-    let response: JsonRpcResponse = connection.receive_json().await?;
+    let response = round_trip(&mut connection, &request, response_timeout(method)).await?;
     let result = response_result(response)?;
     emit(render_result(&result, cli.json)?);
     if follows {
+        // Following events is open-ended by design: the user ends it, not a deadline.
         loop {
             let notification: Value = connection.receive_json().await?;
             let event = notification.get("params").cloned().unwrap_or(notification);
@@ -752,6 +762,39 @@ pub async fn execute_with(cli: &Cli, mut emit: impl FnMut(String)) -> Result<(),
         }
     }
     Ok(())
+}
+
+/// One bounded request/response exchange. A daemon that never reads or never answers becomes
+/// the existing `LZ-IPC` timed-out error (exit 3) with a message naming the phase.
+async fn round_trip(
+    connection: &mut AuthenticatedConnection,
+    request: &JsonRpcRequest,
+    response_deadline: Duration,
+) -> Result<JsonRpcResponse, CliError> {
+    timeout(REQUEST_WRITE_TIMEOUT, connection.send_json(request))
+        .await
+        .map_err(|_| timed_out("daemon request write timed out"))??;
+    timeout(response_deadline, connection.receive_json())
+        .await
+        .map_err(|_| timed_out("daemon response timed out"))?
+        .map_err(CliError::Ipc)
+}
+
+/// Read-only ledger queries answer from the store and get the short tier; everything else may
+/// legitimately wait on a provider turn, a probe, or a worktree and gets the long tier.
+fn response_timeout(method: &str) -> Duration {
+    match method {
+        "system.status" | "system.resources" | "system.budget" | "project.list" | "events.list"
+        | "roster.get" | "provider.list" => SHORT_RESPONSE_TIMEOUT,
+        _ => LONG_RESPONSE_TIMEOUT,
+    }
+}
+
+fn timed_out(message: &'static str) -> CliError {
+    CliError::Ipc(IpcError::Io(io::Error::new(
+        io::ErrorKind::TimedOut,
+        message,
+    )))
 }
 
 #[must_use]
@@ -1799,5 +1842,97 @@ fn parse_employee_activation_policy(value: &str) -> Result<ActivationPolicy, Str
         "manual" => Ok(ActivationPolicy::Manual),
         "notice-turns" => Ok(ActivationPolicy::NoticeTurns),
         _ => Err("expected manual or notice-turns".to_owned()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::Instant;
+
+    use lazoo_ipc::PipeServer;
+    use lazoo_runtime::OwnerSecurity;
+
+    use super::*;
+
+    /// A daemon that reads the request and never answers must surface as the labelled `LZ-IPC`
+    /// timeout (exit 3) at the deadline, not hang until a harness kills the CLI.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn stalled_daemon_response_times_out_cleanly() {
+        let temporary = tempfile::tempdir().unwrap();
+        let installation =
+            Installation::load_or_create(&DataRoot::from_path(temporary.path())).unwrap();
+        let mut server =
+            PipeServer::bind(&installation, &OwnerSecurity::current().unwrap()).unwrap();
+        let (server_side, client_side) = tokio::join!(
+            server.accept(),
+            PipeClient::connect(&installation, "lazooctl", "0.1.0")
+        );
+        let mut daemon = server_side.unwrap();
+        let mut client = client_side.unwrap();
+        let stalled = tokio::spawn(async move {
+            let received: JsonRpcRequest = daemon.receive_json().await.unwrap();
+            assert_eq!(received.method, "system.status");
+            // Keep the connection open and never reply until the test aborts this task.
+            std::future::pending::<()>().await;
+        });
+        let request = JsonRpcRequest {
+            jsonrpc: "2.0".to_owned(),
+            id: "stalled".to_owned(),
+            method: "system.status".to_owned(),
+            params: json!({}),
+        };
+
+        let started = Instant::now();
+        let error = timeout(
+            Duration::from_secs(5),
+            round_trip(&mut client, &request, Duration::from_millis(200)),
+        )
+        .await
+        .expect("a stalled daemon must not hang the CLI")
+        .unwrap_err();
+        let elapsed = started.elapsed();
+        stalled.abort();
+
+        assert!(elapsed < Duration::from_secs(2), "{elapsed:?}");
+        match &error {
+            CliError::Ipc(IpcError::Io(source)) => {
+                assert_eq!(source.kind(), io::ErrorKind::TimedOut);
+                assert_eq!(source.to_string(), "daemon response timed out");
+            }
+            other => panic!("expected an IPC timeout, got {other:?}"),
+        }
+        assert_eq!(error.exit_code(), 3);
+        assert_eq!(
+            error.to_string(),
+            "IPC I/O failed: daemon response timed out"
+        );
+    }
+
+    #[test]
+    fn response_timeout_tiers_read_only_queries_short_and_everything_else_long() {
+        for method in [
+            "system.status",
+            "system.resources",
+            "system.budget",
+            "project.list",
+            "events.list",
+            "roster.get",
+            "provider.list",
+        ] {
+            assert_eq!(response_timeout(method), SHORT_RESPONSE_TIMEOUT, "{method}");
+        }
+        for method in [
+            "provider.smoke",
+            "task.create",
+            "session.warm",
+            "roster.refresh",
+        ] {
+            assert_eq!(response_timeout(method), LONG_RESPONSE_TIMEOUT, "{method}");
+        }
+        // The daemon's REQUEST_TIMEOUT, the stress harness's 30 s kill, and the 300 s provider
+        // turn deadline are the three fixed points these tiers are placed against.
+        assert_eq!(REQUEST_WRITE_TIMEOUT, Duration::from_secs(5));
+        assert!(SHORT_RESPONSE_TIMEOUT < Duration::from_secs(30));
+        assert!(LONG_RESPONSE_TIMEOUT > Duration::from_secs(300));
     }
 }
