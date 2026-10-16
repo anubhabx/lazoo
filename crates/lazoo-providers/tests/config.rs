@@ -13,12 +13,12 @@ model = "gpt-5-codex"
 url = "https://mcp.context7.com/mcp"
 
 [mcp_servers.context7.http_headers]
-CONTEXT7_API_KEY = "ctx7sk-SECRET-ONE"
+CONTEXT7_API_KEY = "SECRET-ONE"
 
 [mcp_servers.firecrawl]
 command = "powershell"
 args = ["-NoProfile", "-File", 'C:\Users\me\.codex\bin\firecrawl-mcp.ps1']
-env = { FIRECRAWL_API_KEY = "fc-SECRET-TWO" }
+env = { FIRECRAWL_API_KEY = "SECRET-TWO" }
 
 [mcp_servers.paper]
 url = "http://127.0.0.1:29979/mcp"
@@ -31,7 +31,7 @@ startup_timeout_sec = 120.0
 const CLAUDE_CONFIG: &str = r#"{
   "numStartups": 3,
   "mcpServers": {
-    "context7": {"type": "http", "url": "https://MCP.context7.com/mcp/", "headers": {"CONTEXT7_API_KEY": "ctx7sk-SECRET-THREE"}},
+    "context7": {"type": "http", "url": "https://MCP.context7.com/mcp/", "headers": {"CONTEXT7_API_KEY": "SECRET-THREE"}},
     "paper": {"type": "http", "url": "http://127.0.0.1:31000/mcp?token=SECRET-FOUR"},
     "obsidian": {"command": "npx", "args": ["obsidian-mcp"], "env": {"OBSIDIAN_TOKEN": "SECRET-FIVE"}},
     "broken": 7

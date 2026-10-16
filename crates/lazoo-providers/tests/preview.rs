@@ -11,7 +11,7 @@ const CODEX_CONFIG: &str = r#"
 url = "https://mcp.context7.com/mcp"
 
 [mcp_servers.context7.http_headers]
-CONTEXT7_API_KEY = "ctx7sk-SECRET-ONE"
+CONTEXT7_API_KEY = "SECRET-ONE"
 
 [mcp_servers.paper]
 url = "http://127.0.0.1:29979/mcp"
@@ -22,7 +22,7 @@ startup_timeout_sec = 120.0
 
 const CLAUDE_CONFIG: &str = r#"{
   "mcpServers": {
-    "context7": {"type": "http", "url": "https://MCP.context7.com/mcp/", "headers": {"CONTEXT7_API_KEY": "ctx7sk-SECRET-THREE"}},
+    "context7": {"type": "http", "url": "https://MCP.context7.com/mcp/", "headers": {"CONTEXT7_API_KEY": "SECRET-THREE"}},
     "paper": {"type": "http", "url": "http://127.0.0.1:31000/mcp?token=SECRET-FOUR"},
     "obsidian": {"command": "npx", "args": ["obsidian-mcp"], "env": {"OBSIDIAN_TOKEN": "SECRET-FIVE"}}
   }
