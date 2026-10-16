@@ -11042,15 +11042,24 @@ async fn the_core_scenario_runs_end_to_end_on_the_deterministic_provider() {
     assert_eq!(archived["archive"]["truncated"], false);
     assert_eq!(archived["job"]["sourceTurnId"], json!(mira_turn_id));
     assert_eq!(archived["job"]["state"], "pending");
+    let archive_root = temporary.path().join("data").join("memory-archives");
     assert!(
-        temporary
-            .path()
-            .join("data")
-            .join("memory-archives")
+        archive_root
             .join(archived["archive"]["archiveName"].as_str().unwrap())
             .is_file(),
         "the compressed source archive is on disk: {archived}"
     );
+    // The same read the worker makes: it refuses a file whose size, zstd payload, or SHA-256
+    // differs from the recorded row, so this is the archive's integrity check, not a citation.
+    let archived_source: serde_json::Value = serde_json::from_slice(
+        &harness
+            .store
+            .read_memory_source(&archive_root, mira_turn_id)
+            .expect("the archive verifies against its recorded hash and sizes"),
+    )
+    .unwrap();
+    assert_eq!(archived_source["id"], json!(mira_turn_id));
+    assert_eq!(archived_source["taskId"], json!(mira_task));
     let summary_text = "Mira fixed the parser in 0123abcd; cargo test -p parser passed";
     let mut summary_events = completed_turn_events("completed");
     if let Some(ProviderEvent::TurnCompleted { output, .. }) = summary_events.last_mut() {
