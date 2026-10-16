@@ -2,28 +2,28 @@
   "status": "PASS",
   "schemaVersion": 18,
   "mode": "deterministic-fake-transport",
-  "startedAt": "2026-10-16T21:39:18.7958875Z",
-  "durationMs": 20048,
+  "startedAt": "2026-10-16T21:57:14.6299696Z",
+  "durationMs": 20193,
   "commands": [
     {
       "command": "cargo test -p lazood --test daemon the_core_scenario_runs_end_to_end_on_the_deterministic_provider --locked -- --exact",
       "exitCode": 0,
-      "durationMs": 2464
+      "durationMs": 2468
     },
     {
       "command": "cargo test -p lazood --test daemon project_task_dispatch_uses_an_isolated_worktree_and_preserves_dirty_user_files --locked -- --exact",
       "exitCode": 0,
-      "durationMs": 1229
+      "durationMs": 1216
     },
     {
       "command": "cargo test -p lazood --test daemon message_restart_reconciles_an_uncertain_attempt --locked -- --exact",
       "exitCode": 0,
-      "durationMs": 722
+      "durationMs": 704
     },
     {
       "command": "cargo test -p lazoo-store --test store store_enables_wal_foreign_keys_and_schema_version --locked -- --exact",
       "exitCode": 0,
-      "durationMs": 15530
+      "durationMs": 15684
     },
     {
       "command": "git diff --quiet and git diff --cached --quiet -- apps/lazoo-desktop",
