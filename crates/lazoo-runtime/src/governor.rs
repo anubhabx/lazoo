@@ -128,10 +128,13 @@ impl InfrastructureGovernor {
             )
         }
         .map_err(GovernorError::Windows)?;
+        // Freed on every exit path, including a mutex failure or a lock timeout before the job
+        // exists; `CreateMutexW` and `CreateJobObjectW` are its only readers.
+        let descriptor = DescriptorGuard(descriptor);
         let attributes = SECURITY_ATTRIBUTES {
             nLength: u32::try_from(size_of::<SECURITY_ATTRIBUTES>())
                 .expect("security attributes exceed u32"),
-            lpSecurityDescriptor: descriptor.0.cast::<c_void>(),
+            lpSecurityDescriptor: descriptor.0.0.cast::<c_void>(),
             bInheritHandle: false.into(),
         };
         let initialization_name = HSTRING::from(&initialization_name);
@@ -143,9 +146,7 @@ impl InfrastructureGovernor {
         let handle = unsafe { CreateJobObjectW(Some(&raw const attributes), &wide_name) }
             .map_err(GovernorError::Windows);
         let created = unsafe { GetLastError() } != ERROR_ALREADY_EXISTS;
-        unsafe {
-            let _ = LocalFree(Some(HLOCAL(descriptor.0.cast::<c_void>())));
-        }
+        drop(descriptor);
         let handle = handle?;
         let governor = Self { handle, name };
 
@@ -319,6 +320,17 @@ impl Drop for HandleGuard {
     fn drop(&mut self) {
         unsafe {
             let _ = CloseHandle(self.0);
+        }
+    }
+}
+
+/// A `LocalAlloc`'d security descriptor, freed when dropped.
+struct DescriptorGuard(PSECURITY_DESCRIPTOR);
+
+impl Drop for DescriptorGuard {
+    fn drop(&mut self) {
+        unsafe {
+            let _ = LocalFree(Some(HLOCAL(self.0.0.cast::<c_void>())));
         }
     }
 }

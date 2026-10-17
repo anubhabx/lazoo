@@ -45,3 +45,28 @@ fn cli_deadlines_acceptance_contract_is_deterministic_and_backend_only() {
         );
     }
 }
+
+/// The stress harness keeps the stderr of exit-0 calls, because a governor initialization-lock
+/// timeout degrades a call to un-enrolled with exit 0 and only a stderr line, and it classifies a
+/// client deadline by the LZ-IPC phase message rather than by any `timed out` text, which the
+/// governor's non-fatal line would also match.
+#[test]
+fn cli_stress_harness_keeps_exit_zero_stderr_and_classifies_ipc_deadlines_only() {
+    let repository = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let script = std::fs::read_to_string(repository.join("scripts/test-cli-stress.ps1"))
+        .expect("CLI stress script");
+
+    for required in [
+        "stderrOnSuccess = @($results | Where-Object { $_.exitCode -eq 0 -and $_.stderr.Trim() -ne '' }",
+        "-match 'IPC I/O failed: .*timed out'",
+    ] {
+        assert!(
+            script.contains(required),
+            "stress script must contain {required}"
+        );
+    }
+    assert!(
+        !script.contains("-match 'timed out'"),
+        "stress script must not classify a deadline by bare `timed out` text"
+    );
+}

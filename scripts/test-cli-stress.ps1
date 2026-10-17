@@ -95,8 +95,9 @@ try {
     $failures = @($results | Where-Object { $_.exitCode -ne 0 })
     $daemon.Process.Refresh()
     if ($failures.Count -ne 0) {
-        # A client deadline names its phase on stderr (request write, response read, handshake).
-        $deadlines = @($failures | Where-Object { $_.stderr -match 'timed out' })
+        # A client deadline is an LZ-IPC error whose stderr names its phase (request write, response
+        # read, handshake). The governor's non-fatal lock-timeout line is not one and must not match.
+        $deadlines = @($failures | Where-Object { $_.stderr -match 'IPC I/O failed: .*timed out' })
         if ($deadlines.Count -ne 0) { throw "$($deadlines.Count) of $($failures.Count) failed CLI invocations hit a client deadline: $($deadlines[0].stderr.Trim())" }
         throw "$($failures.Count) CLI invocations failed"
     }
@@ -118,6 +119,9 @@ try {
         binarySha256 = $binaryHashes
         successful = @($results | Where-Object { $_.exitCode -eq 0 }).Count
         failures = @($results | Where-Object { $_.exitCode -ne 0 } | Select-Object -First 50)
+        # A governor initialization-lock timeout degrades the call to un-enrolled with exit 0 and only
+        # a stderr line; keep that phase so it reaches the manifest instead of vanishing inside a PASS.
+        stderrOnSuccess = @($results | Where-Object { $_.exitCode -eq 0 -and $_.stderr.Trim() -ne '' } | Select-Object -First 50 -Property arguments, durationMs, stderr)
         exitCodes = @($results | Group-Object exitCode | ForEach-Object { [ordered]@{ code = [int]$_.Name; count = $_.Count } })
         failure = $failure; daemonStdout = $daemonStdout; daemonStderr = $daemonStderr
         timeoutDiagnostic = $script:timeoutDiagnostic
