@@ -102,6 +102,53 @@ fn opencode_launches_acp_for_the_requested_workspace() {
     assert_eq!(command.executable, PathBuf::from(r"C:\Tools\opencode.exe"));
     assert_eq!(command.args, vec![OsString::from("acp")]);
     assert_eq!(command.cwd, PathBuf::from(r"C:\repo"));
+    assert!(
+        command.env.is_empty(),
+        "a request with no permission mode never widens OpenCode's permissions"
+    );
+}
+
+#[test]
+fn opencode_launch_is_prompt_free_only_under_full_autonomy() {
+    let executable = Path::new(r"C:\Tools\opencode.exe");
+    let key = OsString::from("OPENCODE_PERMISSION");
+
+    // `auto` is the permission mode the daemon derives from full autonomy.
+    let autonomous = OpenCodeAdapter::command(
+        executable,
+        &SessionRequest::new(r"C:\repo").with_permission_mode("auto"),
+    );
+    assert_eq!(autonomous.args, vec![OsString::from("acp")]);
+    assert_eq!(
+        autonomous.env.get(&key),
+        Some(&OsString::from(r#"{"*":"allow"}"#))
+    );
+    assert_eq!(autonomous.env.len(), 1, "no other variable is injected");
+    let parsed: serde_json::Value =
+        serde_json::from_str(&autonomous.env[&key].to_string_lossy()).unwrap();
+    assert_eq!(parsed, serde_json::json!({"*": "allow"}));
+
+    for mode in [
+        "ask",
+        "accept-edits",
+        "untrusted",
+        "plan",
+        "default",
+        "dontAsk",
+        "full-autonomy",
+        "AUTO",
+        "",
+    ] {
+        let command = OpenCodeAdapter::command(
+            executable,
+            &SessionRequest::new(r"C:\repo").with_permission_mode(mode),
+        );
+        assert!(
+            command.env.is_empty(),
+            "permission mode {mode:?} must not carry OPENCODE_PERMISSION"
+        );
+        assert_eq!(command.args, vec![OsString::from("acp")]);
+    }
 }
 
 #[test]

@@ -403,7 +403,7 @@ impl App {
                 if turn.task_id.is_some() {
                     "the selected provider cannot enforce this task authority ceiling"
                 } else {
-                    "conversation turn delivery supports Codex, and Claude Code under full autonomy"
+                    "conversation turn delivery supports Codex, and Claude Code and OpenCode under full autonomy"
                 },
                 turn.id,
             ));

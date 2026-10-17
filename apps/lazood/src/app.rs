@@ -1370,20 +1370,24 @@ fn require_session_idempotency_key(value: &str) -> Result<(), RpcError> {
 
 /// Whether a provider enforces a task authority ceiling natively, so Lazoo may deliver turns
 /// and dispatch tasks to it. Codex: its approval requests are bridged into the schema-8 ledger
-/// under every authority. Claude Code: only `full-autonomy`, which maps to its `auto`
-/// permission mode, the one mode in which no prompt can occur; under `ask` and
-/// `self-decision` its prompts stay inside its own stream where Lazoo cannot answer them.
-/// Antigravity has no prompt-free mode, and the ACP providers (`OpenCode`, Grok Build) have
-/// every permission request cancelled by the adapter, so they stay refused until approval
-/// bridging exists.
+/// under every authority. Claude Code and `OpenCode`: only `full-autonomy`, which maps to the
+/// `auto` permission mode, the one mode in which no prompt can occur (Claude Code's `auto`
+/// permission mode; for `OpenCode` the adapter launches `opencode acp` with an inline
+/// allow-all `OPENCODE_PERMISSION` block). Under `ask` and `self-decision` their prompts stay
+/// where Lazoo cannot answer them, and native allow rules could bypass the approval observer,
+/// so both stay refused. Antigravity has no prompt-free mode, and Grok Build (ACP) has every
+/// permission request cancelled by the adapter, so they stay refused until approval bridging
+/// exists.
 pub(crate) const fn provider_enforces_authority(
     provider: ProviderKind,
     authority: AuthorityMode,
 ) -> bool {
     match provider {
         ProviderKind::Codex => true,
-        ProviderKind::ClaudeCode => matches!(authority, AuthorityMode::FullAutonomy),
-        ProviderKind::OpenCode | ProviderKind::GrokBuild | ProviderKind::Antigravity => false,
+        ProviderKind::ClaudeCode | ProviderKind::OpenCode => {
+            matches!(authority, AuthorityMode::FullAutonomy)
+        }
+        ProviderKind::GrokBuild | ProviderKind::Antigravity => false,
     }
 }
 
