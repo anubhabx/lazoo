@@ -524,6 +524,101 @@ fn claude_api_failures_never_normalize_as_successful_turns() {
     }));
 }
 
+async fn wait_for_file(path: PathBuf) {
+    tokio::time::timeout(std::time::Duration::from_secs(15), async {
+        while !path.exists() {
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .unwrap_or_else(|_| panic!("{} was not written", path.display()));
+}
+
+fn read_host_pid(directory: &Path) -> u32 {
+    fs::read_to_string(directory.join("host-pid"))
+        .unwrap()
+        .trim()
+        .parse()
+        .unwrap()
+}
+
+fn host_is_running(pid: u32) -> bool {
+    let output = std::process::Command::new("tasklist")
+        .args(["/FI", &format!("PID eq {pid}"), "/NH", "/FO", "CSV"])
+        .output()
+        .unwrap();
+    String::from_utf8_lossy(&output.stdout).contains(&format!("\"{pid}\""))
+}
+
+async fn assert_host_gone(pid: u32) {
+    tokio::time::timeout(std::time::Duration::from_secs(10), async {
+        while host_is_running(pid) {
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+    })
+    .await
+    .unwrap_or_else(|_| panic!("fake host {pid} is still running"));
+}
+
+#[tokio::test]
+async fn claude_cancel_during_active_turn_kills_host_and_reports_cancelled() {
+    let cwd = tempfile::tempdir().unwrap();
+    let session = ClaudeAdapter::with_executable(fake_claude())
+        .start(&SessionRequest::new(cwd.path()).with_model("stall-turn"))
+        .await
+        .unwrap();
+    let turn = TurnRequest::new("fixture");
+    let cancel = async {
+        wait_for_file(cwd.path().join("turn-started")).await;
+        session.cancel().await.unwrap();
+    };
+
+    let (events, ()) = tokio::time::timeout(std::time::Duration::from_secs(10), async {
+        tokio::join!(session.turn(&turn), cancel)
+    })
+    .await
+    .expect("a cancelled turn ends long before the fake's 30 s stall");
+
+    let events = events.unwrap();
+    assert!(events.iter().any(|event| {
+        matches!(event, ProviderEvent::TextDelta { text, .. } if text == "before cancel")
+    }));
+    assert!(events.iter().any(|event| {
+        matches!(event, ProviderEvent::Cancelled { provider: ProviderKind::ClaudeCode, session_id, .. }
+            if *session_id == session.id())
+    }));
+    assert!(!events.iter().any(|event| {
+        matches!(
+            event,
+            ProviderEvent::TurnCompleted { .. } | ProviderEvent::Error { .. }
+        )
+    }));
+    session.stop().await.unwrap();
+    assert_host_gone(read_host_pid(cwd.path())).await;
+}
+
+#[tokio::test]
+async fn claude_cancel_without_an_active_turn_is_a_no_op_that_keeps_the_host() {
+    let cwd = tempfile::tempdir().unwrap();
+    let session = ClaudeAdapter::with_executable(fake_claude())
+        .start(&SessionRequest::new(cwd.path()).with_model("stall-turn"))
+        .await
+        .unwrap();
+    wait_for_file(cwd.path().join("host-pid")).await;
+    let pid = read_host_pid(cwd.path());
+    assert!(host_is_running(pid));
+
+    session.cancel().await.unwrap();
+    session.cancel().await.unwrap();
+
+    assert!(
+        host_is_running(pid),
+        "an idle cancel must not kill the host"
+    );
+    session.stop().await.unwrap();
+    assert_host_gone(pid).await;
+}
+
 #[tokio::test]
 #[ignore = "requires an installed Claude Code CLI"]
 async fn live_claude_non_model_probe() {
