@@ -1,9 +1,19 @@
-use std::{process::Command, time::Duration};
+use std::{
+    process::Command,
+    time::{Duration, Instant},
+};
 use uuid::Uuid;
+use windows::{
+    Win32::{
+        Foundation::CloseHandle,
+        System::Threading::{CreateMutexW, ReleaseMutex},
+    },
+    core::HSTRING,
+};
 
 use lazoo_runtime::{
-    BackgroundQueue, BackgroundRefusal, BudgetSample, RollingBudget, RollingBudgetError,
-    WindowState,
+    BackgroundQueue, BackgroundRefusal, BudgetSample, GovernorError, RollingBudget,
+    RollingBudgetError, WindowState,
 };
 
 fn sample(seconds: u64, cpu_seconds: u64) -> BudgetSample {
@@ -36,6 +46,57 @@ fn native_provider_descendant_silently_breaks_away_in_child_helper() {
         .args([
             "--exact",
             "native_provider_descendant_silently_breaks_away_in_child_helper",
+            "--nocapture",
+        ])
+        .env("LAZOO_GOVERNOR_CHILD", "1")
+        .status()
+        .expect("governor child helper starts");
+    assert!(status.success(), "child helper returned {status}");
+}
+
+/// A main that cannot take the initialization lock gives up after about five seconds with a
+/// named error instead of waiting forever. The attach runs in a child process so that an
+/// unexpected success never enrolls the test process in the 20% capped job.
+#[test]
+fn initialization_lock_held_elsewhere_times_out_in_child_helper() {
+    if std::env::var_os("LAZOO_GOVERNOR_CHILD").is_some() {
+        let installation_id = Uuid::new_v4();
+        let name = HSTRING::from(format!(
+            "Local\\Lazoo.Infrastructure.Init.{installation_id}"
+        ));
+        // This thread owns the lock for the whole test. A Windows mutex is re-entrant for its
+        // owner, so the attach must run on another thread to be made to wait.
+        let held = unsafe { CreateMutexW(None, true, &name) }.expect("init lock is created");
+        let started = Instant::now();
+        let outcome = std::thread::spawn(move || {
+            lazoo_runtime::InfrastructureGovernor::attach_current(installation_id.to_string())
+        })
+        .join()
+        .expect("attach thread finishes");
+        let elapsed = started.elapsed();
+        let error = outcome.expect_err("attach must not enroll while another main holds the lock");
+        assert!(
+            matches!(error, GovernorError::InitializationTimedOut),
+            "{error:?}"
+        );
+        assert_eq!(
+            error.to_string(),
+            "infrastructure job initialization lock timed out"
+        );
+        assert!(
+            elapsed >= Duration::from_millis(4_500) && elapsed < Duration::from_secs(30),
+            "{elapsed:?}"
+        );
+        unsafe {
+            let _ = ReleaseMutex(held);
+            let _ = CloseHandle(held);
+        }
+        return;
+    }
+    let status = Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            "initialization_lock_held_elsewhere_times_out_in_child_helper",
             "--nocapture",
         ])
         .env("LAZOO_GOVERNOR_CHILD", "1")

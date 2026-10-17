@@ -12,7 +12,7 @@ use windows::{
     Win32::{
         Foundation::{
             CloseHandle, ERROR_ALREADY_EXISTS, ERROR_NOT_SUPPORTED, GetLastError, HANDLE, HLOCAL,
-            LocalFree, WAIT_ABANDONED, WAIT_OBJECT_0,
+            LocalFree, WAIT_ABANDONED, WAIT_OBJECT_0, WAIT_TIMEOUT,
         },
         Security::{
             Authorization::{
@@ -31,8 +31,8 @@ use windows::{
                 SetInformationJobObject,
             },
             Threading::{
-                CreateMutexW, GetCurrentProcess, INFINITE, OpenProcess,
-                PROCESS_QUERY_LIMITED_INFORMATION, ReleaseMutex, WaitForSingleObject,
+                CreateMutexW, GetCurrentProcess, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
+                ReleaseMutex, WaitForSingleObject,
             },
         },
     },
@@ -51,6 +51,10 @@ const LONG_WINDOW: Duration = Duration::from_mins(5);
 // immediately before a window boundary for interpolation.
 const SHORT_SAMPLE_CAPACITY: usize = 32;
 const LONG_SAMPLE_CAPACITY: usize = 302;
+/// How long a main waits for another main to finish creating and configuring the shared job.
+/// Configuring takes milliseconds; after this the caller runs un-enrolled and reports it, since
+/// every caller already treats governor errors as non-fatal.
+const INITIALIZATION_LOCK_TIMEOUT_MS: u32 = 5_000;
 
 /// A Windows Job Object shared by the daemon, keeper, and CLI for one installation.
 ///
@@ -97,6 +101,8 @@ pub enum GovernorError {
     InvalidInstallationId,
     #[error("could not determine the current Windows owner for the infrastructure job")]
     OwnerLookup,
+    #[error("infrastructure job initialization lock timed out")]
+    InitializationTimedOut,
 }
 
 impl InfrastructureGovernor {
@@ -122,10 +128,13 @@ impl InfrastructureGovernor {
             )
         }
         .map_err(GovernorError::Windows)?;
+        // Freed on every exit path, including a mutex failure or a lock timeout before the job
+        // exists; `CreateMutexW` and `CreateJobObjectW` are its only readers.
+        let descriptor = DescriptorGuard(descriptor);
         let attributes = SECURITY_ATTRIBUTES {
             nLength: u32::try_from(size_of::<SECURITY_ATTRIBUTES>())
                 .expect("security attributes exceed u32"),
-            lpSecurityDescriptor: descriptor.0.cast::<c_void>(),
+            lpSecurityDescriptor: descriptor.0.0.cast::<c_void>(),
             bInheritHandle: false.into(),
         };
         let initialization_name = HSTRING::from(&initialization_name);
@@ -137,9 +146,7 @@ impl InfrastructureGovernor {
         let handle = unsafe { CreateJobObjectW(Some(&raw const attributes), &wide_name) }
             .map_err(GovernorError::Windows);
         let created = unsafe { GetLastError() } != ERROR_ALREADY_EXISTS;
-        unsafe {
-            let _ = LocalFree(Some(HLOCAL(descriptor.0.cast::<c_void>())));
-        }
+        drop(descriptor);
         let handle = handle?;
         let governor = Self { handle, name };
 
@@ -317,6 +324,17 @@ impl Drop for HandleGuard {
     }
 }
 
+/// A `LocalAlloc`'d security descriptor, freed when dropped.
+struct DescriptorGuard(PSECURITY_DESCRIPTOR);
+
+impl Drop for DescriptorGuard {
+    fn drop(&mut self) {
+        unsafe {
+            let _ = LocalFree(Some(HLOCAL(self.0.0.cast::<c_void>())));
+        }
+    }
+}
+
 struct MutexGuard {
     handle: HANDLE,
     abandoned: bool,
@@ -324,10 +342,13 @@ struct MutexGuard {
 
 impl MutexGuard {
     fn acquire(handle: HANDLE) -> Result<Self, GovernorError> {
-        let result = unsafe { WaitForSingleObject(handle, INFINITE) };
+        let result = unsafe { WaitForSingleObject(handle, INITIALIZATION_LOCK_TIMEOUT_MS) };
         if result != WAIT_OBJECT_0 && result != WAIT_ABANDONED {
             unsafe {
                 let _ = CloseHandle(handle);
+            }
+            if result == WAIT_TIMEOUT {
+                return Err(GovernorError::InitializationTimedOut);
             }
             return Err(GovernorError::Windows(windows::core::Error::from_thread()));
         }
