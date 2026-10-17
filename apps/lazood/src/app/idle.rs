@@ -4,8 +4,9 @@
 //! The rule is the employee's own setting, and 0 (the default) never suspends. Only an idle
 //! session owned by this daemon boot with no unfinished turn on it is due; the store re-checks
 //! that in the same transaction that marks it `stopping`, under the `session.stop` key
-//! `idle-suspend:<sessionId>`. Suspension ends the native thread: the next user turn or a
-//! `notice-turns` activation starts a fresh session exactly as it would for any dormant employee.
+//! `idle-suspend:<sessionId>`. Suspension stops the native process but keeps its identifier: the
+//! next user turn or `notice-turns` activation starts a new Lazoo session that resumes the
+//! suspended one where the provider can carry it (see `resume.rs`) and otherwise starts fresh.
 
 use chrono::{DateTime, Utc};
 use lazoo_protocol::RpcError;

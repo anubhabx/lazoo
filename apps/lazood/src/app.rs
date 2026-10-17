@@ -12,6 +12,7 @@ mod memory_worker_execution;
 #[cfg(test)]
 mod memory_worker_tests;
 mod resources;
+mod resume;
 mod task;
 mod terminal;
 mod tools;
@@ -899,11 +900,17 @@ impl App {
         working_directory: Option<std::path::PathBuf>,
     ) -> Result<lazoo_protocol::SessionMutationResult, RpcError> {
         let session_id = starting.session.id;
-        let working_directory = if let Some(working_directory) = working_directory {
-            Ok(working_directory)
+        // Task dispatch passes its own workspace and never resumes; every other start may
+        // continue the employee's suspended predecessor.
+        let resume = if working_directory.is_none() {
+            self.decide_session_resume(&employee, provider, session_id)
+                .await
         } else {
-            self.root.ensure_session_working_dir(session_id)
+            resume::ResumeDecision::Fresh
         };
+        let working_directory = working_directory
+            .or_else(|| resume.working_directory())
+            .map_or_else(|| self.root.ensure_session_working_dir(session_id), Ok);
         let Ok(working_directory) = working_directory else {
             self.record_session_failure(
                 session_id,
@@ -927,6 +934,9 @@ impl App {
         }
         if provider == ProviderKind::Codex {
             session_request = session_request.with_tools(tools::collaboration_tools());
+        }
+        if let Some(native_session_id) = resume.native_session_id() {
+            session_request = session_request.resume(native_session_id);
         }
 
         let Ok(session) = self.session_backend.start(provider, &session_request).await else {
@@ -982,6 +992,7 @@ impl App {
                 return Err(session_store_error(error));
             }
         };
+        self.record_resume_decision(session_id, &resume, &ready.session);
         self.publish_events()?;
         Ok(ready)
     }

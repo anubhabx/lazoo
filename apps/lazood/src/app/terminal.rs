@@ -485,6 +485,26 @@ impl App {
                 terminal: replayed,
             }));
         }
+        // An older suspended session and the one resumed from it share a native transcript, so
+        // the owner may not drive it while the employee has a session in flight. Checked after
+        // the slot is taken: `begin_session` marks a waking session `starting` before it decides
+        // whether to resume, so either this check sees that session or its decision sees the slot.
+        match self.store.active_session_for_employee(session.employee_id) {
+            Ok(None) => {}
+            Ok(Some(active)) => {
+                self.terminals.lock().await.attachments.remove(&session.id);
+                return Err(super::session_store_error(
+                    lazoo_store::StoreError::SessionConflict {
+                        employee_id: session.employee_id,
+                        session_id: active.id,
+                    },
+                ));
+            }
+            Err(error) => {
+                self.terminals.lock().await.attachments.remove(&session.id);
+                return Err(super::session_store_error(error));
+            }
+        }
         let opened = self.terminal_open(open).await;
         self.complete_attachment(session.id, opened).await
     }
@@ -523,7 +543,9 @@ impl App {
             .map_err(super::session_store_error)?
         {
             Some(workspace) => PathBuf::from(workspace),
-            None => self.root.session_working_dir(session.id),
+            None => self
+                .session_directory(session.id)
+                .map_err(super::session_store_error)?,
         };
         Ok(TerminalOpenParams {
             executable: executable.to_string_lossy().into_owned(),
@@ -534,6 +556,21 @@ impl App {
             // Namespaced so an attach never replays or collides with an ad-hoc terminal.open key.
             idempotency_key: format!("session-attach:{}:{}", session.id, params.idempotency_key),
         })
+    }
+
+    /// Whether an owner terminal is, or is still opening, attached to `session_id`. A resume must
+    /// not start a second native process on a conversation the owner is driving.
+    pub(super) async fn session_has_live_attachment(&self, session_id: Uuid) -> bool {
+        let mut state = self.terminals.lock().await;
+        // An exit-status failure leaves the entry in place, which reads as still attached.
+        let _ = release_exited(&mut state, self.boot_id);
+        state
+            .attachments
+            .get(&session_id)
+            .copied()
+            .is_some_and(|bound| {
+                bound.is_none_or(|terminal_id| state.sessions.contains_key(&terminal_id))
+            })
     }
 
     /// Takes the session's single attach slot, or returns the terminal an identical earlier
