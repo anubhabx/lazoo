@@ -25,7 +25,7 @@ The owner requested checking out and pulling main before implementation. Main wa
 - [x] Implement infrastructure resource enforcement, rolling accounting and background backpressure, excluding employee process trees.
 - [x] Complete backend install/recovery verification and the full deterministic gate (37 steps passed; subsequent compatibility fixes have separate focused and release-binary checks indexed in `artifacts/acceptance/core-v1-final-verification.json`).
 - [x] Pass the short live smoke tests for the required providers. Updated 2026-10-16: the owner excluded Grok; OpenCode 1.19.0 passed with Big Pickle and Claude 2.1.300 passed through the restored native subscription, joining the existing Codex and Antigravity passes. The first post-login Claude timeout is retained as historical evidence, with no causal fix claimed.
-- [ ] Complete native lifecycle/authority acceptance beyond the short reply tests: tools, permission coverage, cancellation, resume/recovery, and terminal attachment where supported.
+- [ ] Complete native lifecycle/authority acceptance beyond the short reply tests: tools, permission coverage, cancellation, resume/recovery, and terminal attachment where supported. Deterministic coverage landed 2026-10-17 for cancellation on every adapter, suspend-then-attach for Claude Code and Codex, and resume on wake (Claude Code resumes; Codex starts fresh with a recorded reason); the live proofs remain.
 - [ ] Explain the intermittent CLI timeout: one run timed out after 850 successes; the final diagnostic run passed 4,096 calls at concurrency 16. This is non-reproduction, not a causal fix.
 
 ## First implementation: ACP approval transport
