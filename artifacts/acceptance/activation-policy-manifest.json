@@ -2,53 +2,53 @@
   "status": "PASS",
   "schemaVersion": 19,
   "mode": "deterministic-fake-transport",
-  "startedAt": "2026-10-17T11:24:31.4231571Z",
-  "durationMs": 22074,
+  "startedAt": "2026-10-17T11:58:30.8351335Z",
+  "durationMs": 8912,
   "commands": [
     {
       "command": "cargo test -p lazoo-protocol --test contracts activation_policies_round_trip_as_kebab_case_and_default_to_manual --locked -- --exact",
       "exitCode": 0,
-      "durationMs": 489
+      "durationMs": 368
     },
     {
       "command": "cargo test -p lazoo-domain --test delivery notice_turns_activate_a_recipient_only_under_the_notice_turns_policy --locked -- --exact",
       "exitCode": 0,
-      "durationMs": 407
+      "durationMs": 333
     },
     {
       "command": "cargo test -p lazoo-store --test employee activation_policy_defaults_to_manual_and_a_change_bumps_the_configuration_revision --locked -- --exact",
       "exitCode": 0,
-      "durationMs": 650
+      "durationMs": 616
     },
     {
       "command": "cargo test -p lazooctl --test cli employee_cli_maps_mutations_and_roster_refresh --locked -- --exact",
       "exitCode": 0,
-      "durationMs": 2076
+      "durationMs": 2156
     },
     {
       "command": "cargo test -p lazood --test daemon a_notice_turn_activates_a_dormant_lead_by_policy_and_stops_the_session_after_it --locked -- --exact",
       "exitCode": 0,
-      "durationMs": 15984
+      "durationMs": 2940
     },
     {
       "command": "cargo test -p lazood --test daemon a_failed_activation_is_never_retried_and_the_user_still_resumes_the_lead --locked -- --exact",
       "exitCode": 0,
-      "durationMs": 595
+      "durationMs": 620
     },
     {
       "command": "cargo test -p lazood --test daemon notices_wait_for_a_dormant_lead_until_the_user_resumes_it --locked -- --exact",
       "exitCode": 0,
-      "durationMs": 594
+      "durationMs": 570
     },
     {
       "command": "cargo test -p lazood --test daemon peer_messages_never_activate_a_dormant_recipient_and_refusals_never_end_the_turn --locked -- --exact",
       "exitCode": 0,
-      "durationMs": 573
+      "durationMs": 576
     },
     {
       "command": "cargo test -p lazoo-store --test store store_enables_wal_foreign_keys_and_schema_version --locked -- --exact",
       "exitCode": 0,
-      "durationMs": 631
+      "durationMs": 658
     },
     {
       "command": "git diff --quiet and git diff --cached --quiet -- apps/lazoo-desktop",
