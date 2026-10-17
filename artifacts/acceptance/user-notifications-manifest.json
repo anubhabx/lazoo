@@ -1,34 +1,34 @@
 {
   "status": "PASS",
-  "schemaVersion": 18,
+  "schemaVersion": 19,
   "mode": "deterministic-fake-transport",
-  "startedAt": "2026-10-15T18:15:08.8115133Z",
-  "durationMs": 3363,
+  "startedAt": "2026-10-17T09:21:26.6448958Z",
+  "durationMs": 2235,
   "commands": [
     {
       "command": "cargo test -p lazoo-protocol --test incident incident_record_round_trips_with_camel_case_keys --locked -- --exact",
       "exitCode": 0,
-      "durationMs": 278
+      "durationMs": 245
     },
     {
       "command": "cargo test -p lazoo-store --test incident user_escalations_are_claimed_once_and_their_outcome_is_never_rewritten --locked -- --exact",
       "exitCode": 0,
-      "durationMs": 512
+      "durationMs": 368
     },
     {
       "command": "cargo test -p lazood --test daemon user_escalations_reach_the_desktop_once_coalesced_and_never_retried --locked -- --exact",
       "exitCode": 0,
-      "durationMs": 712
+      "durationMs": 531
     },
     {
       "command": "cargo test -p lazoo-store --test store version_eleven_priority_incidents_upgrade_straight_to_the_user --locked -- --exact",
       "exitCode": 0,
-      "durationMs": 1312
+      "durationMs": 646
     },
     {
       "command": "cargo test -p lazoo-store --test store store_enables_wal_foreign_keys_and_schema_version --locked -- --exact",
       "exitCode": 0,
-      "durationMs": 451
+      "durationMs": 378
     },
     {
       "command": "git diff --quiet and git diff --cached --quiet -- apps/lazoo-desktop",
