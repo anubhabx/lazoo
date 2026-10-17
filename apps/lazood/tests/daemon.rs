@@ -6070,6 +6070,22 @@ fn tool_harness_idle(
     activation: lazoo_protocol::ActivationPolicy,
     idle_timeout_seconds: u32,
 ) -> (tempfile::TempDir, ToolHarness) {
+    tool_harness_environment(
+        authority,
+        activation,
+        idle_timeout_seconds,
+        DiscoveryEnvironment::empty(),
+    )
+}
+
+/// The tool harness over a chosen provider discovery environment, for scenarios that need an
+/// executable the daemon can launch in an owner terminal.
+fn tool_harness_environment(
+    authority: AuthorityMode,
+    activation: lazoo_protocol::ActivationPolicy,
+    idle_timeout_seconds: u32,
+    environment: DiscoveryEnvironment,
+) -> (tempfile::TempDir, ToolHarness) {
     let temporary = tempdir().unwrap();
     let root = DataRoot::from_path(temporary.path().join("data"));
     root.ensure().unwrap();
@@ -6124,13 +6140,9 @@ fn tool_harness_idle(
         .lock()
         .unwrap()
         .extend(completed_turn_events("completed"));
-    let app = App::new_with_session_backend(
-        store.clone(),
-        root,
-        DiscoveryEnvironment::empty(),
-        Arc::new(backend.clone()),
-    )
-    .unwrap();
+    let app =
+        App::new_with_session_backend(store.clone(), root, environment, Arc::new(backend.clone()))
+            .unwrap();
     (
         temporary,
         ToolHarness {
@@ -8763,20 +8775,7 @@ async fn submit_user_turn(
 ) -> serde_json::Value {
     timeout(
         Duration::from_secs(20),
-        harness.app.handle(request(
-            key,
-            "turn.submit",
-            json!({
-                "conversationId": conversation_id,
-                "author": {"kind": "user"},
-                "recipient": null,
-                "authorityMode": "full-autonomy",
-                "text": "Carry on with the parser fix",
-                "activateIfNeeded": true,
-                "maxAttempts": 3,
-                "idempotencyKey": key
-            }),
-        )),
+        harness.app.handle(user_turn_request(conversation_id, key)),
     )
     .await
     .expect("the turn completes")
@@ -8877,7 +8876,22 @@ async fn an_idle_claude_code_session_suspends_and_the_next_user_turn_resumes_its
         harness.backend.resume_ids.lock().unwrap().as_slice(),
         ["native-1", "native-1"]
     );
-    assert_eq!(resume_events(&harness.store).len(), 2);
+    let third = sessions_of(&harness, lead.id).remove(2);
+    let resumed = resume_events(&harness.store);
+    assert_eq!(resumed.len(), 2);
+    assert_eq!(
+        resumed[1],
+        (
+            "session.resumed".to_owned(),
+            json!({
+                "sessionId": third.id,
+                "priorSessionId": second.id,
+                "nativeSessionId": "native-1",
+                "workingDirectory": first_directory.to_string_lossy()
+            })
+        ),
+        "the third wake resumes the second session and still runs in the origin directory"
+    );
     assert_eq!(
         harness
             .backend
@@ -8935,6 +8949,298 @@ async fn a_suspended_claude_code_session_that_never_completed_a_turn_is_not_resu
                 "reason": "no-completed-turn"
             })
         )]
+    );
+}
+
+fn user_turn_request(conversation_id: uuid::Uuid, key: &str) -> JsonRpcRequest {
+    request(
+        key,
+        "turn.submit",
+        json!({
+            "conversationId": conversation_id,
+            "author": {"kind": "user"},
+            "recipient": null,
+            "authorityMode": "full-autonomy",
+            "text": "Carry on with the parser fix",
+            "activateIfNeeded": true,
+            "maxAttempts": 3,
+            "idempotencyKey": key
+        }),
+    )
+}
+
+async fn suspend_idle_now(harness: &ToolHarness) {
+    use chrono::{TimeDelta, Utc};
+
+    harness
+        .app
+        .suspend_idle_sessions_once(Utc::now() + TimeDelta::seconds(901))
+        .await
+        .unwrap();
+}
+
+async fn warm_session(harness: &ToolHarness, employee: &lazoo_protocol::EmployeeRecord, key: &str) {
+    harness
+        .app
+        .handle(request(
+            key,
+            "session.warm",
+            json!({
+                "employeeId": employee.id,
+                "expectedEmployeeRevision": employee.configuration_revision,
+                "idempotencyKey": key
+            }),
+        ))
+        .await
+        .result
+        .unwrap();
+}
+
+/// A resumed session ran in its predecessor's directory and never made its own, so the owner's
+/// terminal takeover must open there, and the older session that shares its native transcript
+/// may not be taken over while the employee has a session in flight.
+#[tokio::test]
+#[allow(clippy::too_many_lines)] // One story: resume, refuse the older attach, attach the resumed one.
+async fn attach_on_a_resumed_session_uses_the_origin_directory_and_the_older_session_is_refused_while_the_resumed_one_is_active()
+ {
+    use lazoo_protocol::ActivationPolicy;
+
+    let (_temporary, harness) = tool_harness_environment(
+        AuthorityMode::FullAutonomy,
+        ActivationPolicy::Manual,
+        900,
+        DiscoveryEnvironment::empty().with_known_location(ProviderKind::ClaudeCode, CMD_EXE),
+    );
+    let (lead, conversation_id) = claude_lead(&harness, 900);
+    submit_user_turn(&harness, conversation_id, "attach-first").await;
+    suspend_idle_now(&harness).await;
+    submit_user_turn(&harness, conversation_id, "attach-second").await;
+    let sessions = sessions_of(&harness, lead.id);
+    let (older, resumed) = (sessions[0].clone(), sessions[1].clone());
+    let origin = harness.app.data_root().session_working_dir(older.id);
+    assert!(
+        !harness
+            .app
+            .data_root()
+            .session_working_dir(resumed.id)
+            .exists(),
+        "a resumed session never makes a directory of its own"
+    );
+    let attach = |session: &lazoo_protocol::EmployeeSessionRecord, key: &str| {
+        harness.app.handle(request(
+            key,
+            "session.terminal.attach",
+            attach_params(
+                &json!({"id": session.id, "revision": session.revision}),
+                key,
+            ),
+        ))
+    };
+
+    // The resumed session is idle: the older suspended one shares its transcript and is refused.
+    let refused = attach(&older, "attach-older-while-active")
+        .await
+        .error
+        .unwrap();
+    assert_eq!(refused.code, "LZ-SESSION-CONFLICT");
+    assert_eq!(resume_events(&harness.store).len(), 1);
+
+    suspend_idle_now(&harness).await;
+    let resumed = harness.store.get_session(resumed.id).unwrap();
+    let attached = attach(&resumed, "attach-resumed").await.result.unwrap();
+    assert_eq!(
+        attached["terminal"]["args"],
+        json!(["--resume", "native-1"])
+    );
+    assert_eq!(
+        attached["terminal"]["cwd"],
+        origin.to_string_lossy().into_owned(),
+        "the resumed session attaches in the directory its transcript lives in"
+    );
+    // The refused attach left no slot behind: the older session attaches once nothing is active.
+    let older_attached = attach(&older, "attach-older-idle").await.result.unwrap();
+    assert_eq!(
+        older_attached["terminal"]["cwd"],
+        origin.to_string_lossy().into_owned()
+    );
+    for terminal in [&attached["terminal"], &older_attached["terminal"]] {
+        harness
+            .app
+            .handle(request(
+                "terminal-stop",
+                "terminal.stop",
+                stop_terminal_params(terminal),
+            ))
+            .await
+            .result
+            .unwrap();
+    }
+}
+
+/// A warm (or a notice turn whose delivery failed) resumes a session that completes no turn;
+/// that session still carries the native id of the conversation it continued, so the wake after
+/// it resumes too instead of orphaning the transcript.
+#[tokio::test]
+async fn a_resumed_session_that_took_no_turn_still_carries_the_transcript_to_the_next_wake() {
+    use lazoo_protocol::ActivationPolicy;
+
+    let (_temporary, harness) =
+        tool_harness_idle(AuthorityMode::FullAutonomy, ActivationPolicy::Manual, 900);
+    let (lead, conversation_id) = claude_lead(&harness, 900);
+    submit_user_turn(&harness, conversation_id, "lineage-first").await;
+    suspend_idle_now(&harness).await;
+    warm_session(&harness, &lead, "lineage-warm").await;
+    suspend_idle_now(&harness).await;
+    submit_user_turn(&harness, conversation_id, "lineage-third").await;
+
+    let sessions = sessions_of(&harness, lead.id);
+    assert_eq!(sessions.len(), 3);
+    assert_eq!(
+        harness.backend.resume_ids.lock().unwrap().as_slice(),
+        ["native-1", "native-1"]
+    );
+    assert_eq!(sessions[2].native_session_id.as_deref(), Some("native-1"));
+    let origin = harness
+        .app
+        .data_root()
+        .session_working_dir(sessions[0].id)
+        .to_string_lossy()
+        .into_owned();
+    assert_eq!(
+        resume_events(&harness.store),
+        vec![
+            (
+                "session.resumed".to_owned(),
+                json!({
+                    "sessionId": sessions[1].id,
+                    "priorSessionId": sessions[0].id,
+                    "nativeSessionId": "native-1",
+                    "workingDirectory": origin
+                })
+            ),
+            (
+                "session.resumed".to_owned(),
+                json!({
+                    "sessionId": sessions[2].id,
+                    "priorSessionId": sessions[1].id,
+                    "nativeSessionId": "native-1",
+                    "workingDirectory": origin
+                })
+            ),
+        ]
+    );
+}
+
+/// A wake that fails before it touches the native session leaves a `failed` session that never
+/// started; it must not hide the suspended session behind it.
+#[tokio::test]
+async fn a_predecessor_that_failed_before_it_started_does_not_hide_the_suspended_session() {
+    use lazoo_protocol::{ActivationPolicy, SessionLifecycleState};
+
+    let (_temporary, harness) =
+        tool_harness_idle(AuthorityMode::FullAutonomy, ActivationPolicy::Manual, 900);
+    let (lead, conversation_id) = claude_lead(&harness, 900);
+    submit_user_turn(&harness, conversation_id, "start-first").await;
+    suspend_idle_now(&harness).await;
+
+    harness.backend.fail_starts.store(1, Ordering::SeqCst);
+    let failed = harness
+        .app
+        .handle(user_turn_request(conversation_id, "start-refused"))
+        .await;
+    assert!(failed.error.is_some());
+    let sessions = sessions_of(&harness, lead.id);
+    assert_eq!(sessions[1].state, SessionLifecycleState::Failed);
+    assert!(sessions[1].started_at.is_none());
+    assert!(resume_events(&harness.store).is_empty());
+
+    submit_user_turn(&harness, conversation_id, "start-again").await;
+    assert_eq!(
+        harness.backend.resume_ids.lock().unwrap().as_slice(),
+        ["native-1"]
+    );
+    let sessions = sessions_of(&harness, lead.id);
+    assert_eq!(
+        resume_events(&harness.store),
+        vec![(
+            "session.resumed".to_owned(),
+            json!({
+                "sessionId": sessions[2].id,
+                "priorSessionId": sessions[0].id,
+                "nativeSessionId": "native-1",
+                "workingDirectory": harness
+                    .app
+                    .data_root()
+                    .session_working_dir(sessions[0].id)
+                    .to_string_lossy()
+            })
+        )]
+    );
+}
+
+/// With an idle timeout of 0 nothing would ever end a session whose resume the provider
+/// rejected, so the first failed turn on a resumed session stops it; the wake after that starts
+/// fresh instead of resuming the same rejected id.
+#[tokio::test]
+async fn a_resumed_session_whose_first_turn_fails_is_stopped_and_the_next_wake_starts_fresh() {
+    use lazoo_protocol::{ActivationPolicy, SessionLifecycleState};
+
+    let (_temporary, harness) =
+        tool_harness_idle(AuthorityMode::FullAutonomy, ActivationPolicy::Manual, 0);
+    let (lead, conversation_id) = claude_lead(&harness, 0);
+    submit_user_turn(&harness, conversation_id, "reject-first").await;
+    let first = sessions_of(&harness, lead.id).remove(0);
+    harness
+        .app
+        .handle(request(
+            "reject-stop",
+            "session.stop",
+            json!({
+                "id": first.id,
+                "expectedRevision": first.revision,
+                "idempotencyKey": "reject-stop"
+            }),
+        ))
+        .await
+        .result
+        .unwrap();
+
+    *harness.backend.turn_failure.lock().unwrap() = Some("transcript not found".to_owned());
+    let rejected = harness
+        .app
+        .handle(user_turn_request(conversation_id, "reject-second"))
+        .await;
+    assert_eq!(rejected.error.unwrap().code, "LZ-TURN-PROVIDER");
+    assert_eq!(
+        harness.backend.resume_ids.lock().unwrap().as_slice(),
+        ["native-1"]
+    );
+    let sessions = sessions_of(&harness, lead.id);
+    assert_eq!(sessions[1].state, SessionLifecycleState::Suspended);
+    assert_eq!(harness.backend.stops.load(Ordering::SeqCst), 2);
+
+    *harness.backend.turn_failure.lock().unwrap() = None;
+    submit_user_turn(&harness, conversation_id, "reject-third").await;
+    assert_eq!(harness.backend.starts.load(Ordering::SeqCst), 3);
+    assert_eq!(
+        harness.backend.resume_ids.lock().unwrap().len(),
+        1,
+        "the rejected id is not asked for again"
+    );
+    let sessions = sessions_of(&harness, lead.id);
+    assert_eq!(sessions[2].native_session_id.as_deref(), Some("native-3"));
+    let events = resume_events(&harness.store);
+    assert_eq!(events.len(), 2);
+    assert_eq!(
+        events[1],
+        (
+            "session.resume.skipped".to_owned(),
+            json!({
+                "sessionId": sessions[2].id,
+                "priorSessionId": sessions[1].id,
+                "reason": "no-completed-turn"
+            })
+        )
     );
 }
 
@@ -9175,6 +9481,10 @@ fn idle_suspension_acceptance_contract_is_deterministic_and_backend_only() {
         "an_idle_codex_session_suspends_after_its_employee_timeout_and_the_next_user_turn_starts_fresh_with_a_recorded_reason",
         "an_idle_claude_code_session_suspends_and_the_next_user_turn_resumes_its_native_session",
         "a_suspended_claude_code_session_that_never_completed_a_turn_is_not_resumed",
+        "a_resumed_session_that_took_no_turn_still_carries_the_transcript_to_the_next_wake",
+        "a_predecessor_that_failed_before_it_started_does_not_hide_the_suspended_session",
+        "a_resumed_session_whose_first_turn_fails_is_stopped_and_the_next_wake_starts_fresh",
+        "attach_on_a_resumed_session_uses_the_origin_directory_and_the_older_session_is_refused_while_the_resumed_one_is_active",
         "idle_suspension_waits_for_an_unfinished_turn_and_never_touches_a_zero_timeout",
         "a_turn_recorded_on_a_since_stopped_session_is_delivered_on_the_current_session",
         "a_notice_turns_lead_suspended_for_idleness_is_woken_once_by_its_childs_result",
@@ -9184,6 +9494,10 @@ fn idle_suspension_acceptance_contract_is_deterministic_and_backend_only() {
         "recordedTurnNotStranded",
         "claudeCodeResumedOnWake",
         "codexStartsFreshWithReason",
+        "resumedSessionAttachesInOriginDirectory",
+        "resumedLineageSurvivesATurnlessWake",
+        "neverStartedFailureDoesNotHidePredecessor",
+        "failedFirstTurnOnResumeEndsSuspendedAndNextWakeStartsFresh",
         "providerSmokeAbsent",
         "externalModelUseAbsent",
         "uiChangesAbsent",

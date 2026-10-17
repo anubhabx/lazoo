@@ -28,6 +28,13 @@ pub struct MarkSessionReadyInput {
     pub native_host_pid: u32,
 }
 
+/// Whether turns delivered to a session completed, and whether any ended failed or uncertain.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SessionTurnEvidence {
+    pub completed: bool,
+    pub failed: bool,
+}
+
 /// What the daemon decided about continuing a suspended predecessor's native conversation.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum SessionResumeOutcome<'a> {
@@ -437,6 +444,8 @@ impl Store {
     /// The employee's newest session at this configuration revision other than
     /// `excluding_session_id` (the one being started), so the daemon can decide whether the new
     /// session continues it. A configuration change never resumes: an older revision is not seen.
+    /// A `failed` session that never started (its native session was never touched) is not seen
+    /// either, so a transient start failure does not hide the suspended session behind it.
     pub fn previous_session_for_employee(
         &self,
         employee_id: Uuid,
@@ -452,24 +461,48 @@ impl Store {
         )
     }
 
-    /// Whether a conversation turn was delivered to `session_id` and completed. A native session
-    /// that never completed one has no durable transcript to resume.
-    pub fn session_has_completed_turn(&self, session_id: Uuid) -> Result<bool, StoreError> {
+    /// What the conversation turns delivered to `session_id` say about its native transcript:
+    /// a completed turn proves one exists, a failed or uncertain one that it may be unusable.
+    pub fn session_turn_evidence(
+        &self,
+        session_id: Uuid,
+    ) -> Result<SessionTurnEvidence, StoreError> {
         let connection = self.lock()?;
         connection
             .query_row(
-                "SELECT EXISTS (
-                    SELECT 1 FROM conversation_turns
-                    WHERE recipient_session_id = ?1 AND state = 'completed'
-                 )",
+                "SELECT
+                    EXISTS (SELECT 1 FROM conversation_turns
+                            WHERE recipient_session_id = ?1 AND state = 'completed'),
+                    EXISTS (SELECT 1 FROM conversation_turns
+                            WHERE recipient_session_id = ?1
+                              AND state IN ('retryable-failed', 'terminal-failed', 'uncertain'))",
                 [session_id.to_string()],
-                |row| row.get(0),
+                |row| {
+                    Ok(SessionTurnEvidence {
+                        completed: row.get(0)?,
+                        failed: row.get(1)?,
+                    })
+                },
             )
             .map_err(StoreError::from)
     }
 
+    /// The employee's session that is `starting`, `idle` or `stopping`, if any.
+    pub fn active_session_for_employee(
+        &self,
+        employee_id: Uuid,
+    ) -> Result<Option<EmployeeSessionRecord>, StoreError> {
+        let connection = self.lock()?;
+        active_session_for_employee(&connection, employee_id)
+    }
+
     /// The directory a resumed session ran in, from its `session.resumed` event, or `None` for a
     /// session that began its own conversation (which ran in its own session directory).
+    ///
+    /// ponytail: this scans every `session.resumed` event with `json_extract`, once per wake,
+    /// attach and header render. That is fine while those events number in the hundreds; past
+    /// a few thousand, store the origin directory in an indexed `employee_sessions` column in a
+    /// later migration and read it from the row instead.
     pub fn resumed_working_directory(
         &self,
         session_id: Uuid,
@@ -543,7 +576,7 @@ pub(crate) fn latest_session_for_employee(
                     failure_message, created_at, updated_at, started_at, stopped_at
              FROM employee_sessions
              WHERE employee_id = ?1 AND employee_configuration_revision = ?2
-               AND (?3 IS NULL OR id <> ?3)
+               AND (?3 IS NULL OR (id <> ?3 AND NOT (state = 'failed' AND started_at IS NULL)))
              ORDER BY rowid DESC LIMIT 1",
             params![
                 employee_id.to_string(),

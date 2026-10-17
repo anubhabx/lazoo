@@ -40,6 +40,10 @@ $evidence = [ordered]@{
     codexStartsFreshWithReason = $false
     claudeCodeResumedOnWake = $false
     unresumableSuspensionSkippedWithReason = $false
+    resumedSessionAttachesInOriginDirectory = $false
+    resumedLineageSurvivesATurnlessWake = $false
+    neverStartedFailureDoesNotHidePredecessor = $false
+    failedFirstTurnOnResumeEndsSuspendedAndNextWakeStartsFresh = $false
     recordedTurnNotStranded = $false
     suspendedNoticeTurnsLeadWokenOnce = $false
     schemaEleven = $false
@@ -95,6 +99,18 @@ try {
 
     Invoke-Test 'lazood' 'daemon' 'a_suspended_claude_code_session_that_never_completed_a_turn_is_not_resumed'
     $evidence.unresumableSuspensionSkippedWithReason = $true
+
+    Invoke-Test 'lazood' 'daemon' 'a_resumed_session_that_took_no_turn_still_carries_the_transcript_to_the_next_wake'
+    $evidence.resumedLineageSurvivesATurnlessWake = $true
+
+    Invoke-Test 'lazood' 'daemon' 'a_predecessor_that_failed_before_it_started_does_not_hide_the_suspended_session'
+    $evidence.neverStartedFailureDoesNotHidePredecessor = $true
+
+    Invoke-Test 'lazood' 'daemon' 'a_resumed_session_whose_first_turn_fails_is_stopped_and_the_next_wake_starts_fresh'
+    $evidence.failedFirstTurnOnResumeEndsSuspendedAndNextWakeStartsFresh = $true
+
+    Invoke-Test 'lazood' 'daemon' 'attach_on_a_resumed_session_uses_the_origin_directory_and_the_older_session_is_refused_while_the_resumed_one_is_active'
+    $evidence.resumedSessionAttachesInOriginDirectory = $true
 
     Invoke-Test 'lazood' 'daemon' 'idle_suspension_waits_for_an_unfinished_turn_and_never_touches_a_zero_timeout'
     $evidence.unfinishedTurnKeepsSession = $true

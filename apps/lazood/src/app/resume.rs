@@ -11,7 +11,7 @@
 
 use std::path::PathBuf;
 
-use lazoo_protocol::{EmployeeRecord, EmployeeSessionRecord, SessionLifecycleState};
+use lazoo_protocol::{EmployeeRecord, EmployeeSessionRecord, SessionLifecycleState, TurnState};
 use lazoo_providers::{ProviderKind, attach_args};
 use lazoo_store::SessionResumeOutcome;
 use uuid::Uuid;
@@ -77,7 +77,7 @@ impl App {
         decision: &ResumeDecision,
         ready: &EmployeeSessionRecord,
     ) {
-        let _ = match decision {
+        let recorded = match decision {
             ResumeDecision::Fresh => return,
             ResumeDecision::Skipped {
                 prior_session_id,
@@ -100,6 +100,65 @@ impl App {
                 },
             ),
         };
+        if let Err(error) = recorded {
+            tracing::warn!(%session_id, %error, "session resume decision could not be audited");
+        }
+    }
+
+    /// The directory the native conversation of `session_id` lives in: where a resumed session
+    /// ran (its predecessor directory), otherwise the session own directory.
+    pub(super) fn session_directory(
+        &self,
+        session_id: Uuid,
+    ) -> Result<PathBuf, lazoo_store::StoreError> {
+        Ok(self
+            .store
+            .resumed_working_directory(session_id)?
+            .map_or_else(|| self.root.session_working_dir(session_id), PathBuf::from))
+    }
+
+    /// A resumed session whose first conversation turn ended failed or uncertain is stopped at
+    /// once, so it ends `suspended` with no completed turn and the next wake starts fresh. A
+    /// rejected resume (the provider no longer has the transcript) would otherwise leave an idle
+    /// session that fails every turn, and with an idle timeout of 0 nothing would ever end it.
+    pub(super) async fn stop_resumed_session_after_failed_first_turn(
+        &self,
+        turn_id: Uuid,
+        session_id: Uuid,
+    ) {
+        let failed = self.store.get_turn(turn_id).is_ok_and(|current| {
+            matches!(
+                current.state,
+                TurnState::RetryableFailed | TurnState::TerminalFailed | TurnState::Uncertain
+            )
+        });
+        if !failed {
+            return;
+        }
+        let proven = self
+            .store
+            .session_turn_evidence(session_id)
+            .map_or(true, |evidence| evidence.completed);
+        let resumed = self
+            .store
+            .resumed_working_directory(session_id)
+            .is_ok_and(|directory| directory.is_some());
+        if proven || !resumed {
+            return;
+        }
+        let Ok(session) = self.store.get_session(session_id) else {
+            return;
+        };
+        if session.state != SessionLifecycleState::Idle {
+            return;
+        }
+        let key = format!("resume-failed-first-turn:{session_id}");
+        if let Err(error) =
+            Box::pin(self.stop_session_command(session_id, session.revision, key.clone(), key))
+                .await
+        {
+            tracing::warn!(%session_id, code = %error.code, "failed resumed session could not be stopped");
+        }
     }
 
     async fn try_decide_session_resume(
@@ -150,23 +209,26 @@ impl App {
             // `thread/resume` has no field to carry them: the adapter fails closed.
             return skipped("codex-dynamic-tools");
         }
-        if !self.store.session_has_completed_turn(prior_session_id)? {
-            // A native session that never completed a turn has no durable transcript, and a
-            // resume that the provider rejected leaves exactly such a session behind: skipping
-            // it here is what keeps one bad resume from repeating on every wake.
+        // A native session that never completed a turn has no durable transcript, and a resume
+        // the provider rejected leaves exactly such a session behind: skipping it keeps one bad
+        // resume from repeating on every wake. A session that was itself resumed and has not
+        // failed a turn (a `session.warm`, or a notice whose delivery failed) still carries the
+        // native id of the conversation it continued, so it qualifies too; otherwise it would
+        // orphan the transcript of the session before it.
+        let evidence = self.store.session_turn_evidence(prior_session_id)?;
+        let carries_resumed_transcript = !evidence.failed
+            && self
+                .store
+                .resumed_working_directory(prior_session_id)?
+                .is_some();
+        if !evidence.completed && !carries_resumed_transcript {
             return skipped("no-completed-turn");
         }
         if self.session_has_live_attachment(prior_session_id).await {
             return skipped("owner-terminal-attached");
         }
         // A session that was itself resumed ran in its predecessor's directory, not its own.
-        let working_directory = self
-            .store
-            .resumed_working_directory(prior_session_id)?
-            .map_or_else(
-                || self.root.session_working_dir(prior_session_id),
-                PathBuf::from,
-            );
+        let working_directory = self.session_directory(prior_session_id)?;
         if !working_directory.is_dir() {
             return skipped("working-directory-missing");
         }

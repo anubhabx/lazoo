@@ -530,6 +530,24 @@ impl App {
         submitting: TurnMutationResult,
         live_turn: Arc<LiveTurn>,
     ) -> Result<Value, RpcError> {
+        let turn_id = submitting.turn.id;
+        let session_id = submitting.turn.recipient.session_id;
+        let result = self
+            .run_registered_submitting_turn(request_id, submitting, live_turn)
+            .await;
+        if let Some(session_id) = session_id {
+            self.stop_resumed_session_after_failed_first_turn(turn_id, session_id)
+                .await;
+        }
+        result
+    }
+
+    async fn run_registered_submitting_turn(
+        &self,
+        request_id: &str,
+        submitting: TurnMutationResult,
+        live_turn: Arc<LiveTurn>,
+    ) -> Result<Value, RpcError> {
         let turn = &submitting.turn;
         let permission_mode = submitting
             .task
