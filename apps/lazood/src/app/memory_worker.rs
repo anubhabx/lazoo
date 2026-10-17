@@ -151,6 +151,13 @@ impl App {
         if self.background_throttled() {
             return Ok(false);
         }
+        self.summarize_next_memory_job_once().await
+    }
+
+    /// One unthrottled admission: claim the next due job and run it to settlement. The daemon
+    /// loop only ever reaches this through the throttled `run_memory_worker_once`.
+    #[doc(hidden)]
+    pub async fn summarize_next_memory_job_once(&self) -> Result<bool, String> {
         let Some(job) = self
             .store
             .claim_memory_summary_for_worker(self.boot_id)

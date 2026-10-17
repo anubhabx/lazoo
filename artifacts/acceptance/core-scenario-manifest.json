@@ -2,28 +2,28 @@
   "status": "PASS",
   "schemaVersion": 18,
   "mode": "deterministic-fake-transport",
-  "startedAt": "2026-10-15T18:11:28.8333951Z",
-  "durationMs": 4906,
+  "startedAt": "2026-10-16T21:57:14.6299696Z",
+  "durationMs": 20193,
   "commands": [
     {
       "command": "cargo test -p lazood --test daemon the_core_scenario_runs_end_to_end_on_the_deterministic_provider --locked -- --exact",
       "exitCode": 0,
-      "durationMs": 2433
+      "durationMs": 2468
     },
     {
       "command": "cargo test -p lazood --test daemon project_task_dispatch_uses_an_isolated_worktree_and_preserves_dirty_user_files --locked -- --exact",
       "exitCode": 0,
-      "durationMs": 1242
+      "durationMs": 1216
     },
     {
       "command": "cargo test -p lazood --test daemon message_restart_reconciles_an_uncertain_attempt --locked -- --exact",
       "exitCode": 0,
-      "durationMs": 631
+      "durationMs": 704
     },
     {
       "command": "cargo test -p lazoo-store --test store store_enables_wal_foreign_keys_and_schema_version --locked -- --exact",
       "exitCode": 0,
-      "durationMs": 500
+      "durationMs": 15684
     },
     {
       "command": "git diff --quiet and git diff --cached --quiet -- apps/lazoo-desktop",
@@ -89,8 +89,8 @@
     },
     "step12": {
       "text": "Results include commits, verification, task links, messages, incidents, and concise memory records",
-      "status": "PARTIAL",
-      "evidence": "core scenario story: the first worker reports completion through task_report with commit and verification evidence, which is the task's durable evidence through task.show, and the result notice links the task; messages and incidents are ledgers of their own (result-delivery.ps1, minimum-incidents.ps1); memory records need Stage 5"
+      "status": "PASS",
+      "evidence": "core scenario story: the first worker reports completion through task_report with commit and verification evidence, which is the task's durable evidence through task.show, and the result notice links the task; messages and incidents are ledgers of their own (result-delivery.ps1, minimum-incidents.ps1); on the restarted daemon the completed task's dispatch turn is archived through memory.archive, a dedicated dormant Codex summary employee opted in through memory.worker.configure summarizes it in one fresh read-only turn, and the typed memory record citing that turn and the archive's source hash is read back through memory.search by taskId (the summary output is scripted on the fake transport: the worker pipeline is proven, model summary quality is not)"
     },
     "step13": {
       "text": "Integration follows configured authority and never overwrites dirty user work",
