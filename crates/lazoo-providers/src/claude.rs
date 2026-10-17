@@ -30,6 +30,13 @@ const AUTH_TIMEOUT: Duration = Duration::from_secs(15);
 const MAX_PROBE_BYTES: usize = 1024 * 1024;
 const MAX_STARTUP_HOOK_FRAMES: usize = 64;
 const STARTUP_HOOK_DRAIN_TIMEOUT: Duration = Duration::from_secs(1);
+/// How long the first prompt of a session waits for a trailing startup frame before it is written.
+/// `SessionStart` hook frames can trail `init` by more than a scheduler tick; one millisecond
+/// caught them on an idle machine and missed them under load (five fixture tests failed in a
+/// loaded gate on 2026-10-17), which would attribute the frames to the first turn. Later prompts
+/// keep the one-millisecond check: hooks fire at session start, and each turn would otherwise pay it.
+const FIRST_PROMPT_QUIET_WINDOW: Duration = Duration::from_millis(150);
+const LATER_PROMPT_QUIET_WINDOW: Duration = Duration::from_millis(1);
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct ClaudeExternalAuth {
@@ -241,6 +248,7 @@ impl ClaudeAdapter {
             request: request.clone(),
             active: AtomicBool::new(false),
             cancel_requested: AtomicBool::new(false),
+            prompted: AtomicBool::new(false),
             lifecycle: std::sync::Mutex::new(false),
             cancellation: Notify::new(),
             stopped: AtomicBool::new(false),
@@ -286,6 +294,7 @@ pub struct ClaudeSession {
     request: SessionRequest,
     active: AtomicBool,
     cancel_requested: AtomicBool,
+    prompted: AtomicBool,
     lifecycle: std::sync::Mutex<bool>,
     cancellation: Notify,
     stopped: AtomicBool,
@@ -369,6 +378,7 @@ impl ClaudeSession {
         self.control
             .send(&ClaudeAdapter::turn_input(request))
             .await?;
+        self.prompted.store(true, Ordering::Release);
         let started = Instant::now();
         let mut last_progress = started;
         let mut turn_started = false;
@@ -503,10 +513,12 @@ impl ClaudeSession {
     ) -> Result<(), ProviderError> {
         let started = Instant::now();
         let mut frames = 0_usize;
-        while process
-            .wait_for_ready_output(Duration::from_millis(1))
-            .await?
-        {
+        let quiet_window = if self.prompted.load(Ordering::Acquire) {
+            LATER_PROMPT_QUIET_WINDOW
+        } else {
+            FIRST_PROMPT_QUIET_WINDOW
+        };
+        while process.wait_for_ready_output(quiet_window).await? {
             if frames == MAX_STARTUP_HOOK_FRAMES || started.elapsed() >= STARTUP_HOOK_DRAIN_TIMEOUT
             {
                 let _ = self.control.kill().await;
