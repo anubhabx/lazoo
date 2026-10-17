@@ -2,68 +2,88 @@
   "status": "PASS",
   "schemaVersion": 19,
   "mode": "deterministic-fake-transport",
-  "startedAt": "2026-10-17T08:45:50.9886498Z",
-  "durationMs": 41910,
+  "startedAt": "2026-10-17T09:02:24.1865359Z",
+  "durationMs": 9898,
   "commands": [
     {
       "command": "cargo test -p lazoo-protocol --test contracts idle_timeouts_default_to_never_on_create_and_stay_unchanged_when_an_update_omits_them --locked -- --exact",
       "exitCode": 0,
-      "durationMs": 10993
+      "durationMs": 368
     },
     {
       "command": "cargo test -p lazoo-domain --test employee idle_timeouts_are_never_or_a_minute_to_a_day_and_due_only_after_the_whole_timeout --locked -- --exact",
       "exitCode": 0,
-      "durationMs": 11605
+      "durationMs": 312
     },
     {
       "command": "cargo test -p lazoo-store --test employee idle_timeout_defaults_to_never_and_a_change_bumps_the_configuration_revision --locked -- --exact",
       "exitCode": 0,
-      "durationMs": 1770
+      "durationMs": 466
     },
     {
       "command": "cargo test -p lazoo-store --test session idle_sessions_are_due_only_after_their_employee_timeout_and_stop_once_under_their_own_key --locked -- --exact",
       "exitCode": 0,
-      "durationMs": 1857
+      "durationMs": 518
     },
     {
       "command": "cargo test -p lazooctl --test cli employee_cli_maps_mutations_and_roster_refresh --locked -- --exact",
       "exitCode": 0,
-      "durationMs": 9225
+      "durationMs": 438
     },
     {
       "command": "cargo test -p lazood --test daemon an_idle_codex_session_suspends_after_its_employee_timeout_and_the_next_user_turn_starts_fresh_with_a_recorded_reason --locked -- --exact",
       "exitCode": 0,
-      "durationMs": 660
+      "durationMs": 731
     },
     {
       "command": "cargo test -p lazood --test daemon an_idle_claude_code_session_suspends_and_the_next_user_turn_resumes_its_native_session --locked -- --exact",
       "exitCode": 0,
-      "durationMs": 769
+      "durationMs": 864
     },
     {
       "command": "cargo test -p lazood --test daemon a_suspended_claude_code_session_that_never_completed_a_turn_is_not_resumed --locked -- --exact",
       "exitCode": 0,
-      "durationMs": 626
+      "durationMs": 700
+    },
+    {
+      "command": "cargo test -p lazood --test daemon a_resumed_session_that_took_no_turn_still_carries_the_transcript_to_the_next_wake --locked -- --exact",
+      "exitCode": 0,
+      "durationMs": 688
+    },
+    {
+      "command": "cargo test -p lazood --test daemon a_predecessor_that_failed_before_it_started_does_not_hide_the_suspended_session --locked -- --exact",
+      "exitCode": 0,
+      "durationMs": 676
+    },
+    {
+      "command": "cargo test -p lazood --test daemon a_resumed_session_whose_first_turn_fails_is_stopped_and_the_next_wake_starts_fresh --locked -- --exact",
+      "exitCode": 0,
+      "durationMs": 714
+    },
+    {
+      "command": "cargo test -p lazood --test daemon attach_on_a_resumed_session_uses_the_origin_directory_and_the_older_session_is_refused_while_the_resumed_one_is_active --locked -- --exact",
+      "exitCode": 0,
+      "durationMs": 711
     },
     {
       "command": "cargo test -p lazood --test daemon idle_suspension_waits_for_an_unfinished_turn_and_never_touches_a_zero_timeout --locked -- --exact",
       "exitCode": 0,
-      "durationMs": 1497
+      "durationMs": 765
     },
     {
       "command": "cargo test -p lazood --test daemon a_turn_recorded_on_a_since_stopped_session_is_delivered_on_the_current_session --locked -- --exact",
       "exitCode": 0,
-      "durationMs": 1306
+      "durationMs": 624
     },
     {
       "command": "cargo test -p lazood --test daemon a_notice_turns_lead_suspended_for_idleness_is_woken_once_by_its_childs_result --locked -- --exact",
       "exitCode": 0,
-      "durationMs": 970
+      "durationMs": 756
     },
     {
       "command": "cargo test -p lazoo-store --test store store_enables_wal_foreign_keys_and_schema_version --locked -- --exact",
       "exitCode": 0,
-      "durationMs": 514
+      "durationMs": 456
     },
     {
       "command": "git diff --quiet and git diff --cached --quiet -- apps/lazoo-desktop",
@@ -89,6 +109,10 @@
     "codexStartsFreshWithReason": true,
     "claudeCodeResumedOnWake": true,
     "unresumableSuspensionSkippedWithReason": true,
+    "resumedSessionAttachesInOriginDirectory": true,
+    "resumedLineageSurvivesATurnlessWake": true,
+    "neverStartedFailureDoesNotHidePredecessor": true,
+    "failedFirstTurnOnResumeEndsSuspendedAndNextWakeStartsFresh": true,
     "recordedTurnNotStranded": true,
     "suspendedNoticeTurnsLeadWokenOnce": true,
     "schemaEleven": true,
