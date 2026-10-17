@@ -59,6 +59,25 @@ pub struct TerminalListResult {
     pub terminals: Vec<TerminalRecord>,
 }
 
+/// `session.terminal.attach`: open the suspended employee session's native harness in an
+/// owner terminal that resumes it. `id` and `expected_revision` name the employee session.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct SessionTerminalAttachParams {
+    pub id: Uuid,
+    pub expected_revision: u64,
+    pub columns: u16,
+    pub rows: u16,
+    pub idempotency_key: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct SessionTerminalAttachResult {
+    pub session_id: Uuid,
+    pub terminal: TerminalRecord,
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct TerminalInput {

@@ -3,7 +3,7 @@ use std::sync::Mutex;
 use lazoo_providers::{
     DiscoverySource, ExecutableCandidate, ProviderCapabilities, ProviderError, ProviderEvent,
     ProviderKind, ProviderSession, ProviderVerification, ToolCall, ToolResult, TurnEventObserver,
-    TurnRequest, rank_candidates, redact_json,
+    TurnRequest, attach_args, rank_candidates, redact_json,
 };
 use serde_json::json;
 
@@ -12,6 +12,33 @@ fn contained_host_pid_is_part_of_the_session_contract(session: &impl ProviderSes
     session
         .native_host_pid()
         .expect("a live provider session must expose its contained host PID")
+}
+
+#[test]
+fn attach_args_name_only_the_documented_resume_shapes_and_refuse_placeholders() {
+    assert_eq!(
+        attach_args(ProviderKind::ClaudeCode, "0b8e4c2a-session"),
+        Some(vec!["--resume".to_owned(), "0b8e4c2a-session".to_owned()])
+    );
+    assert_eq!(
+        attach_args(ProviderKind::Codex, "thread-7"),
+        Some(vec!["resume".to_owned(), "thread-7".to_owned()])
+    );
+    for provider in [
+        ProviderKind::OpenCode,
+        ProviderKind::GrokBuild,
+        ProviderKind::Antigravity,
+    ] {
+        assert_eq!(attach_args(provider, "session-1"), None, "{provider}");
+    }
+    for provider in ProviderKind::ALL {
+        assert_eq!(attach_args(provider, ""), None, "{provider} empty id");
+        assert_eq!(
+            attach_args(provider, "pending:0b8e4c2a"),
+            None,
+            "{provider} placeholder id"
+        );
+    }
 }
 
 #[test]

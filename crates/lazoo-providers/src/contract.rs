@@ -66,6 +66,26 @@ impl FromStr for ProviderKind {
     }
 }
 
+/// The argv that reopens `native_session_id` in the provider's own interactive TUI, for the
+/// owner's terminal takeover of a suspended session. The shapes come from the installed CLIs'
+/// help (Claude Code 2.1.302 `--resume <id>`, codex-cli 0.153.4 `resume <id>`) and are not
+/// proven against a live resume. `None` means Lazoo has no proven resume command: `OpenCode` and
+/// Grok Build never receive governed turns, Antigravity's session record keeps the
+/// `pending:<uuid>` placeholder instead of the real conversation id, and an empty id cannot be
+/// resumed anywhere.
+#[must_use]
+pub fn attach_args(provider: ProviderKind, native_session_id: &str) -> Option<Vec<String>> {
+    if native_session_id.is_empty() || native_session_id.starts_with("pending:") {
+        return None;
+    }
+    let id = native_session_id.to_owned();
+    match provider {
+        ProviderKind::ClaudeCode => Some(vec!["--resume".to_owned(), id]),
+        ProviderKind::Codex => Some(vec!["resume".to_owned(), id]),
+        ProviderKind::OpenCode | ProviderKind::GrokBuild | ProviderKind::Antigravity => None,
+    }
+}
+
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum ProviderVerification {

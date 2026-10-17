@@ -596,7 +596,7 @@ async fn accepted_projectless_child_dispatches_automatically_through_the_canonic
     let app = App::new_with_session_backend(
         store.clone(),
         root.clone(),
-        DiscoveryEnvironment::empty(),
+        DiscoveryEnvironment::empty().with_known_location(ProviderKind::Codex, CMD_EXE),
         Arc::new(backend.clone()),
     )
     .unwrap();
@@ -698,6 +698,51 @@ async fn accepted_projectless_child_dispatches_automatically_through_the_canonic
         backend.working_directories.lock().unwrap().last(),
         Some(&root.projectless_task_working_dir(task_id))
     );
+
+    // The owner takes over the suspended worker session: its terminal opens in the retained task
+    // workspace, not in the generic session directory.
+    let worker_session_id = dispatch.session_id.unwrap();
+    wait_until(|| {
+        store.get_session(worker_session_id).unwrap().state
+            == lazoo_protocol::SessionLifecycleState::Suspended
+    })
+    .await;
+    let worker_session = store.get_session(worker_session_id).unwrap();
+    let attached = app
+        .handle(request(
+            "dispatch-attach",
+            "session.terminal.attach",
+            json!({
+                "id": worker_session_id,
+                "expectedRevision": worker_session.revision,
+                "columns": 80,
+                "rows": 25,
+                "idempotencyKey": "dispatch-attach"
+            }),
+        ))
+        .await
+        .result
+        .unwrap();
+    assert_eq!(
+        attached["terminal"]["cwd"],
+        dispatch.workspace_path.unwrap()
+    );
+    assert_eq!(
+        attached["terminal"]["args"],
+        json!(["resume", worker_session.native_session_id.unwrap()])
+    );
+    app.handle(request(
+        "dispatch-attach-stop",
+        "terminal.stop",
+        json!({
+            "id": attached["terminal"]["id"],
+            "expectedRevision": attached["terminal"]["revision"],
+            "expectedBootId": attached["terminal"]["bootId"]
+        }),
+    ))
+    .await
+    .result
+    .unwrap();
     dispatcher.abort();
     let _ = dispatcher.await;
 }
@@ -4421,6 +4466,470 @@ async fn session_stale_revision_has_a_stable_error_family() {
 
     assert_eq!(error.code, "LZ-SESSION-STALE");
     assert_eq!(error.data.unwrap(), json!({"currentRevision": 2}));
+}
+
+const CMD_EXE: &str = r"C:\Windows\System32\cmd.exe";
+
+/// The session harness with cmd.exe standing in for the Codex executable: known locations are
+/// not name-filtered, and cmd.exe ignores `resume <id>` and stays interactive on stdin.
+fn attach_test_app() -> (
+    tempfile::TempDir,
+    Store,
+    App,
+    FakeSessionBackend,
+    uuid::Uuid,
+) {
+    let temporary = tempdir().unwrap();
+    let root = DataRoot::from_path(temporary.path().join("data"));
+    root.ensure().unwrap();
+    let store = Store::open_path(root.state_db()).unwrap();
+    let employee = configured_employee(&store);
+    let backend = FakeSessionBackend::default();
+    let app = App::new_with_session_backend(
+        store.clone(),
+        root,
+        DiscoveryEnvironment::empty().with_known_location(ProviderKind::Codex, CMD_EXE),
+        Arc::new(backend.clone()),
+    )
+    .unwrap();
+    (temporary, store, app, backend, employee.id)
+}
+
+/// Warms one session for `employee_id` and stops it, returning the suspended session record.
+async fn suspended_session(app: &App, employee_id: uuid::Uuid, key: &str) -> serde_json::Value {
+    let warmed = app
+        .handle(request(
+            key,
+            "session.warm",
+            json!({
+                "employeeId": employee_id,
+                "expectedEmployeeRevision": 1,
+                "idempotencyKey": format!("{key}-warm")
+            }),
+        ))
+        .await
+        .result
+        .unwrap();
+    app.handle(request(
+        key,
+        "session.stop",
+        json!({
+            "id": warmed["session"]["id"],
+            "expectedRevision": warmed["session"]["revision"],
+            "idempotencyKey": format!("{key}-stop")
+        }),
+    ))
+    .await
+    .result
+    .unwrap()["session"]
+        .clone()
+}
+
+fn attach_params(session: &serde_json::Value, key: &str) -> serde_json::Value {
+    json!({
+        "id": session["id"],
+        "expectedRevision": session["revision"],
+        "columns": 80,
+        "rows": 25,
+        "idempotencyKey": key
+    })
+}
+
+fn stop_terminal_params(terminal: &serde_json::Value) -> serde_json::Value {
+    json!({
+        "id": terminal["id"],
+        "expectedRevision": terminal["revision"],
+        "expectedBootId": terminal["bootId"]
+    })
+}
+
+/// The owner takes over a finished Codex session: the terminal runs the discovered executable
+/// with the recorded native id in the session's own directory, a replay returns the same
+/// terminal, a second attach is refused while it lives, a stop frees the slot, and each attach
+/// is audited while the session row itself stays suspended at its revision.
+#[tokio::test]
+#[allow(clippy::too_many_lines)] // One owner session: attach, replay, refuse, stop, re-attach, audit.
+async fn session_terminal_attach_resumes_a_suspended_codex_session_in_an_owner_terminal() {
+    let (_temporary, _store, app, backend, employee_id) = attach_test_app();
+    let session = suspended_session(&app, employee_id, "attach").await;
+    let session_id: uuid::Uuid = session["id"].as_str().unwrap().parse().unwrap();
+    let attach = |id: &str, params: serde_json::Value| {
+        app.handle(request(id, "session.terminal.attach", params))
+    };
+
+    let attached = attach("attach-1", attach_params(&session, "attach-1"))
+        .await
+        .result
+        .unwrap();
+    assert_eq!(attached["sessionId"], session["id"]);
+    let terminal = attached["terminal"].clone();
+    assert_eq!(terminal["executable"], CMD_EXE);
+    assert_eq!(terminal["args"], json!(["resume", "native-1"]));
+    assert_eq!(
+        terminal["cwd"],
+        app.data_root()
+            .session_working_dir(session_id)
+            .to_string_lossy()
+            .into_owned()
+    );
+    assert_eq!(terminal["live"], true);
+    assert_eq!(terminal["revision"], 1);
+
+    let replayed = attach("attach-1-replay", attach_params(&session, "attach-1"))
+        .await
+        .result
+        .unwrap();
+    assert_eq!(replayed["terminal"]["id"], terminal["id"]);
+
+    let refused = attach("attach-2", attach_params(&session, "attach-2"))
+        .await
+        .error
+        .unwrap();
+    assert_eq!(refused.code, "LZ-SESSION-ATTACHED");
+    assert_eq!(
+        refused.data.unwrap(),
+        json!({"sessionId": session["id"], "terminalId": terminal["id"]})
+    );
+
+    let stopped = app
+        .handle(request(
+            "terminal-stop",
+            "terminal.stop",
+            stop_terminal_params(&terminal),
+        ))
+        .await
+        .result
+        .unwrap();
+    assert_eq!(stopped["live"], false);
+
+    let reattached = attach("attach-3", attach_params(&session, "attach-3"))
+        .await
+        .result
+        .unwrap();
+    assert_ne!(reattached["terminal"]["id"], terminal["id"]);
+    assert_eq!(reattached["terminal"]["live"], true);
+    assert_eq!(reattached["terminal"]["args"], terminal["args"]);
+
+    let shown = app
+        .handle(request("show", "session.show", json!({"id": session_id})))
+        .await
+        .result
+        .unwrap();
+    assert_eq!(
+        shown, session,
+        "the attach changes nothing on the session row"
+    );
+    assert_eq!(backend.starts.load(Ordering::SeqCst), 1);
+    assert_eq!(backend.stops.load(Ordering::SeqCst), 1);
+
+    let events = app
+        .handle(request(
+            "events",
+            "events.list",
+            json!({"after": 0, "limit": 1024}),
+        ))
+        .await
+        .result
+        .unwrap();
+    let audited = events
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|event| event["eventType"] == "session.terminal.attached")
+        .map(|event| event["payload"].clone())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        audited,
+        vec![
+            json!({"sessionId": session["id"], "terminalId": terminal["id"]}),
+            json!({"sessionId": session["id"], "terminalId": reattached["terminal"]["id"]}),
+        ]
+    );
+
+    app.handle(request(
+        "terminal-stop-2",
+        "terminal.stop",
+        stop_terminal_params(&reattached["terminal"]),
+    ))
+    .await
+    .result
+    .unwrap();
+}
+
+/// Only a suspended session may be taken over: an idle session has a live protocol host, a
+/// stale revision, an unknown id, and malformed requests are refused before anything spawns.
+#[tokio::test]
+async fn session_terminal_attach_refuses_idle_sessions_stale_revisions_and_unknown_ids() {
+    let (_temporary, _store, app, backend, employee_id) = attach_test_app();
+    let warmed = app
+        .handle(request(
+            "warm",
+            "session.warm",
+            json!({
+                "employeeId": employee_id,
+                "expectedEmployeeRevision": 1,
+                "idempotencyKey": "warm-rhea"
+            }),
+        ))
+        .await
+        .result
+        .unwrap()["session"]
+        .clone();
+    let attach = |id: &str, params: serde_json::Value| {
+        app.handle(request(id, "session.terminal.attach", params))
+    };
+
+    let idle = attach("idle", attach_params(&warmed, "idle"))
+        .await
+        .error
+        .unwrap();
+    assert_eq!(idle.code, "LZ-SESSION-STATE");
+    assert_eq!(idle.data.unwrap(), json!({"sessionId": warmed["id"]}));
+    assert_eq!(backend.starts.load(Ordering::SeqCst), 1);
+    assert_eq!(backend.stops.load(Ordering::SeqCst), 0);
+
+    let suspended = app
+        .handle(request(
+            "stop",
+            "session.stop",
+            json!({
+                "id": warmed["id"],
+                "expectedRevision": warmed["revision"],
+                "idempotencyKey": "stop-rhea"
+            }),
+        ))
+        .await
+        .result
+        .unwrap()["session"]
+        .clone();
+    let stale = attach("stale", attach_params(&warmed, "stale"))
+        .await
+        .error
+        .unwrap();
+    assert_eq!(stale.code, "LZ-SESSION-STALE");
+    assert_eq!(
+        stale.data.unwrap(),
+        json!({"currentRevision": suspended["revision"]})
+    );
+
+    let unknown = attach(
+        "unknown",
+        attach_params(
+            &json!({"id": uuid::Uuid::new_v4(), "revision": 1}),
+            "unknown",
+        ),
+    )
+    .await
+    .error
+    .unwrap();
+    assert_eq!(unknown.code, "LZ-SESSION-NOT-FOUND");
+
+    let mut zero = attach_params(&suspended, "zero");
+    zero["expectedRevision"] = json!(0);
+    assert_eq!(
+        attach("zero", zero).await.error.unwrap().code,
+        "LZ-SESSION-INVALID"
+    );
+    assert_eq!(
+        attach("blank", attach_params(&suspended, ""))
+            .await
+            .error
+            .unwrap()
+            .code,
+        "LZ-SESSION-INVALID"
+    );
+    let mut unexpected = attach_params(&suspended, "unexpected");
+    unexpected["authority"] = json!("full-autonomy");
+    assert_eq!(
+        attach("unexpected", unexpected).await.error.unwrap().code,
+        "LZ-INVALID-PARAMS"
+    );
+
+    let terminals = app
+        .handle(request("terminals", "terminal.list", json!({})))
+        .await
+        .result
+        .unwrap();
+    assert_eq!(terminals["terminals"], json!([]));
+}
+
+/// Without a discovered executable there is nothing to run, and providers without a documented
+/// resume command are refused by name rather than guessed at.
+#[tokio::test]
+async fn session_terminal_attach_fails_closed_without_an_executable_or_a_resume_command() {
+    let (_temporary, app, _backend, employee_id) = session_test_app();
+    let session = suspended_session(&app, employee_id, "undetected").await;
+    let undetected = app
+        .handle(request(
+            "undetected",
+            "session.terminal.attach",
+            attach_params(&session, "undetected"),
+        ))
+        .await
+        .error
+        .unwrap();
+    assert_eq!(undetected.code, "LZ-PROVIDER-NOT-DETECTED");
+
+    let (_temporary, store, app, _backend, _codex) = attach_test_app();
+    for (name, provider) in [("Noor", "opencode"), ("Ivo", "antigravity")] {
+        let employee = store
+            .create_employee(&CreateEmployeeInput {
+                request_id: format!("{name}-request"),
+                idempotency_key: format!("create-{name}"),
+                name: name.to_owned(),
+                provider: provider.to_owned(),
+                role: "Worker".to_owned(),
+                instructions: String::new(),
+                model: Some("test-model".to_owned()),
+                reasoning_effort: Some("low".to_owned()),
+                native_settings: json!({}),
+                authority_mode: AuthorityMode::Ask,
+                checkout_policy: EmployeeCheckoutPolicy::Isolated,
+                activation_policy: lazoo_protocol::ActivationPolicy::Manual,
+                idle_timeout_seconds: 0,
+                enabled: true,
+                provider_observation: Some(ProviderObservation {
+                    provider: provider.to_owned(),
+                    verification: "configured".to_owned(),
+                    version: Some("test".to_owned()),
+                    protocol: Some("test".to_owned()),
+                    capabilities: json!({"session": true}),
+                    authentication: json!({"native": "ready"}),
+                    degradation_reason: None,
+                    checked_at: "2026-10-17T00:00:00Z".to_owned(),
+                }),
+            })
+            .unwrap()
+            .employee;
+        let session = suspended_session(&app, employee.id, provider).await;
+        let unsupported = app
+            .handle(request(
+                provider,
+                "session.terminal.attach",
+                attach_params(&session, provider),
+            ))
+            .await
+            .error
+            .unwrap();
+        assert_eq!(
+            unsupported.code, "LZ-SESSION-ATTACH-UNSUPPORTED",
+            "{provider}"
+        );
+        assert_eq!(
+            unsupported.data.unwrap(),
+            json!({"sessionId": session["id"]})
+        );
+    }
+    let terminals = app
+        .handle(request("terminals", "terminal.list", json!({})))
+        .await
+        .result
+        .unwrap();
+    assert_eq!(terminals["terminals"], json!([]));
+}
+
+/// An attached suspended session does not block the employee: a new warm session starts as
+/// usual in a different directory, and the owner's terminal stays live beside it.
+#[tokio::test]
+async fn session_terminal_attach_leaves_the_employee_free_for_new_sessions() {
+    let (_temporary, _store, app, backend, employee_id) = attach_test_app();
+    let session = suspended_session(&app, employee_id, "first").await;
+    let attached = app
+        .handle(request(
+            "attach",
+            "session.terminal.attach",
+            attach_params(&session, "attach"),
+        ))
+        .await
+        .result
+        .unwrap();
+
+    let warmed = app
+        .handle(request(
+            "warm-again",
+            "session.warm",
+            json!({
+                "employeeId": employee_id,
+                "expectedEmployeeRevision": 1,
+                "idempotencyKey": "warm-again"
+            }),
+        ))
+        .await
+        .result
+        .unwrap();
+    assert_eq!(warmed["session"]["state"], "idle");
+    assert_ne!(warmed["session"]["id"], session["id"]);
+    assert_eq!(warmed["session"]["nativeSessionId"], "native-2");
+    assert_eq!(backend.starts.load(Ordering::SeqCst), 2);
+
+    let terminal = app
+        .handle(request(
+            "terminal",
+            "terminal.show",
+            json!({"id": attached["terminal"]["id"]}),
+        ))
+        .await
+        .result
+        .unwrap();
+    assert_eq!(terminal["live"], true);
+    app.handle(request(
+        "terminal-stop",
+        "terminal.stop",
+        stop_terminal_params(&attached["terminal"]),
+    ))
+    .await
+    .result
+    .unwrap();
+}
+
+#[test]
+fn session_terminal_attach_acceptance_contract_is_real_binary_and_backend_only() {
+    let repository = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let script_path = repository.join("scripts/acceptance/session-terminal-attach.ps1");
+    let script =
+        std::fs::read_to_string(&script_path).expect("session terminal attach acceptance script");
+
+    for required in [
+        "[switch]$SkipBuild",
+        "lazoo-turn-transport-fixture.exe",
+        "'codex.exe'",
+        "LAZOO_TURN_FIXTURE_THREAD_ID",
+        "'session', 'warm'",
+        "'session', 'attach'",
+        "'session', 'stop'",
+        "'terminal', 'write'",
+        "'terminal', 'read'",
+        "'terminal', 'stop'",
+        "LZ-SESSION-STATE",
+        "LZ-SESSION-ATTACHED",
+        "LZ-SESSION-NOT-FOUND",
+        "session.terminal.attached",
+        "idleAttachRefused",
+        "resumeArgumentsFromRecords",
+        "cwdFromRecords",
+        "oneLiveTerminalPerSession",
+        "terminalBytesRoundTrip",
+        "reattachAfterStop",
+        "sessionRecordUnchanged",
+        "auditEventRecorded",
+        "providerSmokeAbsent",
+        "externalModelUseAbsent",
+        "uiChangesAbsent",
+        "real-binaries-disposable-data-root-no-provider",
+        "schemaVersion = 18",
+        "session-terminal-attach-manifest.json",
+    ] {
+        assert!(
+            script.contains(required),
+            "acceptance script must contain {required}"
+        );
+    }
+    for forbidden in ["provider', 'smoke", "LivePrompt", "claude.exe"] {
+        assert!(
+            !script.contains(forbidden),
+            "acceptance script must not contain {forbidden}"
+        );
+    }
 }
 
 #[tokio::test]
