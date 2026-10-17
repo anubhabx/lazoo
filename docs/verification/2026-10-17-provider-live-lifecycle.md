@@ -20,7 +20,7 @@ This slice also adds two ignored adapter-level live cancellation tests, `live_op
 |---|---|---|
 | `claude-code` | PASS (2026-10-17, earlier run, not rerun here) | `artifacts/acceptance/provider-live-lifecycle-claude-code-manifest.json` (renamed with `git mv` from `claude-live-lifecycle-manifest.json`; contents unchanged, so it still carries the old `claudeVersion` key). Five gates in 20.5 s, 3 live turns. |
 | `codex` | PASS (one run, 39.4 s, 3 live turns) | `artifacts/acceptance/provider-live-lifecycle-codex-manifest.json`. |
-| `opencode` | WRITTEN, NOT RUN | The branch that makes the daemon deliver to OpenCode under `full-autonomy` had not merged; the integrator runs it after that merge. No OpenCode lifecycle manifest exists. |
+| `opencode` | PASS (2026-10-17, run by the integrator after OpenCode full-autonomy delivery, the smoke-verified readiness rule, and the ACP stop-reason mapping merged; 59.1 s; 4 live turns including the verification smoke; `artifacts/acceptance/provider-live-lifecycle-opencode-manifest.json`; see `2026-10-17-live-lifecycle-gates.md`) |
 
 | Ignored live adapter test | Result |
 |---|---|
