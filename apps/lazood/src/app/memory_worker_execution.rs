@@ -102,7 +102,7 @@ impl App {
             .map_err(|error| error.to_string())?;
         if !employee.enabled
             || employee.model.as_deref() != Some(settings.model.as_str())
-            || !super::provider_enforces_authority(provider, AuthorityMode::Ask)
+            || !super::provider_runs_memory_summaries(provider)
         {
             return Err(
                 "memory worker employee model, availability, or governed authority changed"

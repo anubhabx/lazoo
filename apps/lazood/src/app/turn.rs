@@ -393,7 +393,7 @@ impl App {
             .transpose()
             .map_err(turn_store_error)?
             .map_or(AuthorityMode::Ask, |detail| detail.task.effective_authority);
-        if !super::provider_enforces_authority(provider, authority) {
+        if !super::session_serves_authority(provider, authority, employee.authority_mode) {
             return Err(turn_failure(
                 if turn.task_id.is_some() {
                     "LZ-TASK-AUTHORITY-UNSUPPORTED"
@@ -403,7 +403,7 @@ impl App {
                 if turn.task_id.is_some() {
                     "the selected provider cannot enforce this task authority ceiling"
                 } else {
-                    "conversation turn delivery supports Codex, and Claude Code and OpenCode under full autonomy"
+                    "conversation turn delivery supports Codex, OpenCode (whose launch must match the turn's authority), and Claude Code under full autonomy"
                 },
                 turn.id,
             ));

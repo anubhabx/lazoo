@@ -1424,27 +1424,53 @@ fn require_session_idempotency_key(value: &str) -> Result<(), RpcError> {
     }
 }
 
-/// Whether a provider enforces a task authority ceiling natively, so Lazoo may deliver turns
-/// and dispatch tasks to it. Codex: its approval requests are bridged into the schema-8 ledger
-/// under every authority. Claude Code and `OpenCode`: only `full-autonomy`, which maps to the
-/// `auto` permission mode, the one mode in which no prompt can occur (Claude Code's `auto`
-/// permission mode; for `OpenCode` the adapter launches `opencode acp` with an inline
-/// allow-all `OPENCODE_PERMISSION` block). Under `ask` and `self-decision` their prompts stay
-/// where Lazoo cannot answer them, and native allow rules could bypass the approval observer,
-/// so both stay refused. Antigravity has no prompt-free mode, and Grok Build (ACP) has every
-/// permission request cancelled by the adapter, so they stay refused until approval bridging
-/// exists.
+/// Whether a provider enforces a task authority ceiling, so Lazoo may deliver turns and
+/// dispatch tasks to it. Codex: its approval requests are bridged into the schema-8 ledger under
+/// every authority. `OpenCode`: under every authority too, because the adapter launches
+/// `opencode acp` with an inline `OPENCODE_PERMISSION` block chosen by the permission mode
+/// (allow-all for `auto`; for `ask` and `accept-edits` every governed tool asks and only the
+/// read-only tools are allowed by name) and the ACP bridge admits only command and file-change
+/// requests into the ledger, declining every other kind. Claude Code: only `full-autonomy`,
+/// which maps to its `auto` permission mode, the one mode in which no prompt can occur; under
+/// `ask` and `self-decision` its prompts stay where Lazoo cannot answer them. Antigravity has no
+/// prompt-free mode, and Grok Build (ACP) is not launched with a governed permission block, so
+/// both stay refused.
 pub(crate) const fn provider_enforces_authority(
     provider: ProviderKind,
     authority: AuthorityMode,
 ) -> bool {
     match provider {
-        ProviderKind::Codex => true,
-        ProviderKind::ClaudeCode | ProviderKind::OpenCode => {
-            matches!(authority, AuthorityMode::FullAutonomy)
-        }
+        ProviderKind::Codex | ProviderKind::OpenCode => true,
+        ProviderKind::ClaudeCode => matches!(authority, AuthorityMode::FullAutonomy),
         ProviderKind::GrokBuild | ProviderKind::Antigravity => false,
     }
+}
+
+/// Whether the session the employee's authority launches can serve a turn or task at
+/// `authority`. `OpenCode` takes its permission block at launch and ACP cannot narrow it per
+/// turn, so a session launched prompt-free (a `full-autonomy` employee) never serves a narrower
+/// `ask` or `self-decision` turn: that would run it without the approvals the turn requires. A
+/// governed session (`ask`, `self-decision`) serves any authority up to its own, and the
+/// approval observer applies the turn's authority to each request.
+pub(crate) const fn session_serves_authority(
+    provider: ProviderKind,
+    authority: AuthorityMode,
+    employee_authority: AuthorityMode,
+) -> bool {
+    provider_enforces_authority(provider, authority)
+        && !(matches!(provider, ProviderKind::OpenCode)
+            && matches!(employee_authority, AuthorityMode::FullAutonomy)
+            && !matches!(authority, AuthorityMode::FullAutonomy))
+}
+
+/// Whether a provider may run the memory worker's summary turns. Besides the governed `ask`
+/// ceiling the summary turn must be read-only. The daemon declines every permission request on a
+/// summary turn, but `OpenCode`'s ACP adapter rejects a `read_only` turn request
+/// ("read-only turns" unsupported), so a summary could neither be proven read-only nor run there;
+/// it stays excluded.
+pub(crate) const fn provider_runs_memory_summaries(provider: ProviderKind) -> bool {
+    provider_enforces_authority(provider, AuthorityMode::Ask)
+        && !matches!(provider, ProviderKind::OpenCode)
 }
 
 const fn authority_permission_mode(authority: AuthorityMode) -> &'static str {

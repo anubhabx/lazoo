@@ -36,7 +36,12 @@ while ($null -ne ($line = [Console]::In.ReadLine())) {
         'session/prompt' {
             $prompt = [string]$message.params.prompt[0].text
             $session = if ($prompt -like '*MISMATCH*') { 'other-session' } else { 'session-1' }
-            $kind = if ($prompt -like '*UNKNOWN_KIND*') { 'network' } elseif ($prompt -like '*EXECUTE*') { 'execute' } else { 'edit' }
+            $kind = 'edit'
+            foreach ($candidate in @('network', 'execute', 'delete', 'move', 'read', 'search', 'think', 'fetch', 'other')) {
+                $marker = if ($candidate -eq 'network') { 'UNKNOWN_KIND' } else { 'KIND_' + $candidate.ToUpperInvariant() }
+                if ($prompt -like "*$marker*") { $kind = $candidate; break }
+            }
+            if ($prompt -like '*EXECUTE*') { $kind = 'execute' }
             $options = if ($prompt -like '*MISSING_ONCE*') {
                 @(@{ optionId = 'reject'; name = 'Reject'; kind = 'reject_once' })
             } else {
