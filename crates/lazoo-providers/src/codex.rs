@@ -1104,6 +1104,7 @@ fn thread_resume_params(
         return Err(ProviderError::Unsupported {
             provider: ProviderKind::Codex,
             capability: "dynamic tools on thread/resume",
+            detail: None,
         });
     }
     let mut params = Map::new();

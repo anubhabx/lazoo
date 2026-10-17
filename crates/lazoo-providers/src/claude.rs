@@ -306,6 +306,7 @@ impl ClaudeSession {
             return Err(ProviderError::Unsupported {
                 provider: ProviderKind::ClaudeCode,
                 capability: "read-only turns",
+                detail: None,
             });
         }
         if self.stopped.load(Ordering::Acquire) {
@@ -329,6 +330,7 @@ impl ClaudeSession {
             return Err(ProviderError::Unsupported {
                 provider: ProviderKind::ClaudeCode,
                 capability: "read-only turns",
+                detail: None,
             });
         }
         if self.stopped.load(Ordering::Acquire) {

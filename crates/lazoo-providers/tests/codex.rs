@@ -706,7 +706,8 @@ async fn codex_sessions_without_tools_stay_stable_and_resume_with_tools_fails_cl
         error,
         ProviderError::Unsupported {
             provider: ProviderKind::Codex,
-            capability: "dynamic tools on thread/resume"
+            capability: "dynamic tools on thread/resume",
+            ..
         }
     ));
 }
