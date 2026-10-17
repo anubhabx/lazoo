@@ -8,7 +8,7 @@ Product version: `0.1.0`
 
 Database schema: 19
 
-Scope: the live, owner-account runs behind PROJECT-BRIEF section 21.3 for the four required providers, executed through the owner's installed and already-authenticated CLIs on this machine: the ignored `live_*` adapter tests in `crates/lazoo-providers/tests`, the daemon smoke `scripts/acceptance/provider-adapters.ps1`, and the new `scripts/acceptance/claude-live-lifecycle.ps1` (messaging, cancellation, resume on wake, planned shutdown through the real daemon and CLI). Grok Build is excluded by the owner. Every run used a disposable `LAZOO_DATA_ROOT`; no user provider configuration was changed. Transcript: `artifacts/2026-10-17-live-gates.log`.
+Scope: the live, owner-account runs behind PROJECT-BRIEF section 21.3 for the four required providers, executed through the owner's installed and already-authenticated CLIs on this machine: the ignored `live_*` adapter tests in `crates/lazoo-providers/tests`, the daemon smoke `scripts/acceptance/provider-adapters.ps1`, and the new `scripts/acceptance/provider-live-lifecycle.ps1 -Provider claude-code` (messaging, cancellation, resume on wake, planned shutdown through the real daemon and CLI). Grok Build is excluded by the owner. Every run used a disposable `LAZOO_DATA_ROOT`; no user provider configuration was changed. Transcript: `artifacts/2026-10-17-live-gates.log`.
 
 ## Outcome
 
@@ -16,7 +16,7 @@ PASS for every provider's live lifecycle as defined below, after two retries and
 
 | Provider | Readiness (no model) | Adapter turn and resume | Daemon smoke (`provider-adapters.ps1`) | Lifecycle beyond a reply |
 |---|---|---|---|---|
-| Claude Code 2.1.302, native subscription | `live_claude_non_model_probe` ok, 0.66 s | `live_claude_model_backed_turn_and_resume`: first attempt FAILED (`InvalidEvent`, "frame before correlated startup init", 3.4 s); PASS on the retry, 20.0 s | PASS, 12.6 s, exact `LAZOO_CLAUDE_OK` | `claude-live-lifecycle.ps1` PASS: messaging, cancellation, resume on wake, planned shutdown (below) |
+| Claude Code 2.1.302, native subscription | `live_claude_non_model_probe` ok, 0.66 s | `live_claude_model_backed_turn_and_resume`: first attempt FAILED (`InvalidEvent`, "frame before correlated startup init", 3.4 s); PASS on the retry, 20.0 s | PASS, 12.6 s, exact `LAZOO_CLAUDE_OK` | `provider-live-lifecycle.ps1 -Provider claude-code` PASS: messaging, cancellation, resume on wake, planned shutdown (below) |
 | Codex 0.153.4 (`codex.cmd`), ChatGPT account | `live_codex_app_server_handshake` ok, 4.1 s; `live_codex_session_start_reports_contained_host` ok, 3.5 s | `live_codex_single_turn_and_resume` PASS, 20.1 s | PASS, exact `LAZOO_CODEX_OK` | Cancellation is the interrupt path proven on the fixture (`codex_interrupt_correlates_the_active_turn`); no live cancel was run |
 | OpenCode 1.19.0 ACP, Big Pickle | `live_opencode_acp_handshake` ok, 4.5 s | `live_opencode_model_backed_turn` (turn, `session/load`, second turn): first attempt FAILED because the resumed reply was `</think>LAZOO_OPENCODE_RESUME_OK`; PASS on the retry, 18.6 s | first attempt FAIL (turn completed, 28,966 tokens, reply did not equal the token); PASS on the retry | Stall handling is the deterministic `opencode_acceptance_without_progress_becomes_stalled`; no live cancel was run |
 | Antigravity 1.3.6 (`agy`) | `live_agy_non_model_probe` ok, 16.9 s | `live_agy_model_backed_turn_and_resume` PASS, 43.7 s (`--conversation <id>` resume) | PASS, exact `LAZOO_AGY_OK` | Cancellation proven on the fixture only (`agy_cancel_during_active_turn_kills_host_and_reports_cancelled`) |
@@ -25,7 +25,7 @@ The two first-attempt failures did not recur. The OpenCode one is model variance
 
 ## Claude Code live lifecycle
 
-`scripts/acceptance/claude-live-lifecycle.ps1` starts the real `lazood.exe` on a disposable data root with this outer Claude session's `ANTHROPIC_*`, `CLAUDE_CODE_*`, and session variables removed from the daemon's environment, so the native login is the only channel; creates a Claude Code lead under `full-autonomy`; and runs one daemon lifetime:
+`scripts/acceptance/provider-live-lifecycle.ps1 -Provider claude-code` starts the real `lazood.exe` on a disposable data root with this outer Claude session's `ANTHROPIC_*`, `CLAUDE_CODE_*`, and session variables removed from the daemon's environment, so the native login is the only channel; creates a Claude Code lead under `full-autonomy`; and runs one daemon lifetime:
 
 1. Turn 1 asks the model to remember the code word `PELICAN` and reply exactly `LAZOO_CLAUDE_OK`: PASS.
 2. Turn 2 asks for a long count and is cancelled with `lazooctl turn cancel` once accepted: the turn ends `cancelled`.
@@ -33,7 +33,7 @@ The two first-attempt failures did not recur. The OpenCode one is model variance
 4. Turn 3 asks for the remembered word: the reply is exactly `PELICAN`, the new session's native session id equals the first session's, the ledger holds exactly one `session.resumed` event naming the prior session and that native id and no `session.resume.skipped`.
 5. Planned daemon shutdown leaves no native tree process alive.
 
-Runs: the first complete run reached turn 2 and FAILED cancellation: `lazooctl turn cancel` returned `LZ-TURN-UNCERTAIN` and the turn was stored `uncertain` with `LZ-TURN-NO-ACCEPTANCE-EVIDENCE`. Cause, fixed on this branch: when the Claude Code host exited after a cancel request, `collect_turn` appended `ProviderEvent::Cancelled` to the returned events but never passed it to the turn observer, and the daemon records a cancellation only from its observer, so the turn stayed `accepted` and ended `uncertain`. The adapter now observes the `Cancelled` event before returning it; `claude_cancel_during_active_turn_kills_host_and_reports_cancelled` now runs the observed turn path and asserts the observer saw the cancellation (the earlier version of that test checked the returned events only, which is why the fixture gate missed it). The Antigravity adapter has no observed path of its own and uses the trait's default, which observes returned events after the turn, so it did not need the change. The second run passed cancellation and failed the resume gate on a script error (`.Count` on an unwrapped process list under strict mode) before turn 3 was sent; the third run, after that one-line script fix, passed all five gates in 20.5 s with 3 live turns. The script's own record is `docs/verification/2026-10-17-claude-live-lifecycle.md`.
+Runs: the first complete run reached turn 2 and FAILED cancellation: `lazooctl turn cancel` returned `LZ-TURN-UNCERTAIN` and the turn was stored `uncertain` with `LZ-TURN-NO-ACCEPTANCE-EVIDENCE`. Cause, fixed on this branch: when the Claude Code host exited after a cancel request, `collect_turn` appended `ProviderEvent::Cancelled` to the returned events but never passed it to the turn observer, and the daemon records a cancellation only from its observer, so the turn stayed `accepted` and ended `uncertain`. The adapter now observes the `Cancelled` event before returning it; `claude_cancel_during_active_turn_kills_host_and_reports_cancelled` now runs the observed turn path and asserts the observer saw the cancellation (the earlier version of that test checked the returned events only, which is why the fixture gate missed it). The Antigravity adapter has no observed path of its own and uses the trait's default, which observes returned events after the turn, so it did not need the change. The second run passed cancellation and failed the resume gate on a script error (`.Count` on an unwrapped process list under strict mode) before turn 3 was sent; the third run, after that one-line script fix, passed all five gates in 20.5 s with 3 live turns. The script's own record is `docs/verification/2026-10-17-provider-live-lifecycle.md`.
 
 ## Commands
 
@@ -45,7 +45,7 @@ Runs: the first complete run reached turn 2 and FAILED cancellation: `lazooctl t
 | `cargo test -p lazoo-providers --test opencode live_opencode_model_backed_turn --locked -- --ignored --exact` | 101, then 0 | FAILED once on `</think>LAZOO_OPENCODE_RESUME_OK`, then ok in 18.6 s. |
 | `cargo test -p lazoo-providers --test antigravity live_agy_model_backed_turn_and_resume --locked -- --ignored --exact` | 0 | ok, 43.7 s. |
 | `pwsh -File scripts/acceptance/provider-adapters.ps1 -Provider <p> -SkipBuild` for claude-code, codex, opencode, antigravity | 0, 0, 1 then 0, 0 | PASS, PASS, FAIL then PASS on retry, PASS; `artifacts/acceptance/provider-adapters-manifest.json`. |
-| `pwsh -File scripts/acceptance/claude-live-lifecycle.ps1` | 1, 1, 0 | FAIL at cancellation (product defect, fixed), FAIL at resume (script defect, fixed), PASS in 20.5 s with 3 live turns; `artifacts/acceptance/claude-live-lifecycle-manifest.json`. |
+| `pwsh -File scripts/acceptance/provider-live-lifecycle.ps1 -Provider claude-code` | 1, 1, 0 | FAIL at cancellation (product defect, fixed), FAIL at resume (script defect, fixed), PASS in 20.5 s with 3 live turns; `artifacts/acceptance/provider-live-lifecycle-claude-code-manifest.json`. |
 | `cargo test -p lazoo-providers --test claude --locked` and `--test antigravity --locked` after the fix | 0 | 19 passed and 6 passed (2 ignored each). |
 
 Live model turns sent on 2026-10-17, all short: about 9 through the lifecycle script across its development and final runs, 11 through the adapter tests (including the retries), 5 through the daemon smokes (OpenCode twice), and 2 manual frame-order probes of the Claude CLI. No turn used tools.
@@ -54,7 +54,7 @@ Live model turns sent on 2026-10-17, all short: about 9 through the lifecycle sc
 
 - No user provider configuration was read for writing or changed; every daemon ran on a disposable data root, and the vendor probes earlier in the day used disposable homes.
 - The authentication channel actually verified for Claude Code is the native subscription (`authenticationChannel: native-subscription` in the lifecycle manifest; the external API variables were removed from the daemon environment).
-- `claude-live-lifecycle` and `provider-adapters` are excluded from the deterministic gate (`scripts/gate.ps1` `$excluded`, pinned by `gate_runner_runs_the_whole_gate_and_excludes_only_the_live_and_ui_scripts`).
+- `provider-live-lifecycle` and `provider-adapters` are excluded from the deterministic gate (`scripts/gate.ps1` `$excluded`, pinned by `gate_runner_runs_the_whole_gate_and_excludes_only_the_live_and_ui_scripts`).
 - `UI BACKEND CONTRACT: GO` remains intentionally withheld.
 
 ## Retained boundaries
