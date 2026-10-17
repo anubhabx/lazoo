@@ -3,7 +3,7 @@
 //! Dispatch is deliberately kept in the app integration layer: it must claim a durable job,
 //! create a dedicated audited conversation/turn, and never retry an uncertain turn.
 
-use lazoo_protocol::{AuthorityMode, EmployeeRecord, MemoryRecordType};
+use lazoo_protocol::{EmployeeRecord, MemoryRecordType};
 use lazoo_providers::ProviderKind;
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -116,7 +116,7 @@ impl App {
             .provider
             .parse::<ProviderKind>()
             .map_err(|_| super::invalid_params("memory worker employee provider is unsupported"))?;
-        if input.enabled && !super::provider_enforces_authority(provider, AuthorityMode::Ask) {
+        if input.enabled && !super::provider_runs_memory_summaries(provider) {
             return Err(super::invalid_params(
                 "memory worker provider cannot enforce the governed ask authority ceiling",
             ));

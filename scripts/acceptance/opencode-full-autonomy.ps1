@@ -24,7 +24,7 @@ $commands = [Collections.Generic.List[object]]::new()
 $manifestStatus = 'FAIL'
 $evidence = [ordered]@{
     fullAutonomyDelivered = $false
-    askAndSelfDecisionRefused = $false
+    promptFreeSessionNeverServesNarrowerAuthority = $false
     launchPromptFreeOnlyUnderFullAutonomy = $false
     otherProvidersRefused = $false
     refusalsFailClosedBeforeIo = $false
@@ -53,9 +53,9 @@ function Invoke-Test([string]$Package, [string]$Target, [string]$Name) {
 
 try {
     Push-Location $repoRoot
-    Invoke-Test 'lazood' 'daemon' 'opencode_runs_turns_and_tasks_only_under_full_autonomy'
+    Invoke-Test 'lazood' 'daemon' 'opencode_delivers_turns_and_tasks_under_every_authority_its_launch_enforces'
     $evidence.fullAutonomyDelivered = $true
-    $evidence.askAndSelfDecisionRefused = $true
+    $evidence.promptFreeSessionNeverServesNarrowerAuthority = $true
     $evidence.otherProvidersRefused = $true
 
     Invoke-Test 'lazoo-providers' 'opencode' 'opencode_launch_is_prompt_free_only_under_full_autonomy'
@@ -97,8 +97,8 @@ try {
             externalModelUse = 'NOT_RUN'
             desktopUi = 'UNCHANGED'
             schemaMigration = 'NONE'
-            unlocked = 'OPENCODE_FULL_AUTONOMY_ONLY'
-            stillRefused = 'OPENCODE_ASK_AND_SELF_DECISION_ANTIGRAVITY_GROK_BUILD'
+            unlocked = 'OPENCODE_FULL_AUTONOMY_SUPERSEDED_BY_GOVERNED_DELIVERY'
+            stillRefused = 'ANTIGRAVITY_GROK_BUILD_AND_NARROWER_TURNS_ON_A_PROMPT_FREE_OPENCODE_SESSION'
             liveGate = 'NOT_RUN_NO_SUPPORT_CLAIMED'
             toolAccess = 'CODEX_SESSIONS_ONLY'
         }

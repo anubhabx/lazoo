@@ -18,10 +18,19 @@ use crate::{
 const OPENCODE_PROTOCOL: &str = "acp/v1";
 /// The session permission mode the daemon derives from full autonomy.
 const FULL_AUTONOMY_PERMISSION_MODE: &str = "auto";
+/// The permission modes the daemon derives from `ask` and `self-decision`.
+const GOVERNED_PERMISSION_MODES: [&str; 2] = ["ask", "accept-edits"];
 /// `OpenCode`'s inline permissions config variable ("Inlined json permissions config").
 const PERMISSION_ENV: &str = "OPENCODE_PERMISSION";
 /// A top-level `"*"` rule covers built-in and MCP tools alike.
 const ALLOW_ALL_PERMISSION: &str = r#"{"*":"allow"}"#;
+/// Every tool asks, so each governed action raises `session/request_permission` for the
+/// daemon's approval observer; only the read-only, non-governed tools (`read`, `glob`, `grep`,
+/// `list`) are allowed by name. The catch-all comes first because the last matching rule wins,
+/// and an unknown or newly added tool (writes, `bash`, `webfetch`, `websearch`, `task`, MCP
+/// tools, `external_directory`, `todowrite`) stays under `"*": "ask"` and never auto-runs.
+const GOVERNED_PERMISSION: &str =
+    r#"{"*":"ask","read":"allow","glob":"allow","grep":"allow","list":"allow"}"#;
 const STOP_TIMEOUT: Duration = Duration::from_secs(2);
 const VERSION_TIMEOUT: Duration = Duration::from_secs(5);
 const MAX_VERSION_BYTES: usize = 64 * 1024;
@@ -42,16 +51,21 @@ impl OpenCodeAdapter {
     #[must_use]
     pub fn command(executable: &Path, request: &SessionRequest) -> CommandSpec {
         let mut command = CommandSpec::new(executable, &request.cwd).arg("acp");
-        // Full autonomy is the one authority this adapter makes prompt-free, natively: the
-        // inline permission block outranks every OpenCode config file, so no
-        // `session/request_permission` is raised and no config file is written. Every other
-        // permission mode (and the probe, which carries none) leaves OpenCode's own
-        // permission configuration untouched; the adapter never widens authority on its own.
-        if request.permission_mode.as_deref() == Some(FULL_AUTONOMY_PERMISSION_MODE) {
-            command.env.insert(
-                OsString::from(PERMISSION_ENV),
-                OsString::from(ALLOW_ALL_PERMISSION),
-            );
+        // The permission mode selects the inline permission block, which outranks every OpenCode
+        // config file, so no config file is written. Full autonomy is prompt-free; `ask` and
+        // `self-decision` make every governed tool raise `session/request_permission`, which the
+        // daemon's approval observer answers. Any other mode (and the probe, which carries
+        // none) leaves OpenCode's own permission configuration untouched; the adapter never
+        // widens authority on its own.
+        let block = match request.permission_mode.as_deref() {
+            Some(FULL_AUTONOMY_PERMISSION_MODE) => Some(ALLOW_ALL_PERMISSION),
+            Some(mode) if GOVERNED_PERMISSION_MODES.contains(&mode) => Some(GOVERNED_PERMISSION),
+            _ => None,
+        };
+        if let Some(block) = block {
+            command
+                .env
+                .insert(OsString::from(PERMISSION_ENV), OsString::from(block));
         }
         command
     }

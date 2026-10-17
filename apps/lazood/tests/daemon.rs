@@ -14103,21 +14103,23 @@ fn claude_full_autonomy_acceptance_contract_is_deterministic_and_backend_only() 
     }
 }
 
-/// `OpenCode` is opened the way Claude Code was: delivery under `full-autonomy` only, the one
-/// authority the native harness enforces prompt-free (the adapter launches `opencode acp` with
-/// an inline allow-all permission block when, and only when, the session's permission mode is
-/// `auto`). A Codex lead's delegation to an `OpenCode` worker under full autonomy is dispatched
-/// and completes on the worker's own session, which the fake backend records as started with
-/// the `auto` permission mode; the same delegation to a worker whose authority is `ask` is
-/// proposed, accepted by the user, and then refused at dispatch, as is one to a `self-decision`
-/// worker (accepted outright) and to Grok Build and Antigravity workers even under full
-/// autonomy, each with the task failed before any session starts. An `OpenCode` lead takes a user turn under full
-/// autonomy and refuses one under `ask` or `self-decision` before any provider I/O. An
-/// `OpenCode` summary employee stays excluded from the memory worker, which needs the governed
-/// `ask` ceiling. No live support is claimed: the integrator runs the live delivery.
+/// `OpenCode` receives turns and tasks under every authority its launch enforces: the adapter
+/// launches `opencode acp` with an allow-all permission block when the session's permission
+/// mode is `auto` and with a governed block (every governed tool asks) when it is `ask` or
+/// `accept-edits`. A Codex lead's delegations to `OpenCode` workers of each authority are
+/// dispatched on the worker's own session, which the fake backend records as started with the
+/// matching permission mode (`auto`, `accept-edits`, `ask`; the `ask` task only after the user
+/// accepts its proposal). Grok Build and Antigravity workers are still refused even under full
+/// autonomy, each with the task failed before any session starts. An `OpenCode` lead takes a
+/// user turn under full autonomy, but a prompt-free session never serves a narrower `ask` or
+/// `self-decision` turn: that is refused before any provider I/O, because the launch block
+/// cannot be narrowed per turn. An `OpenCode` summary employee stays excluded from the memory
+/// worker. The governed approval path is proven by
+/// `opencode_ask_and_self_decision_turns_are_governed_through_the_approval_ledger`; no live
+/// support is claimed: the integrator runs the live delivery.
 #[tokio::test]
 #[allow(clippy::too_many_lines)] // One story over every authority pairing.
-async fn opencode_runs_turns_and_tasks_only_under_full_autonomy() {
+async fn opencode_delivers_turns_and_tasks_under_every_authority_its_launch_enforces() {
     use lazoo_protocol::TaskState;
 
     let (_temporary, harness) = tool_harness(AuthorityMode::FullAutonomy);
@@ -14223,9 +14225,10 @@ async fn opencode_runs_turns_and_tasks_only_under_full_autonomy() {
     assert_eq!(results[2].content["effectiveAuthority"], "self-decision");
     assert_eq!(results[2].content["state"], "accepted");
 
-    // Opal's task runs on her own OpenCode session, started prompt-free, and completes. Sven's
-    // (`self-decision`) and the Grok Build and Antigravity tasks (even under full autonomy) are
-    // refused at dispatch: the pass reports the refusal after running Opal.
+    // Opal's task runs on her own OpenCode session, started prompt-free, and Sven's
+    // (`self-decision`) on a governed one; both complete. The Grok Build and Antigravity tasks
+    // (even under full autonomy) are refused at dispatch: the pass reports the refusal after
+    // running the others.
     assert_eq!(
         harness
             .app
@@ -14235,7 +14238,7 @@ async fn opencode_runs_turns_and_tasks_only_under_full_autonomy() {
             .code,
         "LZ-TASK-AUTHORITY-UNSUPPORTED"
     );
-    for task in [sven_task, gro_task, gus_task] {
+    for task in [gro_task, gus_task] {
         let detail = harness.store.get_task(task).unwrap();
         assert_eq!(detail.task.state, TaskState::Failed);
         assert_eq!(
@@ -14243,6 +14246,8 @@ async fn opencode_runs_turns_and_tasks_only_under_full_autonomy() {
             Some("LZ-TASK-AUTHORITY-UNSUPPORTED")
         );
     }
+    let sven_detail = harness.store.get_task(sven_task).unwrap();
+    assert_eq!(sven_detail.task.state, TaskState::Completed);
     let opal_detail = harness.store.get_task(opal_task).unwrap();
     assert_eq!(opal_detail.task.state, TaskState::Completed);
     let opal_session = harness
@@ -14251,25 +14256,31 @@ async fn opencode_runs_turns_and_tasks_only_under_full_autonomy() {
         .unwrap();
     assert_eq!(opal_session.provider, "opencode");
     assert_eq!(opal_session.employee_id, opal.id);
-    assert_eq!(
+    let started_modes = || {
         harness
             .backend
             .session_permission_modes
             .lock()
             .unwrap()
-            .last(),
-        Some(&(ProviderKind::OpenCode, Some("auto".to_owned()))),
-        "the OpenCode session starts in the full-autonomy permission mode"
+            .iter()
+            .filter(|(provider, _)| *provider == ProviderKind::OpenCode)
+            .filter_map(|(_, mode)| mode.clone())
+            .collect::<Vec<_>>()
+    };
+    let mut modes = started_modes();
+    modes.sort();
+    assert_eq!(
+        modes,
+        ["accept-edits", "auto"],
+        "each OpenCode session starts in the permission mode of its worker's authority"
     );
     assert_eq!(
         harness.backend.starts.load(Ordering::SeqCst),
-        2,
-        "Rhea's session and Opal's"
+        3,
+        "Rhea's session, Opal's, and Sven's"
     );
 
-    // Olga's `ask` proposal is accepted by the user, then refused at dispatch: under `ask`
-    // OpenCode's prompts stay where Lazoo cannot answer them, so Lazoo fails closed before any
-    // session starts.
+    // Olga's `ask` proposal is accepted by the user, then dispatched on a governed session.
     call(
         "accept-olga",
         "task.accept",
@@ -14278,25 +14289,19 @@ async fn opencode_runs_turns_and_tasks_only_under_full_autonomy() {
     .await
     .result
     .unwrap();
+    harness.app.dispatch_pending_tasks_once().await.unwrap();
     assert_eq!(
-        harness
-            .app
-            .dispatch_pending_tasks_once()
-            .await
-            .unwrap_err()
-            .code,
-        "LZ-TASK-AUTHORITY-UNSUPPORTED"
+        harness.store.get_task(olga_task).unwrap().task.state,
+        TaskState::Completed
     );
-    let olga_detail = harness.store.get_task(olga_task).unwrap();
-    assert_eq!(olga_detail.task.state, TaskState::Failed);
-    assert_eq!(
-        olga_detail.task.failure_code.as_deref(),
-        Some("LZ-TASK-AUTHORITY-UNSUPPORTED")
-    );
-    assert_eq!(harness.backend.starts.load(Ordering::SeqCst), 2);
+    let mut modes = started_modes();
+    modes.sort();
+    assert_eq!(modes, ["accept-edits", "ask", "auto"]);
+    assert_eq!(harness.backend.starts.load(Ordering::SeqCst), 4);
 
-    // An OpenCode lead: user turns under `ask` and `self-decision` are refused before any
-    // provider I/O; one under full autonomy activates her session and completes.
+    // An OpenCode lead: a user turn under full autonomy activates her session and completes.
+    // Her session is launched prompt-free, so user turns under `ask` and `self-decision` are
+    // refused before any provider I/O rather than run without their approvals.
     let conversation: uuid::Uuid = call(
         "create-opal-conversation",
         "conversation.create",
@@ -14338,8 +14343,8 @@ async fn opencode_runs_turns_and_tasks_only_under_full_autonomy() {
             .unwrap();
         assert_eq!(refused.code, "LZ-TASK-AUTHORITY-UNSUPPORTED");
     }
-    assert_eq!(harness.backend.starts.load(Ordering::SeqCst), 2);
-    assert_eq!(harness.backend.turns.load(Ordering::SeqCst), 2);
+    assert_eq!(harness.backend.starts.load(Ordering::SeqCst), 4);
+    assert_eq!(harness.backend.turns.load(Ordering::SeqCst), 4);
     let completed = timeout(
         Duration::from_secs(20),
         submit("opal-full", "full-autonomy"),
@@ -14350,7 +14355,7 @@ async fn opencode_runs_turns_and_tasks_only_under_full_autonomy() {
     .unwrap();
     assert_eq!(completed["turn"]["state"], "completed");
     assert_eq!(completed["task"]["effectiveAuthority"], "full-autonomy");
-    assert_eq!(harness.backend.starts.load(Ordering::SeqCst), 3);
+    assert_eq!(harness.backend.starts.load(Ordering::SeqCst), 5);
     let opal_lead_session = harness
         .store
         .list_sessions()
@@ -14374,11 +14379,12 @@ async fn opencode_runs_turns_and_tasks_only_under_full_autonomy() {
     );
     assert_eq!(
         harness.backend.turns.load(Ordering::SeqCst),
-        3,
-        "Rhea's turn, Opal's dispatch turn, Opal's user turn"
+        5,
+        "Rhea's turn, three dispatch turns, Opal's user turn"
     );
 
-    // The memory worker needs the governed `ask` ceiling, which OpenCode still cannot enforce.
+    // The memory worker stays closed to OpenCode: its summary turn must be read-only, which the
+    // ACP adapter cannot carry.
     let configured = call(
         "configure-opencode-memory-worker",
         "memory.worker.configure",
@@ -14402,6 +14408,581 @@ async fn opencode_runs_turns_and_tasks_only_under_full_autonomy() {
     );
 }
 
+/// An `OpenCode` lead and its conversation over a chosen session backend, for the governed
+/// approval stories. The employee is `ready` for turns: the ledger, not the probe, is under test.
+struct OpenCodeLead {
+    _temporary: tempfile::TempDir,
+    store: Store,
+    app: App,
+    employee: lazoo_protocol::EmployeeRecord,
+    conversation_id: uuid::Uuid,
+}
+
+fn opencode_lead(authority: AuthorityMode, backend: Arc<dyn SessionBackend>) -> OpenCodeLead {
+    let temporary = tempdir().unwrap();
+    let root = DataRoot::from_path(temporary.path().join("data"));
+    root.ensure().unwrap();
+    let store = Store::open_path(root.state_db()).unwrap();
+    let employee = store
+        .create_employee(&CreateEmployeeInput {
+            request_id: "create-opencode-governed-request".to_owned(),
+            idempotency_key: "create-opencode-governed".to_owned(),
+            name: "Opal".to_owned(),
+            provider: "opencode".to_owned(),
+            role: "Lead".to_owned(),
+            instructions: String::new(),
+            model: Some("test-model".to_owned()),
+            reasoning_effort: None,
+            native_settings: json!({}),
+            authority_mode: authority,
+            checkout_policy: EmployeeCheckoutPolicy::Isolated,
+            activation_policy: lazoo_protocol::ActivationPolicy::Manual,
+            idle_timeout_seconds: 0,
+            enabled: true,
+            provider_observation: Some(ProviderObservation {
+                provider: "opencode".to_owned(),
+                verification: "configured".to_owned(),
+                version: Some("test".to_owned()),
+                protocol: Some("acp/v1".to_owned()),
+                capabilities: json!({"session": true, "permission": true}),
+                authentication: json!({"native": "ready", "external": "unknown"}),
+                degradation_reason: None,
+                checked_at: "2026-10-17T00:00:00Z".to_owned(),
+            }),
+        })
+        .unwrap()
+        .employee;
+    let conversation = store
+        .create_conversation(&CreateConversationInput {
+            request_id: "create-opencode-governed-conversation-request".to_owned(),
+            idempotency_key: "create-opencode-governed-conversation".to_owned(),
+            project_id: None,
+            lead_employee_id: employee.id,
+            title: None,
+        })
+        .unwrap()
+        .conversation;
+    let app =
+        App::new_with_session_backend(store.clone(), root, DiscoveryEnvironment::empty(), backend)
+            .unwrap()
+            .with_approval_timeout(Duration::from_secs(60));
+    OpenCodeLead {
+        _temporary: temporary,
+        store,
+        app,
+        employee,
+        conversation_id: conversation.id,
+    }
+}
+
+impl OpenCodeLead {
+    async fn warm(&self) {
+        self.app
+            .handle(request(
+                "warm-opencode-lead",
+                "session.warm",
+                json!({
+                    "employeeId": self.employee.id,
+                    "expectedEmployeeRevision": self.employee.configuration_revision,
+                    "idempotencyKey": "warm-opencode-lead"
+                }),
+            ))
+            .await
+            .result
+            .unwrap();
+    }
+
+    fn submit(
+        &self,
+        key: &str,
+        authority: &str,
+        text: &str,
+    ) -> tokio::task::JoinHandle<lazoo_protocol::JsonRpcResponse> {
+        let app = self.app.clone();
+        let (conversation_id, key, authority, text) = (
+            self.conversation_id,
+            key.to_owned(),
+            authority.to_owned(),
+            text.to_owned(),
+        );
+        tokio::spawn(async move {
+            app.handle(request(
+                &key,
+                "turn.submit",
+                json!({
+                    "conversationId": conversation_id,
+                    "author": {"kind": "user"},
+                    "recipient": null,
+                    "authorityMode": authority,
+                    "text": text,
+                    "activateIfNeeded": false,
+                    "maxAttempts": 1,
+                    "idempotencyKey": key
+                }),
+            ))
+            .await
+        })
+    }
+
+    async fn approvals(&self, state: Option<&str>) -> Vec<serde_json::Value> {
+        let params = state.map_or_else(|| json!({}), |state| json!({"state": state}));
+        self.app
+            .handle(request("list-opencode-approvals", "approval.list", params))
+            .await
+            .result
+            .unwrap()
+            .as_array()
+            .unwrap()
+            .clone()
+    }
+
+    async fn wait_for_pending(&self) -> serde_json::Value {
+        timeout(Duration::from_secs(30), async {
+            loop {
+                if let Some(first) = self.approvals(Some("pending")).await.first() {
+                    return first.clone();
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("a pending approval should be listed while the provider waits")
+    }
+
+    async fn decide(&self, pending: &serde_json::Value, decision: &str) -> serde_json::Value {
+        let key = format!("decide-{}-{decision}", pending["id"].as_str().unwrap());
+        self.app
+            .handle(request(
+                &key,
+                "approval.decide",
+                json!({
+                    "id": pending["id"],
+                    "expectedRevision": pending["revision"],
+                    "decision": decision,
+                    "idempotencyKey": key
+                }),
+            ))
+            .await
+            .result
+            .unwrap()
+    }
+}
+
+/// Runs the real `OpenCode` ACP adapter against the fake ACP fixture, so a daemon turn crosses the
+/// genuine `session/request_permission` bridge. The fixture emits one permission request per
+/// prompt whose tool kind the prompt text selects (`KIND_FETCH`, `KIND_DELETE`, ...), and it
+/// stores the response it receives beside the session's working directory.
+struct AcpFixtureBackend {
+    executable: PathBuf,
+    starts: AcpStarts,
+}
+
+/// The permission mode and working directory of every session the fixture backend started.
+type AcpStarts = Arc<Mutex<Vec<(Option<String>, PathBuf)>>>;
+
+struct AcpFixtureSession(lazoo_providers::OpenCodeSession);
+
+impl ManagedSession for AcpFixtureSession {
+    fn id(&self) -> String {
+        lazoo_providers::ProviderSession::id(&self.0)
+    }
+
+    fn native_host_pid(&self) -> Option<u32> {
+        lazoo_providers::ProviderSession::native_host_pid(&self.0)
+    }
+
+    fn turn_observed<'a>(
+        &'a self,
+        request: &'a TurnRequest,
+        observer: &'a dyn TurnEventObserver,
+    ) -> Pin<Box<dyn Future<Output = Result<Vec<ProviderEvent>, ProviderError>> + Send + 'a>> {
+        lazoo_providers::ProviderSession::turn_observed(&self.0, request, observer)
+    }
+
+    fn cancel(&self) -> Pin<Box<dyn Future<Output = Result<(), ProviderError>> + Send + '_>> {
+        lazoo_providers::ProviderSession::cancel(&self.0)
+    }
+
+    fn stop(&self) -> Pin<Box<dyn Future<Output = Result<(), ProviderError>> + Send + '_>> {
+        lazoo_providers::ProviderSession::stop(&self.0)
+    }
+}
+
+impl SessionBackend for AcpFixtureBackend {
+    fn start<'a>(
+        &'a self,
+        _provider: ProviderKind,
+        request: &'a SessionRequest,
+    ) -> SessionBackendFuture<'a> {
+        Box::pin(async move {
+            self.starts
+                .lock()
+                .unwrap()
+                .push((request.permission_mode.clone(), request.cwd.clone()));
+            let session = lazoo_providers::ProviderAdapter::start(
+                &lazoo_providers::OpenCodeAdapter::with_executable(self.executable.clone()),
+                request,
+            )
+            .await?;
+            Ok(Box::new(AcpFixtureSession(session)) as Box<dyn ManagedSession>)
+        })
+    }
+}
+
+fn acp_fixture_backend() -> (Arc<AcpFixtureBackend>, AcpStarts) {
+    ensure_session_host();
+    let starts = Arc::new(Mutex::new(Vec::new()));
+    let backend = Arc::new(AcpFixtureBackend {
+        executable: Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../crates/lazoo-providers/tests/fixtures/acp/fake-acp.cmd"),
+        starts: Arc::clone(&starts),
+    });
+    (backend, starts)
+}
+
+/// What the fixture received for the last permission request of the session at `cwd`.
+fn acp_fixture_outcome(cwd: &Path) -> serde_json::Value {
+    let text = std::fs::read_to_string(cwd.join("fake-acp-response-1.json")).unwrap();
+    serde_json::from_str::<serde_json::Value>(text.trim_start_matches('\u{feff}').trim()).unwrap()
+        ["result"]["outcome"]
+        .clone()
+}
+
+/// Brief section 12: under `ask` a governed action waits for the user's one-action approval in
+/// the Inbox, and under `self-decision` the daemon's policy answers within scope while scope
+/// expansion still needs the user. `OpenCode` is held to that through the ACP bridge, which admits
+/// only command-execution and file-change requests (`execute`, `edit`, `delete`, `move`) and
+/// declines every other kind (`fetch`, `other`, ...) without an approval ever existing. The first
+/// half runs the ledger on the fake backend with scripted requests, mirroring the Codex story,
+/// and records the permission mode each session launches with. The second half runs the real
+/// adapter against the fake ACP fixture, so the bridge itself, its allow-once answer and its
+/// cancel answer are on the path.
+#[tokio::test]
+#[allow(clippy::too_many_lines)] // One story: ledger on the fake backend, then the real ACP bridge.
+async fn opencode_ask_and_self_decision_turns_are_governed_through_the_approval_ledger() {
+    let scripted = |kind: PermissionKind, action: &str, scope_expansion: bool| PermissionRequest {
+        provider: ProviderKind::OpenCode,
+        ..permission_request(kind, action, scope_expansion)
+    };
+    let opencode_modes = |backend: &FakeSessionBackend| {
+        backend
+            .session_permission_modes
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|(provider, _)| *provider == ProviderKind::OpenCode)
+            .filter_map(|(_, mode)| mode.clone())
+            .collect::<Vec<_>>()
+    };
+
+    // Under `ask`, a command-execution request is a pending Inbox approval and the turn waits.
+    let backend = FakeSessionBackend::default();
+    backend
+        .turn_events
+        .lock()
+        .unwrap()
+        .extend(completed_turn_events("completed"));
+    backend.permission_requests.lock().unwrap().push(scripted(
+        PermissionKind::CommandExecution,
+        "cargo test",
+        false,
+    ));
+    let ask = opencode_lead(AuthorityMode::Ask, Arc::new(backend.clone()));
+    ask.warm().await;
+    let submission = ask.submit("ask-approve", "ask", "Run the governed command");
+    let pending = ask.wait_for_pending().await;
+    assert_eq!(pending["kind"], "command-execution");
+    assert_eq!(pending["action"], "cargo test");
+    assert_eq!(pending["authority"], "ask");
+    assert!(!submission.is_finished());
+    assert!(backend.permission_decisions.lock().unwrap().is_empty());
+    let decided = ask.decide(&pending, "approve").await;
+    assert_eq!(decided["approval"]["state"], "approved");
+    assert_eq!(decided["approval"]["decider"], "user");
+    let submitted = timeout(Duration::from_secs(10), submission)
+        .await
+        .unwrap()
+        .unwrap()
+        .result
+        .unwrap();
+    assert_eq!(submitted["turn"]["state"], "completed");
+    assert_eq!(
+        *backend.permission_decisions.lock().unwrap(),
+        vec![PermissionDecision::Approve]
+    );
+    assert_eq!(opencode_modes(&backend), ["ask"]);
+    assert_eq!(
+        approval_event_types(&ask.store),
+        vec!["approval.requested", "approval.decided"]
+    );
+
+    // Declined, the provider receives the decline and the ledger records it.
+    let backend = FakeSessionBackend::default();
+    backend
+        .turn_events
+        .lock()
+        .unwrap()
+        .extend(completed_turn_events("completed"));
+    backend.permission_requests.lock().unwrap().push(scripted(
+        PermissionKind::FileChange,
+        "apply file changes in the workspace",
+        false,
+    ));
+    let declined = opencode_lead(AuthorityMode::Ask, Arc::new(backend.clone()));
+    declined.warm().await;
+    let submission = declined.submit("ask-decline", "ask", "Change a file");
+    let pending = declined.wait_for_pending().await;
+    assert_eq!(pending["kind"], "file-change");
+    let decided = declined.decide(&pending, "decline").await;
+    assert_eq!(decided["approval"]["state"], "declined");
+    assert_eq!(decided["approval"]["decider"], "user");
+    timeout(Duration::from_secs(10), submission)
+        .await
+        .unwrap()
+        .unwrap()
+        .result
+        .unwrap();
+    assert_eq!(
+        *backend.permission_decisions.lock().unwrap(),
+        vec![PermissionDecision::Decline]
+    );
+
+    // Under `self-decision` the policy answers an in-scope request with no pending approval; a
+    // scope expansion still waits for the user.
+    let backend = FakeSessionBackend::default();
+    backend
+        .turn_events
+        .lock()
+        .unwrap()
+        .extend(completed_turn_events("completed"));
+    backend.permission_requests.lock().unwrap().extend([
+        scripted(
+            PermissionKind::FileChange,
+            "apply file changes in the workspace",
+            false,
+        ),
+        scripted(
+            PermissionKind::CommandExecution,
+            "apply file changes under C:\\",
+            true,
+        ),
+    ]);
+    let policy = opencode_lead(AuthorityMode::SelfDecision, Arc::new(backend.clone()));
+    policy.warm().await;
+    let submission = policy.submit("self-decision", "self-decision", "Change a file");
+    let pending = policy.wait_for_pending().await;
+    assert_eq!(pending["scopeExpansion"], true);
+    assert_eq!(pending["authority"], "self-decision");
+    assert_eq!(
+        *backend.permission_decisions.lock().unwrap(),
+        vec![PermissionDecision::Approve],
+        "the in-scope request was answered by policy while the expansion waits"
+    );
+    policy.decide(&pending, "decline").await;
+    timeout(Duration::from_secs(10), submission)
+        .await
+        .unwrap()
+        .unwrap()
+        .result
+        .unwrap();
+    let approvals = policy.approvals(None).await;
+    assert_eq!(approvals.len(), 2);
+    assert_eq!(approvals[0]["state"], "approved");
+    assert_eq!(approvals[0]["decider"], "policy");
+    assert_eq!(approvals[1]["state"], "declined");
+    assert_eq!(approvals[1]["decider"], "user");
+    assert_eq!(opencode_modes(&backend), ["accept-edits"]);
+
+    // The real ACP bridge, under `ask`. A command request is held for the user and, once
+    // approved, answered with the offered one-shot option.
+    let (acp, starts) = acp_fixture_backend();
+    let lead = opencode_lead(AuthorityMode::Ask, acp);
+    lead.warm().await;
+    let cwd = starts.lock().unwrap()[0].1.clone();
+    assert_eq!(starts.lock().unwrap()[0].0.as_deref(), Some("ask"));
+    let submission = lead.submit("acp-execute", "ask", "KIND_EXECUTE run the command");
+    let pending = lead.wait_for_pending().await;
+    assert_eq!(pending["kind"], "command-execution");
+    assert_eq!(pending["action"], "execute an ACP command");
+    assert_eq!(pending["authority"], "ask");
+    assert_eq!(pending["scopeExpansion"], true);
+    assert!(!submission.is_finished());
+    lead.decide(&pending, "approve").await;
+    let submitted = timeout(Duration::from_secs(30), submission)
+        .await
+        .unwrap()
+        .unwrap()
+        .result
+        .unwrap();
+    assert_eq!(submitted["turn"]["state"], "completed");
+    let outcome = acp_fixture_outcome(&cwd);
+    assert_eq!(outcome["outcome"], "selected");
+    assert_eq!(outcome["optionId"], "allow-one");
+
+    // A declined delete is a file-change approval whose action names the kind; the provider is
+    // answered with a cancel and the turn ends with the decision recorded.
+    let submission = lead.submit("acp-delete", "ask", "KIND_DELETE remove the file");
+    let pending = lead.wait_for_pending().await;
+    assert_eq!(pending["kind"], "file-change");
+    assert_eq!(pending["action"], "delete ACP files");
+    let decided = lead.decide(&pending, "decline").await;
+    assert_eq!(decided["approval"]["state"], "declined");
+    let submitted = timeout(Duration::from_secs(30), submission)
+        .await
+        .unwrap()
+        .unwrap()
+        .result
+        .unwrap();
+    assert_eq!(submitted["turn"]["state"], "completed");
+    assert_eq!(acp_fixture_outcome(&cwd)["outcome"], "cancelled");
+    let recorded = lead.approvals(None).await.len();
+    assert_eq!(recorded, 2);
+
+    // A fetch or other-kind request never becomes an approval: the adapter declines it itself, the
+    // turn ends, and the refusal reason is recorded in the stored event payload.
+    for (key, text) in [
+        ("acp-fetch", "KIND_FETCH get the page"),
+        ("acp-other", "KIND_OTHER use the tool"),
+    ] {
+        let submitted = timeout(Duration::from_secs(30), lead.submit(key, "ask", text))
+            .await
+            .unwrap()
+            .unwrap()
+            .result
+            .unwrap();
+        assert_eq!(submitted["turn"]["state"], "completed", "{key}");
+        assert_eq!(acp_fixture_outcome(&cwd)["outcome"], "cancelled", "{key}");
+        assert_eq!(lead.approvals(None).await.len(), recorded, "{key}");
+        // The refusal and its reason stay in the turn transcript (the adapter's raw payload goes to
+        // the raw-frame capture).
+        let refused = submitted["turn"]["events"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|event| {
+                let payload = event["payload"].to_string();
+                payload.contains("ACP permission request refused")
+                    && payload.contains("unsupported tool kind")
+            });
+        assert!(
+            refused,
+            "{key}: the refusal reason is kept in the turn events"
+        );
+    }
+
+    // Under `self-decision` the bridge marks every ACP request as a scope expansion (no portable
+    // confinement proof), so the policy never answers one: it waits for the user, and an
+    // unsupported kind is still declined with no approval.
+    let (acp, starts) = acp_fixture_backend();
+    let lead = opencode_lead(AuthorityMode::SelfDecision, acp);
+    lead.warm().await;
+    let cwd = starts.lock().unwrap()[0].1.clone();
+    assert_eq!(starts.lock().unwrap()[0].0.as_deref(), Some("accept-edits"));
+    let submission = lead.submit(
+        "self-execute",
+        "self-decision",
+        "KIND_EXECUTE run the command",
+    );
+    let pending = lead.wait_for_pending().await;
+    assert_eq!(pending["authority"], "self-decision");
+    assert_eq!(pending["scopeExpansion"], true);
+    lead.decide(&pending, "approve").await;
+    let submitted = timeout(Duration::from_secs(30), submission)
+        .await
+        .unwrap()
+        .unwrap()
+        .result
+        .unwrap();
+    assert_eq!(submitted["turn"]["state"], "completed");
+    assert_eq!(acp_fixture_outcome(&cwd)["outcome"], "selected");
+    let submitted = timeout(
+        Duration::from_secs(30),
+        lead.submit("self-fetch", "self-decision", "KIND_FETCH get the page"),
+    )
+    .await
+    .unwrap()
+    .unwrap()
+    .result
+    .unwrap();
+    assert_eq!(submitted["turn"]["state"], "completed");
+    assert_eq!(acp_fixture_outcome(&cwd)["outcome"], "cancelled");
+    let approvals = lead.approvals(None).await;
+    assert_eq!(approvals.len(), 1);
+    assert_eq!(approvals[0]["state"], "approved");
+    assert_eq!(approvals[0]["decider"], "user");
+}
+
+#[test]
+fn opencode_governed_delivery_acceptance_contract_is_deterministic_and_backend_only() {
+    let repository = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let script = std::fs::read_to_string(
+        repository.join("scripts/acceptance/opencode-governed-delivery.ps1"),
+    )
+    .expect("opencode governed delivery acceptance script");
+
+    for required in [
+        "opencode_ask_and_self_decision_turns_are_governed_through_the_approval_ledger",
+        "opencode_delivers_turns_and_tasks_under_every_authority_its_launch_enforces",
+        "opencode_launch_makes_every_governed_tool_ask_under_ask_and_self_decision",
+        "opencode_launch_is_prompt_free_only_under_full_autonomy",
+        "observed_acp_admits_command_edit_delete_and_move_as_governed_requests",
+        "observed_acp_refuses_every_other_kind_with_a_cancel_and_a_recorded_reason",
+        "acp_delete_and_move_map_to_file_changes_and_every_other_kind_stays_refused",
+        "task_turn_rejects_a_provider_without_authority_override_support_before_io",
+        "store_enables_wal_foreign_keys_and_schema_version",
+        "governedModesAskForEveryGovernedTool",
+        "approvalLedgerGovernsAskAndSelfDecision",
+        "unsupportedKindsDeclinedWithoutApproval",
+        "promptFreeSessionNeverServesNarrowerAuthority",
+        "memoryWorkerStillExcludesOpenCode",
+        "noSupportClaimed",
+        "providerSmokeAbsent",
+        "externalModelUseAbsent",
+        "uiChangesAbsent",
+        "deterministic-fake-transport",
+        "schemaVersion = 19",
+    ] {
+        assert!(
+            script.contains(required),
+            "acceptance script must contain {required}"
+        );
+    }
+    for forbidden in [
+        "provider', 'smoke",
+        "LivePrompt",
+        "lazooctl",
+        "opencode.exe",
+    ] {
+        assert!(
+            !script.contains(forbidden),
+            "acceptance script must not contain {forbidden}"
+        );
+    }
+}
+
+#[test]
+fn opencode_governed_live_script_is_bounded_and_excluded_from_deterministic_proof() {
+    let repository = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let script =
+        std::fs::read_to_string(repository.join("scripts/acceptance/opencode-governed-live.ps1"))
+            .expect("opencode governed live script");
+    for required in [
+        "$maxLiveTurns = 4",
+        "'provider', 'smoke'",
+        "LAZOO_ASK_OK",
+        "action-required",
+        "'approval', 'approve'",
+        "'approval', 'decline'",
+        "self-decision",
+        "NOT_RUN",
+    ] {
+        assert!(
+            script.contains(required),
+            "live script must contain {required}"
+        );
+    }
+}
+
 #[test]
 fn opencode_full_autonomy_acceptance_contract_is_deterministic_and_backend_only() {
     let repository = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
@@ -14410,12 +14991,12 @@ fn opencode_full_autonomy_acceptance_contract_is_deterministic_and_backend_only(
         std::fs::read_to_string(&script_path).expect("opencode full autonomy acceptance script");
 
     for required in [
-        "opencode_runs_turns_and_tasks_only_under_full_autonomy",
+        "opencode_delivers_turns_and_tasks_under_every_authority_its_launch_enforces",
         "task_turn_rejects_a_provider_without_authority_override_support_before_io",
         "opencode_launch_is_prompt_free_only_under_full_autonomy",
         "store_enables_wal_foreign_keys_and_schema_version",
         "fullAutonomyDelivered",
-        "askAndSelfDecisionRefused",
+        "promptFreeSessionNeverServesNarrowerAuthority",
         "launchPromptFreeOnlyUnderFullAutonomy",
         "otherProvidersRefused",
         "noSupportClaimed",

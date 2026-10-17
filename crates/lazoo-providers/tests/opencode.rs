@@ -9,9 +9,10 @@ use std::{
 };
 
 use lazoo_providers::{
-    AdapterFuture, DiscoveryEnvironment, OpenCodeAdapter, PermissionDecision, PermissionRequest,
-    ProgressDeadline, ProviderAdapter, ProviderError, ProviderEvent, ProviderKind, ProviderSession,
-    ProviderVerification, SessionRequest, TurnEventObserver, TurnRequest, normalize_acp_message,
+    AdapterFuture, DiscoveryEnvironment, OpenCodeAdapter, PermissionDecision, PermissionKind,
+    PermissionRequest, ProgressDeadline, ProviderAdapter, ProviderError, ProviderEvent,
+    ProviderKind, ProviderSession, ProviderVerification, SessionRequest, TurnEventObserver,
+    TurnRequest, normalize_acp_message,
 };
 use tempfile::tempdir;
 use tokio::{sync::Notify, time::timeout};
@@ -129,14 +130,16 @@ fn opencode_launch_is_prompt_free_only_under_full_autonomy() {
     assert_eq!(parsed, serde_json::json!({"*": "allow"}));
 
     for mode in [
-        "ask",
-        "accept-edits",
         "untrusted",
         "plan",
         "default",
         "dontAsk",
         "full-autonomy",
+        "self-decision",
         "AUTO",
+        "ASK",
+        "Accept-Edits",
+        " ask",
         "",
     ] {
         let command = OpenCodeAdapter::command(
@@ -148,6 +151,52 @@ fn opencode_launch_is_prompt_free_only_under_full_autonomy() {
             "permission mode {mode:?} must not carry OPENCODE_PERMISSION"
         );
         assert_eq!(command.args, vec![OsString::from("acp")]);
+    }
+}
+
+#[test]
+fn opencode_launch_makes_every_governed_tool_ask_under_ask_and_self_decision() {
+    let executable = Path::new(r"C:\Tools\opencode.exe");
+    let key = OsString::from("OPENCODE_PERMISSION");
+    let expected = r#"{"*":"ask","read":"allow","glob":"allow","grep":"allow","list":"allow"}"#;
+
+    // `ask` and `accept-edits` are the modes the daemon derives from `ask` and `self-decision`.
+    for mode in ["ask", "accept-edits"] {
+        let command = OpenCodeAdapter::command(
+            executable,
+            &SessionRequest::new(r"C:\repo").with_permission_mode(mode),
+        );
+        assert_eq!(command.args, vec![OsString::from("acp")]);
+        assert_eq!(command.env.len(), 1, "no other variable is injected");
+        assert_eq!(command.env.get(&key), Some(&OsString::from(expected)));
+        let parsed: serde_json::Value =
+            serde_json::from_str(&command.env[&key].to_string_lossy()).unwrap();
+        let rules = parsed.as_object().unwrap();
+        // The catch-all comes first (the last matching rule wins) and asks; only the read-only,
+        // non-governed tools are allowed by name.
+        assert_eq!(rules.keys().next().map(String::as_str), Some("*"));
+        assert_eq!(rules["*"], "ask");
+        let allowed = rules
+            .iter()
+            .filter(|(_, action)| *action == "allow")
+            .map(|(tool, _)| tool.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(allowed, ["read", "glob", "grep", "list"]);
+        for governed in [
+            "bash",
+            "edit",
+            "write",
+            "webfetch",
+            "websearch",
+            "task",
+            "external_directory",
+            "todowrite",
+        ] {
+            assert!(
+                !rules.contains_key(governed),
+                "{governed} must stay under the catch-all ask"
+            );
+        }
     }
 }
 
@@ -397,6 +446,132 @@ async fn acp_native_cancellation_missing_observer_and_deadline_all_reply_cancell
         "cancelled"
     );
     session.stop().await.unwrap();
+}
+
+#[tokio::test]
+async fn observed_acp_admits_command_edit_delete_and_move_as_governed_requests() {
+    for (prompt, expected_kind, expected_action) in [
+        (
+            "KIND_EXECUTE",
+            PermissionKind::CommandExecution,
+            "execute an ACP command",
+        ),
+        ("edit-kind", PermissionKind::FileChange, "edit ACP files"),
+        (
+            "KIND_DELETE",
+            PermissionKind::FileChange,
+            "delete ACP files",
+        ),
+        ("KIND_MOVE", PermissionKind::FileChange, "move ACP files"),
+    ] {
+        let temporary = tempdir().unwrap();
+        let session = OpenCodeAdapter::with_executable(fake_acp())
+            .start(&SessionRequest::new(temporary.path()))
+            .await
+            .unwrap();
+        let observer = GateObserver::approving();
+        let request = TurnRequest::new(prompt);
+        let turn = session.turn_observed(&request, &observer);
+        tokio::pin!(turn);
+        timeout(Duration::from_secs(5), async {
+            tokio::select! {
+                () = observer.entered.notified() => {},
+                result = &mut turn => panic!("turn completed before approval gate: {result:?}"),
+            }
+        })
+        .await
+        .unwrap();
+        observer.release.notify_one();
+        let events = timeout(Duration::from_secs(5), &mut turn)
+            .await
+            .unwrap()
+            .unwrap();
+        let requests = observer.requests.lock().unwrap().clone();
+        assert_eq!(requests.len(), 1, "{prompt}");
+        assert_eq!(requests[0].kind, expected_kind, "{prompt}");
+        assert_eq!(requests[0].action, expected_action, "{prompt}");
+        assert!(requests[0].scope_expansion, "{prompt}");
+        let wire = response(temporary.path(), "fake-acp-response-1.json");
+        assert_eq!(wire["result"]["outcome"]["outcome"], "selected", "{prompt}");
+        assert_eq!(
+            wire["result"]["outcome"]["optionId"], "allow-one",
+            "{prompt}"
+        );
+        assert!(
+            events
+                .iter()
+                .any(|event| matches!(event, ProviderEvent::PermissionRequested { .. })),
+            "{prompt}"
+        );
+        session.stop().await.unwrap();
+    }
+}
+
+#[tokio::test]
+async fn observed_acp_refuses_every_other_kind_with_a_cancel_and_a_recorded_reason() {
+    for (prompt, kind) in [
+        ("KIND_READ", "read"),
+        ("KIND_SEARCH", "search"),
+        ("KIND_THINK", "think"),
+        ("KIND_FETCH", "fetch"),
+        ("KIND_OTHER", "other"),
+        ("UNKNOWN_KIND", "network"),
+    ] {
+        let temporary = tempdir().unwrap();
+        let session = OpenCodeAdapter::with_executable(fake_acp())
+            .start(&SessionRequest::new(temporary.path()).with_permission_mode("ask"))
+            .await
+            .unwrap();
+        let observer = GateObserver::approving();
+        let events = session
+            .turn_observed(&TurnRequest::new(prompt), &observer)
+            .await
+            .unwrap();
+
+        // The observer is never asked, so no approval can exist for the request.
+        assert_eq!(observer.decisions.load(Ordering::SeqCst), 0, "{kind}");
+        assert!(
+            events
+                .iter()
+                .all(|event| !matches!(event, ProviderEvent::PermissionRequested { .. })),
+            "{kind}"
+        );
+        // It is answered with a one-shot cancel, never a selected option (so never a grant).
+        let wire = response(temporary.path(), "fake-acp-response-1.json");
+        assert_eq!(wire["result"]["outcome"]["outcome"], "cancelled", "{kind}");
+        assert!(
+            wire["result"]["outcome"].get("optionId").is_none(),
+            "{kind}"
+        );
+        // The refusal and its reason are recorded in the event's raw payload.
+        let refusal = events
+            .iter()
+            .find_map(|event| match event {
+                ProviderEvent::Progress {
+                    message: Some(message),
+                    raw: Some(raw),
+                    ..
+                } if message.starts_with("ACP permission request refused") => Some(raw.clone()),
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("{kind}: the refusal was not recorded: {events:?}"));
+        assert_eq!(refusal["permissionRefused"]["toolKind"], kind);
+        assert_eq!(refusal["permissionRefused"]["answer"], "cancelled");
+        assert_eq!(refusal["permissionRefused"]["toolCallId"], "call-1");
+        assert!(
+            refusal["permissionRefused"]["reason"]
+                .as_str()
+                .unwrap()
+                .contains("unsupported tool kind"),
+            "{kind}"
+        );
+        // The title is not durable (it can carry secrets) and is not in the record.
+        assert!(
+            !refusal.to_string().contains("Write fixture file"),
+            "{kind}"
+        );
+        session.stop().await.unwrap();
+    }
 }
 
 #[tokio::test]

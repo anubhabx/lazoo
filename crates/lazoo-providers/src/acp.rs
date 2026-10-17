@@ -442,7 +442,7 @@ impl AcpSession {
             return Ok(None);
         };
         let request_id = permission_request_id(&id);
-        let permission = request_id
+        let normalized = request_id
             .as_ref()
             .and_then(|(key, request_id)| {
                 (!permission_ids.contains(key)).then(|| {
@@ -455,9 +455,14 @@ impl AcpSession {
                     )
                 })
             })
-            .transpose()
-            .ok()
-            .flatten();
+            .transpose();
+        // A refused request is still answered below (cancelled, never a session-wide grant); the
+        // reason is kept as a progress event so the refusal is recorded rather than silent.
+        let refusal = normalized
+            .as_ref()
+            .err()
+            .map(|error| self.permission_refusal_event(message, error));
+        let permission = normalized.ok().flatten();
         let authorization_key = permission.as_ref().and_then(permission_authorization_key);
         let permission = authorization_key
             .as_ref()
@@ -514,7 +519,35 @@ impl AcpSession {
         if valid_permission {
             normalize_acp_message(self.provider, message)
         } else {
-            Ok(None)
+            Ok(refusal)
+        }
+    }
+
+    /// Records why a permission request was refused. Only the tool kind, the tool call id, and
+    /// the reason are kept: titles and raw input can carry secrets and are not durable.
+    fn permission_refusal_event(&self, message: &Value, error: &ProviderError) -> ProviderEvent {
+        let tool_call = message
+            .get("params")
+            .and_then(|params| params.get("toolCall"));
+        let reason = match error {
+            ProviderError::InvalidEvent(reason) => reason.clone(),
+            other => other.to_string(),
+        };
+        let mut raw = json!({
+            "permissionRefused": {
+                "reason": reason,
+                "toolKind": tool_call.and_then(|call| call.get("kind")).cloned().unwrap_or(Value::Null),
+                "toolCallId": tool_call.and_then(|call| call.get("toolCallId")).cloned().unwrap_or(Value::Null),
+                "answer": "cancelled",
+            }
+        });
+        raw = redact_json(raw);
+        bound_json(&mut raw, MAX_PERMISSION_DETAIL_BYTES);
+        ProviderEvent::Progress {
+            provider: self.provider,
+            session_id: self.session_id.clone(),
+            message: Some(format!("ACP permission request refused: {reason}")),
+            raw: Some(raw),
         }
     }
 
@@ -882,7 +915,7 @@ fn normalize_acp_permission_request(
         })?;
     let kind = match tool_call.get("kind").and_then(Value::as_str) {
         Some("execute") => PermissionKind::CommandExecution,
-        Some("edit") => PermissionKind::FileChange,
+        Some("edit" | "delete" | "move") => PermissionKind::FileChange,
         _ => {
             return Err(ProviderError::InvalidEvent(
                 "ACP permission request has an unsupported tool kind".to_owned(),
@@ -901,9 +934,14 @@ fn normalize_acp_permission_request(
             "ACP permission request did not offer one unambiguous allow_once option".to_owned(),
         )
     })?;
-    let mut action = match kind {
-        PermissionKind::CommandExecution => "execute an ACP command".to_owned(),
-        PermissionKind::FileChange => "edit ACP files".to_owned(),
+    // The action names the ACP kind so a delete or a move is not shown as an ordinary edit.
+    let mut action = match tool_call.get("kind").and_then(Value::as_str) {
+        Some("delete") => "delete ACP files".to_owned(),
+        Some("move") => "move ACP files".to_owned(),
+        _ => match kind {
+            PermissionKind::CommandExecution => "execute an ACP command".to_owned(),
+            PermissionKind::FileChange => "edit ACP files".to_owned(),
+        },
     };
     truncate_utf8(&mut action, MAX_PERMISSION_ACTION_BYTES);
     let mut detail = json!({
@@ -1057,6 +1095,38 @@ mod tests {
             ]),
         );
         assert!(allow_once_option(&ambiguous).is_none());
+    }
+
+    #[test]
+    fn acp_delete_and_move_map_to_file_changes_and_every_other_kind_stays_refused() {
+        let options = json!([{"optionId":"allow-one", "name":"Allow once", "kind":"allow_once"}]);
+        for (kind, action) in [("delete", "delete ACP files"), ("move", "move ACP files")] {
+            let request = normalize_acp_permission_request(
+                ProviderKind::OpenCode,
+                "permission-1",
+                &permission(kind, &options),
+                "session-1",
+                &TurnRequest::new("x"),
+            )
+            .unwrap();
+            assert_eq!(request.kind, PermissionKind::FileChange);
+            assert_eq!(request.action, action);
+            assert_eq!(request.detail["kind"], kind);
+            assert!(request.scope_expansion);
+        }
+        for kind in ["read", "search", "think", "fetch", "other", "network", ""] {
+            assert!(
+                normalize_acp_permission_request(
+                    ProviderKind::OpenCode,
+                    "permission-1",
+                    &permission(kind, &options),
+                    "session-1",
+                    &TurnRequest::new("x"),
+                )
+                .is_err(),
+                "kind {kind:?} must stay refused"
+            );
+        }
     }
 
     #[test]
