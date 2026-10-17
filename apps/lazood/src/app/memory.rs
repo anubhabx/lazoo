@@ -200,7 +200,13 @@ impl App {
             dropped_frames,
         };
         match tokio::task::spawn_blocking(move || store.archive_memory_raw_frames(input)).await {
-            Ok(Ok(_)) => {}
+            Ok(Ok(_)) => {
+                // The turn observer published the outbox before this write; publish again so the
+                // `memory.archived` row does not wait for the next unrelated write.
+                if let Err(error) = self.publish_events() {
+                    tracing::warn!(code = %error.code, message = %error.message, source_turn_id = %turn_id, "memory raw-frame archive publish failed");
+                }
+            }
             Ok(Err(error)) => {
                 tracing::warn!(%error, source_turn_id = %turn_id, "memory raw-frame archive skipped");
             }
@@ -223,8 +229,14 @@ impl App {
         ticks.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         loop {
             ticks.tick().await;
-            if let Err(error) = self.run_memory_archiver_once().await {
-                tracing::warn!(%error, "memory archive sweep failed");
+            match self.run_memory_archiver_once().await {
+                Ok(0) => {}
+                Ok(_) => {
+                    if let Err(error) = self.publish_events() {
+                        tracing::warn!(code = %error.code, message = %error.message, "memory archive sweep publish failed");
+                    }
+                }
+                Err(error) => tracing::warn!(%error, "memory archive sweep failed"),
             }
         }
     }

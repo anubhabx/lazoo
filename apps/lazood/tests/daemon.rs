@@ -1900,6 +1900,15 @@ async fn completed_turn_archives_redacted_raw_provider_frames() {
     )
     .await;
 
+    // The archive's `memory.archived` row is published with the turn, never left for the next
+    // unrelated write: the conversation-delivery gate reads `pendingOutbox` right after a turn.
+    let status = app
+        .handle(request("status-raw-frames", "system.status", json!({})))
+        .await
+        .result
+        .unwrap();
+    assert_eq!(status["pendingOutbox"], 0);
+
     let lines = raw_frame_lines(&store, &root, turn_id);
     assert_eq!(lines[0]["type"], "lazoo-raw-frames");
     assert_eq!(lines[0]["sourceTurnId"], turn_id.to_string());
