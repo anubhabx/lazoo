@@ -60,8 +60,10 @@ $script:liveTurns = 0
 $script:outcome = 'FAILED_ASSERTION'
 # One smoke turn plus three governed turns.
 $maxLiveTurns = 4
-$askPrompt = 'Run the shell command echo LAZOO_ASK_OK and reply with exactly its output and nothing else.'
-$okToken = 'LAZOO_ASK_OK'
+# A value the model cannot know without running a command (the free model answered the earlier
+# `echo LAZOO_ASK_OK` prompt from the prompt text, raising no permission request at all).
+$askPrompt = 'Use your shell tool to run the command hostname and reply with exactly its output and nothing else. Do not guess it.'
+$okToken = [string]$env:COMPUTERNAME
 # The outer agent session variables are scrubbed so the only channel left is the native install.
 $scrubPattern = '^(CLAUDECODE$|CLAUDE_CODE_(?!GIT_BASH_PATH$)|CLAUDE_PID$|CLAUDE_EFFORT$|CLAUDE_PLUGIN_|CODEX_THREAD_ID$|CODEX_SESSION_ID$|AI_AGENT$|OPENCODE_PERMISSION$)'
 $gates = [ordered]@{
@@ -431,7 +433,7 @@ try {
         durationMs = $script:turnDurations['turn1']
     }
     Assert-Equal ([string]$firstTurn.turn.state) 'completed' 'turn 1 state'
-    Assert-True ($null -ne $firstOutput -and $firstOutput.Contains($okToken)) "turn 1 output contains $okToken"
+    Assert-True ($null -ne $firstOutput -and $firstOutput -like "*$okToken*") "turn 1 output contains $okToken"
     $gates.askApproved = 'PASS'
 
     # Turn 2: the same prompt, declined. The decision is recorded and no command ran.
@@ -484,7 +486,7 @@ try {
         durationMs = $script:turnDurations['turn3']
     }
     Assert-Equal ([string]$thirdTurn.turn.state) 'completed' 'turn 3 state'
-    Assert-True ($null -ne $thirdOutput -and $thirdOutput.Contains($okToken)) "turn 3 output contains $okToken"
+    Assert-True ($null -ne $thirdOutput -and $thirdOutput -like "*$okToken*") "turn 3 output contains $okToken"
     $gates.selfDecision = 'PASS'
 
     # Planned shutdown: the daemon's whole native tree must be gone afterwards.

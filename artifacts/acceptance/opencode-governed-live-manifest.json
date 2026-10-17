@@ -1,0 +1,237 @@
+{
+  "manifestVersion": 1,
+  "status": "PASS",
+  "outcome": "PASS",
+  "failure": null,
+  "mode": "live-native-install",
+  "schemaVersion": 19,
+  "startedAt": "2026-10-17T10:59:57.6745742Z",
+  "completedAt": "2026-10-17T11:01:27.3883813Z",
+  "durationMs": 89699,
+  "provider": "opencode",
+  "providerVersion": "1.19.0",
+  "scrubbedEnvironmentVariableNames": [
+    "AI_AGENT",
+    "CLAUDE_CODE_BRIDGE_SESSION_ID",
+    "CLAUDE_CODE_CHILD_SESSION",
+    "CLAUDE_CODE_ENTRYPOINT",
+    "CLAUDE_CODE_EXECPATH",
+    "CLAUDE_CODE_MESSAGING_SOCKET",
+    "CLAUDE_CODE_MESSAGING_TOKEN",
+    "CLAUDE_CODE_SESSION_ATTENDED",
+    "CLAUDE_CODE_SESSION_ID",
+    "CLAUDE_CODE_SSE_PORT",
+    "CLAUDE_EFFORT",
+    "CLAUDE_PID",
+    "CLAUDE_PLUGIN_DATA",
+    "CLAUDECODE"
+  ],
+  "liveTurnsSent": 4,
+  "liveTurnCap": 4,
+  "turnTimeoutSeconds": 240,
+  "approvalWaitSeconds": 150,
+  "isolatedDataRoot": "C:\\Users\\anubhab\\AppData\\Local\\Temp\\lazoo-live-opencode-governed-de5f5ce82fd048b9ac9c0a3409ab8823\\data",
+  "temporaryDataRetained": false,
+  "prompt": "Use your shell tool to run the command hostname and reply with exactly its output and nothing else. Do not guess it.",
+  "turns": {
+    "askApproved": {
+      "prompt": "Use your shell tool to run the command hostname and reply with exactly its output and nothing else. Do not guess it.",
+      "state": "completed",
+      "output": "DESKTOP-7F54DA6",
+      "toolStatuses": [
+        "pending",
+        "in_progress",
+        "in_progress",
+        "in_progress",
+        "completed"
+      ],
+      "durationMs": 30767
+    },
+    "askDeclined": {
+      "prompt": "Use your shell tool to run the command hostname and reply with exactly its output and nothing else. Do not guess it.",
+      "state": "completed",
+      "output": "",
+      "toolStatuses": [
+        "pending",
+        "in_progress",
+        "failed"
+      ],
+      "durationMs": 2213
+    },
+    "selfDecision": {
+      "prompt": "Use your shell tool to run the command hostname and reply with exactly its output and nothing else. Do not guess it.",
+      "state": "completed",
+      "output": "DESKTOP-7F54DA6",
+      "toolStatuses": [
+        "pending",
+        "in_progress",
+        "in_progress",
+        "in_progress",
+        "completed"
+      ],
+      "durationMs": 17417
+    }
+  },
+  "turnDurationsMs": {
+    "turn1": 30767,
+    "turn2": 2213,
+    "turn3": 17417
+  },
+  "pollCalls": 47,
+  "commands": [
+    {
+      "command": "lazooctl --json provider probe opencode",
+      "exitCode": 0,
+      "durationMs": 4148
+    },
+    {
+      "command": "lazooctl --json provider smoke opencode --prompt Reply with exactly LAZOO_OPENCODE_OK. Do not use tools.",
+      "exitCode": 0,
+      "durationMs": 17408
+    },
+    {
+      "command": "lazooctl --json provider probe opencode",
+      "exitCode": 0,
+      "durationMs": 4022
+    },
+    {
+      "command": "lazooctl --json employee create Opal --provider opencode --role Lead --authority-mode ask --idle-timeout-seconds 0 --idempotency-key lead-Opal-de5f5ce82fd048b9ac9c0a3409ab8823",
+      "exitCode": 0,
+      "durationMs": 3943
+    },
+    {
+      "command": "lazooctl --json conversation create 5d6cd57e-463c-436f-948d-6d1812287710 --title OpenCode governed ask --idempotency-key conversation-Opal-de5f5ce82fd048b9ac9c0a3409ab8823",
+      "exitCode": 0,
+      "durationMs": 24
+    },
+    {
+      "command": "lazooctl --json approval approve 85bc985c-5082-4ec8-bf1f-60e38a9ffd2d --expected-revision 1 --idempotency-key approve-de5f5ce82fd048b9ac9c0a3409ab8823",
+      "exitCode": 0,
+      "durationMs": 24
+    },
+    {
+      "command": "lazooctl --json turn submit 1f7a9c5c-9011-4e72-b86e-fc5db226f694 --authority-mode ask --text Use your shell tool to run the command hostname and reply with exactly its output and nothing else. Do not guess it. --activate-if-needed --idempotency-key turn1-de5f5ce82fd048b9ac9c0a3409ab8823",
+      "exitCode": 0,
+      "durationMs": 30767
+    },
+    {
+      "command": "lazooctl --json approval decline 7b5a6255-a4be-4539-871a-2c7c63c1f6d8 --expected-revision 1 --idempotency-key decline-de5f5ce82fd048b9ac9c0a3409ab8823",
+      "exitCode": 0,
+      "durationMs": 22
+    },
+    {
+      "command": "lazooctl --json turn submit 1f7a9c5c-9011-4e72-b86e-fc5db226f694 --authority-mode ask --text Use your shell tool to run the command hostname and reply with exactly its output and nothing else. Do not guess it. --activate-if-needed --idempotency-key turn2-de5f5ce82fd048b9ac9c0a3409ab8823",
+      "exitCode": 0,
+      "durationMs": 2213
+    },
+    {
+      "command": "lazooctl --json approval show 7b5a6255-a4be-4539-871a-2c7c63c1f6d8",
+      "exitCode": 0,
+      "durationMs": 18
+    },
+    {
+      "command": "lazooctl --json employee create Sven --provider opencode --role Lead --authority-mode self-decision --idle-timeout-seconds 0 --idempotency-key lead-Sven-de5f5ce82fd048b9ac9c0a3409ab8823",
+      "exitCode": 0,
+      "durationMs": 3952
+    },
+    {
+      "command": "lazooctl --json conversation create 3e7f748e-4c11-4e6e-88f3-37ae9ccde668 --title OpenCode governed self-decision --idempotency-key conversation-Sven-de5f5ce82fd048b9ac9c0a3409ab8823",
+      "exitCode": 0,
+      "durationMs": 25
+    },
+    {
+      "command": "lazooctl --json approval approve d5a07939-3943-4d6c-8681-c232b41668cb --expected-revision 1 --idempotency-key approve-self-de5f5ce82fd048b9ac9c0a3409ab8823",
+      "exitCode": 0,
+      "durationMs": 22
+    },
+    {
+      "command": "lazooctl --json turn submit d5cdf03e-276f-4af3-a258-3f64804350ce --authority-mode self-decision --text Use your shell tool to run the command hostname and reply with exactly its output and nothing else. Do not guess it. --activate-if-needed --idempotency-key turn3-de5f5ce82fd048b9ac9c0a3409ab8823",
+      "exitCode": 0,
+      "durationMs": 17417
+    },
+    {
+      "command": "lazooctl --json system shutdown",
+      "exitCode": 0,
+      "durationMs": 21
+    }
+  ],
+  "gates": {
+    "verification": "PASS",
+    "askApproved": "PASS",
+    "askDeclined": "PASS",
+    "selfDecision": "PASS",
+    "plannedShutdown": "PASS"
+  },
+  "evidence": {
+    "verification": {
+      "probeVerification": "unverified",
+      "smokeOutput": "LAZOO_OPENCODE_OK",
+      "verificationAfterSmoke": "unverified"
+    },
+    "askApproval": {
+      "id": "85bc985c-5082-4ec8-bf1f-60e38a9ffd2d",
+      "revision": 1,
+      "subtype": "command-execution",
+      "title": "Approval requested: execute an ACP command",
+      "requiredAction": "Approve or decline: execute an ACP command",
+      "requestingEmployee": "Opal",
+      "provider": "opencode",
+      "scope": {
+        "conversationId": "1f7a9c5c-9011-4e72-b86e-fc5db226f694",
+        "turnId": "057774e7-7ff2-46a7-ba85-1cef26a0d009",
+        "taskId": "057774e7-7ff2-46a7-ba85-1cef26a0d009"
+      },
+      "detail": "{\"approvalKind\":\"command-execution\",\"action\":\"execute an ACP command\",\"fingerprint\":\"52327815163523c611566bc46eedca42c1ed121bc18dfd41172c358d6c5565d1\",\"authority\":\"ask\",\"scopeExpansion\":true,\"detail\":{\"toolCallId\":\"call_18c32673ce324cb4b8ab55d4\",\"kind\":\"execute\",\"status\":\"pending\"}}",
+      "actions": [
+        "approve",
+        "decline"
+      ]
+    },
+    "declinedApproval": {
+      "id": "7b5a6255-a4be-4539-871a-2c7c63c1f6d8",
+      "revision": 1,
+      "subtype": "command-execution",
+      "title": "Approval requested: execute an ACP command",
+      "requiredAction": "Approve or decline: execute an ACP command",
+      "requestingEmployee": "Opal",
+      "provider": "opencode",
+      "scope": {
+        "conversationId": "1f7a9c5c-9011-4e72-b86e-fc5db226f694",
+        "turnId": "5387db28-bd99-47a4-a3b9-06ba6ff25fa9",
+        "taskId": "5387db28-bd99-47a4-a3b9-06ba6ff25fa9"
+      },
+      "detail": "{\"approvalKind\":\"command-execution\",\"action\":\"execute an ACP command\",\"fingerprint\":\"52327815163523c611566bc46eedca42c1ed121bc18dfd41172c358d6c5565d1\",\"authority\":\"ask\",\"scopeExpansion\":true,\"detail\":{\"toolCallId\":\"7c735ad4-c5f1-42ad-81e8-46911931c545\",\"kind\":\"execute\",\"status\":\"pending\"}}",
+      "actions": [
+        "approve",
+        "decline"
+      ]
+    },
+    "selfDecisionApproval": {
+      "id": "d5a07939-3943-4d6c-8681-c232b41668cb",
+      "revision": 1,
+      "subtype": "command-execution",
+      "title": "Approval requested: execute an ACP command",
+      "requiredAction": "Approve or decline: execute an ACP command",
+      "requestingEmployee": "Sven",
+      "provider": "opencode",
+      "scope": {
+        "conversationId": "d5cdf03e-276f-4af3-a258-3f64804350ce",
+        "turnId": "75dfa81e-eadf-4ae8-99ad-f17b6d0cdefc",
+        "taskId": "75dfa81e-eadf-4ae8-99ad-f17b6d0cdefc"
+      },
+      "detail": "{\"approvalKind\":\"command-execution\",\"action\":\"execute an ACP command\",\"fingerprint\":\"52327815163523c611566bc46eedca42c1ed121bc18dfd41172c358d6c5565d1\",\"authority\":\"self-decision\",\"scopeExpansion\":true,\"detail\":{\"toolCallId\":\"3a912e34-e977-4943-97d7-1203badc568e\",\"kind\":\"execute\",\"status\":\"pending\"}}",
+      "actions": [
+        "approve",
+        "decline"
+      ]
+    },
+    "selfDecisionResolution": "user-approved-scope-expansion",
+    "shutdownTreeProcesses": 7
+  },
+  "boundaries": {
+    "permissions": "EXERCISED_ASK_APPROVE_DECLINE_AND_SELF_DECISION",
+    "deterministicGate": "EXCLUDED",
+    "userProviderConfiguration": "UNTOUCHED",
+    "networkAndConnectorKinds": "DECLINED_NOT_GOVERNED_NOT_EXERCISED_LIVE"
+  }
+}
