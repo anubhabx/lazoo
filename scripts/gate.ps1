@@ -16,7 +16,7 @@ param(
 # The repository's full gate, as every backend slice must pass it before its pull request:
 # format check, clippy with warnings denied, the workspace tests, the locked release build, and
 # every deterministic or real-binary acceptance script. Three scripts are never part of it:
-# provider-adapters.ps1 and claude-live-lifecycle.ps1 (live model turns, run only when explicitly authorized) and
+# provider-adapters.ps1 and provider-live-lifecycle.ps1 (live model turns, run only when explicitly authorized) and
 # desktop-shell.ps1 (the separately owned desktop). The manifest it writes records every step.
 
 $ErrorActionPreference = 'Stop'
@@ -38,7 +38,7 @@ if ([string]::IsNullOrWhiteSpace($OutputPath)) {
 $manifestPath = [IO.Path]::GetFullPath($OutputPath)
 New-Item -ItemType Directory -Force -Path (Split-Path -Parent $manifestPath) | Out-Null
 
-$excluded = @('provider-adapters', 'claude-live-lifecycle', 'desktop-shell')
+$excluded = @('provider-adapters', 'provider-live-lifecycle', 'desktop-shell')
 $startedAt = [DateTime]::UtcNow
 $stopwatch = [Diagnostics.Stopwatch]::StartNew()
 $steps = [Collections.Generic.List[object]]::new()

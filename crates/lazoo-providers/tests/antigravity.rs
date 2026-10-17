@@ -308,3 +308,54 @@ async fn live_agy_model_backed_turn_and_resume() {
     }));
     resumed.stop().await.unwrap();
 }
+
+// Live counterpart of `agy_cancel_during_active_turn_kills_host_and_reports_cancelled`. The
+// Antigravity adapter returns its events only after the turn, so there is no first-delta signal to
+// wait for: the cancel fires after a short bounded wait (6 s). One short live model turn on the
+// owner's account.
+#[tokio::test]
+#[ignore = "requires an installed and authenticated Antigravity CLI; sends one live model turn"]
+async fn live_agy_cancel_mid_turn_reports_cancelled() {
+    let session = AntigravityAdapter::default()
+        .start(&SessionRequest::new(std::env::current_dir().unwrap()).with_permission_mode("plan"))
+        .await
+        .unwrap();
+    let request = TurnRequest::new(
+        "Count slowly from 1 to 400, one number per line, with no other text. Do not use tools.",
+    );
+    let started = std::time::Instant::now();
+    let cancel = async {
+        tokio::time::sleep(std::time::Duration::from_secs(6)).await;
+        session.cancel().await.unwrap();
+        started.elapsed()
+    };
+    let (outcome, cancel_at) = tokio::time::timeout(std::time::Duration::from_secs(60), async {
+        tokio::join!(session.turn(&request), cancel)
+    })
+    .await
+    .expect("a cancelled live turn must return long before the 60 s bound");
+    println!(
+        "cancel_after={cancel_at:?} returned_after={:?}",
+        started.elapsed()
+    );
+    let events = outcome.unwrap();
+    println!(
+        "events={} terminal event: {:?}",
+        events.len(),
+        events.last()
+    );
+    assert!(
+        events
+            .iter()
+            .any(|event| matches!(event, ProviderEvent::Cancelled { .. })),
+        "expected a Cancelled event, got: {:?}",
+        events.last()
+    );
+    assert!(
+        !events
+            .iter()
+            .any(|event| matches!(event, ProviderEvent::TurnCompleted { .. })),
+        "a cancelled turn must not also complete"
+    );
+    session.stop().await.unwrap();
+}

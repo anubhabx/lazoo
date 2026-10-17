@@ -408,3 +408,78 @@ async fn live_opencode_model_backed_turn() {
     }));
     resumed.stop().await.unwrap();
 }
+
+struct FirstDeltaObserver {
+    events: Mutex<Vec<ProviderEvent>>,
+    first_delta: Notify,
+}
+
+impl TurnEventObserver for FirstDeltaObserver {
+    fn observe(&self, event: &ProviderEvent) -> Result<(), ProviderError> {
+        if matches!(event, ProviderEvent::TextDelta { .. }) {
+            self.first_delta.notify_one();
+        }
+        self.events.lock().unwrap().push(event.clone());
+        Ok(())
+    }
+}
+
+// Live counterpart of the ACP cancel fixture test: the real OpenCode server streams a long answer
+// and `cancel()` after the first text delta (or after 20 s without one) must end the turn with a
+// `Cancelled` event and no `TurnCompleted`. One short model turn on the free model.
+#[tokio::test]
+#[ignore = "requires an installed and authenticated OpenCode ACP server; sends one live model turn"]
+async fn live_opencode_cancel_mid_turn_reports_cancelled() {
+    let session = OpenCodeAdapter::default()
+        .start(&SessionRequest::new(std::env::current_dir().unwrap()))
+        .await
+        .unwrap();
+    let observer = FirstDeltaObserver {
+        events: Mutex::new(Vec::new()),
+        first_delta: Notify::new(),
+    };
+    let request = TurnRequest::new(
+        "Count slowly from 1 to 400, one number per line, with no other text. Do not use tools.",
+    );
+    let started = Instant::now();
+    let cancel = async {
+        let saw_delta = timeout(Duration::from_secs(20), observer.first_delta.notified())
+            .await
+            .is_ok();
+        let cancel_at = started.elapsed();
+        session.cancel().await.unwrap();
+        (saw_delta, cancel_at)
+    };
+    let (outcome, (saw_delta, cancel_at)) = timeout(Duration::from_secs(60), async {
+        tokio::join!(session.turn_observed(&request, &observer), cancel)
+    })
+    .await
+    .expect("a cancelled live turn must return long before the 60 s bound");
+    let events = outcome.unwrap();
+    println!(
+        "saw_delta={saw_delta} cancel_after={cancel_at:?} returned_after={:?} events={}",
+        started.elapsed(),
+        events.len()
+    );
+    println!("terminal event: {:?}", events.last());
+    let seen = observer.events.lock().unwrap().clone();
+    assert!(
+        events
+            .iter()
+            .any(|event| matches!(event, ProviderEvent::Cancelled { .. })),
+        "expected a Cancelled event, got: {:?}",
+        events.last()
+    );
+    assert!(
+        !events
+            .iter()
+            .any(|event| matches!(event, ProviderEvent::TurnCompleted { .. })),
+        "a cancelled turn must not also complete"
+    );
+    assert!(
+        seen.iter()
+            .any(|event| matches!(event, ProviderEvent::Cancelled { .. })),
+        "the observer must see the Cancelled event"
+    );
+    session.stop().await.unwrap();
+}

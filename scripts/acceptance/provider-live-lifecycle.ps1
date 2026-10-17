@@ -1,4 +1,7 @@
 param(
+    [Parameter(Mandatory = $true)]
+    [ValidateSet('claude-code', 'codex', 'opencode')]
+    [string]$Provider,
     [switch]$Build,
     [int]$TurnTimeoutSeconds = 240,
     [int]$CancelTimeoutSeconds = 30
@@ -7,19 +10,85 @@ param(
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
-# LIVE acceptance for Claude Code (PROJECT-BRIEF section 21.3): one daemon lifetime on a disposable
-# data root, one Claude Code employee under full autonomy, and exactly THREE real model turns on the
-# owner's native subscription: messaging, cancellation, and resume after a stop. It sends real
-# prompts, so it is never part of scripts/gate.ps1 (the gate's $excluded list names it). It never
-# reads or writes the owner's Claude configuration; the daemon's environment is scrubbed of every
-# API credential, cloud selector and outer Claude Code session variable so the only channel left is
-# the native login. One run, at most three live turns, no retries.
+# LIVE acceptance for one provider (PROJECT-BRIEF section 21.3): one daemon lifetime on a disposable
+# data root, one employee of that provider, and exactly THREE real model turns on the owner's native
+# account: messaging, cancellation, and a turn after `session stop` (the wake). It sends real prompts,
+# so it is never part of scripts/gate.ps1 (the gate's $excluded list names it). It never reads or
+# writes the owner's provider configuration; the daemon's environment is scrubbed of the outer agent
+# session variables (and, for Claude Code and Codex, API credentials) so the only channel left is the
+# native login. One run, at most three live turns, no retries.
+#
+# The expectations are per provider, because the daemon treats them differently on wake:
+#   claude-code  employee under full-autonomy (the only authority delivered to Claude Code). The wake
+#                RESUMES the native session: same native session id, exactly one session.resumed
+#                event, and the reply to turn 3 must be the remembered code word.
+#   codex        employee created the way conversation-delivery.ps1 does (default authority; Codex is
+#                delivered to under any authority). Cancellation goes through Codex's native
+#                interrupt. The wake starts FRESH by design (thread/resume cannot carry the dynamic
+#                tools): a new native session id and exactly one session.resume.skipped event with
+#                reason codex-dynamic-tools. Turn 3 must complete; its output is recorded as
+#                evidence and is NOT required to recall the code word.
+#   opencode     employee under full-autonomy, like Claude Code. The wake starts FRESH: a new native
+#                session id and exactly one session.resume.skipped event with reason
+#                unsupported-provider. If the daemon refuses delivery (LZ-TURN-PROVIDER-UNSUPPORTED)
+#                the run fails with outcome DELIVERY_REFUSED before any model is reached.
 
-$prompts = [ordered]@{
-    messaging = 'Remember the code word PELICAN for later in this conversation. Reply with exactly LAZOO_CLAUDE_OK and nothing else.'
-    cancellation = 'Count slowly from 1 to 400, one number per line, with no other text.'
-    resume = 'Reply with exactly the code word I asked you to remember, and nothing else.'
+$profiles = @{
+    'claude-code' = @{
+        displayName = 'Claude Code'
+        executable = 'claude'
+        employeeName = 'Cleo'
+        employeeAuthority = 'full-autonomy'
+        turnAuthority = 'full-autonomy'
+        scrubPattern = '^(ANTHROPIC_|CLAUDECODE$|CLAUDE_CODE_(?!GIT_BASH_PATH$)|CLAUDE_PID$|CLAUDE_EFFORT$|CLAUDE_PLUGIN_|CODEX_THREAD_ID$|CODEX_SESSION_ID$|AI_AGENT$)'
+        okToken = 'LAZOO_CLAUDE_OK'
+        tolerateThinkTags = $false
+        wake = 'resumed'
+        skipReason = ''
+        prompts = [ordered]@{
+            messaging = 'Remember the code word PELICAN for later in this conversation. Reply with exactly LAZOO_CLAUDE_OK and nothing else.'
+            cancellation = 'Count slowly from 1 to 400, one number per line, with no other text.'
+            resume = 'Reply with exactly the code word I asked you to remember, and nothing else.'
+        }
+    }
+    'codex' = @{
+        displayName = 'Codex'
+        executable = 'codex'
+        employeeName = 'Cora'
+        employeeAuthority = $null
+        turnAuthority = $null
+        scrubPattern = '^(OPENAI_|CODEX_API_KEY$|CODEX_THREAD_ID$|CODEX_SESSION_ID$)'
+        okToken = 'LAZOO_CODEX_OK'
+        tolerateThinkTags = $false
+        wake = 'fresh'
+        skipReason = 'codex-dynamic-tools'
+        prompts = [ordered]@{
+            messaging = 'Remember the code word PELICAN for later in this conversation. Reply with exactly LAZOO_CODEX_OK and nothing else. Do not use tools.'
+            cancellation = 'Count slowly from 1 to 400, one number per line, with no other text. Do not use tools.'
+            resume = 'Reply with exactly the code word I asked you to remember, and nothing else. Do not use tools.'
+        }
+    }
+    'opencode' = @{
+        displayName = 'OpenCode'
+        executable = 'opencode'
+        employeeName = 'Opal'
+        employeeAuthority = 'full-autonomy'
+        turnAuthority = 'full-autonomy'
+        scrubPattern = '^(CLAUDECODE$|CLAUDE_CODE_(?!GIT_BASH_PATH$)|CLAUDE_PID$|CLAUDE_EFFORT$|CLAUDE_PLUGIN_|CODEX_THREAD_ID$|CODEX_SESSION_ID$|AI_AGENT$)'
+        okToken = 'LAZOO_OPENCODE_OK'
+        # The free model has leaked a closing think tag into its answer; the raw output is recorded.
+        tolerateThinkTags = $true
+        wake = 'fresh'
+        skipReason = 'unsupported-provider'
+        prompts = [ordered]@{
+            messaging = 'Remember the code word PELICAN for later in this conversation. Reply with exactly LAZOO_OPENCODE_OK and nothing else. Do not use tools.'
+            cancellation = 'Count slowly from 1 to 400, one number per line, with no other text. Do not use tools.'
+            resume = 'Reply with exactly the code word I asked you to remember, and nothing else. Do not use tools.'
+        }
+    }
 }
+$script:profile = $profiles[$Provider]
+$prompts = $script:profile.prompts
 $maxLiveTurns = 3
 
 function Assert-Equal($Actual, $Expected, [string]$Label) {
@@ -99,7 +168,7 @@ function Start-Daemon {
     $startInfo.Environment['LAZOO_DATA_ROOT'] = $script:dataRoot
     # Only the names are kept; values are never read into the manifest.
     foreach ($name in @($startInfo.Environment.Keys)) {
-        if ($name -match '^(ANTHROPIC_|CLAUDECODE$|CLAUDE_CODE_(?!GIT_BASH_PATH$)|CLAUDE_PID$|CLAUDE_EFFORT$|CLAUDE_PLUGIN_|CODEX_THREAD_ID$|CODEX_SESSION_ID$|AI_AGENT$)') {
+        if ($name -match $script:profile.scrubPattern) {
             [void]$startInfo.Environment.Remove($name)
             $script:scrubbedEnvironment.Add([string]$name)
         }
@@ -187,10 +256,12 @@ function Test-AuthenticationText([string]$Text) {
 function Submit-LiveTurn([string]$Name, [string]$ConversationId, [string]$Prompt) {
     if ($script:liveTurns -ge $maxLiveTurns) { throw "refusing a live turn beyond the cap of $maxLiveTurns" }
     $script:liveTurns++
-    return (Start-BackgroundCtl "$Name-submit" @(
-        'turn', 'submit', $ConversationId, '--authority-mode', 'full-autonomy', '--text', $Prompt,
-        '--activate-if-needed', '--idempotency-key', "$Name-$script:runId"
-    ))
+    $arguments = @('turn', 'submit', $ConversationId)
+    if ($null -ne $script:profile.turnAuthority) {
+        $arguments += @('--authority-mode', [string]$script:profile.turnAuthority)
+    }
+    $arguments += @('--text', $Prompt, '--activate-if-needed', '--idempotency-key', "$Name-$script:runId")
+    return (Start-BackgroundCtl "$Name-submit" $arguments)
 }
 
 function Complete-LiveTurn($Command, [string]$Name) {
@@ -201,6 +272,13 @@ function Complete-LiveTurn($Command, [string]$Name) {
         throw "live turn '$Name' did not finish within $TurnTimeoutSeconds seconds"
     }
     if ($result.ExitCode -ne 0) {
+        if ($result.Text -match 'LZ-TURN-PROVIDER-UNSUPPORTED') {
+            # The daemon refused before any model was reached: it does not count as a live turn.
+            $script:outcome = 'DELIVERY_REFUSED'
+            $script:liveTurns--
+            $script:evidence.deliveryRefusal = $result.Text
+            throw "the daemon refuses to deliver turns to $($script:profile.displayName) (LZ-TURN-PROVIDER-UNSUPPORTED): $($result.Text)"
+        }
         $script:outcome = if (Test-AuthenticationText $result.Text) { 'BLOCKED_AUTHENTICATION' } else { 'TURN_FAILED' }
         throw "live turn '$Name' failed with lazooctl exit $($result.ExitCode): $($result.Text)"
     }
@@ -248,6 +326,23 @@ function Wait-ProcessGone([int]$ProcessId, [int]$TimeoutSeconds, [string]$Label)
     throw "$Label process $ProcessId remained alive after $TimeoutSeconds seconds"
 }
 
+# Reads a property that may be absent from a JSON object without tripping strict mode.
+function Get-Field($Object, [string]$Name) {
+    if ($null -eq $Object) { return $null }
+    $property = $Object.PSObject.Properties[$Name]
+    if ($null -eq $property) { return $null }
+    return $property.Value
+}
+
+# Trims the answer; for models known to leak a think tag into the answer text it also drops the tag.
+function Format-AnswerForCompare([string]$Text) {
+    $trimmed = $Text.Trim()
+    if ($script:profile.tolerateThinkTags) {
+        $trimmed = ($trimmed -replace '</?think>', '').Trim()
+    }
+    return $trimmed
+}
+
 function Limit-Output([string]$Text) {
     if ($null -eq $Text) { return $null }
     $trimmed = $Text.Trim()
@@ -260,10 +355,10 @@ $releaseDir = Join-Path $repoRoot 'target\release'
 $script:daemonExe = Join-Path $releaseDir 'lazood.exe'
 $script:ctlExe = Join-Path $releaseDir 'lazooctl.exe'
 $artifactDir = Join-Path $repoRoot 'artifacts\acceptance'
-$manifestPath = Join-Path $artifactDir 'claude-live-lifecycle-manifest.json'
+$manifestPath = Join-Path $artifactDir "provider-live-lifecycle-$Provider-manifest.json"
 $script:runId = [Guid]::NewGuid().ToString('N')
 $tempBase = [IO.Path]::GetFullPath([IO.Path]::GetTempPath())
-$script:runRoot = [IO.Path]::GetFullPath((Join-Path $tempBase "lazoo-claude-live-$script:runId"))
+$script:runRoot = [IO.Path]::GetFullPath((Join-Path $tempBase "lazoo-live-$Provider-$script:runId"))
 if (-not $script:runRoot.StartsWith($tempBase, [StringComparison]::OrdinalIgnoreCase)) {
     throw 'acceptance run root is outside the system temporary directory'
 }
@@ -285,12 +380,13 @@ $gates = [ordered]@{
     plannedShutdown = 'NOT_RUN'
 }
 $currentGate = 'authentication'
-$evidence = [ordered]@{}
+$script:evidence = [ordered]@{}
+$evidence = $script:evidence
 $turns = [ordered]@{}
 $daemon = $null
 $manifestStatus = 'FAIL'
 $failureMessage = ''
-$claudeVersion = ''
+$providerVersion = ''
 
 New-Item -ItemType Directory -Force -Path $artifactDir, $script:dataRoot | Out-Null
 
@@ -307,36 +403,41 @@ try {
     foreach ($binary in @($script:daemonExe, $script:ctlExe)) {
         Assert-True (Test-Path -LiteralPath $binary) "binary exists: $binary"
     }
-    $claudeCommand = Get-Command claude -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
-    Assert-True ($null -ne $claudeCommand) 'claude executable on PATH'
-    $claudeVersion = ((& $claudeCommand.Source --version 2>&1) -join ' ').Trim()
+    $providerCommand = Get-Command $script:profile.executable -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+    Assert-True ($null -ne $providerCommand) "$($script:profile.executable) executable on PATH"
+    $providerVersion = ((& $providerCommand.Source --version 2>&1) -join ' ').Trim()
 
     $daemon = Start-Daemon
     $status = Wait-Status
     Assert-Equal $status.schemaVersion 19 'schema 19'
 
     # Authentication: a read-only probe, no model prompt. A known-missing login ends the run here.
-    $probe = Invoke-Json @('provider', 'probe', 'claude-code')
+    $probe = Invoke-Json @('provider', 'probe', $Provider)
+    $probeNative = Get-Field (Get-Field $probe 'authentication') 'native'
+    $probeExternal = Get-Field (Get-Field $probe 'authentication') 'external'
     $evidence.authentication = [ordered]@{
-        native = [string]$probe.authentication.native
-        external = [string]$probe.authentication.external
-        verification = [string]$probe.verification
-        version = [string]$probe.version
+        native = [string]$probeNative
+        external = [string]$probeExternal
+        verification = [string](Get-Field $probe 'verification')
+        version = [string](Get-Field $probe 'version')
     }
-    if ($probe.authentication.native -in @('needs-login', 'blocked') -and $probe.authentication.external -ne 'ready') {
+    if ($probeNative -in @('needs-login', 'blocked') -and $probeExternal -ne 'ready') {
         $script:outcome = 'BLOCKED_AUTHENTICATION'
-        throw 'Claude Code reports no ready native login and no ready external credential; no model prompt was sent'
+        throw "$($script:profile.displayName) reports no ready native login and no ready external credential; no model prompt was sent"
     }
     $gates.authentication = 'PASS'
 
-    $employee = Invoke-Json @(
-        'employee', 'create', 'Cleo', '--provider', 'claude-code', '--role', 'Lead',
-        '--authority-mode', 'full-autonomy', '--idle-timeout-seconds', '0',
-        '--idempotency-key', "lead-$script:runId"
+    $employeeArguments = @(
+        'employee', 'create', $script:profile.employeeName, '--provider', $Provider, '--role', 'Lead',
+        '--idle-timeout-seconds', '0', '--idempotency-key', "lead-$script:runId"
     )
+    if ($null -ne $script:profile.employeeAuthority) {
+        $employeeArguments += @('--authority-mode', [string]$script:profile.employeeAuthority)
+    }
+    $employee = Invoke-Json $employeeArguments
     $employeeId = [string]$employee.employee.id
     $conversation = Invoke-Json @(
-        'conversation', 'create', $employeeId, '--title', 'Claude live lifecycle',
+        'conversation', 'create', $employeeId, '--title', "$($script:profile.displayName) live lifecycle",
         '--idempotency-key', "conversation-$script:runId"
     )
     $conversationId = [string]$conversation.conversation.id
@@ -353,7 +454,7 @@ try {
     }
     Assert-Equal ([string]$first.turn.state) 'completed' 'turn 1 state'
     Assert-True ($null -ne $firstOutput) 'turn 1 carries a turnCompleted event with output'
-    Assert-Equal $firstOutput.Trim() 'LAZOO_CLAUDE_OK' 'turn 1 trimmed output'
+    Assert-Equal (Format-AnswerForCompare $firstOutput) $script:profile.okToken 'turn 1 trimmed output'
     $sessionOneId = [string]$first.turn.recipient.sessionId
     $sessionOne = Invoke-Json @('session', 'show', $sessionOneId)
     $nativeSessionId = [string]$sessionOne.nativeSessionId
@@ -429,6 +530,7 @@ try {
     $cancelledForSecond = @($events | Where-Object {
         $_.eventType -eq 'turn.cancelled' -and (($_.payload | ConvertTo-Json -Compress -Depth 12) -match [regex]::Escape($secondTurnId))
     })
+    $evidence.cancelledEventPayloads = @($cancelledForSecond | ForEach-Object { ConvertTo-SafeText ($_.payload | ConvertTo-Json -Compress -Depth 8) 400 })
     $turns.cancellation = [ordered]@{
         prompt = $prompts.cancellation
         state = [string]$secondFinal.state
@@ -493,15 +595,30 @@ try {
     }
     $evidence.resumedPayloads = @($resumedEvents | ForEach-Object { $_.payload | ConvertTo-Json -Compress -Depth 8 })
     $evidence.resumeSkippedPayloads = @($skippedEvents | ForEach-Object { $_.payload | ConvertTo-Json -Compress -Depth 8 })
-    Assert-Equal $skippedEvents.Count 0 "session.resume.skipped events (payload: $(ConvertTo-SafeText ($evidence.resumeSkippedPayloads -join ' | ')))"
+    $turns.resume.expectedWake = $script:profile.wake
+    $turns.resume.expectedSkipReason = $script:profile.skipReason
     Assert-Equal ([string]$third.turn.state) 'completed' 'turn 3 state'
     Assert-True ($sessionThreeId -ne $sessionOneId) 'turn 3 ran on a new session record'
-    Assert-Equal ([string]$sessionThree.nativeSessionId) $nativeSessionId 'resumed native session id equals the recorded one'
-    Assert-Equal $resumedEvents.Count 1 'session.resumed event count'
-    Assert-Equal ([string]$resumedEvents[0].payload.priorSessionId) $sessionOneId 'session.resumed names the prior session'
-    Assert-Equal ([string]$resumedEvents[0].payload.nativeSessionId) $nativeSessionId 'session.resumed names the native session'
     Assert-True ($null -ne $thirdOutput) 'turn 3 carries a turnCompleted event with output'
-    Assert-Equal $thirdOutput.Trim() 'PELICAN' 'turn 3 trimmed output'
+    if ($script:profile.wake -eq 'resumed') {
+        Assert-Equal $skippedEvents.Count 0 "session.resume.skipped events (payload: $(ConvertTo-SafeText ($evidence.resumeSkippedPayloads -join ' | ')))"
+        Assert-Equal ([string]$sessionThree.nativeSessionId) $nativeSessionId 'resumed native session id equals the recorded one'
+        Assert-Equal $resumedEvents.Count 1 'session.resumed event count'
+        Assert-Equal ([string]$resumedEvents[0].payload.priorSessionId) $sessionOneId 'session.resumed names the prior session'
+        Assert-Equal ([string]$resumedEvents[0].payload.nativeSessionId) $nativeSessionId 'session.resumed names the native session'
+        Assert-Equal $thirdOutput.Trim() 'PELICAN' 'turn 3 trimmed output'
+    } else {
+        # A fresh start by design: the daemon records why it did not resume, and the answer is
+        # evidence only (the new native session cannot be expected to recall the code word).
+        Assert-Equal $resumedEvents.Count 0 'session.resumed event count on a fresh start'
+        Assert-Equal $skippedEvents.Count 1 "session.resume.skipped event count (payload: $(ConvertTo-SafeText ($evidence.resumeSkippedPayloads -join ' | ')))"
+        Assert-Equal ([string]$skippedEvents[0].payload.reason) $script:profile.skipReason 'session.resume.skipped reason'
+        $newNative = [string]$sessionThree.nativeSessionId
+        Assert-True (-not [string]::IsNullOrWhiteSpace($newNative)) 'fresh session native session id recorded'
+        Assert-True ($newNative -ne $nativeSessionId) "fresh session has a new native session id (was '$nativeSessionId', now '$newNative')"
+        $evidence.freshStartAnswerRecalledCodeWord = [bool]($thirdOutput -match 'PELICAN')
+        $evidence.freshStartAnswer = Limit-Output $thirdOutput
+    }
     $gates.resume = 'PASS'
 
     # Planned shutdown: the native tree of the live (resumed) session must be gone afterwards.
@@ -552,10 +669,10 @@ try {
         startedAt = $startedAt.ToString('o')
         completedAt = [DateTime]::UtcNow.ToString('o')
         durationMs = $stopwatch.ElapsedMilliseconds
-        provider = 'claude-code'
-        claudeVersion = $claudeVersion
-        authenticationChannel = 'native-subscription'
-        authenticationChannelNote = 'ANTHROPIC_*, CLAUDE_CODE_* and outer-session variables were removed from the daemon environment (names only recorded); the owner Claude configuration was neither read nor changed'
+        provider = $Provider
+        providerVersion = $providerVersion
+        authenticationChannel = 'native-account'
+        authenticationChannelNote = 'Variables matching the provider scrub pattern (outer agent session variables and, for Claude Code and Codex, API credentials) were removed from the daemon environment (names only recorded); the owner provider configuration was neither read nor changed'
         scrubbedEnvironmentVariableNames = @($script:scrubbedEnvironment | Sort-Object -Unique)
         liveTurnsSent = $script:liveTurns
         liveTurnCap = $maxLiveTurns
@@ -570,16 +687,16 @@ try {
         gates = $gates
         evidence = $evidence
         boundaries = [ordered]@{
-            permissions = 'NOT_APPLICABLE_FULL_AUTONOMY_ONLY'
+            permissions = if ($null -ne $script:profile.turnAuthority) { 'NOT_APPLICABLE_FULL_AUTONOMY_ONLY' } else { 'NOT_EXERCISED_PROMPTS_USE_NO_TOOLS' }
             deterministicGate = 'EXCLUDED'
-            userClaudeConfiguration = 'UNTOUCHED'
+            userProviderConfiguration = 'UNTOUCHED'
             forkOfLiveSession = 'NOT_RUN_SECTION_27_DECISION'
         }
     }
     $manifest | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath $manifestPath -Encoding UTF8
     $resolvedRunRoot = [IO.Path]::GetFullPath($script:runRoot)
     if ($resolvedRunRoot.StartsWith($tempBase, [StringComparison]::OrdinalIgnoreCase) -and
-        (Split-Path -Leaf $resolvedRunRoot).StartsWith('lazoo-claude-live-')) {
+        (Split-Path -Leaf $resolvedRunRoot).StartsWith('lazoo-live-')) {
         Remove-Item -LiteralPath $resolvedRunRoot -Recurse -Force -ErrorAction SilentlyContinue
     }
 }
