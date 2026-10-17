@@ -639,15 +639,20 @@ impl App {
             .map_err(provider_error)?;
         let request = SessionRequest::new(cwd).with_permission_mode("untrusted");
         let session = self
-            .providers
+            .session_backend
             .start(provider, &request)
             .await
             .map_err(provider_error)?;
-        let session_id = ProviderSession::id(&session);
-        let turn = session.turn(&TurnRequest::new(params.prompt)).await;
-        let stop = ProviderSession::stop(&session).await;
+        let session_id = session.id();
+        let turn = session
+            .turn_observed(&TurnRequest::new(params.prompt), &SmokeObserver)
+            .await;
+        let stop = session.stop().await;
         let events = turn.map_err(provider_error)?;
         stop.map_err(provider_error)?;
+        if smoke_turn_answered(&events) {
+            self.record_verified_observation(provider).await?;
+        }
         let (events, transcript_truncated) = concise_events(events);
         Ok(to_value(ProviderSmokeResult {
             provider: provider.to_string(),
@@ -656,6 +661,57 @@ impl App {
             transcript_truncated,
             checked_at: Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true),
         }))
+    }
+
+    /// A smoke turn that a model answered is the only evidence of model readiness the product
+    /// has, so it is recorded as the provider's `verified` observation through the same store
+    /// path a roster refresh uses (the roster revision advances and `roster.refreshed` is
+    /// emitted only when the effective observation changed).
+    ///
+    /// The version, protocol, capabilities, and check time come from a fresh probe taken now.
+    /// A probe that finds the binary gone or degraded cannot describe the provider that just
+    /// answered, so the stored observation is used instead; with neither there is nothing
+    /// truthful to record and the smoke result is returned unchanged. Authentication is
+    /// `native: ready`, since a model answered through the native channel, and `external` stays
+    /// as the base observation reported it, else `unknown`.
+    async fn record_verified_observation(&self, provider: ProviderKind) -> Result<(), RpcError> {
+        let fresh = self.observe_provider(provider).await;
+        let usable = !matches!(fresh.verification.as_str(), "not-detected" | "degraded");
+        let base = if usable {
+            Some(fresh)
+        } else {
+            self.store
+                .roster_snapshot()
+                .map_err(store_error)?
+                .entries
+                .into_iter()
+                .find_map(|entry| {
+                    entry
+                        .provider_observation
+                        .filter(|observation| observation.provider == provider.to_string())
+                })
+        };
+        let Some(mut observation) = base else {
+            return Ok(());
+        };
+        let external = observation
+            .authentication
+            .get("external")
+            .and_then(Value::as_str)
+            .unwrap_or("unknown")
+            .to_owned();
+        "verified".clone_into(&mut observation.verification);
+        observation.degradation_reason = None;
+        observation.authentication = json!({"native": "ready", "external": external});
+        let key = format!("provider-smoke:{}", Uuid::new_v4());
+        self.store
+            .refresh_provider_observations(&RefreshProviderObservationsInput {
+                request_id: key.clone(),
+                idempotency_key: key,
+                observations: vec![observation],
+            })
+            .map_err(store_error)?;
+        self.publish_events()
     }
 
     async fn create_employee(&self, request: &JsonRpcRequest) -> Result<Value, RpcError> {
@@ -1520,6 +1576,32 @@ fn discovery_source_name(source: DiscoverySource) -> &'static str {
         DiscoverySource::PersistedMachinePath => "persisted-machine-path",
         DiscoverySource::KnownLocation => "known-location",
     }
+}
+
+/// The smoke turn declines every permission request, as `ProviderSession::turn` does, and
+/// keeps no events of its own.
+struct SmokeObserver;
+
+impl TurnEventObserver for SmokeObserver {
+    fn observe(&self, _event: &ProviderEvent) -> Result<(), ProviderError> {
+        Ok(())
+    }
+}
+
+/// Whether a model answered: the turn completed, no provider error was reported, and the
+/// completion is not a failed, interrupted, or cancelled one. ACP reports its stop reason
+/// (for example `end_turn`) as the completion status, so only the unsuccessful ones are named.
+fn smoke_turn_answered(events: &[ProviderEvent]) -> bool {
+    events
+        .iter()
+        .all(|event| !matches!(event, ProviderEvent::Error { .. }))
+        && events.iter().any(|event| {
+            matches!(
+                event,
+                ProviderEvent::TurnCompleted { status, .. }
+                    if !matches!(status.as_str(), "failed" | "interrupted" | "cancelled")
+            )
+        })
 }
 
 fn concise_events(events: Vec<lazoo_providers::ProviderEvent>) -> (Vec<Value>, bool) {

@@ -14437,3 +14437,212 @@ fn opencode_full_autonomy_acceptance_contract_is_deterministic_and_backend_only(
         );
     }
 }
+
+/// The ACP probe launches its child through `lazoo-session-host.exe`, which must sit beside the
+/// test executable; build it once, as the provider crate's own fixtures do.
+fn ensure_session_host() {
+    static READY: std::sync::OnceLock<()> = std::sync::OnceLock::new();
+    READY.get_or_init(|| {
+        let workspace = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let status = Command::new(env!("CARGO"))
+            .current_dir(workspace)
+            .args(["build", "-p", "lazoo-session-host", "--locked"])
+            .status()
+            .unwrap();
+        assert!(status.success(), "lazoo-session-host fixture build failed");
+    });
+}
+
+fn opencode_events(status: &str) -> Vec<ProviderEvent> {
+    vec![
+        ProviderEvent::TurnStarted {
+            provider: ProviderKind::OpenCode,
+            session_id: "native-1".to_owned(),
+            turn_id: None,
+            raw: None,
+        },
+        ProviderEvent::TurnCompleted {
+            provider: ProviderKind::OpenCode,
+            session_id: "native-1".to_owned(),
+            turn_id: None,
+            status: status.to_owned(),
+            output: Some("LAZOO_OPENCODE_OK".to_owned()),
+            raw: None,
+        },
+    ]
+}
+
+/// Brief section 16: the `OpenCode` probe can only report `unverified` (an ACP handshake cannot see
+/// a login and the free model needs none), so a completed model turn is the only thing that can
+/// make an `OpenCode` employee dormant. The probe runs the real adapter against a stand-in
+/// executable that answers `--version` and `initialize`; the session is the fake backend.
+#[tokio::test]
+#[allow(clippy::too_many_lines)] // One story: unverified, failed smoke, successful smoke, refresh, conversation.
+async fn a_successful_smoke_verifies_an_opencode_employee_and_survives_a_refresh() {
+    ensure_session_host();
+    let temporary = tempdir().unwrap();
+    let root = DataRoot::from_path(temporary.path().join("data"));
+    root.ensure().unwrap();
+    let store = Store::open_path(root.state_db()).unwrap();
+    let backend = FakeSessionBackend::default();
+    let executable =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/opencode-probe.cmd");
+    let app = App::new_with_session_backend(
+        store.clone(),
+        root,
+        DiscoveryEnvironment::empty().with_known_location(ProviderKind::OpenCode, executable),
+        Arc::new(backend.clone()),
+    )
+    .unwrap();
+    let call =
+        |id: &str, method: &str, params: serde_json::Value| app.handle(request(id, method, params));
+    let roster = || async {
+        call("roster", "roster.get", json!({}))
+            .await
+            .result
+            .unwrap()
+    };
+    let roster_events = || {
+        store
+            .list_events(0, 1000)
+            .unwrap()
+            .into_iter()
+            .filter(|event| event.event_type == "roster.refreshed")
+            .count()
+    };
+
+    let created = call(
+        "create",
+        "employee.create",
+        json!({
+            "name": "Opal",
+            "provider": "opencode",
+            "role": "Lead",
+            "idempotencyKey": "create-opal"
+        }),
+    )
+    .await
+    .result
+    .unwrap();
+    let employee_id = created["employee"]["id"].as_str().unwrap().to_owned();
+    let conversation = |key: &str| {
+        call(
+            key,
+            "conversation.create",
+            json!({
+                "projectId": null,
+                "leadEmployeeId": employee_id,
+                "title": null,
+                "idempotencyKey": key
+            }),
+        )
+    };
+
+    // A refresh sees an executable and a handshake but cannot see model readiness.
+    let refreshed = call(
+        "refresh-1",
+        "roster.refresh",
+        json!({"idempotencyKey": "refresh-1"}),
+    )
+    .await
+    .result
+    .unwrap();
+    let entry = &refreshed["roster"]["entries"][0];
+    assert_eq!(entry["availability"], "unverified");
+    assert_eq!(entry["providerObservation"]["verification"], "unverified");
+    assert_eq!(
+        entry["availabilityReason"],
+        "provider model readiness has not been verified"
+    );
+    let before = conversation("conversation-too-early").await.error.unwrap();
+    assert_eq!(before.code, "LZ-CONVERSATION-LEAD-NOT-READY");
+    let unverified_revision = roster().await["revision"].as_u64().unwrap();
+    let unverified_events = roster_events();
+
+    // A smoke that errors, or that ends without a completion, records nothing.
+    *backend.turn_failure.lock().unwrap() = Some("scripted turn failure".to_owned());
+    let failed = call(
+        "smoke-failed",
+        "provider.smoke",
+        json!({"provider": "opencode", "prompt": "Reply with LAZOO_OPENCODE_OK"}),
+    )
+    .await;
+    assert!(failed.error.is_some(), "a failed turn fails the smoke");
+    *backend.turn_failure.lock().unwrap() = None;
+    *backend.turn_events.lock().unwrap() = opencode_events("end_turn")[..1].to_vec();
+    let unfinished = call(
+        "smoke-unfinished",
+        "provider.smoke",
+        json!({"provider": "opencode", "prompt": "Reply with LAZOO_OPENCODE_OK"}),
+    )
+    .await;
+    assert!(unfinished.error.is_none());
+    *backend.turn_events.lock().unwrap() = opencode_events("failed");
+    let declined = call(
+        "smoke-declined",
+        "provider.smoke",
+        json!({"provider": "opencode", "prompt": "Reply with LAZOO_OPENCODE_OK"}),
+    )
+    .await;
+    assert!(declined.error.is_none());
+    let after_failures = roster().await;
+    assert_eq!(after_failures["entries"][0]["availability"], "unverified");
+    assert_eq!(
+        after_failures["revision"].as_u64().unwrap(),
+        unverified_revision
+    );
+    assert_eq!(roster_events(), unverified_events);
+
+    // A completed turn (ACP reports its stop reason as the status) verifies the provider.
+    *backend.turn_events.lock().unwrap() = opencode_events("end_turn");
+    let smoke = call(
+        "smoke-ok",
+        "provider.smoke",
+        json!({"provider": "opencode", "prompt": "Reply with LAZOO_OPENCODE_OK"}),
+    )
+    .await
+    .result
+    .unwrap();
+    assert_eq!(smoke["events"][1]["output"], "LAZOO_OPENCODE_OK");
+    let verified = roster().await;
+    let entry = &verified["entries"][0];
+    assert_eq!(entry["availability"], "dormant");
+    assert!(entry["availabilityReason"].is_null());
+    assert_eq!(entry["providerObservation"]["verification"], "verified");
+    assert_eq!(
+        entry["providerObservation"]["authentication"]["native"],
+        "ready"
+    );
+    assert_eq!(
+        entry["providerObservation"]["authentication"]["external"],
+        "unknown"
+    );
+    assert_eq!(entry["providerObservation"]["version"], "0.0.0-smoke-test");
+    assert_eq!(
+        verified["revision"].as_u64().unwrap(),
+        unverified_revision + 1
+    );
+    assert_eq!(roster_events(), unverified_events + 1);
+
+    // A later refresh sees the same unverified probe and keeps the verification.
+    let again = call(
+        "refresh-2",
+        "roster.refresh",
+        json!({"idempotencyKey": "refresh-2"}),
+    )
+    .await
+    .result
+    .unwrap();
+    assert!(again["eventSequence"].is_null());
+    assert_eq!(again["roster"]["revision"], verified["revision"]);
+    assert_eq!(again["roster"]["entries"][0]["availability"], "dormant");
+    assert_eq!(
+        again["roster"]["entries"][0]["providerObservation"]["verification"],
+        "verified"
+    );
+
+    // The employee can lead a conversation now.
+    let created = conversation("conversation-after-smoke").await;
+    assert!(created.error.is_none(), "{:?}", created.error);
+    assert_desktop_is_roster_neutral(&app).await;
+}

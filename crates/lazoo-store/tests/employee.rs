@@ -373,3 +373,141 @@ fn idle_timeout_defaults_to_never_and_a_change_bumps_the_configuration_revision(
         .unwrap();
     assert_eq!(legacy.idle_timeout_seconds, 0);
 }
+
+fn probe(
+    verification: &str,
+    version: &str,
+    authentication: serde_json::Value,
+    checked_at: &str,
+) -> ProviderObservation {
+    let mut observation = refreshed_observation(verification, checked_at);
+    observation.version = Some(version.to_owned());
+    observation.authentication = authentication;
+    observation
+}
+
+fn stored_observation(store: &Store) -> ProviderObservation {
+    store.roster_snapshot().unwrap().entries[0]
+        .provider_observation
+        .clone()
+        .unwrap()
+}
+
+#[test]
+fn a_verified_observation_survives_probes_that_cannot_see_authentication() {
+    use lazoo_protocol::EmployeeAvailability::{Dormant, Offline, Unverified};
+
+    let temporary = tempdir().unwrap();
+    let store = Store::open_path(temporary.path().join("lazoo.db")).unwrap();
+    store.create_employee(&creation("create", "Rhea")).unwrap();
+    let unknown = json!({"native": "unknown", "external": "unknown"});
+    let verify = |key: &str, stamp: &str| {
+        store
+            .refresh_provider_observations(&refresh(
+                key,
+                vec![probe(
+                    "verified",
+                    "0.150.0",
+                    json!({"native": "ready", "external": "unknown"}),
+                    stamp,
+                )],
+            ))
+            .unwrap()
+    };
+
+    // The model-answered observation is a real change: the roster revision advances once.
+    let verified = verify("verify-1", "2026-08-30T01:00:00Z");
+    assert_eq!(verified.roster.revision, 2);
+    assert!(verified.event_sequence.is_some());
+
+    // A probe that only reports the weaker states for the same version and protocol keeps the
+    // row verified and ready, takes the fresh check time, and changes nothing effective.
+    for (index, weaker) in ["detected", "unverified", "configured"]
+        .into_iter()
+        .enumerate()
+    {
+        let stamp = format!("2026-08-30T02:0{index}:00Z");
+        let result = store
+            .refresh_provider_observations(&refresh(
+                &format!("weaker-{weaker}"),
+                vec![probe(weaker, "0.150.0", unknown.clone(), &stamp)],
+            ))
+            .unwrap();
+        assert_eq!(
+            result.roster.revision, 2,
+            "{weaker} must not advance the roster"
+        );
+        assert_eq!(
+            result.event_sequence, None,
+            "{weaker} must not emit an event"
+        );
+        assert_eq!(result.roster.entries[0].availability, Dormant);
+        let kept = stored_observation(&store);
+        assert_eq!(kept.verification, "verified");
+        assert_eq!(kept.authentication["native"], "ready");
+        assert_eq!(kept.authentication["external"], "unknown");
+        assert_eq!(kept.checked_at, stamp);
+    }
+
+    // A second employee created with a fresh probe does not downgrade it either.
+    let mut second = creation("create-second", "Mira");
+    second.provider_observation = Some(probe("unverified", "0.150.0", unknown.clone(), "t"));
+    store.create_employee(&second).unwrap();
+    assert_eq!(stored_observation(&store).verification, "verified");
+
+    // A blocked or login-needing state replaces the row.
+    let blocked = store
+        .refresh_provider_observations(&refresh(
+            "needs-login",
+            vec![probe(
+                "unverified",
+                "0.150.0",
+                json!({"native": "needs-login", "external": "unknown"}),
+                "2026-08-30T03:00:00Z",
+            )],
+        ))
+        .unwrap();
+    assert_eq!(stored_observation(&store).verification, "unverified");
+    assert_eq!(blocked.roster.entries[0].availability, Offline);
+
+    // A degraded probe replaces the row.
+    verify("verify-2", "2026-08-30T04:00:00Z");
+    assert_eq!(stored_observation(&store).verification, "verified");
+    store
+        .refresh_provider_observations(&refresh(
+            "degraded",
+            vec![probe(
+                "degraded",
+                "0.150.0",
+                unknown.clone(),
+                "2026-08-30T05:00:00Z",
+            )],
+        ))
+        .unwrap();
+    assert_eq!(stored_observation(&store).verification, "degraded");
+
+    // A changed version replaces the row: a replaced binary must be verified again.
+    verify("verify-3", "2026-08-30T06:00:00Z");
+    let upgraded = store
+        .refresh_provider_observations(&refresh(
+            "new-version",
+            vec![probe(
+                "unverified",
+                "0.151.0",
+                unknown.clone(),
+                "2026-08-30T07:00:00Z",
+            )],
+        ))
+        .unwrap();
+    assert_eq!(stored_observation(&store).verification, "unverified");
+    assert_eq!(upgraded.roster.entries[0].availability, Unverified);
+
+    // So does a changed protocol.
+    verify("verify-4", "2026-08-30T08:00:00Z");
+    let mut renegotiated = probe("unverified", "0.150.0", unknown, "2026-08-30T09:00:00Z");
+    renegotiated.protocol = Some("app-server/v3".to_owned());
+    store
+        .refresh_provider_observations(&refresh("new-protocol", vec![renegotiated]))
+        .unwrap();
+    assert_eq!(stored_observation(&store).verification, "unverified");
+}
