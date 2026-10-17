@@ -2,28 +2,28 @@
   "status": "PASS",
   "schemaVersion": 19,
   "mode": "deterministic-fake-transport",
-  "startedAt": "2026-10-17T10:30:48.3485336Z",
-  "durationMs": 3967,
+  "startedAt": "2026-10-17T10:55:06.4362664Z",
+  "durationMs": 3008,
   "commands": [
     {
-      "command": "cargo test -p lazood --test daemon opencode_runs_turns_and_tasks_only_under_full_autonomy --locked -- --exact",
+      "command": "cargo test -p lazood --test daemon opencode_delivers_turns_and_tasks_under_every_authority_its_launch_enforces --locked -- --exact",
       "exitCode": 0,
-      "durationMs": 876
+      "durationMs": 1228
     },
     {
       "command": "cargo test -p lazoo-providers --test opencode opencode_launch_is_prompt_free_only_under_full_autonomy --locked -- --exact",
       "exitCode": 0,
-      "durationMs": 2050
+      "durationMs": 353
     },
     {
       "command": "cargo test -p lazood --test daemon task_turn_rejects_a_provider_without_authority_override_support_before_io --locked -- --exact",
       "exitCode": 0,
-      "durationMs": 547
+      "durationMs": 881
     },
     {
       "command": "cargo test -p lazoo-store --test store store_enables_wal_foreign_keys_and_schema_version --locked -- --exact",
       "exitCode": 0,
-      "durationMs": 430
+      "durationMs": 481
     },
     {
       "command": "git diff --quiet and git diff --cached --quiet -- apps/lazoo-desktop",
@@ -33,7 +33,7 @@
   ],
   "evidence": {
     "fullAutonomyDelivered": true,
-    "askAndSelfDecisionRefused": true,
+    "promptFreeSessionNeverServesNarrowerAuthority": true,
     "launchPromptFreeOnlyUnderFullAutonomy": true,
     "otherProvidersRefused": true,
     "refusalsFailClosedBeforeIo": true,
@@ -48,8 +48,8 @@
     "externalModelUse": "NOT_RUN",
     "desktopUi": "UNCHANGED",
     "schemaMigration": "NONE",
-    "unlocked": "OPENCODE_FULL_AUTONOMY_ONLY",
-    "stillRefused": "OPENCODE_ASK_AND_SELF_DECISION_ANTIGRAVITY_GROK_BUILD",
+    "unlocked": "OPENCODE_FULL_AUTONOMY_SUPERSEDED_BY_GOVERNED_DELIVERY",
+    "stillRefused": "ANTIGRAVITY_GROK_BUILD_AND_NARROWER_TURNS_ON_A_PROMPT_FREE_OPENCODE_SESSION",
     "liveGate": "NOT_RUN_NO_SUPPORT_CLAIMED",
     "toolAccess": "CODEX_SESSIONS_ONLY"
   }
