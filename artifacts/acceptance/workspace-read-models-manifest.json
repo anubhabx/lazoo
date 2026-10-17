@@ -2,38 +2,38 @@
   "status": "PASS",
   "schemaVersion": 19,
   "mode": "deterministic-fake-transport",
-  "startedAt": "2026-10-17T10:33:27.9056765Z",
-  "durationMs": 2261,
+  "startedAt": "2026-10-17T11:30:53.5794911Z",
+  "durationMs": 2098,
   "commands": [
     {
       "command": "cargo test -p lazoo-domain --test workspace the_marker_prefers_attention_then_activity_then_failure_then_completion --locked -- --exact",
       "exitCode": 0,
-      "durationMs": 249
+      "durationMs": 251
     },
     {
       "command": "cargo test -p lazoo-domain --test workspace titles_come_from_the_store_then_the_first_request_then_a_default --locked -- --exact",
       "exitCode": 0,
-      "durationMs": 238
+      "durationMs": 232
     },
     {
       "command": "cargo test -p lazoo-domain --test workspace startability_follows_roster_availability_with_lazoo_words_for_each_block --locked -- --exact",
       "exitCode": 0,
-      "durationMs": 244
+      "durationMs": 243
     },
     {
       "command": "cargo test -p lazooctl --test cli workspace_cli_maps_conversations_and_launcher --locked -- --exact",
       "exitCode": 0,
-      "durationMs": 271
+      "durationMs": 281
     },
     {
       "command": "cargo test -p lazood --test daemon the_user_browses_a_space_and_its_launcher_through_the_daemon --locked -- --exact",
       "exitCode": 0,
-      "durationMs": 747
+      "durationMs": 637
     },
     {
       "command": "cargo test -p lazoo-store --test store store_enables_wal_foreign_keys_and_schema_version --locked -- --exact",
       "exitCode": 0,
-      "durationMs": 445
+      "durationMs": 385
     },
     {
       "command": "git diff --quiet and git diff --cached --quiet -- apps/lazoo-desktop",

@@ -1,0 +1,121 @@
+{
+  "status": "PASS",
+  "mode": "real-binaries-disposable-data-root-no-provider",
+  "startedAt": "2026-10-17T11:26:28.6178196Z",
+  "durationMs": 1412,
+  "dataRoot": "C:\\Users\\anubhab\\AppData\\Local\\Temp\\lazoo-core-services-7f4a641087b8482098e5717dbf3915eb\\data",
+  "checks": {
+    "releaseBuild": "SKIPPED_BY_CALLER",
+    "infrastructureBudget": "PASS",
+    "memoryDefaultsAndQueue": "PASS",
+    "terminalControlAndLoad": "PASS",
+    "daemonResourcesSampled": "PASS",
+    "plannedShutdown": "PASS"
+  },
+  "measurements": {
+    "daemon": {
+      "pid": 27600,
+      "cpuMillis": 47,
+      "workingSetBytes": 13455360,
+      "peakWorkingSetBytes": 13479936,
+      "handleCount": 135,
+      "terminalReadCycles": 8,
+      "nonEmptyReads": 1
+    }
+  },
+  "commands": [
+    {
+      "command": "lazooctl --json status",
+      "exitCode": 0,
+      "durationMs": 89
+    },
+    {
+      "command": "lazooctl --json system budget",
+      "exitCode": 0,
+      "durationMs": 17
+    },
+    {
+      "command": "lazooctl --json memory policy-show --global",
+      "exitCode": 0,
+      "durationMs": 17
+    },
+    {
+      "command": "lazooctl --json memory-worker show",
+      "exitCode": 0,
+      "durationMs": 17
+    },
+    {
+      "command": "lazooctl --json memory queue-status --limit 20",
+      "exitCode": 0,
+      "durationMs": 16
+    },
+    {
+      "command": "lazooctl --json terminal open C:\\WINDOWS\\System32\\cmd.exe --arg /d --arg /c --arg for /L %i in (1,1,48) do @echo core-services-%i & ping -n 7 127.0.0.1 >nul --cwd C:\\Users\\anubhab\\AppData\\Local\\Temp\\lazoo-core-services-7f4a641087b8482098e5717dbf3915eb --columns 100 --rows 30 --idempotency-key core-services-terminal-7f4a641087b8482098e5717dbf3915eb",
+      "exitCode": 0,
+      "durationMs": 32
+    },
+    {
+      "command": "lazooctl --json terminal resize 60ee84d9-5188-4a87-96ae-22a8e90bcdf1 --columns 120 --rows 40 --expected-revision 1 --expected-boot-id 3352b97e-0072-4b84-8db3-c4cb712955ee",
+      "exitCode": 0,
+      "durationMs": 17
+    },
+    {
+      "command": "lazooctl --json terminal read 60ee84d9-5188-4a87-96ae-22a8e90bcdf1 --expected-boot-id 3352b97e-0072-4b84-8db3-c4cb712955ee --after 0 --limit 4096",
+      "exitCode": 0,
+      "durationMs": 16
+    },
+    {
+      "command": "lazooctl --json terminal read 60ee84d9-5188-4a87-96ae-22a8e90bcdf1 --expected-boot-id 3352b97e-0072-4b84-8db3-c4cb712955ee --after 332 --limit 4096",
+      "exitCode": 0,
+      "durationMs": 17
+    },
+    {
+      "command": "lazooctl --json terminal read 60ee84d9-5188-4a87-96ae-22a8e90bcdf1 --expected-boot-id 3352b97e-0072-4b84-8db3-c4cb712955ee --after 332 --limit 4096",
+      "exitCode": 0,
+      "durationMs": 15
+    },
+    {
+      "command": "lazooctl --json terminal read 60ee84d9-5188-4a87-96ae-22a8e90bcdf1 --expected-boot-id 3352b97e-0072-4b84-8db3-c4cb712955ee --after 332 --limit 4096",
+      "exitCode": 0,
+      "durationMs": 16
+    },
+    {
+      "command": "lazooctl --json terminal read 60ee84d9-5188-4a87-96ae-22a8e90bcdf1 --expected-boot-id 3352b97e-0072-4b84-8db3-c4cb712955ee --after 332 --limit 4096",
+      "exitCode": 0,
+      "durationMs": 15
+    },
+    {
+      "command": "lazooctl --json terminal read 60ee84d9-5188-4a87-96ae-22a8e90bcdf1 --expected-boot-id 3352b97e-0072-4b84-8db3-c4cb712955ee --after 332 --limit 4096",
+      "exitCode": 0,
+      "durationMs": 15
+    },
+    {
+      "command": "lazooctl --json terminal read 60ee84d9-5188-4a87-96ae-22a8e90bcdf1 --expected-boot-id 3352b97e-0072-4b84-8db3-c4cb712955ee --after 332 --limit 4096",
+      "exitCode": 0,
+      "durationMs": 15
+    },
+    {
+      "command": "lazooctl --json terminal read 60ee84d9-5188-4a87-96ae-22a8e90bcdf1 --expected-boot-id 3352b97e-0072-4b84-8db3-c4cb712955ee --after 332 --limit 4096",
+      "exitCode": 0,
+      "durationMs": 15
+    },
+    {
+      "command": "lazooctl --json terminal stop 60ee84d9-5188-4a87-96ae-22a8e90bcdf1 --expected-revision 2 --expected-boot-id 3352b97e-0072-4b84-8db3-c4cb712955ee",
+      "exitCode": 0,
+      "durationMs": 20
+    },
+    {
+      "command": "lazooctl --json system shutdown",
+      "exitCode": 0,
+      "durationMs": 17
+    }
+  ],
+  "boundaries": {
+    "externalModelUse": "NOT_RUN",
+    "userConfiguration": "NOT_READ_OR_WRITTEN",
+    "providerProcess": "NOT_STARTED",
+    "desktop": "NOT_RUNNING",
+    "fiveMinuteCpuWindow": "NOT_COVERED",
+    "desktopInfrastructureCap": "NOT_COVERED"
+  }
+}
