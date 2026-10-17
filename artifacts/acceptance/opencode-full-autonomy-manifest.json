@@ -2,28 +2,33 @@
   "status": "PASS",
   "schemaVersion": 19,
   "mode": "deterministic-fake-transport",
-  "startedAt": "2026-10-17T10:55:06.4362664Z",
-  "durationMs": 3008,
+  "startedAt": "2026-10-17T11:18:05.6909767Z",
+  "durationMs": 2984,
   "commands": [
     {
       "command": "cargo test -p lazood --test daemon opencode_delivers_turns_and_tasks_under_every_authority_its_launch_enforces --locked -- --exact",
       "exitCode": 0,
-      "durationMs": 1228
+      "durationMs": 925
+    },
+    {
+      "command": "cargo test -p lazood --test daemon a_prompt_free_opencode_session_refuses_a_narrower_delegated_task_before_any_session_starts --locked -- --exact",
+      "exitCode": 0,
+      "durationMs": 659
     },
     {
       "command": "cargo test -p lazoo-providers --test opencode opencode_launch_is_prompt_free_only_under_full_autonomy --locked -- --exact",
       "exitCode": 0,
-      "durationMs": 353
+      "durationMs": 347
     },
     {
       "command": "cargo test -p lazood --test daemon task_turn_rejects_a_provider_without_authority_override_support_before_io --locked -- --exact",
       "exitCode": 0,
-      "durationMs": 881
+      "durationMs": 537
     },
     {
       "command": "cargo test -p lazoo-store --test store store_enables_wal_foreign_keys_and_schema_version --locked -- --exact",
       "exitCode": 0,
-      "durationMs": 481
+      "durationMs": 449
     },
     {
       "command": "git diff --quiet and git diff --cached --quiet -- apps/lazoo-desktop",
