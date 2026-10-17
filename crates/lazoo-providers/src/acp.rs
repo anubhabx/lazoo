@@ -399,7 +399,11 @@ impl AcpSession {
                     )
                     .await?
                 {
-                    progress.progress_at(Instant::now());
+                    // A refusal is recorded but is not provider progress: a model that keeps
+                    // asking for refused tools must still reach the stall deadline.
+                    if matches!(permission, ProviderEvent::PermissionRequested { .. }) {
+                        progress.progress_at(Instant::now());
+                    }
                     if let Some(observer) = observer {
                         observer.observe(&permission)?;
                     }
@@ -442,32 +446,45 @@ impl AcpSession {
             return Ok(None);
         };
         let request_id = permission_request_id(&id);
-        let normalized = request_id
-            .as_ref()
-            .and_then(|(key, request_id)| {
-                (!permission_ids.contains(key)).then(|| {
-                    normalize_acp_permission_request(
-                        self.provider,
-                        request_id,
-                        message,
-                        &self.session_id,
-                        turn,
-                    )
-                })
-            })
-            .transpose();
-        // A refused request is still answered below (cancelled, never a session-wide grant); the
-        // reason is kept as a progress event so the refusal is recorded rather than silent.
-        let refusal = normalized
-            .as_ref()
-            .err()
-            .map(|error| self.permission_refusal_event(message, error));
-        let permission = normalized.ok().flatten();
+        // Every refusal (malformed, an unsupported kind, a reused JSON-RPC id, or a reused tool
+        // call id) is still answered below with a cancel, never a grant, and is recorded.
+        let mut refusal: Option<ProviderError> = None;
+        let mut permission = None;
+        match &request_id {
+            None => {
+                refusal = Some(ProviderError::InvalidEvent(
+                    "ACP permission request id must be a string or a number".to_owned(),
+                ));
+            }
+            Some((key, _)) if permission_ids.contains(key) => {
+                refusal = Some(ProviderError::InvalidEvent(
+                    "ACP permission request reused a JSON-RPC request id in this turn".to_owned(),
+                ));
+            }
+            Some((_, request_id)) => {
+                match normalize_acp_permission_request(
+                    self.provider,
+                    request_id,
+                    message,
+                    &self.session_id,
+                    turn,
+                ) {
+                    Ok(request) => permission = Some(request),
+                    Err(error) => refusal = Some(error),
+                }
+            }
+        }
         let authorization_key = permission.as_ref().and_then(permission_authorization_key);
-        let permission = authorization_key
+        if authorization_key
             .as_ref()
-            .filter(|key| !authorization_keys.contains(*key))
-            .and(permission);
+            .is_some_and(|key| authorization_keys.contains(key))
+        {
+            permission = None;
+            refusal = Some(ProviderError::InvalidEvent(
+                "ACP permission request reused a tool call id in this turn".to_owned(),
+            ));
+        }
+        let refusal = refusal.map(|error| self.permission_refusal_event(message, &error));
         if let (Some((request_key, _)), Some(authorization_key), Some(_)) =
             (&request_id, &authorization_key, &permission)
         {

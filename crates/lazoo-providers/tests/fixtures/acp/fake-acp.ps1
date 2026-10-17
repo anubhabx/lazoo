@@ -35,6 +35,16 @@ while ($null -ne ($line = [Console]::In.ReadLine())) {
         }
         'session/prompt' {
             $prompt = [string]$message.params.prompt[0].text
+            if ($prompt -like '*LOOP_REFUSED*') {
+                # A model that keeps asking for a refused tool and never does anything else.
+                for ($index = 1; $index -le 40; $index++) {
+                    Write-Message @{ jsonrpc = '2.0'; id = "loop-$index"; method = 'session/request_permission'; params = @{ sessionId = 'session-1'; toolCall = @{ toolCallId = "call-$index"; title = 'Fetch'; kind = 'fetch'; status = 'pending' }; options = @(@{ optionId = 'allow-one'; name = 'Allow once'; kind = 'allow_once' }) } }
+                    Save-Response 'fake-acp-response-loop.json'
+                    Start-Sleep -Milliseconds 200
+                }
+                Write-Message @{ jsonrpc = '2.0'; id = $message.id; result = @{ stopReason = 'completed' } }
+                break
+            }
             $session = if ($prompt -like '*MISMATCH*') { 'other-session' } else { 'session-1' }
             $kind = 'edit'
             foreach ($candidate in @('network', 'execute', 'delete', 'move', 'read', 'search', 'think', 'fetch', 'other')) {

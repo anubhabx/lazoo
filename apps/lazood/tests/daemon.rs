@@ -14408,6 +14408,104 @@ async fn opencode_delivers_turns_and_tasks_under_every_authority_its_launch_enfo
     );
 }
 
+/// A session launched prompt-free (a `full-autonomy` employee) cannot be narrowed per turn, so a
+/// delegated task whose effective authority is `ask` is refused at dispatch with the task failed
+/// and no session started, even though `OpenCode` now serves `ask` on a governed session.
+#[tokio::test]
+async fn a_prompt_free_opencode_session_refuses_a_narrower_delegated_task_before_any_session_starts()
+ {
+    use lazoo_protocol::TaskState;
+
+    let (_temporary, harness) = tool_harness(AuthorityMode::FullAutonomy);
+    let opal = harness
+        .store
+        .create_employee(&CreateEmployeeInput {
+            request_id: "opencode-narrow-request".to_owned(),
+            idempotency_key: "opencode-narrow".to_owned(),
+            name: "Opal".to_owned(),
+            provider: "opencode".to_owned(),
+            role: "Worker".to_owned(),
+            instructions: String::new(),
+            model: Some("test-model".to_owned()),
+            reasoning_effort: None,
+            native_settings: json!({}),
+            authority_mode: AuthorityMode::FullAutonomy,
+            checkout_policy: EmployeeCheckoutPolicy::Isolated,
+            activation_policy: lazoo_protocol::ActivationPolicy::Manual,
+            idle_timeout_seconds: 0,
+            enabled: true,
+            provider_observation: Some(ProviderObservation {
+                provider: "opencode".to_owned(),
+                verification: "configured".to_owned(),
+                version: Some("test".to_owned()),
+                protocol: Some("acp/v1".to_owned()),
+                capabilities: json!({"session": true}),
+                authentication: json!({"native": "ready", "external": "unknown"}),
+                degradation_reason: None,
+                checked_at: "2026-10-17T00:00:00Z".to_owned(),
+            }),
+        })
+        .unwrap()
+        .employee;
+    warm_tool_lead(&harness).await;
+    let roster_revision = harness.store.roster_snapshot().unwrap().revision;
+    harness.backend.tool_calls.lock().unwrap().push(tool_call(
+        "call-1",
+        "task_delegate",
+        json!({
+            "employeeId": opal.id,
+            "objective": "Port the parser to OpenCode",
+            "rosterRevision": roster_revision,
+            "requestedAuthority": "ask"
+        }),
+    ));
+    assert_eq!(
+        submit_lead_turn(&harness, "full-autonomy").await["turn"]["state"],
+        "completed"
+    );
+    let results = harness.backend.tool_results.lock().unwrap().clone();
+    assert!(results.iter().all(|result| result.success), "{results:?}");
+    assert_eq!(results[0].content["effectiveAuthority"], "ask");
+    assert_eq!(results[0].content["state"], "proposed");
+    let task: uuid::Uuid = results[0].content["taskId"]
+        .as_str()
+        .unwrap()
+        .parse()
+        .unwrap();
+    harness
+        .app
+        .handle(request(
+            "accept-narrow",
+            "task.accept",
+            json!({"id": task, "expectedRevision": 1, "idempotencyKey": "accept-narrow"}),
+        ))
+        .await
+        .result
+        .unwrap();
+    let starts = harness.backend.starts.load(Ordering::SeqCst);
+    assert_eq!(starts, 1, "only Rhea's session so far");
+    assert_eq!(
+        harness
+            .app
+            .dispatch_pending_tasks_once()
+            .await
+            .unwrap_err()
+            .code,
+        "LZ-TASK-AUTHORITY-UNSUPPORTED"
+    );
+    let detail = harness.store.get_task(task).unwrap();
+    assert_eq!(detail.task.state, TaskState::Failed);
+    assert_eq!(
+        detail.task.failure_code.as_deref(),
+        Some("LZ-TASK-AUTHORITY-UNSUPPORTED")
+    );
+    assert_eq!(
+        harness.backend.starts.load(Ordering::SeqCst),
+        starts,
+        "no session starts for the refused task"
+    );
+}
+
 /// An `OpenCode` lead and its conversation over a chosen session backend, for the governed
 /// approval stories. The employee is `ready` for turns: the ledger, not the probe, is under test.
 struct OpenCodeLead {
@@ -14640,6 +14738,11 @@ fn acp_fixture_backend() -> (Arc<AcpFixtureBackend>, AcpStarts) {
     (backend, starts)
 }
 
+/// Removes the response file so the next assertion can only read what the next turn produced.
+fn clear_acp_outcome(cwd: &Path) {
+    let _ = std::fs::remove_file(cwd.join("fake-acp-response-1.json"));
+}
+
 /// What the fixture received for the last permission request of the session at `cwd`.
 fn acp_fixture_outcome(cwd: &Path) -> serde_json::Value {
     let text = std::fs::read_to_string(cwd.join("fake-acp-response-1.json")).unwrap();
@@ -14800,6 +14903,7 @@ async fn opencode_ask_and_self_decision_turns_are_governed_through_the_approval_
     lead.warm().await;
     let cwd = starts.lock().unwrap()[0].1.clone();
     assert_eq!(starts.lock().unwrap()[0].0.as_deref(), Some("ask"));
+    clear_acp_outcome(&cwd);
     let submission = lead.submit("acp-execute", "ask", "KIND_EXECUTE run the command");
     let pending = lead.wait_for_pending().await;
     assert_eq!(pending["kind"], "command-execution");
@@ -14821,6 +14925,7 @@ async fn opencode_ask_and_self_decision_turns_are_governed_through_the_approval_
 
     // A declined delete is a file-change approval whose action names the kind; the provider is
     // answered with a cancel and the turn ends with the decision recorded.
+    clear_acp_outcome(&cwd);
     let submission = lead.submit("acp-delete", "ask", "KIND_DELETE remove the file");
     let pending = lead.wait_for_pending().await;
     assert_eq!(pending["kind"], "file-change");
@@ -14844,6 +14949,7 @@ async fn opencode_ask_and_self_decision_turns_are_governed_through_the_approval_
         ("acp-fetch", "KIND_FETCH get the page"),
         ("acp-other", "KIND_OTHER use the tool"),
     ] {
+        clear_acp_outcome(&cwd);
         let submitted = timeout(Duration::from_secs(30), lead.submit(key, "ask", text))
             .await
             .unwrap()
@@ -14878,6 +14984,7 @@ async fn opencode_ask_and_self_decision_turns_are_governed_through_the_approval_
     lead.warm().await;
     let cwd = starts.lock().unwrap()[0].1.clone();
     assert_eq!(starts.lock().unwrap()[0].0.as_deref(), Some("accept-edits"));
+    clear_acp_outcome(&cwd);
     let submission = lead.submit(
         "self-execute",
         "self-decision",
@@ -14895,6 +15002,7 @@ async fn opencode_ask_and_self_decision_turns_are_governed_through_the_approval_
         .unwrap();
     assert_eq!(submitted["turn"]["state"], "completed");
     assert_eq!(acp_fixture_outcome(&cwd)["outcome"], "selected");
+    clear_acp_outcome(&cwd);
     let submitted = timeout(
         Duration::from_secs(30),
         lead.submit("self-fetch", "self-decision", "KIND_FETCH get the page"),
@@ -14923,6 +15031,12 @@ fn opencode_governed_delivery_acceptance_contract_is_deterministic_and_backend_o
     for required in [
         "opencode_ask_and_self_decision_turns_are_governed_through_the_approval_ledger",
         "opencode_delivers_turns_and_tasks_under_every_authority_its_launch_enforces",
+        "a_prompt_free_opencode_session_refuses_a_narrower_delegated_task_before_any_session_starts",
+        "governed_sessions_refuse_a_project_configuration_that_can_override_the_block",
+        "observed_acp_records_a_reused_jsonrpc_id_and_refusals_are_not_progress",
+        "opencode::tests::governed_sessions_refuse_configuration_that_can_override_the_block",
+        "governedConfigurationConflictRefused",
+        "refusalsAreRecordedAndNotProgress",
         "opencode_launch_makes_every_governed_tool_ask_under_ask_and_self_decision",
         "opencode_launch_is_prompt_free_only_under_full_autonomy",
         "observed_acp_admits_command_edit_delete_and_move_as_governed_requests",

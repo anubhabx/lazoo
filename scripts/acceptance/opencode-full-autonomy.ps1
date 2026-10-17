@@ -55,8 +55,10 @@ try {
     Push-Location $repoRoot
     Invoke-Test 'lazood' 'daemon' 'opencode_delivers_turns_and_tasks_under_every_authority_its_launch_enforces'
     $evidence.fullAutonomyDelivered = $true
-    $evidence.promptFreeSessionNeverServesNarrowerAuthority = $true
     $evidence.otherProvidersRefused = $true
+
+    Invoke-Test 'lazood' 'daemon' 'a_prompt_free_opencode_session_refuses_a_narrower_delegated_task_before_any_session_starts'
+    $evidence.promptFreeSessionNeverServesNarrowerAuthority = $true
 
     Invoke-Test 'lazoo-providers' 'opencode' 'opencode_launch_is_prompt_free_only_under_full_autonomy'
     $evidence.launchPromptFreeOnlyUnderFullAutonomy = $true
