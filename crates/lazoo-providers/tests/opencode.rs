@@ -233,10 +233,22 @@ async fn governed_sessions_refuse_a_project_configuration_that_can_override_the_
         let outcome = OpenCodeAdapter::with_executable(fake_acp())
             .start(&request)
             .await;
-        assert!(
-            matches!(outcome, Err(ProviderError::Unsupported { .. })),
-            "mode {mode:?} must be refused beside a permission configuration"
-        );
+        match outcome {
+            Err(ProviderError::Unsupported {
+                detail: Some(detail),
+                ..
+            }) => {
+                assert!(detail.contains("opencode.json"), "{detail}");
+                assert!(
+                    !detail.contains("allow"),
+                    "contents must not leak: {detail}"
+                );
+            }
+            other => panic!(
+                "mode {mode:?} must be refused beside a permission configuration, got {:?}",
+                other.map(|_| ())
+            ),
+        }
     }
     let session = OpenCodeAdapter::with_executable(fake_acp())
         .start(&SessionRequest::new(temporary.path()).with_permission_mode("auto"))
@@ -250,6 +262,169 @@ async fn governed_sessions_refuse_a_project_configuration_that_can_override_the_
         .start(&SessionRequest::new(temporary.path()).with_permission_mode("ask"))
         .await;
     assert!(matches!(outcome, Err(ProviderError::Unsupported { .. })));
+}
+
+const SCAN_WORK: &str = "LAZOO_GLOBAL_SCAN_WORK";
+const SCAN_EXPECT: &str = "LAZOO_GLOBAL_SCAN_EXPECT";
+
+/// The body of one global-configuration case. It runs in a child process whose environment the
+/// parent test sets (`XDG_CONFIG_HOME`, `USERPROFILE`, `HOME`), because the scan reads the real
+/// process environment and mutating it inside this binary would race the other tests.
+#[tokio::test]
+#[ignore = "runs only as a child of governed_sessions_refuse_the_owners_global_agent_configuration"]
+async fn global_scan_case_child() {
+    let (Some(work), Some(expect)) = (std::env::var_os(SCAN_WORK), std::env::var(SCAN_EXPECT).ok())
+    else {
+        return;
+    };
+    for mode in [Some("ask"), Some("accept-edits"), Some("untrusted"), None] {
+        let mut request = SessionRequest::new(&work);
+        if let Some(mode) = mode {
+            request = request.with_permission_mode(mode);
+        }
+        let outcome = OpenCodeAdapter::with_executable(fake_acp())
+            .start(&request)
+            .await;
+        match (expect.as_str(), outcome) {
+            ("allow", Ok(session)) => session.stop().await.unwrap(),
+            (
+                named,
+                Err(ProviderError::Unsupported {
+                    detail: Some(detail),
+                    ..
+                }),
+            ) if named != "allow" => {
+                assert!(detail.contains(named), "{detail} must name {named}");
+                assert!(
+                    !detail.contains("allow"),
+                    "contents must not leak: {detail}"
+                );
+            }
+            (expect, outcome) => panic!(
+                "mode {mode:?}: expected {expect}, got {:?}",
+                outcome.map(|_| ())
+            ),
+        }
+    }
+    // Full autonomy has no governed rules to bypass, so it is never refused.
+    let session = OpenCodeAdapter::with_executable(fake_acp())
+        .start(&SessionRequest::new(&work).with_permission_mode("auto"))
+        .await
+        .unwrap();
+    session.stop().await.unwrap();
+}
+
+fn run_global_scan_case(
+    name: &str,
+    config_home: Option<&Path>,
+    home: &Path,
+    work: &Path,
+    expect: &str,
+) {
+    let mut command = std::process::Command::new(std::env::current_exe().unwrap());
+    command
+        .args([
+            "global_scan_case_child",
+            "--exact",
+            "--ignored",
+            "--test-threads=1",
+        ])
+        .env("USERPROFILE", home)
+        .env("HOME", home)
+        .env(SCAN_WORK, work)
+        .env(SCAN_EXPECT, expect)
+        .env_remove("OPENCODE_CONFIG")
+        .env_remove("OPENCODE_CONFIG_CONTENT")
+        .env_remove("OPENCODE_CONFIG_DIR");
+    match config_home {
+        Some(config_home) => command.env("XDG_CONFIG_HOME", config_home),
+        None => command.env_remove("XDG_CONFIG_HOME"),
+    };
+    let output = command.output().unwrap();
+    assert!(
+        output.status.success() && String::from_utf8_lossy(&output.stdout).contains("1 passed"),
+        "case {name} failed:\n{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn governed_sessions_refuse_the_owners_global_agent_configuration() {
+    // The live probe (2026-10-17): a global agent-scoped permission beats the inline block, a
+    // global top-level `permission` does not. The directories stand in for the owner's home.
+    let temporary = tempdir().unwrap();
+    let home = temporary.path().join("home");
+    let xdg = temporary.path().join("xdg");
+    let work = temporary.path().join("work");
+    for directory in [
+        home.join(".config").join("opencode"),
+        home.join(".opencode"),
+        xdg.join("opencode"),
+        work.join(".git"),
+    ] {
+        std::fs::create_dir_all(directory).unwrap();
+    }
+    let xdg_root = xdg.join("opencode");
+    let default_root = home.join(".config").join("opencode");
+    let dot_root = home.join(".opencode");
+    let run = |name: &str, config_home: Option<&Path>, expect: &str| {
+        run_global_scan_case(name, config_home, &home, &work, expect);
+    };
+
+    run("clean", Some(&xdg), "allow");
+    run("clean without XDG", None, "allow");
+
+    // A global top-level permission (and legacy tools) alone does not refuse.
+    std::fs::write(
+        xdg_root.join("opencode.json"),
+        r#"{"permission":{"bash":"allow"},"tools":{"bash":true}}"#,
+    )
+    .unwrap();
+    run("global top-level permission", Some(&xdg), "allow");
+
+    // An agent-scoped permission under XDG_CONFIG_HOME refuses and names the file.
+    std::fs::write(
+        xdg_root.join("opencode.json"),
+        r#"{"agent":{"build":{"permission":{"bash":"allow"}}}}"#,
+    )
+    .unwrap();
+    run(
+        "xdg agent",
+        Some(&xdg),
+        &xdg_root.join("opencode.json").display().to_string(),
+    );
+    std::fs::remove_file(xdg_root.join("opencode.json")).unwrap();
+
+    // Without XDG_CONFIG_HOME the root is ~/.config/opencode; with it, that directory is ignored.
+    std::fs::write(default_root.join("opencode.jsonc"), "// c\n{\"mode\":{}}").unwrap();
+    run(
+        "default root mode",
+        None,
+        &default_root.join("opencode.jsonc").display().to_string(),
+    );
+    run("default root ignored under XDG", Some(&xdg), "allow");
+    std::fs::remove_file(default_root.join("opencode.jsonc")).unwrap();
+
+    // A markdown agent definition in ~/.opencode refuses; an unparsable configuration does too.
+    std::fs::create_dir(dot_root.join("agents")).unwrap();
+    std::fs::write(dot_root.join("agents").join("build.md"), "bash: allow").unwrap();
+    run(
+        "dot opencode agent",
+        Some(&xdg),
+        &dot_root
+            .join("agents")
+            .join("build.md")
+            .display()
+            .to_string(),
+    );
+    std::fs::remove_dir_all(dot_root.join("agents")).unwrap();
+    std::fs::write(xdg_root.join("opencode.json"), [0xff, 0xfe, 0x00, 0x9f]).unwrap();
+    run(
+        "unparsable",
+        Some(&xdg),
+        &xdg_root.join("opencode.json").display().to_string(),
+    );
 }
 
 #[test]

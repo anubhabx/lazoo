@@ -134,6 +134,7 @@ pub(crate) async fn start_acp_session(
             return Err(ProviderError::Unsupported {
                 provider,
                 capability: "session resume",
+                detail: None,
             });
         }
         let load = LoadSessionRequest::new(session_id.clone(), request.cwd.clone())
@@ -240,6 +241,7 @@ impl AcpSession {
             return Err(ProviderError::Unsupported {
                 provider: self.provider,
                 capability: "read-only turns",
+                detail: None,
             });
         }
         if self.stopped.load(Ordering::Acquire) {
@@ -270,6 +272,7 @@ impl AcpSession {
             return Err(ProviderError::Unsupported {
                 provider: self.provider,
                 capability: "read-only turns",
+                detail: None,
             });
         }
         if self.stopped.load(Ordering::Acquire) {

@@ -217,6 +217,7 @@ impl AntigravitySession {
             return Err(ProviderError::Unsupported {
                 provider: ProviderKind::Antigravity,
                 capability: "read-only turns",
+                detail: None,
             });
         }
         if self.stopped.load(Ordering::Acquire) {

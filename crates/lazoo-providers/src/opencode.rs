@@ -40,6 +40,10 @@ const CONFIG_ENVIRONMENT: [&str; 3] = [
 /// Configuration keys that can grant or change permissions (`tools` and `mode` are the legacy
 /// spellings). Matched as quoted keys, so a false positive only refuses.
 const PERMISSION_CONFIG_KEYS: [&str; 5] = ["permission", "agent", "agents", "mode", "tools"];
+/// The global configuration keys that carry agent-scoped permissions, which the live probe showed
+/// beating the inline block. A global top-level `permission` is deliberately absent: the block
+/// wins over it.
+const AGENT_SCOPED_CONFIG_KEYS: [&str; 3] = ["agent", "agents", "mode"];
 const MAX_CONFIG_BYTES: u64 = 1024 * 1024;
 const STOP_TIMEOUT: Duration = Duration::from_secs(2);
 const VERSION_TIMEOUT: Duration = Duration::from_secs(5);
@@ -163,18 +167,20 @@ impl OpenCodeAdapter {
             .next()
             .ok_or(ProviderError::NotDetected(ProviderKind::OpenCode))?;
         if request.permission_mode.as_deref() != Some(FULL_AUTONOMY_PERMISSION_MODE)
-            && governed_config_conflict(
+            && let Some(detail) = governed_config_conflict(
                 &request.cwd,
                 &|name| std::env::var_os(name).is_some(),
                 home_directory().as_deref(),
+                config_home().as_deref(),
             )
         {
-            // The live precedence probe (2026-10-17) showed a project `opencode.json` that allows
-            // `bash` beating the inline block, so a governed session fails closed rather than
-            // run where the block may not hold.
+            // The live precedence probes (2026-10-17) showed a project or global agent-scoped
+            // permission beating the inline block, so a governed session fails closed rather
+            // than run where the block may not hold.
             return Err(ProviderError::Unsupported {
                 provider: ProviderKind::OpenCode,
                 capability: "governed permissions beside an OpenCode permission, agent, plugin, or environment configuration",
+                detail: Some(detail),
             });
         }
         let (session, _) = start_acp_session(
@@ -374,21 +380,48 @@ fn home_directory() -> Option<PathBuf> {
         .map(PathBuf::from)
 }
 
-/// Whether the session's working directory (or an ancestor up to the repository root), or the
-/// environment, carries `OpenCode` configuration that can override the inline permission block:
-/// an `opencode.json` or `opencode.jsonc` naming a permission-bearing key (or unreadable), any
-/// `.opencode` directory (agents, plugins, tools), or an `OPENCODE_CONFIG*` variable. The scan
-/// stops before the user's home directory: its `.opencode` is `OpenCode`'s own installation and
-/// global configuration, which is the owner's, not the project's (see the record's retained
+/// The owner's XDG configuration root as `OpenCode` reads it (`XDG_CONFIG_HOME || ~/.config`): the
+/// variable when it is set and non-empty, else none.
+fn config_home() -> Option<PathBuf> {
+    std::env::var_os("XDG_CONFIG_HOME")
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+}
+
+/// Why a governed session must not start, or `None` when nothing the scan knows can outrank the
+/// inline permission block. The reason names the file, directory, or variable that triggered the
+/// refusal and never its contents.
+///
+/// Project rule: the session's working directory (or an ancestor up to the repository root), or
+/// the environment, carries `OpenCode` configuration that can override the block: an
+/// `opencode.json` or `opencode.jsonc` naming a permission-bearing key (or unreadable), any
+/// `.opencode` directory (agents, plugins, tools), or an `OPENCODE_CONFIG*` variable. The project
+/// scan stops before the user's home directory: its `.opencode` is the owner's own installation
+/// and global configuration, which the global rule below covers (see the record's retained
 /// boundaries).
+///
+/// Global rule: the owner's configuration directories (`$XDG_CONFIG_HOME/opencode` when that is
+/// set, else `~/.config/opencode`, plus `~/.opencode`) refuse a governed start when
+/// `opencode.json`/`opencode.jsonc` names an agent-scoped carrier (`agent`, `agents`, `mode`),
+/// when an `agent`/`agents` subdirectory holds any `*.md` agent definition, or when a file or
+/// directory there cannot be read. The live probe (2026-10-17) showed agent-scoped permissions
+/// beating the inline block wherever they live, while a global top-level `permission` key does
+/// NOT: the block wins there, so a global `permission` (or legacy `tools`) alone never refuses.
 fn governed_config_conflict(
     cwd: &Path,
     environment_has: &dyn Fn(&str) -> bool,
     home: Option<&Path>,
-) -> bool {
-    if CONFIG_ENVIRONMENT.iter().any(|name| environment_has(name)) {
-        return true;
+    config_home: Option<&Path>,
+) -> Option<String> {
+    for name in CONFIG_ENVIRONMENT {
+        if environment_has(name) {
+            return Some(format!("the environment variable {name} is set"));
+        }
     }
+    project_config_conflict(cwd, home).or_else(|| global_config_conflict(home, config_home))
+}
+
+fn project_config_conflict(cwd: &Path, home: Option<&Path>) -> Option<String> {
     for directory in cwd.ancestors() {
         if home.is_some_and(|home| {
             home.to_string_lossy()
@@ -396,31 +429,120 @@ fn governed_config_conflict(
         }) {
             break;
         }
-        if directory.join(".opencode").exists() {
-            return true;
+        let dot_directory = directory.join(".opencode");
+        if dot_directory.exists() {
+            return Some(format!(
+                "the project directory {} exists",
+                dot_directory.display()
+            ));
         }
         for name in ["opencode.json", "opencode.jsonc"] {
             let file = directory.join(name);
             if !file.exists() {
                 continue;
             }
-            let small = std::fs::metadata(&file).is_ok_and(|meta| meta.len() <= MAX_CONFIG_BYTES);
-            let Some(text) = small.then(|| std::fs::read_to_string(&file).ok()).flatten() else {
-                return true;
-            };
-            if names_a_key(&text) {
-                return true;
+            match read_configuration(&file) {
+                None => return Some(format!("{} is unreadable or too large", file.display())),
+                Some(text) if names_a_key(&text, &PERMISSION_CONFIG_KEYS) => {
+                    return Some(format!(
+                        "the project configuration {} names a permission-bearing key",
+                        file.display()
+                    ));
+                }
+                Some(_) => {}
             }
         }
         if directory.join(".git").exists() {
             break;
         }
     }
-    false
+    None
 }
 
-fn names_a_key(text: &str) -> bool {
-    PERMISSION_CONFIG_KEYS.iter().any(|key| {
+fn global_config_conflict(home: Option<&Path>, config_home: Option<&Path>) -> Option<String> {
+    let mut roots = Vec::new();
+    match (config_home, home) {
+        (Some(config_home), _) => roots.push(config_home.join("opencode")),
+        (None, Some(home)) => roots.push(home.join(".config").join("opencode")),
+        (None, None) => {}
+    }
+    if let Some(home) = home {
+        roots.push(home.join(".opencode"));
+    }
+    roots.iter().find_map(|root| global_root_conflict(root))
+}
+
+fn global_root_conflict(root: &Path) -> Option<String> {
+    for name in ["opencode.json", "opencode.jsonc"] {
+        let file = root.join(name);
+        match std::fs::metadata(&file) {
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(_) => return Some(format!("{} is unreadable", file.display())),
+            Ok(_) => {}
+        }
+        match read_configuration(&file) {
+            None => return Some(format!("{} is unreadable or too large", file.display())),
+            Some(text) if names_a_key(&text, &AGENT_SCOPED_CONFIG_KEYS) => {
+                return Some(format!(
+                    "the global configuration {} names an agent-scoped key",
+                    file.display()
+                ));
+            }
+            Some(_) => {}
+        }
+    }
+    for name in ["agent", "agents"] {
+        let directory = root.join(name);
+        match agent_definition(&directory, 0) {
+            Ok(None) => {}
+            Ok(Some(file)) => {
+                return Some(format!(
+                    "the global agent definition {} exists",
+                    file.display()
+                ));
+            }
+            Err(()) => return Some(format!("{} is unreadable", directory.display())),
+        }
+    }
+    None
+}
+
+/// The first `*.md` file under `directory` (an absent directory holds none), or `Err` when a
+/// directory cannot be read or nests deeper than the bound.
+fn agent_definition(directory: &Path, depth: usize) -> Result<Option<PathBuf>, ()> {
+    const MAX_AGENT_DEPTH: usize = 8;
+    let entries = match std::fs::read_dir(directory) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(_) => return Err(()),
+    };
+    for entry in entries {
+        let path = entry.map_err(|_| ())?.path();
+        if path.is_dir() {
+            if depth >= MAX_AGENT_DEPTH {
+                return Err(());
+            }
+            if let Some(found) = agent_definition(&path, depth + 1)? {
+                return Ok(Some(found));
+            }
+        } else if path
+            .extension()
+            .is_some_and(|extension| extension.eq_ignore_ascii_case("md"))
+        {
+            return Ok(Some(path));
+        }
+    }
+    Ok(None)
+}
+
+/// The configuration text, or `None` when the file is unreadable, not UTF-8, or too large.
+fn read_configuration(file: &Path) -> Option<String> {
+    let small = std::fs::metadata(file).is_ok_and(|meta| meta.len() <= MAX_CONFIG_BYTES);
+    small.then(|| std::fs::read_to_string(file).ok()).flatten()
+}
+
+fn names_a_key(text: &str, keys: &[&str]) -> bool {
+    keys.iter().any(|key| {
         let quoted = format!("\"{key}\"");
         text.match_indices(&quoted)
             .any(|(index, _)| text[index + quoted.len()..].trim_start().starts_with(':'))
@@ -435,6 +557,10 @@ mod tests {
         false
     }
 
+    fn conflict(cwd: &Path) -> Option<String> {
+        governed_config_conflict(cwd, &none, None, None)
+    }
+
     #[test]
     fn governed_sessions_refuse_configuration_that_can_override_the_block() {
         let temporary = tempfile::tempdir().unwrap();
@@ -442,13 +568,13 @@ mod tests {
         std::fs::create_dir(root.join(".git")).unwrap();
         let work = root.join("a").join("b");
         std::fs::create_dir_all(&work).unwrap();
-        assert!(!governed_config_conflict(&work, &none, None));
+        assert_eq!(conflict(&work), None);
 
         // Unrelated configuration does not refuse; permission-bearing keys do, even in an
         // ancestor and even with comments, and an unparseable file is not trusted either way
         // (it is only refused when it names a key).
         std::fs::write(root.join("opencode.json"), r#"{"model":"x","theme":"y"}"#).unwrap();
-        assert!(!governed_config_conflict(&work, &none, None));
+        assert_eq!(conflict(&work), None);
         for text in [
             r#"{"permission":{"bash":"allow"}}"#,
             r#"{"agent" : {"build":{"permission":{"bash":"allow"}}}}"#,
@@ -456,25 +582,24 @@ mod tests {
             r#"{"mode":{"x":{}}}"#,
         ] {
             std::fs::write(root.join("opencode.json"), text).unwrap();
-            assert!(governed_config_conflict(&work, &none, None), "{text}");
+            let detail = conflict(&work).unwrap_or_default();
+            assert!(detail.contains("opencode.json"), "{text}: {detail}");
+            assert!(!detail.contains("bash"), "contents must not leak: {detail}");
         }
         std::fs::remove_file(root.join("opencode.json")).unwrap();
 
         std::fs::write(work.join("opencode.jsonc"), r#"{"agent":{}}"#).unwrap();
-        assert!(governed_config_conflict(&work, &none, None));
+        assert!(conflict(&work).is_some_and(|detail| detail.contains("opencode.jsonc")));
         std::fs::remove_file(work.join("opencode.jsonc")).unwrap();
 
         std::fs::create_dir(work.join(".opencode")).unwrap();
-        assert!(governed_config_conflict(&work, &none, None));
+        assert!(conflict(&work).is_some_and(|detail| detail.contains(".opencode")));
         std::fs::remove_dir(work.join(".opencode")).unwrap();
-        assert!(!governed_config_conflict(&work, &none, None));
+        assert_eq!(conflict(&work), None);
 
         for name in CONFIG_ENVIRONMENT {
-            assert!(governed_config_conflict(
-                &work,
-                &|variable| variable == name,
-                None
-            ));
+            let detail = governed_config_conflict(&work, &|variable| variable == name, None, None);
+            assert!(detail.is_some_and(|detail| detail.contains(name)));
         }
     }
 
@@ -485,10 +610,15 @@ mod tests {
         std::fs::create_dir(home.join(".opencode")).unwrap();
         let work = home.join("data").join("session");
         std::fs::create_dir_all(&work).unwrap();
-        assert!(governed_config_conflict(&work, &none, None));
-        assert!(!governed_config_conflict(&work, &none, Some(home)));
+        assert!(conflict(&work).is_some());
+        // Below the home directory the project rule stops, and the global rule finds nothing
+        // agent-scoped in a bare `~/.opencode` (OpenCode's own installation).
+        assert_eq!(
+            governed_config_conflict(&work, &none, Some(home), None),
+            None
+        );
         std::fs::create_dir(work.join(".opencode")).unwrap();
-        assert!(governed_config_conflict(&work, &none, Some(home)));
+        assert!(governed_config_conflict(&work, &none, Some(home), None).is_some());
     }
 
     #[test]
@@ -498,6 +628,141 @@ mod tests {
         std::fs::write(outer.join("opencode.json"), r#"{"permission":{}}"#).unwrap();
         let repository = outer.join("repo");
         std::fs::create_dir_all(repository.join(".git")).unwrap();
-        assert!(!governed_config_conflict(&repository, &none, None));
+        assert_eq!(conflict(&repository), None);
+    }
+
+    #[test]
+    fn the_global_scan_refuses_agent_scoped_carriers_and_names_the_file() {
+        let temporary = tempfile::tempdir().unwrap();
+        let home = temporary.path().join("home");
+        let xdg = temporary.path().join("xdg");
+        let work = temporary.path().join("work");
+        for directory in [&home, &xdg, &work] {
+            std::fs::create_dir_all(directory).unwrap();
+        }
+        std::fs::create_dir(work.join(".git")).unwrap();
+        let scan = |config_home: Option<&Path>| {
+            governed_config_conflict(&work, &none, Some(&home), config_home)
+        };
+        assert_eq!(scan(None), None);
+        assert_eq!(scan(Some(&xdg)), None);
+
+        // With XDG_CONFIG_HOME set, only `$XDG_CONFIG_HOME/opencode` is the config root; without
+        // it the root is `~/.config/opencode`.
+        let xdg_root = xdg.join("opencode");
+        let default_root = home.join(".config").join("opencode");
+        let dot_root = home.join(".opencode");
+        for root in [&xdg_root, &default_root, &dot_root] {
+            std::fs::create_dir_all(root).unwrap();
+        }
+
+        // Agent-scoped carriers refuse; the detail names the file and never its contents.
+        for (root, config_home) in [
+            (&xdg_root, Some(xdg.as_path())),
+            (&default_root, None),
+            (&dot_root, None),
+        ] {
+            for (name, text) in [
+                (
+                    "opencode.json",
+                    r#"{"agent":{"build":{"permission":{"bash":"allow"}}}}"#,
+                ),
+                ("opencode.jsonc", "// c\n{\"agents\": {}}"),
+                ("opencode.json", r#"{"mode":{"build":{}}}"#),
+            ] {
+                let file = root.join(name);
+                std::fs::write(&file, text).unwrap();
+                let detail = scan(config_home).unwrap_or_default();
+                assert!(detail.contains(&file.display().to_string()), "{detail}");
+                assert!(
+                    !detail.contains("allow"),
+                    "contents must not leak: {detail}"
+                );
+                std::fs::remove_file(&file).unwrap();
+            }
+            assert_eq!(scan(config_home), None);
+        }
+
+        // The default root is ignored while XDG_CONFIG_HOME names another.
+        std::fs::write(default_root.join("opencode.json"), r#"{"agent":{}}"#).unwrap();
+        assert_eq!(scan(Some(&xdg)), None);
+        assert!(scan(None).is_some());
+        std::fs::remove_file(default_root.join("opencode.json")).unwrap();
+
+        // An `agent` or `agents` directory refuses only for a markdown definition.
+        for directory in ["agent", "agents"] {
+            let agents = xdg_root.join(directory);
+            std::fs::create_dir_all(agents.join("nested")).unwrap();
+            std::fs::write(agents.join("notes.txt"), "x").unwrap();
+            assert_eq!(scan(Some(&xdg)), None, "{directory} without markdown");
+            let definition = agents.join("nested").join("build.MD");
+            std::fs::write(&definition, "---\npermission:\n  bash: allow\n---\n").unwrap();
+            let detail = scan(Some(&xdg)).unwrap_or_default();
+            assert!(
+                detail.contains(&definition.display().to_string()),
+                "{detail}"
+            );
+            assert!(!detail.contains("bash"), "contents must not leak: {detail}");
+            std::fs::remove_dir_all(&agents).unwrap();
+        }
+        assert_eq!(scan(Some(&xdg)), None);
+    }
+
+    #[test]
+    fn a_global_top_level_permission_alone_does_not_refuse() {
+        // The live probe (2026-10-17): a global top-level `permission.bash: allow` lost to the
+        // inline block (the `execute` request still arrived), so only agent-scoped carriers
+        // refuse. Legacy `tools` is likewise not an agent-scoped carrier.
+        let temporary = tempfile::tempdir().unwrap();
+        let home = temporary.path().join("home");
+        let xdg = temporary.path().join("xdg");
+        let work = temporary.path().join("work");
+        std::fs::create_dir_all(xdg.join("opencode")).unwrap();
+        std::fs::create_dir_all(&home).unwrap();
+        std::fs::create_dir_all(work.join(".git")).unwrap();
+        std::fs::write(
+            xdg.join("opencode").join("opencode.json"),
+            r#"{"permission":{"bash":"allow"},"tools":{"bash":true},"model":"x"}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            governed_config_conflict(&work, &none, Some(&home), Some(&xdg)),
+            None
+        );
+    }
+
+    #[test]
+    fn the_global_scan_fails_closed_on_an_unreadable_file_or_directory() {
+        let temporary = tempfile::tempdir().unwrap();
+        let home = temporary.path().join("home");
+        let xdg = temporary.path().join("xdg");
+        let work = temporary.path().join("work");
+        let root = xdg.join("opencode");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::create_dir_all(&home).unwrap();
+        std::fs::create_dir_all(work.join(".git")).unwrap();
+        let scan = || governed_config_conflict(&work, &none, Some(&home), Some(&xdg));
+
+        // A configuration that is not UTF-8 cannot be read as text.
+        std::fs::write(root.join("opencode.json"), [0xff, 0xfe, 0x00, 0x9f]).unwrap();
+        assert!(scan().is_some_and(|detail| detail.contains("opencode.json")));
+        std::fs::remove_file(root.join("opencode.json")).unwrap();
+
+        // An oversize configuration is not trusted either.
+        let oversize = vec![b' '; usize::try_from(MAX_CONFIG_BYTES).unwrap() + 1];
+        std::fs::write(root.join("opencode.jsonc"), oversize).unwrap();
+        assert!(scan().is_some_and(|detail| detail.contains("opencode.jsonc")));
+        std::fs::remove_file(root.join("opencode.jsonc")).unwrap();
+
+        // A configuration path that is a directory cannot be read as a file.
+        std::fs::create_dir(root.join("opencode.json")).unwrap();
+        assert!(scan().is_some_and(|detail| detail.contains("opencode.json")));
+        std::fs::remove_dir(root.join("opencode.json")).unwrap();
+
+        // An `agent` path that is a file, not a directory, cannot be listed.
+        std::fs::write(root.join("agent"), "x").unwrap();
+        assert!(scan().is_some_and(|detail| detail.contains("agent")));
+        std::fs::remove_file(root.join("agent")).unwrap();
+        assert_eq!(scan(), None);
     }
 }

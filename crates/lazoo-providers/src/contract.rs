@@ -585,10 +585,13 @@ pub enum ProviderError {
     UnknownProvider(String),
     #[error("provider executable was not detected: {0}")]
     NotDetected(ProviderKind),
-    #[error("provider does not support {capability}: {provider}")]
+    /// `detail` names the configuration that triggered a refusal (a path or variable name,
+    /// never its contents) so the owner can fix it.
+    #[error("provider does not support {capability}: {provider}{}", .detail.as_ref().map(|detail| format!(" ({detail})")).unwrap_or_default())]
     Unsupported {
         provider: ProviderKind,
         capability: &'static str,
+        detail: Option<String>,
     },
     #[error("provider authentication is not ready: {0}")]
     Authentication(String),
