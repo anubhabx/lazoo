@@ -24,6 +24,8 @@ $commands = [Collections.Generic.List[object]]::new()
 $manifestStatus = 'FAIL'
 $evidence = [ordered]@{
     governedModesAskForEveryGovernedTool = $false
+    governedConfigurationConflictRefused = $false
+    refusalsAreRecordedAndNotProgress = $false
     launchPromptFreeOnlyUnderFullAutonomy = $false
     approvalLedgerGovernsAskAndSelfDecision = $false
     governedKindsMapped = $false
@@ -82,9 +84,20 @@ try {
     # Delivery by authority: a session launched prompt-free never serves a narrower turn; Grok
     # Build and Antigravity stay refused; the memory worker stays closed to OpenCode.
     Invoke-Test 'lazood' 'daemon' 'opencode_delivers_turns_and_tasks_under_every_authority_its_launch_enforces'
-    $evidence.promptFreeSessionNeverServesNarrowerAuthority = $true
     $evidence.otherProvidersRefused = $true
     $evidence.memoryWorkerStillExcludesOpenCode = $true
+    # The task path: an `ask` delegation to a full-autonomy OpenCode employee fails at dispatch
+    # before any session starts. The evidence flag is set only from this test.
+    Invoke-Test 'lazood' 'daemon' 'a_prompt_free_opencode_session_refuses_a_narrower_delegated_task_before_any_session_starts'
+    $evidence.promptFreeSessionNeverServesNarrowerAuthority = $true
+
+    # Every governed launch gets the block; a project configuration that can override it is
+    # refused; refusals are recorded and are not provider progress.
+    Invoke-Test 'lazoo-providers' 'opencode' 'governed_sessions_refuse_a_project_configuration_that_can_override_the_block'
+    Invoke-Test 'lazoo-providers' '' 'opencode::tests::governed_sessions_refuse_configuration_that_can_override_the_block'
+    $evidence.governedConfigurationConflictRefused = $true
+    Invoke-Test 'lazoo-providers' 'opencode' 'observed_acp_records_a_reused_jsonrpc_id_and_refusals_are_not_progress'
+    $evidence.refusalsAreRecordedAndNotProgress = $true
 
     Invoke-Test 'lazood' 'daemon' 'task_turn_rejects_a_provider_without_authority_override_support_before_io'
     $evidence.refusalsFailClosedBeforeIo = $true

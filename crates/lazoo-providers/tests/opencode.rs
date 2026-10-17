@@ -78,6 +78,8 @@ impl TurnEventObserver for ErrorObserver {
     }
 }
 
+const GOVERNED_BLOCK: &str = r#"{"*":"ask","read":{"*":"allow","*.env":"deny","*.env.*":"deny","*.env.example":"allow"},"glob":"allow","grep":"allow","list":"allow"}"#;
+
 fn fake_acp() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/acp/fake-acp.cmd")
 }
@@ -103,9 +105,10 @@ fn opencode_launches_acp_for_the_requested_workspace() {
     assert_eq!(command.executable, PathBuf::from(r"C:\Tools\opencode.exe"));
     assert_eq!(command.args, vec![OsString::from("acp")]);
     assert_eq!(command.cwd, PathBuf::from(r"C:\repo"));
-    assert!(
-        command.env.is_empty(),
-        "a request with no permission mode never widens OpenCode's permissions"
+    assert_eq!(
+        command.env.get(&OsString::from("OPENCODE_PERMISSION")),
+        Some(&OsString::from(GOVERNED_BLOCK)),
+        "a request with no permission mode gets the governed block, never the owner's own rules"
     );
 }
 
@@ -129,6 +132,8 @@ fn opencode_launch_is_prompt_free_only_under_full_autonomy() {
         serde_json::from_str(&autonomous.env[&key].to_string_lossy()).unwrap();
     assert_eq!(parsed, serde_json::json!({"*": "allow"}));
 
+    // Every other mode, including none-recognized ones, gets the governed block (never the
+    // owner's own rules, never allow-all).
     for mode in [
         "untrusted",
         "plan",
@@ -146,9 +151,10 @@ fn opencode_launch_is_prompt_free_only_under_full_autonomy() {
             executable,
             &SessionRequest::new(r"C:\repo").with_permission_mode(mode),
         );
-        assert!(
-            command.env.is_empty(),
-            "permission mode {mode:?} must not carry OPENCODE_PERMISSION"
+        assert_eq!(
+            command.env.get(&key),
+            Some(&OsString::from(GOVERNED_BLOCK)),
+            "permission mode {mode:?} must get the governed block"
         );
         assert_eq!(command.args, vec![OsString::from("acp")]);
     }
@@ -158,7 +164,7 @@ fn opencode_launch_is_prompt_free_only_under_full_autonomy() {
 fn opencode_launch_makes_every_governed_tool_ask_under_ask_and_self_decision() {
     let executable = Path::new(r"C:\Tools\opencode.exe");
     let key = OsString::from("OPENCODE_PERMISSION");
-    let expected = r#"{"*":"ask","read":"allow","glob":"allow","grep":"allow","list":"allow"}"#;
+    let expected = GOVERNED_BLOCK;
 
     // `ask` and `accept-edits` are the modes the daemon derives from `ask` and `self-decision`.
     for mode in ["ask", "accept-edits"] {
@@ -181,7 +187,15 @@ fn opencode_launch_makes_every_governed_tool_ask_under_ask_and_self_decision() {
             .filter(|(_, action)| *action == "allow")
             .map(|(tool, _)| tool.as_str())
             .collect::<Vec<_>>();
-        assert_eq!(allowed, ["read", "glob", "grep", "list"]);
+        assert_eq!(allowed, ["glob", "grep", "list"]);
+        // `read` is the object form with OpenCode's documented env-file defaults, so it is
+        // never the shorthand allow that would open `.env` files.
+        assert_eq!(
+            rules["read"],
+            serde_json::json!({
+                "*": "allow", "*.env": "deny", "*.env.*": "deny", "*.env.example": "allow"
+            })
+        );
         for governed in [
             "bash",
             "edit",
@@ -198,6 +212,44 @@ fn opencode_launch_makes_every_governed_tool_ask_under_ask_and_self_decision() {
             );
         }
     }
+}
+
+#[tokio::test]
+async fn governed_sessions_refuse_a_project_configuration_that_can_override_the_block() {
+    // The live precedence probe showed a project `opencode.json` allowing `bash` beating the
+    // inline block, so a governed session fails closed before any process starts. The
+    // prompt-free session has no governed rules to bypass and is unaffected.
+    let temporary = tempdir().unwrap();
+    std::fs::write(
+        temporary.path().join("opencode.json"),
+        r#"{"permission":{"bash":"allow"},"agent":{"build":{"permission":{"bash":"allow"}}}}"#,
+    )
+    .unwrap();
+    for mode in [Some("ask"), Some("accept-edits"), Some("untrusted"), None] {
+        let mut request = SessionRequest::new(temporary.path());
+        if let Some(mode) = mode {
+            request = request.with_permission_mode(mode);
+        }
+        let outcome = OpenCodeAdapter::with_executable(fake_acp())
+            .start(&request)
+            .await;
+        assert!(
+            matches!(outcome, Err(ProviderError::Unsupported { .. })),
+            "mode {mode:?} must be refused beside a permission configuration"
+        );
+    }
+    let session = OpenCodeAdapter::with_executable(fake_acp())
+        .start(&SessionRequest::new(temporary.path()).with_permission_mode("auto"))
+        .await
+        .unwrap();
+    session.stop().await.unwrap();
+
+    std::fs::remove_file(temporary.path().join("opencode.json")).unwrap();
+    std::fs::create_dir(temporary.path().join(".opencode")).unwrap();
+    let outcome = OpenCodeAdapter::with_executable(fake_acp())
+        .start(&SessionRequest::new(temporary.path()).with_permission_mode("ask"))
+        .await;
+    assert!(matches!(outcome, Err(ProviderError::Unsupported { .. })));
 }
 
 #[test]
@@ -325,13 +377,102 @@ async fn observed_acp_refuses_malformed_and_duplicate_requests_without_reauthori
     tokio::pin!(turn);
     timeout(Duration::from_secs(2), async { tokio::select! { () = observer.entered.notified() => {}, result = &mut turn => panic!("turn completed early: {result:?}"), } }).await.unwrap();
     observer.release.notify_one();
-    turn.await.unwrap();
+    let events = turn.await.unwrap();
     assert_eq!(observer.decisions.load(Ordering::SeqCst), 1);
     assert_eq!(
         response(temporary.path(), "fake-acp-response-2.json")["result"]["outcome"]["outcome"],
         "cancelled"
     );
+    // The reused tool call id is refused with the same recorded `permissionRefused` payload.
+    let refusal = refusal_payloads(&events);
+    assert_eq!(refusal.len(), 1, "{events:?}");
+    assert_eq!(refusal[0]["permissionRefused"]["toolCallId"], "call-1");
+    assert!(
+        refusal[0]["permissionRefused"]["reason"]
+            .as_str()
+            .unwrap()
+            .contains("reused a tool call id")
+    );
     session.stop().await.unwrap();
+}
+
+#[tokio::test]
+async fn observed_acp_records_a_reused_jsonrpc_id_and_refusals_are_not_progress() {
+    // A reused JSON-RPC id is refused and recorded too.
+    let temporary = tempdir().unwrap();
+    let session = OpenCodeAdapter::with_executable(fake_acp())
+        .start(&SessionRequest::new(temporary.path()))
+        .await
+        .unwrap();
+    let observer = GateObserver::approving();
+    let request = TurnRequest::new("DUPLICATE");
+    let turn = session.turn_observed(&request, &observer);
+    tokio::pin!(turn);
+    timeout(Duration::from_secs(5), async {
+        tokio::select! {
+            () = observer.entered.notified() => {},
+            result = &mut turn => panic!("turn completed early: {result:?}"),
+        }
+    })
+    .await
+    .unwrap();
+    observer.release.notify_one();
+    let events = turn.await.unwrap();
+    let refusal = refusal_payloads(&events);
+    assert_eq!(refusal.len(), 1, "{events:?}");
+    assert!(
+        refusal[0]["permissionRefused"]["reason"]
+            .as_str()
+            .unwrap()
+            .contains("reused a JSON-RPC request id")
+    );
+    session.stop().await.unwrap();
+
+    // A model that keeps asking for a refused tool never counts as making progress: the
+    // progress deadline still fires while the refusals are being recorded.
+    let temporary = tempdir().unwrap();
+    let mut request = SessionRequest::new(temporary.path());
+    request.progress_timeout_millis = 1_500;
+    let session = OpenCodeAdapter::with_executable(fake_acp())
+        .start(&request)
+        .await
+        .unwrap();
+    let observer = GateObserver::approving();
+    let outcome = timeout(
+        Duration::from_secs(20),
+        session.turn_observed(&TurnRequest::new("LOOP_REFUSED"), &observer),
+    )
+    .await
+    .unwrap();
+    assert!(
+        matches!(outcome, Err(ProviderError::Stalled { millis: 1_500 })),
+        "{outcome:?}"
+    );
+    assert_eq!(observer.decisions.load(Ordering::SeqCst), 0);
+    assert!(
+        observer
+            .events
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|event| matches!(event, ProviderEvent::Progress { raw: Some(raw), .. } if raw.get("permissionRefused").is_some())),
+        "the refusals were observed"
+    );
+    let _ = session.stop().await;
+}
+
+fn refusal_payloads(events: &[ProviderEvent]) -> Vec<serde_json::Value> {
+    events
+        .iter()
+        .filter_map(|event| match event {
+            ProviderEvent::Progress { raw: Some(raw), .. }
+                if raw.get("permissionRefused").is_some() =>
+            {
+                Some(raw.clone())
+            }
+            _ => None,
+        })
+        .collect()
 }
 
 #[tokio::test]

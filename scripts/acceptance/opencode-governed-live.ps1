@@ -18,16 +18,19 @@ Set-StrictMode -Version Latest
 # Exactly FOUR live turns, no retries:
 #   smoke   `provider smoke opencode` verifies the provider in this data root (the probe cannot
 #           see model readiness), as provider-live-lifecycle does.
-#   turn 1  an OpenCode lead under `ask` is asked to run `echo LAZOO_ASK_OK`. The script polls
+#   turn 1  an OpenCode lead under `ask` is asked to run `hostname`. The script polls
 #           `inbox list` until an `action-required` approval appears, records it (requesting
-#           employee, action, scope), approves it with `approval approve`, and requires the turn
-#           to complete with LAZOO_ASK_OK.
+#           employee, action, scope), requires kind `command-execution` and the fixed action
+#           text, approves it with `approval approve`, and requires the turn to complete with the
+#           machine name.
 #   turn 2  the same prompt; the approval is declined with `approval decline`. The approval must
-#           end `declined` and the turn must end with no completed tool call.
+#           end `declined` and the turn must record at least one `toolUpdate` whose final status
+#           is `failed` and none that completed.
 #   turn 3  a second OpenCode employee under `self-decision` takes the same prompt. The ACP
 #           bridge marks every request a scope expansion (no portable confinement proof), so the
-#           policy is expected to leave it for the user: the script approves what appears and
-#           records which of the two resolutions happened. The turn must complete with the token.
+#           policy is expected to leave it for the user: the script approves what appears. Either
+#           way the turn must have an approved approval record decided by the user or by policy,
+#           and the run fails if none exists. The turn must complete with the machine name.
 # Then a planned shutdown; the native process tree must be gone.
 #
 # The integrator rebuilds target\release first (`cargo build --workspace --release --locked`) and
@@ -65,7 +68,7 @@ $maxLiveTurns = 4
 $askPrompt = 'Use your shell tool to run the command hostname and reply with exactly its output and nothing else. Do not guess it.'
 $okToken = [string]$env:COMPUTERNAME
 # The outer agent session variables are scrubbed so the only channel left is the native install.
-$scrubPattern = '^(CLAUDECODE$|CLAUDE_CODE_(?!GIT_BASH_PATH$)|CLAUDE_PID$|CLAUDE_EFFORT$|CLAUDE_PLUGIN_|CODEX_THREAD_ID$|CODEX_SESSION_ID$|AI_AGENT$|OPENCODE_PERMISSION$)'
+$scrubPattern = '^(CLAUDECODE$|CLAUDE_CODE_(?!GIT_BASH_PATH$)|CLAUDE_PID$|CLAUDE_EFFORT$|CLAUDE_PLUGIN_|CODEX_THREAD_ID$|CODEX_SESSION_ID$|AI_AGENT$|OPENCODE_PERMISSION$|OPENCODE_CONFIG$|OPENCODE_CONFIG_CONTENT$|OPENCODE_CONFIG_DIR$)'
 $gates = [ordered]@{
     verification = 'NOT_RUN'
     askApproved = 'NOT_RUN'
@@ -158,7 +161,10 @@ function Start-Daemon {
     $startInfo.CreateNoWindow = $true
     $startInfo.Environment['LAZOO_DATA_ROOT'] = $script:dataRoot
     # Only the names are kept; values are never read into the manifest. A pre-set
-    # OPENCODE_PERMISSION would reach OpenCode under every mode, so it is scrubbed too.
+    # OPENCODE_PERMISSION would reach OpenCode under every mode, and OPENCODE_CONFIG,
+    # OPENCODE_CONFIG_CONTENT, and OPENCODE_CONFIG_DIR can carry permission rules the inline block
+    # does not outrank (the provider also refuses to start a governed session beside them), so
+    # all four are scrubbed. XDG variables are kept: the owner's authentication stays reachable.
     foreach ($name in @($startInfo.Environment.Keys)) {
         if ($name -match $scrubPattern) {
             [void]$startInfo.Environment.Remove($name)
@@ -318,6 +324,16 @@ function Format-Approval($Item) {
     }
 }
 
+# The approval record's kind and action text. The bridge admits only an execute request as a
+# command-execution approval whose action is the fixed text below (no command or path target: the
+# adapter drops titles as potentially secret).
+function Assert-CommandApproval($Item, [string]$Label) {
+    $record = Invoke-Json @('approval', 'show', [string]$Item.id)
+    Assert-Equal ([string]$record.kind) 'command-execution' "$Label approval kind"
+    Assert-Equal ([string]$record.action) 'execute an ACP command' "$Label approval action"
+    return [ordered]@{ kind = [string]$record.kind; action = [string]$record.action; authority = [string]$record.authority; scopeExpansion = [bool]$record.scopeExpansion }
+}
+
 function Complete-LiveTurn($Command, [string]$Name) {
     $result = Wait-BackgroundCtl $Command $TurnTimeoutSeconds
     $script:turnDurations[$Name] = $result.DurationMs
@@ -417,6 +433,7 @@ try {
     Assert-True ($null -ne $approval) 'turn 1 raised an action-required approval before finishing'
     $evidence.askApproval = Format-Approval $approval
     Assert-Equal ([string]$approval.state) 'pending' 'turn 1 approval state'
+    $evidence.askApprovalRecord = Assert-CommandApproval $approval 'turn 1'
     Assert-True (-not $first.Process.HasExited) 'turn 1 waits for the decision'
     $decided = Invoke-Json @(
         'approval', 'approve', [string]$approval.id, '--expected-revision', [string]$approval.revision,
@@ -442,6 +459,7 @@ try {
     $approval = Wait-ForApproval $second $opal.EmployeeId
     Assert-True ($null -ne $approval) 'turn 2 raised an action-required approval before finishing'
     $evidence.declinedApproval = Format-Approval $approval
+    $evidence.declinedApprovalRecord = Assert-CommandApproval $approval 'turn 2'
     $declined = Invoke-Json @(
         'approval', 'decline', [string]$approval.id, '--expected-revision', [string]$approval.revision,
         '--idempotency-key', "decline-$script:runId")
@@ -458,6 +476,10 @@ try {
     }
     $shown = Invoke-Json @('approval', 'show', [string]$approval.id)
     Assert-Equal ([string]$shown.state) 'declined' 'turn 2 approval stays declined'
+    # The refused tool call must be recorded as failed, not merely absent as completed.
+    Assert-True ($secondStatuses.Count -ge 1) 'turn 2 recorded at least one toolUpdate event'
+    Assert-True ($secondStatuses -contains 'failed') 'turn 2 recorded a toolUpdate whose status is failed'
+    Assert-Equal ([string]$secondStatuses[-1]) 'failed' 'turn 2 final toolUpdate status'
     Assert-True ($secondStatuses -notcontains 'completed') 'turn 2 recorded no completed tool call'
     $gates.askDeclined = 'PASS'
 
@@ -468,13 +490,11 @@ try {
     $approval = Wait-ForApproval $third $sven.EmployeeId
     if ($null -ne $approval) {
         $evidence.selfDecisionApproval = Format-Approval $approval
+        $evidence.selfDecisionApprovalRecord = Assert-CommandApproval $approval 'turn 3'
         $decided = Invoke-Json @(
             'approval', 'approve', [string]$approval.id, '--expected-revision', [string]$approval.revision,
             '--idempotency-key', "approve-self-$script:runId")
         Assert-Equal ([string]$decided.approval.state) 'approved' 'turn 3 approval decision'
-        $evidence.selfDecisionResolution = 'user-approved-scope-expansion'
-    } else {
-        $evidence.selfDecisionResolution = 'answered-without-a-pending-approval'
     }
     $thirdTurn = Complete-LiveTurn $third 'turn3'
     $thirdOutput = Get-TurnOutput $thirdTurn
@@ -486,6 +506,20 @@ try {
         durationMs = $script:turnDurations['turn3']
     }
     Assert-Equal ([string]$thirdTurn.turn.state) 'completed' 'turn 3 state'
+    # Whichever way it was resolved, the turn must have an approval record, decided by the user or
+    # by policy: a completed turn with no record would mean the command ran outside the ledger.
+    $turnApprovals = @(Invoke-Json @('approval', 'list', '--turn-id', [string]$thirdTurn.turn.id, '--limit', '20'))
+    Assert-True ($turnApprovals.Count -ge 1) 'turn 3 has an approval record'
+    $decidedApprovals = @($turnApprovals | Where-Object {
+        [string]$_.state -eq 'approved' -and ([string]$_.decider -in @('user', 'policy'))
+    })
+    Assert-True ($decidedApprovals.Count -ge 1) 'turn 3 has an approved record decided by the user or policy'
+    $evidence.selfDecisionResolution = if ($null -ne $approval) { 'user-approved-scope-expansion' } else { 'policy-decided' }
+    $evidence.selfDecisionRecords = @($turnApprovals | ForEach-Object {
+        [ordered]@{ kind = [string]$_.kind; action = [string]$_.action; state = [string]$_.state; decider = [string]$_.decider; scopeExpansion = [bool]$_.scopeExpansion }
+    })
+    Assert-Equal ([string]$decidedApprovals[0].kind) 'command-execution' 'turn 3 approval kind'
+    Assert-Equal ([string]$decidedApprovals[0].action) 'execute an ACP command' 'turn 3 approval action'
     Assert-True ($null -ne $thirdOutput -and $thirdOutput -like "*$okToken*") "turn 3 output contains $okToken"
     $gates.selfDecision = 'PASS'
 
