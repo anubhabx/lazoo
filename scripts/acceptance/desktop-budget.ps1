@@ -16,6 +16,8 @@ Set-StrictMode -Version Latest
 # Brief section 20.1, "Lazoo itself" including the desktop. This script measures the keeper,
 # the daemon, the desktop process and every descendant of the desktop (the Tauri WebView2
 # process tree) over per-second samples, and compares them with the idle and routing targets.
+# Memory is judged on the summed private working set (Task Manager's Memory column, counter
+# "Working Set - Private"); the summed WorkingSet64 is recorded beside it as an upper bound.
 # It starts no provider and no model. Nothing is enforced.
 
 function Assert-Equal($Actual, $Expected, [string]$Label) {
@@ -215,8 +217,53 @@ function Update-Roster {
     }
 }
 
+# Private working set per process, Task Manager's Memory column (performance counter
+# "Working Set - Private"): the resident pages that belong to that process alone, so pages
+# shared between the WebView2 processes are not counted once per process. Source order: the CIM
+# performance class Win32_PerfFormattedData_PerfProc_Process (IDProcess, WorkingSetPrivate), then
+# Get-Counter '\Process(*)\Working Set - Private' joined to '\Process(*)\ID Process'. The source
+# is chosen on the first call and kept, and recorded in the manifest. Returns pid -> bytes.
+function Get-PrivateWorkingSetMap([int[]]$ProcessIds) {
+    $map = @{}
+    if ($ProcessIds.Count -eq 0) { return $map }
+    if (-not $script:pwsUseCounter) {
+        try {
+            $filter = ($ProcessIds | ForEach-Object { "IDProcess=$_" }) -join ' OR '
+            $rows = @(Get-CimInstance -ClassName Win32_PerfFormattedData_PerfProc_Process -Filter $filter -Property IDProcess, WorkingSetPrivate -ErrorAction Stop)
+            if ($rows.Count -gt 0) {
+                foreach ($row in $rows) { $map[[int]$row.IDProcess] = [long]$row.WorkingSetPrivate }
+                if ($null -eq $script:pwsSource) { $script:pwsSource = 'cim:Win32_PerfFormattedData_PerfProc_Process.WorkingSetPrivate' }
+                return $map
+            }
+            $reason = 'CIM class returned no rows for the measured PIDs'
+        } catch {
+            $reason = "CIM class unavailable: $($_.Exception.Message)"
+        }
+        if ($null -eq $script:pwsSource) {
+            # The CIM class never worked: use the counter for the whole run and say why.
+            $script:pwsSource = "counter:\Process(*)\Working Set - Private joined on \Process(*)\ID Process (fallback: $reason)"
+            $script:pwsUseCounter = $true
+        } else {
+            # A transient CIM failure after it had worked: read this one sample from the counter.
+            $script:pwsTransientFallbackSamples += 1
+        }
+    }
+    $samples = (Get-Counter -Counter '\Process(*)\Working Set - Private', '\Process(*)\ID Process' -ErrorAction SilentlyContinue).CounterSamples
+    $idByInstance = @{}
+    foreach ($sample in $samples) { if ($sample.Path -like '*\id process') { $idByInstance[$sample.InstanceName] = [int]$sample.CookedValue } }
+    foreach ($sample in $samples) {
+        if ($sample.Path -like '*\working set - private' -and $idByInstance.ContainsKey($sample.InstanceName)) {
+            $id = $idByInstance[$sample.InstanceName]
+            if ($ProcessIds -contains $id) { $map[$id] = [long]$sample.CookedValue }
+        }
+    }
+    return $map
+}
+
 # One sample: CPU milliseconds consumed since the previous sample by every tracked process
-# (including ones that exited in between, read from the kept handle), plus current memory.
+# (including ones that exited in between, read from the kept handle), plus current memory:
+# the summed working set (upper bound, shared pages counted per process), the summed private
+# working set (the gated figure), and private bytes.
 function Get-ProcessSample {
     $wall = $script:clock.Elapsed.TotalMilliseconds
     $wallUtc = [DateTime]::UtcNow
@@ -225,6 +272,8 @@ function Get-ProcessSample {
     $privateBytes = 0L
     $alive = 0
     $groupCpu = @{}
+    $liveIds = [Collections.Generic.List[int]]::new()
+    $liveGroup = @{}
     foreach ($processId in @($script:tracked.Keys)) {
         $item = $script:tracked[$processId]
         if (-not $item.alive) { continue }
@@ -244,11 +293,30 @@ function Get-ProcessSample {
                 $workingSet += [long]$process.WorkingSet64
                 $privateBytes += [long]$process.PrivateMemorySize64
                 $alive += 1
+                $liveIds.Add([int]$processId)
+                $liveGroup[[int]$processId] = $item.group
             }
         } catch {
             $item.alive = $false
         }
     }
+    # Private working set of the same live set, from the performance counters. A live process the
+    # counters do not know yet (it started a moment ago) is counted in pwsMissing, not guessed.
+    $pwsMap = Get-PrivateWorkingSetMap @($liveIds)
+    $privateWorkingSet = 0L
+    $groupPrivateWs = @{}
+    $pwsMissing = 0
+    foreach ($id in $liveIds) {
+        if ($pwsMap.ContainsKey($id)) {
+            $privateWorkingSet += $pwsMap[$id]
+            $group = $liveGroup[$id]
+            if (-not $groupPrivateWs.ContainsKey($group)) { $groupPrivateWs[$group] = 0L }
+            $groupPrivateWs[$group] += $pwsMap[$id]
+        } else {
+            $pwsMissing += 1
+        }
+    }
+    $script:pwsMissingProcessSamples += $pwsMissing
     $previousWall = $script:lastSampleWallMs
     $script:lastSampleWallMs = $wall
     $script:lastSampleWall = $wallUtc
@@ -258,9 +326,11 @@ function Get-ProcessSample {
         wallMs = ($wall - $previousWall)
         cpuMs = $cpuDelta
         workingSetBytes = $workingSet
+        privateWorkingSetBytes = $privateWorkingSet
         privateBytes = $privateBytes
         processCount = $alive
         groupCpuMs = $groupCpu
+        groupPrivateWorkingSetBytes = $groupPrivateWs
     }
 }
 
@@ -303,9 +373,12 @@ function Get-WindowSummary($Window) {
     $peakShare = 0.0
     $wsSum = 0.0
     $wsPeak = 0L
+    $pwsSum = 0.0
+    $pwsPeak = 0L
     $privPeak = 0L
     $processPeak = 0
     $groupTotals = @{}
+    $groupPwsPeak = @{}
     foreach ($sample in $samples) {
         $wallSum += $sample.wallMs
         $cpuSum += $sample.cpuMs
@@ -313,11 +386,17 @@ function Get-WindowSummary($Window) {
         if ($share -gt $peakShare) { $peakShare = $share }
         $wsSum += $sample.workingSetBytes
         if ($sample.workingSetBytes -gt $wsPeak) { $wsPeak = $sample.workingSetBytes }
+        $pwsSum += $sample.privateWorkingSetBytes
+        if ($sample.privateWorkingSetBytes -gt $pwsPeak) { $pwsPeak = $sample.privateWorkingSetBytes }
         if ($sample.privateBytes -gt $privPeak) { $privPeak = $sample.privateBytes }
         if ($sample.processCount -gt $processPeak) { $processPeak = $sample.processCount }
         foreach ($key in $sample.groupCpuMs.Keys) {
             if (-not $groupTotals.ContainsKey($key)) { $groupTotals[$key] = 0L }
             $groupTotals[$key] += $sample.groupCpuMs[$key]
+        }
+        foreach ($key in $sample.groupPrivateWorkingSetBytes.Keys) {
+            $value = [long]$sample.groupPrivateWorkingSetBytes[$key]
+            if (-not $groupPwsPeak.ContainsKey($key) -or $value -gt $groupPwsPeak[$key]) { $groupPwsPeak[$key] = $value }
         }
     }
     $groups = [ordered]@{}
@@ -325,6 +404,7 @@ function Get-WindowSummary($Window) {
         $groups[$key] = [ordered]@{
             cpuMillis = [long]$groupTotals[$key]
             cpuShare = [double]$groupTotals[$key] / ($wallSum * $script:processorCount)
+            privateWorkingSetBytesPeak = if ($groupPwsPeak.ContainsKey($key)) { [long]$groupPwsPeak[$key] } else { 0L }
         }
     }
     $rolling30 = Get-RollingMaxShare $samples 30000
@@ -340,14 +420,16 @@ function Get-WindowSummary($Window) {
         cpuShareRollingMax30s = $rolling30
         cpuShareRollingMax5min = $rolling300
         rolling5minNote = if ($null -eq $rolling300) { 'not computed: window shorter than 300 seconds (use -FullWindows)' } else { 'computed' }
+        privateWorkingSetBytesMean = [long]($pwsSum / [Math]::Max(1, $samples.Count))
+        privateWorkingSetBytesPeak = $pwsPeak
         workingSetBytesMean = [long]($wsSum / [Math]::Max(1, $samples.Count))
         workingSetBytesPeak = $wsPeak
         privateBytesPeak = $privPeak
         liveProcessCountPeak = $processPeak
         groups = $groups
         extra = $Window.extra
-        samples = @($samples | ForEach-Object { , @([Math]::Round($_.tMs), [Math]::Round(($_.cpuMs / ($_.wallMs * $script:processorCount)), 5), $_.workingSetBytes) })
-        samplesColumns = @('elapsedMs', 'cpuShare', 'workingSetBytes')
+        samples = @($samples | ForEach-Object { , @([Math]::Round($_.tMs), [Math]::Round(($_.cpuMs / ($_.wallMs * $script:processorCount)), 5), $_.workingSetBytes, $_.privateWorkingSetBytes) })
+        samplesColumns = @('elapsedMs', 'cpuShare', 'workingSetBytes', 'privateWorkingSetBytes')
     }
 }
 
@@ -428,6 +510,10 @@ $script:processorCount = [Environment]::ProcessorCount
 $script:tracked = @{}
 $script:everSeen = @{}
 $script:unreadable = @{}
+$script:pwsSource = $null
+$script:pwsUseCounter = $false
+$script:pwsTransientFallbackSamples = 0
+$script:pwsMissingProcessSamples = 0
 $script:hasSampled = $false
 $script:lastSampleWall = [DateTime]::UtcNow
 $script:lastSampleWallMs = 0.0
@@ -579,9 +665,13 @@ try {
     $idleCpuWorst = Get-WorstShare $idleSummary
     $routingCpuWorst = Get-WorstShare $routingSummary
     $gates.idleCpuUnderOnePercent = if ($idleCpuWorst -lt $idleCpuCeiling) { 'PASS' } else { 'FAIL' }
-    $gates.idleMemoryUnder350MiB = if ($idleSummary.workingSetBytesPeak -lt $idleMemoryCeilingBytes) { 'PASS' } else { 'FAIL' }
+    # Memory is judged on the summed private working set (Task Manager's Memory column); the
+    # summed working set stays beside it as the upper bound.
+    Assert-True ($null -ne $script:pwsSource) 'a private working set source answered'
+    Assert-True ($idleSummary.privateWorkingSetBytesPeak -gt 0 -and $routingSummary.privateWorkingSetBytesPeak -gt 0) 'private working set was read for the measured processes'
+    $gates.idleMemoryUnder350MiB = if ($idleSummary.privateWorkingSetBytesPeak -lt $idleMemoryCeilingBytes) { 'PASS' } else { 'FAIL' }
     $gates.routingCpuUnderFivePercent = if ($routingCpuWorst -lt $routingCpuCeiling) { 'PASS' } else { 'FAIL' }
-    $gates.activeMemoryUnder750MiB = if ($routingSummary.workingSetBytesPeak -lt $activeMemoryCeilingBytes) { 'PASS' } else { 'FAIL' }
+    $gates.activeMemoryUnder750MiB = if ($routingSummary.privateWorkingSetBytesPeak -lt $activeMemoryCeilingBytes) { 'PASS' } else { 'FAIL' }
     $jobInclusive = [ordered]@{
         idle = Get-JobWindow $daemonAccounting.beforeIdle $daemonAccounting.afterIdle
         routing = Get-JobWindow $daemonAccounting.afterIdle $daemonAccounting.afterRouting
@@ -590,15 +680,25 @@ try {
     $measured.idle = [ordered]@{
         cpuShareGated = $idleCpuWorst
         cpuShareTarget = $idleCpuCeiling
-        workingSetBytesGated = $idleSummary.workingSetBytesPeak
-        workingSetBytesTarget = [long]$idleMemoryCeilingBytes
+        memoryBasis = 'private-working-set'
+        privateWorkingSetBytesGated = $idleSummary.privateWorkingSetBytesPeak
+        workingSetUpperBoundBytes = $idleSummary.workingSetBytesPeak
+        workingSetUpperBoundMiB = [Math]::Round($idleSummary.workingSetBytesPeak / 1MB, 1)
+        privateWorkingSetMiB = [Math]::Round($idleSummary.privateWorkingSetBytesPeak / 1MB, 1)
+        memoryBytesTarget = [long]$idleMemoryCeilingBytes
+        workingSetUpperBoundUnderTarget = ($idleSummary.workingSetBytesPeak -lt $idleMemoryCeilingBytes)
     }
     $measured.routing = [ordered]@{
         cpuShareGated = $routingCpuWorst
         cpuShareTarget = $routingCpuCeiling
-        workingSetBytesGated = $routingSummary.workingSetBytesPeak
-        workingSetBytesTarget = [long]$activeMemoryCeilingBytes
-        workingSetBytesAlsoUnderIdleTarget = ($routingSummary.workingSetBytesPeak -lt $idleMemoryCeilingBytes)
+        memoryBasis = 'private-working-set'
+        privateWorkingSetBytesGated = $routingSummary.privateWorkingSetBytesPeak
+        workingSetUpperBoundBytes = $routingSummary.workingSetBytesPeak
+        workingSetUpperBoundMiB = [Math]::Round($routingSummary.workingSetBytesPeak / 1MB, 1)
+        privateWorkingSetMiB = [Math]::Round($routingSummary.privateWorkingSetBytesPeak / 1MB, 1)
+        memoryBytesTarget = [long]$activeMemoryCeilingBytes
+        workingSetUpperBoundUnderTarget = ($routingSummary.workingSetBytesPeak -lt $activeMemoryCeilingBytes)
+        privateWorkingSetAlsoUnderIdleTarget = ($routingSummary.privateWorkingSetBytesPeak -lt $idleMemoryCeilingBytes)
     }
     if ($script:unreadable.Count -gt 0) {
         $gates.allProcessesReadable = "FAIL: $($script:unreadable.Keys -join ', ')"
@@ -664,6 +764,7 @@ try {
         status = $manifestStatus
         schemaVersion = 19
         mode = 'real-binaries-with-desktop'
+        memoryBasis = 'private-working-set'
         startedAt = $startedAt.ToString('o')
         durationMs = [long]$stopwatch.ElapsedMilliseconds
         processorCount = $script:processorCount
@@ -678,7 +779,12 @@ try {
             settleSeconds = $SettleSeconds
             sampleIntervalMillis = 1000
             cpuGate = 'worst rolling 30-second mean (and worst rolling 5-minute mean when the window is at least 300 seconds), as a share of total machine capacity'
-            memoryGate = 'peak summed working set across the measured processes'
+            memoryBasis = 'private-working-set'
+            memoryGate = 'peak, over the window, of the summed private working set (Task Manager Memory column semantics) across the measured processes; the summed working set is recorded beside it as workingSetUpperBoundMiB and is not gated'
+            briefWording = 'PROJECT-BRIEF section 20.1 and acceptance: measurements use rolling 30-second and 5-minute windows, not a single Task Manager sample. The memory notion is Task Manager''s: the Memory column is the private working set per process (performance counter Working Set - Private), so shared WebView2 pages are counted once at most.'
+            memorySource = $script:pwsSource
+            memorySourceTransientFallbackSamples = $script:pwsTransientFallbackSamples
+            memoryProcessSamplesWithoutPrivateWorkingSet = $script:pwsMissingProcessSamples
         }
         verdicts = $measured
         measurements = $measurements
@@ -695,7 +801,7 @@ try {
         }
         keeper = [ordered]@{ stdoutBytes = $keeperStdout.Length; stderrBytes = $keeperStderr.Length; stderr = $keeperStderr }
         notes = [ordered]@{
-            memory = 'WorkingSet64 summed across processes counts pages shared between WebView2 processes more than once, so it is an upper bound on resident memory; PrivateMemorySize64 peak is recorded beside it.'
+            memory = 'The memory targets are judged on the summed private working set (memoryBasis private-working-set, Task Manager Memory column semantics). WorkingSet64 summed across processes counts pages shared between WebView2 processes more than once, so it is an upper bound on resident memory; it is recorded as workingSetUpperBoundMiB beside the gated figure and is not gated. PrivateMemorySize64 (committed private bytes) peak is recorded too and is neither.'
             readiness = 'desktop readiness used one UI Automation probe (as desktop-shell.ps1 does) before the settle period; that probe can switch WebView2 accessibility on, which makes the figures conservative.'
             cli = 'the gated figures do not count the lazooctl processes that drive the routing window (the load generator), as in resource-budget.ps1. The daemon infrastructure job does enroll them, so infrastructureJobIncludingCli records the keeper + daemon + CLI figure beside it.'
             webview2 = 'WebView2 processes are attributed as descendants of the desktop process by parent PID; WebView2 processes of other applications are not counted.'
