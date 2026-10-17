@@ -1,10 +1,10 @@
 {
   "status": "PASS",
-  "startedAt": "2026-10-17T09:42:41.0850790Z",
-  "completedAt": "2026-10-17T09:42:46.0119980Z",
-  "durationMs": 4894,
+  "startedAt": "2026-10-17T10:28:55.2390612Z",
+  "completedAt": "2026-10-17T10:29:00.0578434Z",
+  "durationMs": 4789,
   "binarySha256": {
-    "daemon": "50e888d0f6ae045cd8a45ccdd59defdbba5e8a7306c819d8343f1c11f6399a4e",
+    "daemon": "45aa7575d9c58cac6f1624e044529cef6b946f2e77a4034f2cfe216fe8a6182b",
     "cli": "880c931e59b4ba149c13cf0ca39a3ca6c334a31cf7379a100a9bfa199a415cf6"
   },
   "codex": {
@@ -30,32 +30,32 @@
     {
       "command": "lazooctl --json status",
       "exitCode": 0,
-      "durationMs": 134
+      "durationMs": 98
     },
     {
       "command": "lazooctl --json provider config-preview --selection {\"provider\":\"codex\",\"name\":\"acceptance-fixture\",\"command\":\"fixture-mcp\",\"args\":[\"--no-connect\"],\"url\":null,\"enabled\":false,\"replace\":false,\"selectedSecretFields\":[]}",
       "exitCode": 0,
-      "durationMs": 2281
+      "durationMs": 2245
     },
     {
-      "command": "lazooctl --json provider config-apply 9e23d252-1a5b-4b5d-9941-3f379cde7dff --expected-revision 1",
+      "command": "lazooctl --json provider config-apply 3894f356-8f39-4036-a1f0-2c39a1b9b12e --expected-revision 1",
       "exitCode": 0,
-      "durationMs": 2156
+      "durationMs": 2157
     },
     {
-      "command": "lazooctl --json provider config-apply 9e23d252-1a5b-4b5d-9941-3f379cde7dff --expected-revision 1",
+      "command": "lazooctl --json provider config-apply 3894f356-8f39-4036-a1f0-2c39a1b9b12e --expected-revision 1",
       "exitCode": 0,
-      "durationMs": 16
+      "durationMs": 15
     },
     {
-      "command": "lazooctl --json provider config-show 9e23d252-1a5b-4b5d-9941-3f379cde7dff",
+      "command": "lazooctl --json provider config-show 3894f356-8f39-4036-a1f0-2c39a1b9b12e",
       "exitCode": 0,
-      "durationMs": 16
+      "durationMs": 17
     },
     {
-      "command": "lazooctl --json provider config-rollback 9e23d252-1a5b-4b5d-9941-3f379cde7dff --expected-revision 4",
+      "command": "lazooctl --json provider config-rollback 3894f356-8f39-4036-a1f0-2c39a1b9b12e --expected-revision 4",
       "exitCode": 0,
-      "durationMs": 28
+      "durationMs": 25
     },
     {
       "command": "lazooctl --json system shutdown",

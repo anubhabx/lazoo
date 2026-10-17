@@ -89,7 +89,8 @@ $profiles = @{
 }
 $script:profile = $profiles[$Provider]
 $prompts = $script:profile.prompts
-$maxLiveTurns = 3
+# OpenCode spends one live turn on the verification smoke before the three lifecycle turns.
+$maxLiveTurns = if ($Provider -eq 'opencode') { 4 } else { 3 }
 
 function Assert-Equal($Actual, $Expected, [string]$Label) {
     if ($Actual -ne $Expected) {
@@ -424,6 +425,17 @@ try {
     if ($probeNative -in @('needs-login', 'blocked') -and $probeExternal -ne 'ready') {
         $script:outcome = 'BLOCKED_AUTHENTICATION'
         throw "$($script:profile.displayName) reports no ready native login and no ready external credential; no model prompt was sent"
+    }
+    if ($Provider -eq 'opencode') {
+        # An OpenCode lead is ready only once its provider is verified in this data root: the probe
+        # cannot see authentication (the free Big Pickle model needs none), so one live smoke turn
+        # verifies the provider first, as provider-adapters.ps1 does. It counts as a live turn.
+        $script:liveTurns++
+        $smoke = Invoke-Json @('provider', 'smoke', $Provider, '--prompt', 'Reply with exactly LAZOO_OPENCODE_OK. Do not use tools.')
+        $smokeCompleted = @(@($smoke.events) | Where-Object { $_.type -eq 'turnCompleted' }) | Select-Object -Last 1
+        Assert-True ($null -ne $smokeCompleted) 'verification smoke completed a turn'
+        $evidence.authentication.verificationSmokeOutput = ConvertTo-SafeText ([string]$smokeCompleted.output)
+        $evidence.authentication.verificationAfterSmoke = [string](Get-Field (Invoke-Json @('provider', 'probe', $Provider)) 'verification')
     }
     $gates.authentication = 'PASS'
 

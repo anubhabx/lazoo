@@ -2,88 +2,88 @@
   "status": "PASS",
   "schemaVersion": 19,
   "mode": "deterministic-fake-transport",
-  "startedAt": "2026-10-17T09:41:38.9225663Z",
-  "durationMs": 15885,
+  "startedAt": "2026-10-17T10:27:48.1368305Z",
+  "durationMs": 18228,
   "commands": [
     {
       "command": "cargo test -p lazoo-domain --test approval ask_always_waits_for_the_user --locked -- --exact",
       "exitCode": 0,
-      "durationMs": 355
+      "durationMs": 335
     },
     {
       "command": "cargo test -p lazoo-domain --test approval self_decision_acts_inside_scope_but_waits_on_scope_expansion --locked -- --exact",
       "exitCode": 0,
-      "durationMs": 235
+      "durationMs": 242
     },
     {
       "command": "cargo test -p lazoo-domain --test approval full_autonomy_proceeds_without_a_user_decision --locked -- --exact",
       "exitCode": 0,
-      "durationMs": 262
+      "durationMs": 239
     },
     {
       "command": "cargo test -p lazoo-store --test approval ask_authority_records_a_pending_approval_and_user_decisions_are_revisioned_and_idempotent --locked -- --exact",
       "exitCode": 0,
-      "durationMs": 737
+      "durationMs": 1840
     },
     {
       "command": "cargo test -p lazoo-store --test approval approval_requests_require_an_owned_in_flight_turn_and_bounded_input --locked -- --exact",
       "exitCode": 0,
-      "durationMs": 453
+      "durationMs": 455
     },
     {
       "command": "cargo test -p lazoo-store --test approval system_closure_and_restart_reconciliation_fail_closed --locked -- --exact",
       "exitCode": 0,
-      "durationMs": 445
+      "durationMs": 470
     },
     {
       "command": "cargo test -p lazood --test daemon ask_turn_waits_for_the_user_decision_and_forwards_approval_to_the_provider --locked -- --exact",
       "exitCode": 0,
-      "durationMs": 596
+      "durationMs": 595
     },
     {
       "command": "cargo test -p lazood --test daemon declined_and_expired_approvals_fail_closed_at_the_provider --locked -- --exact",
       "exitCode": 0,
-      "durationMs": 1842
+      "durationMs": 1867
     },
     {
       "command": "cargo test -p lazood --test daemon cancelling_a_turn_with_a_pending_approval_declines_the_provider_and_records_cancellation --locked -- --exact",
       "exitCode": 0,
-      "durationMs": 605
+      "durationMs": 588
     },
     {
       "command": "cargo test -p lazoo-store --test approval policy_auto_approves_inside_scope_and_pends_scope_expansion --locked -- --exact",
       "exitCode": 0,
-      "durationMs": 613
+      "durationMs": 612
     },
     {
       "command": "cargo test -p lazood --test daemon self_decision_policy_auto_approves_in_scope_and_waits_on_scope_expansion --locked -- --exact",
       "exitCode": 0,
-      "durationMs": 578
+      "durationMs": 595
     },
     {
       "command": "cargo test -p lazood --test daemon pending_approvals_from_a_previous_boot_expire_with_owner_loss_on_restart --locked -- --exact",
       "exitCode": 0,
-      "durationMs": 600
+      "durationMs": 579
     },
     {
       "command": "cargo test -p lazoo-providers --test codex codex_approval_requests_normalize_into_bounded_provider_neutral_requests --locked -- --exact",
       "exitCode": 0,
-      "durationMs": 2551
+      "durationMs": 3850
     },
     {
       "command": "cargo test -p lazoo-providers --test codex observed_codex_approval_requests_are_answered_with_the_lazoo_decision --locked -- --exact",
       "exitCode": 0,
-      "durationMs": 5373
+      "durationMs": 5345
     },
     {
       "command": "cargo test -p lazooctl --test cli approval_cli_maps_list_show_and_bound_decisions --locked -- --exact",
       "exitCode": 0,
-      "durationMs": 302
+      "durationMs": 282
     },
     {
       "command": "cargo test -p lazooctl --test cli approval_errors_use_exit_code_fourteen --locked -- --exact",
       "exitCode": 0,
-      "durationMs": 264
+      "durationMs": 258
     },
     {
       "command": "git diff --quiet and git diff --cached --quiet -- apps/lazoo-desktop",

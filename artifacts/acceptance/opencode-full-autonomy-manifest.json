@@ -2,28 +2,28 @@
   "status": "PASS",
   "schemaVersion": 19,
   "mode": "deterministic-fake-transport",
-  "startedAt": "2026-10-17T10:00:49.4344277Z",
-  "durationMs": 2338,
+  "startedAt": "2026-10-17T10:30:48.3485336Z",
+  "durationMs": 3967,
   "commands": [
     {
       "command": "cargo test -p lazood --test daemon opencode_runs_turns_and_tasks_only_under_full_autonomy --locked -- --exact",
       "exitCode": 0,
-      "durationMs": 899
+      "durationMs": 876
     },
     {
       "command": "cargo test -p lazoo-providers --test opencode opencode_launch_is_prompt_free_only_under_full_autonomy --locked -- --exact",
       "exitCode": 0,
-      "durationMs": 364
+      "durationMs": 2050
     },
     {
       "command": "cargo test -p lazood --test daemon task_turn_rejects_a_provider_without_authority_override_support_before_io --locked -- --exact",
       "exitCode": 0,
-      "durationMs": 538
+      "durationMs": 547
     },
     {
       "command": "cargo test -p lazoo-store --test store store_enables_wal_foreign_keys_and_schema_version --locked -- --exact",
       "exitCode": 0,
-      "durationMs": 442
+      "durationMs": 430
     },
     {
       "command": "git diff --quiet and git diff --cached --quiet -- apps/lazoo-desktop",

@@ -2,19 +2,19 @@
   "schemaVersion": 1,
   "databaseSchemaVersion": 11,
   "status": "PASS",
-  "startedAt": "2026-10-17T09:43:35.4535674Z",
-  "completedAt": "2026-10-17T09:43:45.4856554Z",
-  "durationMs": 10028,
+  "startedAt": "2026-10-17T10:29:49.4175480Z",
+  "completedAt": "2026-10-17T10:29:59.4267309Z",
+  "durationMs": 10005,
   "platform": "Microsoft Windows NT 10.0.26200.0",
   "rustcVersion": "rustc 1.98.0 (88d9e12ae 2026-08-18)",
   "cargoVersion": "cargo 1.98.0 (797e8a9bc 2026-08-05)",
   "repositoryRoot": "C:\\workspace\\Orchestrator",
-  "isolatedDataRoot": "C:\\Users\\anubhab\\AppData\\Local\\Temp\\lazoo-acceptance-cb0c957f3d084327b9ac3ee009aec2a5\\data",
-  "temporaryProject": "C:\\Users\\anubhab\\AppData\\Local\\Temp\\lazoo-acceptance-cb0c957f3d084327b9ac3ee009aec2a5\\repository",
+  "isolatedDataRoot": "C:\\Users\\anubhab\\AppData\\Local\\Temp\\lazoo-acceptance-2834c535ce114d56b3a06147c12ff2e7\\data",
+  "temporaryProject": "C:\\Users\\anubhab\\AppData\\Local\\Temp\\lazoo-acceptance-2834c535ce114d56b3a06147c12ff2e7\\repository",
   "artifacts": {
     "manifest": "C:\\workspace\\Orchestrator\\artifacts\\acceptance\\first-slice-manifest.json",
-    "runLogs": "C:\\Users\\anubhab\\AppData\\Local\\Temp\\lazoo-acceptance-cb0c957f3d084327b9ac3ee009aec2a5",
-    "database": "C:\\Users\\anubhab\\AppData\\Local\\Temp\\lazoo-acceptance-cb0c957f3d084327b9ac3ee009aec2a5\\data\\state\\lazoo.db"
+    "runLogs": "C:\\Users\\anubhab\\AppData\\Local\\Temp\\lazoo-acceptance-2834c535ce114d56b3a06147c12ff2e7",
+    "database": "C:\\Users\\anubhab\\AppData\\Local\\Temp\\lazoo-acceptance-2834c535ce114d56b3a06147c12ff2e7\\data\\state\\lazoo.db"
   },
   "commands": [
     {
@@ -25,22 +25,22 @@
     {
       "command": "lazooctl --json status",
       "exitCode": 0,
-      "durationMs": 116
+      "durationMs": 117
     },
     {
-      "command": "lazooctl --json project register C:\\Users\\anubhab\\AppData\\Local\\Temp\\lazoo-acceptance-cb0c957f3d084327b9ac3ee009aec2a5\\repository --idempotency-key acceptance-cb0c957f3d084327b9ac3ee009aec2a5",
+      "command": "lazooctl --json project register C:\\Users\\anubhab\\AppData\\Local\\Temp\\lazoo-acceptance-2834c535ce114d56b3a06147c12ff2e7\\repository --idempotency-key acceptance-2834c535ce114d56b3a06147c12ff2e7",
       "exitCode": 0,
       "durationMs": 59
     },
     {
-      "command": "lazooctl --json project register C:\\Users\\anubhab\\AppData\\Local\\Temp\\lazoo-acceptance-cb0c957f3d084327b9ac3ee009aec2a5\\repository --idempotency-key acceptance-cb0c957f3d084327b9ac3ee009aec2a5",
+      "command": "lazooctl --json project register C:\\Users\\anubhab\\AppData\\Local\\Temp\\lazoo-acceptance-2834c535ce114d56b3a06147c12ff2e7\\repository --idempotency-key acceptance-2834c535ce114d56b3a06147c12ff2e7",
       "exitCode": 0,
       "durationMs": 47
     },
     {
       "command": "lazooctl --json project list",
       "exitCode": 0,
-      "durationMs": 16
+      "durationMs": 17
     },
     {
       "command": "lazooctl --json events list --after 0 --limit 100",
@@ -50,27 +50,27 @@
     {
       "command": "lazooctl --json status",
       "exitCode": 0,
-      "durationMs": 1059
+      "durationMs": 1070
     },
     {
       "command": "lazooctl --json project list",
       "exitCode": 0,
-      "durationMs": 18
+      "durationMs": 16
     },
     {
       "command": "lazooctl --json events list --after 0 --limit 100",
       "exitCode": 0,
-      "durationMs": 15
+      "durationMs": 14
     },
     {
       "command": "lazooctl --json system shutdown",
       "exitCode": 0,
-      "durationMs": 17
+      "durationMs": 16
     },
     {
       "command": "lazooctl --json status",
       "exitCode": 0,
-      "durationMs": 56
+      "durationMs": 55
     },
     {
       "command": "lazooctl --json system shutdown",
@@ -80,12 +80,12 @@
     {
       "command": "lazooctl --json status",
       "exitCode": 0,
-      "durationMs": 48
+      "durationMs": 47
     },
     {
       "command": "lazooctl --json system shutdown",
       "exitCode": 0,
-      "durationMs": 14
+      "durationMs": 15
     }
   ],
   "gates": {

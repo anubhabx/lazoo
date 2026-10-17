@@ -1,28 +1,28 @@
 {
   "manifestVersion": 1,
   "status": "PASS",
-  "startedAt": "2026-10-17T09:43:24.1699764Z",
-  "completedAt": "2026-10-17T09:43:35.0810914Z",
-  "durationMs": 10901,
+  "startedAt": "2026-10-17T10:29:38.7935708Z",
+  "completedAt": "2026-10-17T10:29:49.0285093Z",
+  "durationMs": 10225,
   "protocolVersion": 1,
   "schemaVersion": 19,
-  "isolatedDataRoot": "C:\\Users\\anubhab\\AppData\\Local\\Temp\\lazoo-employee-roster-00e2e6b5bd4c412d80f07619f4d5ff4c\\data",
+  "isolatedDataRoot": "C:\\Users\\anubhab\\AppData\\Local\\Temp\\lazoo-employee-roster-a6da7c2f0166423ebcba2e98b4894535\\data",
   "temporaryDataRetained": false,
   "commands": [
     {
       "command": "lazooctl --json status",
       "exitCode": 0,
-      "durationMs": 170
+      "durationMs": 163
     },
     {
-      "command": "lazooctl --json employee create Rhea --provider codex --role Lead --idempotency-key employee-create-00e2e6b5bd4c412d80f07619f4d5ff4c",
+      "command": "lazooctl --json employee create Rhea --provider codex --role Lead --idempotency-key employee-create-a6da7c2f0166423ebcba2e98b4894535",
       "exitCode": 0,
-      "durationMs": 3809
+      "durationMs": 3548
     },
     {
-      "command": "lazooctl --json employee create Rhea --provider codex --role Lead --idempotency-key employee-create-00e2e6b5bd4c412d80f07619f4d5ff4c",
+      "command": "lazooctl --json employee create Rhea --provider codex --role Lead --idempotency-key employee-create-a6da7c2f0166423ebcba2e98b4894535",
       "exitCode": 0,
-      "durationMs": 3339
+      "durationMs": 3084
     },
     {
       "command": "lazooctl --json employee list",
@@ -42,30 +42,30 @@
     {
       "command": "lazooctl --json status",
       "exitCode": 0,
-      "durationMs": 46
+      "durationMs": 52
     },
     {
-      "command": "lazooctl --json employee show 2e095518-dccc-42c2-b930-0cb56799a699",
+      "command": "lazooctl --json employee show 8759fc06-ce5b-45d1-8b87-167175152326",
       "exitCode": 0,
       "durationMs": 17
     },
     {
-      "command": "lazooctl --json employee update 2e095518-dccc-42c2-b930-0cb56799a699 --expected-revision 1 --role Principal lead --idempotency-key employee-update-00e2e6b5bd4c412d80f07619f4d5ff4c",
+      "command": "lazooctl --json employee update 8759fc06-ce5b-45d1-8b87-167175152326 --expected-revision 1 --role Principal lead --idempotency-key employee-update-a6da7c2f0166423ebcba2e98b4894535",
       "exitCode": 0,
-      "durationMs": 27
+      "durationMs": 26
     },
     {
-      "command": "lazooctl --json employee update 2e095518-dccc-42c2-b930-0cb56799a699 --expected-revision 1 --role Stale edit --idempotency-key employee-stale-00e2e6b5bd4c412d80f07619f4d5ff4c",
+      "command": "lazooctl --json employee update 8759fc06-ce5b-45d1-8b87-167175152326 --expected-revision 1 --role Stale edit --idempotency-key employee-stale-a6da7c2f0166423ebcba2e98b4894535",
       "exitCode": 9,
       "durationMs": null
     },
     {
-      "command": "lazooctl --json roster refresh --idempotency-key roster-refresh-00e2e6b5bd4c412d80f07619f4d5ff4c",
+      "command": "lazooctl --json roster refresh --idempotency-key roster-refresh-a6da7c2f0166423ebcba2e98b4894535",
       "exitCode": 0,
-      "durationMs": 3126
+      "durationMs": 2967
     },
     {
-      "command": "lazooctl --json employee disable 2e095518-dccc-42c2-b930-0cb56799a699 --expected-revision 2 --idempotency-key employee-disable-00e2e6b5bd4c412d80f07619f4d5ff4c",
+      "command": "lazooctl --json employee disable 8759fc06-ce5b-45d1-8b87-167175152326 --expected-revision 2 --idempotency-key employee-disable-a6da7c2f0166423ebcba2e98b4894535",
       "exitCode": 0,
       "durationMs": 23
     },
@@ -87,12 +87,12 @@
     {
       "command": "lazooctl --json status",
       "exitCode": 0,
-      "durationMs": 50
+      "durationMs": 48
     },
     {
-      "command": "lazooctl --json employee show 2e095518-dccc-42c2-b930-0cb56799a699",
+      "command": "lazooctl --json employee show 8759fc06-ce5b-45d1-8b87-167175152326",
       "exitCode": 0,
-      "durationMs": 15
+      "durationMs": 14
     }
   ],
   "gates": {
