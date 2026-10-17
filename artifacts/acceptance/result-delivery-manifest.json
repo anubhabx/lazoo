@@ -2,8 +2,8 @@
   "status": "PASS",
   "schemaVersion": 19,
   "mode": "deterministic-fake-transport",
-  "startedAt": "2026-10-17T09:21:04.4764009Z",
-  "durationMs": 5642,
+  "startedAt": "2026-10-17T09:46:41.6885005Z",
+  "durationMs": 6560,
   "commands": [
     {
       "command": "cargo test -p lazoo-domain --test delivery completed_result_names_the_child_its_output_and_the_parent --locked -- --exact",
@@ -13,67 +13,67 @@
     {
       "command": "cargo test -p lazoo-domain --test delivery failed_result_carries_the_failure_and_the_remaining_children --locked -- --exact",
       "exitCode": 0,
-      "durationMs": 242
+      "durationMs": 237
     },
     {
       "command": "cargo test -p lazoo-domain --test delivery oversized_output_is_bounded_on_a_utf8_boundary_and_marked --locked -- --exact",
       "exitCode": 0,
-      "durationMs": 234
+      "durationMs": 240
     },
     {
       "command": "cargo test -p lazoo-domain --test delivery incident_notice_states_the_code_title_action_and_boundary --locked -- --exact",
       "exitCode": 0,
-      "durationMs": 244
+      "durationMs": 256
     },
     {
       "command": "cargo test -p lazoo-store --test delivery terminal_child_results_queue_once_to_the_parent_lead --locked -- --exact",
       "exitCode": 0,
-      "durationMs": 400
+      "durationMs": 465
     },
     {
       "command": "cargo test -p lazoo-store --test delivery notice_turns_reuse_the_notice_message_and_wait_for_the_lead_to_be_free --locked -- --exact",
       "exitCode": 0,
-      "durationMs": 396
+      "durationMs": 490
     },
     {
       "command": "cargo test -p lazoo-store --test delivery task_wait_consumes_a_result_with_the_waiting_turn_as_evidence --locked -- --exact",
       "exitCode": 0,
-      "durationMs": 400
+      "durationMs": 470
     },
     {
       "command": "cargo test -p lazoo-store --test delivery a_foreign_turn_cannot_consume_another_leads_result --locked -- --exact",
       "exitCode": 0,
-      "durationMs": 389
+      "durationMs": 474
     },
     {
       "command": "cargo test -p lazoo-store --test delivery priority_incidents_on_a_child_notify_the_lead_once --locked -- --exact",
       "exitCode": 0,
-      "durationMs": 404
+      "durationMs": 484
     },
     {
       "command": "cargo test -p lazood --test daemon child_results_reach_an_idle_lead_as_a_notice_turn_after_its_turn_ended --locked -- --exact",
       "exitCode": 0,
-      "durationMs": 549
+      "durationMs": 678
     },
     {
       "command": "cargo test -p lazood --test daemon task_wait_consumes_child_results_so_no_notice_turn_follows --locked -- --exact",
       "exitCode": 0,
-      "durationMs": 518
+      "durationMs": 659
     },
     {
       "command": "cargo test -p lazood --test daemon notices_wait_for_a_dormant_lead_until_the_user_resumes_it --locked -- --exact",
       "exitCode": 0,
-      "durationMs": 593
+      "durationMs": 694
     },
     {
       "command": "cargo test -p lazood --test daemon escalated_incidents_notify_the_lead_once_as_a_status_turn --locked -- --exact",
       "exitCode": 0,
-      "durationMs": 543
+      "durationMs": 649
     },
     {
       "command": "cargo test -p lazoo-store --test store store_enables_wal_foreign_keys_and_schema_version --locked -- --exact",
       "exitCode": 0,
-      "durationMs": 392
+      "durationMs": 431
     },
     {
       "command": "git diff --quiet and git diff --cached --quiet -- apps/lazoo-desktop",

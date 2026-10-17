@@ -13777,7 +13777,7 @@ fn gate_runner_runs_the_whole_gate_and_excludes_only_the_live_and_ui_scripts() {
         "cargo clippy --workspace --all-targets --locked -- -D warnings",
         "cargo test --workspace --locked",
         "cargo build --workspace --release --locked",
-        "$excluded = @('provider-adapters', 'desktop-shell')",
+        "$excluded = @('provider-adapters', 'claude-live-lifecycle', 'desktop-shell')",
         r"scripts\acceptance\*.ps1",
         "-SkipBuild",
         "-Provider",

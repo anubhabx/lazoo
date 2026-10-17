@@ -13,7 +13,7 @@
       "reason": "Excluded by owner on 2026-10-16"
     }
   ],
-  "generatedAt": "2026-10-15T18:58:15.7598092Z",
+  "generatedAt": "2026-10-17T09:31:21.0186213Z",
   "platform": "Microsoft Windows NT 10.0.26200.0",
   "rustcVersion": "rustc 1.98.0 (88d9e12ae 2026-08-18)",
   "cargoVersion": "cargo 1.98.0 (797e8a9bc 2026-08-05)",
@@ -21,18 +21,18 @@
     "codex": {
       "provider": "codex",
       "status": "PASS",
-      "startedAt": "2026-10-15T18:00:40.4890336Z",
-      "completedAt": "2026-10-15T18:00:57.0802067Z",
-      "durationMs": 16592,
+      "startedAt": "2026-10-17T09:28:57.2729549Z",
+      "completedAt": "2026-10-17T09:29:10.5026249Z",
+      "durationMs": 13230,
       "binaries": {
-        "daemonSha256": "E04C951C8BA788E6EE8701334E393CDA2D53C61E9F9A92BFABDA847DBD876FFA",
-        "cliSha256": "F93445FF6C9C7AF59BBDAE31E82DE31906A38DB3AB12D63CD0363C9617AFDD4F"
+        "daemonSha256": "B5029069E6D8146073B1A72E620BA1270A536B9476E8BDC32E35D243C2E17EAD",
+        "cliSha256": "880C931E59B4BA149C13CF0CA39A3CA6C334A31CF7379A100A9BFA199A415CF6"
       },
       "executable": {
         "detected": true,
         "fileName": "codex.exe",
         "pathSha256": "d8ea5345c781e125990e3d048c265127c0e2d99f800a7d54f2cabb29f3ed4dde",
-        "discoverySource": "inherited-path",
+        "discoverySource": "known-location",
         "version": "codex-cli 0.162.0-alpha.17.2"
       },
       "handshake": {
@@ -45,17 +45,17 @@
         "status": "PASS",
         "outputMatched": true,
         "eventTypes": [
-          "progress",
           "sessionStarted",
+          "progress",
           "turnStarted",
           "textDelta",
           "usage",
           "turnCompleted"
         ],
         "usage": {
-          "inputTokens": 25303,
+          "inputTokens": 24502,
           "outputTokens": 10,
-          "totalTokens": 25313,
+          "totalTokens": 24512,
           "costUsd": null
         },
         "blocker": null
@@ -82,34 +82,34 @@
         {
           "command": "lazooctl --json status",
           "exitCode": 0,
-          "durationMs": 173
+          "durationMs": 105
         },
         {
           "command": "lazooctl --json provider list",
           "exitCode": 0,
-          "durationMs": 41
+          "durationMs": 25
         },
         {
           "command": "lazooctl --json provider probe codex",
           "exitCode": 0,
-          "durationMs": 3835
+          "durationMs": 3184
         },
         {
           "command": "lazooctl --json provider smoke codex --prompt <conformance-prompt>",
           "exitCode": 0,
-          "durationMs": 12304
+          "durationMs": 9805
         }
       ]
     },
     "opencode": {
       "provider": "opencode",
       "status": "PASS",
-      "startedAt": "2026-10-15T18:51:22.0176648Z",
-      "completedAt": "2026-10-15T18:51:40.778118Z",
-      "durationMs": 18760,
+      "startedAt": "2026-10-17T09:31:03.9347126Z",
+      "completedAt": "2026-10-17T09:31:20.8768498Z",
+      "durationMs": 16941,
       "binaries": {
-        "daemonSha256": "C146E61EE80652CCC3006BCC31574DE1F0E3821CD8FFF9990594081A941B587B",
-        "cliSha256": "02470E82ED3D59928314EE7FC85FD6BC267F4A72815CD12626A2151CC1C7291D"
+        "daemonSha256": "B5029069E6D8146073B1A72E620BA1270A536B9476E8BDC32E35D243C2E17EAD",
+        "cliSha256": "880C931E59B4BA149C13CF0CA39A3CA6C334A31CF7379A100A9BFA199A415CF6"
       },
       "executable": {
         "detected": true,
@@ -131,7 +131,6 @@
           "sessionStarted",
           "turnStarted",
           "progress",
-          "thoughtDelta",
           "textDelta",
           "usage",
           "turnCompleted"
@@ -139,7 +138,7 @@
         "usage": {
           "inputTokens": null,
           "outputTokens": null,
-          "totalTokens": 28953,
+          "totalTokens": 27318,
           "costUsd": null
         },
         "blocker": null
@@ -166,22 +165,22 @@
         {
           "command": "lazooctl --json status",
           "exitCode": 0,
-          "durationMs": 173
+          "durationMs": 102
         },
         {
           "command": "lazooctl --json provider list",
           "exitCode": 0,
-          "durationMs": 35
+          "durationMs": 24
         },
         {
           "command": "lazooctl --json provider probe opencode",
           "exitCode": 0,
-          "durationMs": 4249
+          "durationMs": 3999
         },
         {
           "command": "lazooctl --json provider smoke opencode --prompt <conformance-prompt>",
           "exitCode": 0,
-          "durationMs": 14173
+          "durationMs": 12695
         }
       ]
     },
@@ -259,19 +258,19 @@
     "antigravity": {
       "provider": "antigravity",
       "status": "PASS",
-      "startedAt": "2026-10-15T18:01:44.8655971Z",
-      "completedAt": "2026-10-15T18:02:15.9642907Z",
-      "durationMs": 31099,
+      "startedAt": "2026-10-17T09:29:24.5451773Z",
+      "completedAt": "2026-10-17T09:29:52.6802873Z",
+      "durationMs": 28135,
       "binaries": {
-        "daemonSha256": "E04C951C8BA788E6EE8701334E393CDA2D53C61E9F9A92BFABDA847DBD876FFA",
-        "cliSha256": "F93445FF6C9C7AF59BBDAE31E82DE31906A38DB3AB12D63CD0363C9617AFDD4F"
+        "daemonSha256": "B5029069E6D8146073B1A72E620BA1270A536B9476E8BDC32E35D243C2E17EAD",
+        "cliSha256": "880C931E59B4BA149C13CF0CA39A3CA6C334A31CF7379A100A9BFA199A415CF6"
       },
       "executable": {
         "detected": true,
         "fileName": "agy.exe",
         "pathSha256": "98e79b157fddf07fb1f032b78fedc5843e7c6134143a1231c1dbf2babba7c464",
         "discoverySource": "inherited-path",
-        "version": "1.3.6"
+        "version": "1.4.0"
       },
       "handshake": {
         "status": "PASS",
@@ -290,9 +289,9 @@
           "turnCompleted"
         ],
         "usage": {
-          "inputTokens": 13918,
-          "outputTokens": 168,
-          "totalTokens": 14086,
+          "inputTokens": 13915,
+          "outputTokens": 201,
+          "totalTokens": 14116,
           "costUsd": null
         },
         "blocker": null
@@ -319,41 +318,41 @@
         {
           "command": "lazooctl --json status",
           "exitCode": 0,
-          "durationMs": 140
+          "durationMs": 93
         },
         {
           "command": "lazooctl --json provider list",
           "exitCode": 0,
-          "durationMs": 34
+          "durationMs": 25
         },
         {
           "command": "lazooctl --json provider probe antigravity",
           "exitCode": 0,
-          "durationMs": 14972
+          "durationMs": 12515
         },
         {
           "command": "lazooctl --json provider smoke antigravity --prompt <conformance-prompt>",
           "exitCode": 0,
-          "durationMs": 15810
+          "durationMs": 15395
         }
       ]
     },
     "claude-code": {
       "provider": "claude-code",
       "status": "PASS",
-      "startedAt": "2026-10-15T18:58:03.7119440Z",
-      "completedAt": "2026-10-15T18:58:15.6485015Z",
-      "durationMs": 11936,
+      "startedAt": "2026-10-17T09:28:44.047755Z",
+      "completedAt": "2026-10-17T09:28:56.6343848Z",
+      "durationMs": 12586,
       "binaries": {
-        "daemonSha256": "C146E61EE80652CCC3006BCC31574DE1F0E3821CD8FFF9990594081A941B587B",
-        "cliSha256": "02470E82ED3D59928314EE7FC85FD6BC267F4A72815CD12626A2151CC1C7291D"
+        "daemonSha256": "B5029069E6D8146073B1A72E620BA1270A536B9476E8BDC32E35D243C2E17EAD",
+        "cliSha256": "880C931E59B4BA149C13CF0CA39A3CA6C334A31CF7379A100A9BFA199A415CF6"
       },
       "executable": {
         "detected": true,
         "fileName": "claude.exe",
         "pathSha256": "da0e189ed6baa5ea63927cf11f125865d3fa7f0e67d51f2fdfa073e89f442377",
         "discoverySource": "inherited-path",
-        "version": "2.1.300 (Claude Code)"
+        "version": "2.1.302 (Claude Code)"
       },
       "handshake": {
         "status": "PASS",
@@ -376,7 +375,7 @@
           "inputTokens": 2,
           "outputTokens": 17,
           "totalTokens": 19,
-          "costUsd": 1.23953275
+          "costUsd": 1.5221899999999997
         },
         "blocker": null
       },
@@ -402,22 +401,22 @@
         {
           "command": "lazooctl --json status",
           "exitCode": 0,
-          "durationMs": 168
+          "durationMs": 103
         },
         {
           "command": "lazooctl --json provider list",
           "exitCode": 0,
-          "durationMs": 37
+          "durationMs": 25
         },
         {
           "command": "lazooctl --json provider probe claude-code",
           "exitCode": 0,
-          "durationMs": 287
+          "durationMs": 269
         },
         {
           "command": "lazooctl --json provider smoke claude-code --prompt <conformance-prompt>",
           "exitCode": 0,
-          "durationMs": 11307
+          "durationMs": 12018
         }
       ]
     }

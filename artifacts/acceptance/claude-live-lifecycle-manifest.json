@@ -1,0 +1,189 @@
+{
+  "manifestVersion": 1,
+  "status": "PASS",
+  "outcome": "PASS",
+  "failure": null,
+  "mode": "live-native-subscription",
+  "schemaVersion": 19,
+  "startedAt": "2026-10-17T09:38:10.4742075Z",
+  "completedAt": "2026-10-17T09:38:30.9764686Z",
+  "durationMs": 20490,
+  "provider": "claude-code",
+  "claudeVersion": "2.1.302 (Claude Code)",
+  "authenticationChannel": "native-subscription",
+  "authenticationChannelNote": "ANTHROPIC_*, CLAUDE_CODE_* and outer-session variables were removed from the daemon environment (names only recorded); the owner Claude configuration was neither read nor changed",
+  "scrubbedEnvironmentVariableNames": [
+    "AI_AGENT",
+    "CLAUDE_CODE_BRIDGE_SESSION_ID",
+    "CLAUDE_CODE_CHILD_SESSION",
+    "CLAUDE_CODE_ENTRYPOINT",
+    "CLAUDE_CODE_EXECPATH",
+    "CLAUDE_CODE_MESSAGING_SOCKET",
+    "CLAUDE_CODE_MESSAGING_TOKEN",
+    "CLAUDE_CODE_SESSION_ATTENDED",
+    "CLAUDE_CODE_SESSION_ID",
+    "CLAUDE_CODE_SSE_PORT",
+    "CLAUDE_EFFORT",
+    "CLAUDE_PID",
+    "CLAUDE_PLUGIN_DATA",
+    "CLAUDECODE"
+  ],
+  "liveTurnsSent": 3,
+  "liveTurnCap": 3,
+  "turnTimeoutSeconds": 240,
+  "isolatedDataRoot": "C:\\Users\\anubhab\\AppData\\Local\\Temp\\lazoo-claude-live-7816a32f488d4d78905ad0ab32d97c0a\\data",
+  "temporaryDataRetained": false,
+  "prompts": {
+    "messaging": "Remember the code word PELICAN for later in this conversation. Reply with exactly LAZOO_CLAUDE_OK and nothing else.",
+    "cancellation": "Count slowly from 1 to 400, one number per line, with no other text.",
+    "resume": "Reply with exactly the code word I asked you to remember, and nothing else."
+  },
+  "turns": {
+    "messaging": {
+      "prompt": "Remember the code word PELICAN for later in this conversation. Reply with exactly LAZOO_CLAUDE_OK and nothing else.",
+      "state": "completed",
+      "output": "LAZOO_CLAUDE_OK",
+      "durationMs": 7207
+    },
+    "cancellation": {
+      "prompt": "Count slowly from 1 to 400, one number per line, with no other text.",
+      "state": "cancelled",
+      "cancelRequestToCancelledMs": 57,
+      "submitReturnedMs": 1423,
+      "submitExitCode": 0,
+      "turnCompletedEvents": 0,
+      "turnCancelledEvents": 1,
+      "sessionStateAfterCancel": "idle",
+      "sessionAfterCancel": "STILL_USABLE_IDLE"
+    },
+    "resume": {
+      "prompt": "Reply with exactly the code word I asked you to remember, and nothing else.",
+      "state": "completed",
+      "output": "PELICAN",
+      "durationMs": 7430,
+      "newSessionId": "8b7bf659-b04a-4791-a6b2-db530c376330",
+      "newNativeSessionId": "0679c1fc-25fa-499f-88a0-07108b2b6841",
+      "sessionResumedEvents": 1,
+      "sessionResumeSkippedEvents": 0
+    }
+  },
+  "turnDurationsMs": {
+    "turn1": 7207,
+    "turn2": 1423,
+    "turn3": 7430
+  },
+  "pollCalls": 23,
+  "commands": [
+    {
+      "command": "lazooctl --json provider probe claude-code",
+      "exitCode": 0,
+      "durationMs": 262
+    },
+    {
+      "command": "lazooctl --json employee create Cleo --provider claude-code --role Lead --authority-mode full-autonomy --idle-timeout-seconds 0 --idempotency-key lead-7816a32f488d4d78905ad0ab32d97c0a",
+      "exitCode": 0,
+      "durationMs": 269
+    },
+    {
+      "command": "lazooctl --json conversation create 3611304d-cdd9-4cdf-8c10-ebdcf2b3af11 --title Claude live lifecycle --idempotency-key conversation-7816a32f488d4d78905ad0ab32d97c0a",
+      "exitCode": 0,
+      "durationMs": 19
+    },
+    {
+      "command": "lazooctl --json turn submit 85ecfd34-d9c4-4f0d-ab11-a1387caefe39 --authority-mode full-autonomy --text Remember the code word PELICAN for later in this conversation. Reply with exactly LAZOO_CLAUDE_OK and nothing else. --activate-if-needed --idempotency-key turn1-7816a32f488d4d78905ad0ab32d97c0a",
+      "exitCode": 0,
+      "durationMs": 7207
+    },
+    {
+      "command": "lazooctl --json session show 4aa50473-90cd-4b6f-acd5-cf729e733fc5",
+      "exitCode": 0,
+      "durationMs": 18
+    },
+    {
+      "command": "lazooctl --json turn cancel 03e498c5-a653-4ecf-b2cc-bc67888d29af --expected-revision 5 --idempotency-key cancel-1-7816a32f488d4d78905ad0ab32d97c0a",
+      "exitCode": 0,
+      "durationMs": 36
+    },
+    {
+      "command": "lazooctl --json turn submit 85ecfd34-d9c4-4f0d-ab11-a1387caefe39 --authority-mode full-autonomy --text Count slowly from 1 to 400, one number per line, with no other text. --activate-if-needed --idempotency-key turn2-7816a32f488d4d78905ad0ab32d97c0a",
+      "exitCode": 0,
+      "durationMs": 1423
+    },
+    {
+      "command": "lazooctl --json turn show 03e498c5-a653-4ecf-b2cc-bc67888d29af",
+      "exitCode": 0,
+      "durationMs": 17
+    },
+    {
+      "command": "lazooctl --json session show 4aa50473-90cd-4b6f-acd5-cf729e733fc5",
+      "exitCode": 0,
+      "durationMs": 22
+    },
+    {
+      "command": "lazooctl --json events list --after 0 --limit 1024",
+      "exitCode": 0,
+      "durationMs": 28
+    },
+    {
+      "command": "lazooctl --json session stop 4aa50473-90cd-4b6f-acd5-cf729e733fc5 --expected-revision 2 --idempotency-key stop-7816a32f488d4d78905ad0ab32d97c0a",
+      "exitCode": 0,
+      "durationMs": 24
+    },
+    {
+      "command": "lazooctl --json session show 4aa50473-90cd-4b6f-acd5-cf729e733fc5",
+      "exitCode": 0,
+      "durationMs": 15
+    },
+    {
+      "command": "lazooctl --json turn submit 85ecfd34-d9c4-4f0d-ab11-a1387caefe39 --authority-mode full-autonomy --text Reply with exactly the code word I asked you to remember, and nothing else. --activate-if-needed --idempotency-key turn3-7816a32f488d4d78905ad0ab32d97c0a",
+      "exitCode": 0,
+      "durationMs": 7430
+    },
+    {
+      "command": "lazooctl --json session show 8b7bf659-b04a-4791-a6b2-db530c376330",
+      "exitCode": 0,
+      "durationMs": 17
+    },
+    {
+      "command": "lazooctl --json events list --after 0 --limit 1024",
+      "exitCode": 0,
+      "durationMs": 31
+    },
+    {
+      "command": "lazooctl --json system shutdown",
+      "exitCode": 0,
+      "durationMs": 17
+    }
+  ],
+  "gates": {
+    "authentication": "PASS",
+    "messaging": "PASS",
+    "cancellation": "PASS",
+    "resume": "PASS",
+    "plannedShutdown": "PASS"
+  },
+  "evidence": {
+    "authentication": {
+      "native": "ready",
+      "external": "unknown",
+      "verification": "configured",
+      "version": "2.1.302 (Claude Code)"
+    },
+    "sessionId": "4aa50473-90cd-4b6f-acd5-cf729e733fc5",
+    "nativeSessionId": "0679c1fc-25fa-499f-88a0-07108b2b6841",
+    "stoppedBy": "lazooctl session stop",
+    "firstSessionNativeTreeProcessesAtStop": 0,
+    "firstSessionNativeTreeSurvivors": 0,
+    "resumedPayloads": [
+      "{\"sessionId\":\"8b7bf659-b04a-4791-a6b2-db530c376330\",\"priorSessionId\":\"4aa50473-90cd-4b6f-acd5-cf729e733fc5\",\"nativeSessionId\":\"0679c1fc-25fa-499f-88a0-07108b2b6841\",\"workingDirectory\":\"C:\\\\Users\\\\anubhab\\\\AppData\\\\Local\\\\Temp\\\\lazoo-claude-live-7816a32f488d4d78905ad0ab32d97c0a\\\\data\\\\sessions\\\\4aa50473-90cd-4b6f-acd5-cf729e733fc5\"}"
+    ],
+    "resumeSkippedPayloads": [],
+    "shutdownTreeProcesses": 18
+  },
+  "boundaries": {
+    "permissions": "NOT_APPLICABLE_FULL_AUTONOMY_ONLY",
+    "deterministicGate": "EXCLUDED",
+    "userClaudeConfiguration": "UNTOUCHED",
+    "forkOfLiveSession": "NOT_RUN_SECTION_27_DECISION"
+  }
+}
