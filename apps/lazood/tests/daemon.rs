@@ -4916,7 +4916,7 @@ fn session_terminal_attach_acceptance_contract_is_real_binary_and_backend_only()
         "externalModelUseAbsent",
         "uiChangesAbsent",
         "real-binaries-disposable-data-root-no-provider",
-        "schemaVersion = 18",
+        "schemaVersion = 19",
         "session-terminal-attach-manifest.json",
     ] {
         assert!(

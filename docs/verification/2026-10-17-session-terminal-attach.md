@@ -8,7 +8,7 @@ Base: `f98ab93` (`codex/core-v1-backend` tip, schema 18)
 
 Product version: `0.1.0`
 
-Database schema: 18 (no migration; the acceptance manifest's `schemaVersion = 18` literal is bumped by the integrator if the final schema differs)
+Database schema: 19 after integration (this slice adds no migration; the sibling raw-frame slice added 0019, and the integrator bumped this manifest literal and the `schema 19` status assertion on `feat/core-v1-completion`)
 
 Scope: `SessionTerminalAttachParams`/`SessionTerminalAttachResult`, `lazoo_providers::attach_args`, `Store::task_workspace_for_session`, `Store::record_session_terminal_attached`, the daemon's `session.terminal.attach` and its `LZ-SESSION-ATTACH-UNSUPPORTED` / `LZ-SESSION-ATTACHED` / `LZ-SESSION-ATTACH-FAILED` codes, `lazooctl session attach`, the real-binary acceptance script, and this record. The desktop app, Tauri surface, `desktop.snapshot`, collaboration tools, delivery, dispatch, and every provider adapter are unchanged.
 

@@ -8,7 +8,7 @@ Base: `f98ab93` (the `codex/core-v1-backend` checkpoint with the schema 16-18 me
 
 Product version: `0.1.0`
 
-Database schema: 18 (no migration)
+Database schema: 19 after integration (this slice adds no migration; the sibling raw-frame slice added 0019 on `feat/core-v1-completion`)
 
 Scope: brief section 21.2 step 12 ("Results include commits, verification, task links, messages, incidents, and concise memory records") inside the deterministic core scenario. One `#[doc(hidden)] pub` worker entry point, the story's memory-record chapter, the step 12 flip in `scripts/acceptance/core-scenario.ps1`, and continuity documentation. No RPC, CLI command, migration, event, tool, or desktop file changed.
 

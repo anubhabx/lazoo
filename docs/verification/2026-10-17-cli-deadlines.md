@@ -8,7 +8,7 @@ Base: `f98ab93` on `feat/core-v1-completion` (schema 18; `codex/core-v1-backend`
 
 Product version: `0.1.0`
 
-Database schema: 18 (no migration; the acceptance manifest's `schemaVersion = 18` literal is for the integrator to bump)
+Database schema: 19 after integration (this slice adds no migration; the sibling raw-frame slice added 0019, and the integrator bumped this manifest literal to 19 on `feat/core-v1-completion`)
 
 Scope: `lazooctl`'s request write and response read get deadlines through one `round_trip` helper with a per-method `response_timeout`; `InfrastructureGovernor::attach_current` stops waiting on the initialization mutex after 5 s, returns the new `GovernorError::InitializationTimedOut`, and frees its security descriptor on every exit path; `lazooctl` gains `tempfile` as a dev-dependency for an in-process stalled-daemon test; `scripts/test-cli-stress.ps1` names an IPC client deadline in its failure message when one occurs and keeps the stderr of exit-0 calls in its manifest. No protocol, RPC, error code, store, migration, or desktop change. The heap-corruption audit outcome is recorded below without a code change.
 
@@ -92,4 +92,4 @@ Recorded here because the owner asked for the outcome; no code changed for it.
 - `App::handle(request)` has no server-side deadline (`apps/lazood/src/server.rs`); only the request read and the response write are bounded there. The client bound is the only bound on handler time.
 - `system.resources` awaits the daemon's `live_sessions` lock; with live sessions it could legitimately exceed 20 s. This is an inference from the code, not an observation; the stress run has no sessions.
 - Enabling WER LocalDumps for `lazooctl.exe` during stress runs is an owner decision about machine state and was not done.
-- The acceptance manifest's `schemaVersion = 18` literal is bumped by the integrator after the merge, together with the sibling slices.
+- The acceptance manifest literal was bumped to `schemaVersion = 19` by the integrator on `feat/core-v1-completion`, together with the sibling slices.
