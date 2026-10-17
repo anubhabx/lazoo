@@ -29,6 +29,10 @@ $queued = $CliArgs -contains 'queued-startup'
 $startupHooks = $CliArgs -contains 'startup-hooks'
 $wrongSessionHook = $CliArgs -contains 'wrong-session-hook'
 $nonStartupHook = $CliArgs -contains 'non-startup-hook'
+$stallTurn = $CliArgs -contains 'stall-turn'
+if ($stallTurn) {
+  [IO.File]::WriteAllText((Join-Path $PWD 'host-pid'), [string]$PID)
+}
 $startupHookFlood = $CliArgs -contains 'startup-hook-flood'
 if ($queued) {
   [Console]::Out.WriteLine((@{type='system'; subtype='init'; session_id=$session; resumed=$false} | ConvertTo-Json -Compress))
@@ -56,6 +60,12 @@ while (($line = [Console]::In.ReadLine()) -ne $null) {
   if ($message.type -ne 'user') { continue }
   if (-not $queued) {
     [Console]::Out.WriteLine((@{type='system'; subtype='init'; session_id=$session; resumed=$false} | ConvertTo-Json -Compress))
+  }
+  if ($stallTurn) {
+    [Console]::Out.WriteLine((@{type='stream_event'; session_id=$session; event=@{type='content_block_delta'; delta=@{type='text_delta'; text='before cancel'}}} | ConvertTo-Json -Compress -Depth 8))
+    [IO.File]::WriteAllText((Join-Path $PWD 'turn-started'), 'started')
+    Start-Sleep -Seconds 30
+    break
   }
   [Console]::Out.WriteLine((@{type='stream_event'; session_id=$session; event=@{type='content_block_delta'; delta=@{type='text_delta'; text='before permission'}}} | ConvertTo-Json -Compress -Depth 8))
   $request = @{type='control_request'; request_id='permission-1'; request=@{subtype='can_use_tool'; tool_name='Bash'; tool_use_id='toolu-fixture'; input=@{command='echo super-secret-token'}}}
