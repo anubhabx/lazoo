@@ -124,6 +124,9 @@ fn test_app() -> (tempfile::TempDir, App) {
     )
 }
 
+/// The provider and permission mode one session start asked for.
+type SessionStart = (ProviderKind, Option<String>);
+
 #[derive(Clone)]
 struct FakeSessionBackend {
     starts: Arc<AtomicUsize>,
@@ -156,6 +159,8 @@ struct FakeSessionBackend {
     session_tools: Arc<Mutex<Vec<Vec<String>>>>,
     /// The native session id each start asked to resume; starts that begin fresh add nothing.
     resume_ids: Arc<Mutex<Vec<String>>>,
+    /// The provider and permission mode of every session start, in order.
+    session_permission_modes: Arc<Mutex<Vec<SessionStart>>>,
 }
 
 impl Default for FakeSessionBackend {
@@ -185,6 +190,7 @@ impl Default for FakeSessionBackend {
             tool_results: Arc::new(Mutex::new(Vec::new())),
             session_tools: Arc::new(Mutex::new(Vec::new())),
             resume_ids: Arc::new(Mutex::new(Vec::new())),
+            session_permission_modes: Arc::new(Mutex::new(Vec::new())),
         }
     }
 }
@@ -316,7 +322,7 @@ impl ManagedSession for FakeManagedSession {
 impl SessionBackend for FakeSessionBackend {
     fn start<'a>(
         &'a self,
-        _provider: ProviderKind,
+        provider: ProviderKind,
         request: &'a SessionRequest,
     ) -> SessionBackendFuture<'a> {
         Box::pin(async move {
@@ -336,6 +342,10 @@ impl SessionBackend for FakeSessionBackend {
                 .lock()
                 .unwrap()
                 .push(request.tools.iter().map(|tool| tool.name.clone()).collect());
+            self.session_permission_modes
+                .lock()
+                .unwrap()
+                .push((provider, request.permission_mode.clone()));
             if let Some(resumed) = &request.session_id {
                 self.resume_ids.lock().unwrap().push(resumed.clone());
             }
@@ -14072,6 +14082,341 @@ fn claude_full_autonomy_acceptance_contract_is_deterministic_and_backend_only() 
         "store_enables_wal_foreign_keys_and_schema_version",
         "fullAutonomyDelivered",
         "askAndSelfDecisionRefused",
+        "otherProvidersRefused",
+        "noSupportClaimed",
+        "providerSmokeAbsent",
+        "externalModelUseAbsent",
+        "uiChangesAbsent",
+        "deterministic-fake-transport",
+        "schemaVersion = 19",
+    ] {
+        assert!(
+            script.contains(required),
+            "acceptance script must contain {required}"
+        );
+    }
+    for forbidden in ["provider', 'smoke", "LivePrompt"] {
+        assert!(
+            !script.contains(forbidden),
+            "acceptance script must not contain {forbidden}"
+        );
+    }
+}
+
+/// `OpenCode` is opened the way Claude Code was: delivery under `full-autonomy` only, the one
+/// authority the native harness enforces prompt-free (the adapter launches `opencode acp` with
+/// an inline allow-all permission block when, and only when, the session's permission mode is
+/// `auto`). A Codex lead's delegation to an `OpenCode` worker under full autonomy is dispatched
+/// and completes on the worker's own session, which the fake backend records as started with
+/// the `auto` permission mode; the same delegation to a worker whose authority is `ask` is
+/// proposed, accepted by the user, and then refused at dispatch, as is one to a `self-decision`
+/// worker (accepted outright) and to Grok Build and Antigravity workers even under full
+/// autonomy, each with the task failed before any session starts. An `OpenCode` lead takes a user turn under full
+/// autonomy and refuses one under `ask` or `self-decision` before any provider I/O. An
+/// `OpenCode` summary employee stays excluded from the memory worker, which needs the governed
+/// `ask` ceiling. No live support is claimed: the integrator runs the live delivery.
+#[tokio::test]
+#[allow(clippy::too_many_lines)] // One story over every authority pairing.
+async fn opencode_runs_turns_and_tasks_only_under_full_autonomy() {
+    use lazoo_protocol::TaskState;
+
+    let (_temporary, harness) = tool_harness(AuthorityMode::FullAutonomy);
+    let call = |id: &str, method: &str, params: serde_json::Value| {
+        harness.app.handle(request(id, method, params))
+    };
+    let employee = |name: &str, provider: &str, authority: AuthorityMode| CreateEmployeeInput {
+        request_id: format!("opencode-{name}-request"),
+        idempotency_key: format!("opencode-{name}"),
+        name: name.to_owned(),
+        provider: provider.to_owned(),
+        role: "Worker".to_owned(),
+        instructions: String::new(),
+        model: Some("test-model".to_owned()),
+        reasoning_effort: None,
+        native_settings: json!({}),
+        authority_mode: authority,
+        checkout_policy: EmployeeCheckoutPolicy::Isolated,
+        activation_policy: lazoo_protocol::ActivationPolicy::Manual,
+        idle_timeout_seconds: 0,
+        enabled: true,
+        provider_observation: Some(ProviderObservation {
+            provider: provider.to_owned(),
+            verification: "configured".to_owned(),
+            version: Some("test".to_owned()),
+            protocol: Some("acp/v1".to_owned()),
+            capabilities: json!({"session": true}),
+            authentication: json!({"native": "ready", "external": "unknown"}),
+            degradation_reason: None,
+            checked_at: "2026-10-17T00:00:00Z".to_owned(),
+        }),
+    };
+    let opal = harness
+        .store
+        .create_employee(&employee("Opal", "opencode", AuthorityMode::FullAutonomy))
+        .unwrap()
+        .employee;
+    let olga = harness
+        .store
+        .create_employee(&employee("Olga", "opencode", AuthorityMode::Ask))
+        .unwrap()
+        .employee;
+    let sven = harness
+        .store
+        .create_employee(&employee("Sven", "opencode", AuthorityMode::SelfDecision))
+        .unwrap()
+        .employee;
+    // The other ACP provider and Antigravity stay refused even under full autonomy.
+    let gro = harness
+        .store
+        .create_employee(&employee("Gro", "grok-build", AuthorityMode::FullAutonomy))
+        .unwrap()
+        .employee;
+    let gus = harness
+        .store
+        .create_employee(&employee("Gus", "antigravity", AuthorityMode::FullAutonomy))
+        .unwrap()
+        .employee;
+
+    // Rhea (Codex, full autonomy) delegates to all three inside her turn.
+    warm_tool_lead(&harness).await;
+    let roster_revision = harness.store.roster_snapshot().unwrap().revision;
+    let delegate = |call_id: &str, employee: uuid::Uuid, requested: Option<&str>| {
+        let mut arguments = json!({
+            "employeeId": employee,
+            "objective": "Port the parser to OpenCode",
+            "rosterRevision": roster_revision
+        });
+        if let Some(requested) = requested {
+            arguments["requestedAuthority"] = json!(requested);
+        }
+        tool_call(call_id, "task_delegate", arguments)
+    };
+    harness.backend.tool_calls.lock().unwrap().extend([
+        delegate("call-1", opal.id, None),
+        // Each worker's ceiling is its own authority, so the lead asks for exactly that.
+        delegate("call-2", olga.id, Some("ask")),
+        delegate("call-3", sven.id, Some("self-decision")),
+        delegate("call-4", gro.id, None),
+        delegate("call-5", gus.id, None),
+    ]);
+    assert_eq!(
+        submit_lead_turn(&harness, "full-autonomy").await["turn"]["state"],
+        "completed"
+    );
+    let results = harness.backend.tool_results.lock().unwrap().clone();
+    assert_eq!(results.len(), 5, "{results:?}");
+    assert!(results.iter().all(|result| result.success), "{results:?}");
+    let task_of = |index: usize| -> uuid::Uuid {
+        results[index].content["taskId"]
+            .as_str()
+            .unwrap()
+            .parse()
+            .unwrap()
+    };
+    let (opal_task, olga_task, sven_task) = (task_of(0), task_of(1), task_of(2));
+    let (gro_task, gus_task) = (task_of(3), task_of(4));
+    assert_eq!(results[0].content["effectiveAuthority"], "full-autonomy");
+    assert_eq!(results[0].content["state"], "accepted");
+    assert_eq!(results[1].content["effectiveAuthority"], "ask");
+    assert_eq!(results[1].content["state"], "proposed");
+    // Only `ask` is held for the user; a `self-decision` delegation is accepted outright.
+    assert_eq!(results[2].content["effectiveAuthority"], "self-decision");
+    assert_eq!(results[2].content["state"], "accepted");
+
+    // Opal's task runs on her own OpenCode session, started prompt-free, and completes. Sven's
+    // (`self-decision`) and the Grok Build and Antigravity tasks (even under full autonomy) are
+    // refused at dispatch: the pass reports the refusal after running Opal.
+    assert_eq!(
+        harness
+            .app
+            .dispatch_pending_tasks_once()
+            .await
+            .unwrap_err()
+            .code,
+        "LZ-TASK-AUTHORITY-UNSUPPORTED"
+    );
+    for task in [sven_task, gro_task, gus_task] {
+        let detail = harness.store.get_task(task).unwrap();
+        assert_eq!(detail.task.state, TaskState::Failed);
+        assert_eq!(
+            detail.task.failure_code.as_deref(),
+            Some("LZ-TASK-AUTHORITY-UNSUPPORTED")
+        );
+    }
+    let opal_detail = harness.store.get_task(opal_task).unwrap();
+    assert_eq!(opal_detail.task.state, TaskState::Completed);
+    let opal_session = harness
+        .store
+        .get_session(opal_detail.dispatch.unwrap().session_id.unwrap())
+        .unwrap();
+    assert_eq!(opal_session.provider, "opencode");
+    assert_eq!(opal_session.employee_id, opal.id);
+    assert_eq!(
+        harness
+            .backend
+            .session_permission_modes
+            .lock()
+            .unwrap()
+            .last(),
+        Some(&(ProviderKind::OpenCode, Some("auto".to_owned()))),
+        "the OpenCode session starts in the full-autonomy permission mode"
+    );
+    assert_eq!(
+        harness.backend.starts.load(Ordering::SeqCst),
+        2,
+        "Rhea's session and Opal's"
+    );
+
+    // Olga's `ask` proposal is accepted by the user, then refused at dispatch: under `ask`
+    // OpenCode's prompts stay where Lazoo cannot answer them, so Lazoo fails closed before any
+    // session starts.
+    call(
+        "accept-olga",
+        "task.accept",
+        json!({"id": olga_task, "expectedRevision": 1, "idempotencyKey": "accept-olga"}),
+    )
+    .await
+    .result
+    .unwrap();
+    assert_eq!(
+        harness
+            .app
+            .dispatch_pending_tasks_once()
+            .await
+            .unwrap_err()
+            .code,
+        "LZ-TASK-AUTHORITY-UNSUPPORTED"
+    );
+    let olga_detail = harness.store.get_task(olga_task).unwrap();
+    assert_eq!(olga_detail.task.state, TaskState::Failed);
+    assert_eq!(
+        olga_detail.task.failure_code.as_deref(),
+        Some("LZ-TASK-AUTHORITY-UNSUPPORTED")
+    );
+    assert_eq!(harness.backend.starts.load(Ordering::SeqCst), 2);
+
+    // An OpenCode lead: user turns under `ask` and `self-decision` are refused before any
+    // provider I/O; one under full autonomy activates her session and completes.
+    let conversation: uuid::Uuid = call(
+        "create-opal-conversation",
+        "conversation.create",
+        json!({
+            "projectId": null,
+            "leadEmployeeId": opal.id,
+            "title": "OpenCode leads",
+            "idempotencyKey": "opal-conversation"
+        }),
+    )
+    .await
+    .result
+    .unwrap()["conversation"]["id"]
+        .as_str()
+        .unwrap()
+        .parse()
+        .unwrap();
+    let submit = |id: &'static str, authority: &'static str| {
+        call(
+            id,
+            "turn.submit",
+            json!({
+                "conversationId": conversation,
+                "author": {"kind": "user"},
+                "recipient": null,
+                "authorityMode": authority,
+                "text": "Summarize the parser",
+                "activateIfNeeded": true,
+                "maxAttempts": 1,
+                "idempotencyKey": id
+            }),
+        )
+    };
+    for (id, authority) in [("opal-ask", "ask"), ("opal-self", "self-decision")] {
+        let refused = timeout(Duration::from_secs(20), submit(id, authority))
+            .await
+            .unwrap()
+            .error
+            .unwrap();
+        assert_eq!(refused.code, "LZ-TASK-AUTHORITY-UNSUPPORTED");
+    }
+    assert_eq!(harness.backend.starts.load(Ordering::SeqCst), 2);
+    assert_eq!(harness.backend.turns.load(Ordering::SeqCst), 2);
+    let completed = timeout(
+        Duration::from_secs(20),
+        submit("opal-full", "full-autonomy"),
+    )
+    .await
+    .unwrap()
+    .result
+    .unwrap();
+    assert_eq!(completed["turn"]["state"], "completed");
+    assert_eq!(completed["task"]["effectiveAuthority"], "full-autonomy");
+    assert_eq!(harness.backend.starts.load(Ordering::SeqCst), 3);
+    let opal_lead_session = harness
+        .store
+        .list_sessions()
+        .unwrap()
+        .into_iter()
+        .rfind(|session| session.employee_id == opal.id)
+        .unwrap();
+    assert_eq!(opal_lead_session.provider, "opencode");
+    assert_eq!(
+        harness
+            .backend
+            .session_permission_modes
+            .lock()
+            .unwrap()
+            .last(),
+        Some(&(ProviderKind::OpenCode, Some("auto".to_owned())))
+    );
+    assert!(
+        harness.backend.resume_ids.lock().unwrap().is_empty(),
+        "a conversation never resumes the task-dispatch session that preceded it"
+    );
+    assert_eq!(
+        harness.backend.turns.load(Ordering::SeqCst),
+        3,
+        "Rhea's turn, Opal's dispatch turn, Opal's user turn"
+    );
+
+    // The memory worker needs the governed `ask` ceiling, which OpenCode still cannot enforce.
+    let configured = call(
+        "configure-opencode-memory-worker",
+        "memory.worker.configure",
+        json!({
+            "projectId": null,
+            "employeeId": opal.id,
+            "model": "test-model",
+            "requestsPerMinute": 1,
+            "enabled": true,
+            "expectedRevision": null
+        }),
+    )
+    .await
+    .error
+    .unwrap();
+    assert!(
+        configured
+            .message
+            .contains("cannot enforce the governed ask"),
+        "{configured:?}"
+    );
+}
+
+#[test]
+fn opencode_full_autonomy_acceptance_contract_is_deterministic_and_backend_only() {
+    let repository = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let script_path = repository.join("scripts/acceptance/opencode-full-autonomy.ps1");
+    let script =
+        std::fs::read_to_string(&script_path).expect("opencode full autonomy acceptance script");
+
+    for required in [
+        "opencode_runs_turns_and_tasks_only_under_full_autonomy",
+        "task_turn_rejects_a_provider_without_authority_override_support_before_io",
+        "opencode_launch_is_prompt_free_only_under_full_autonomy",
+        "store_enables_wal_foreign_keys_and_schema_version",
+        "fullAutonomyDelivered",
+        "askAndSelfDecisionRefused",
+        "launchPromptFreeOnlyUnderFullAutonomy",
         "otherProvidersRefused",
         "noSupportClaimed",
         "providerSmokeAbsent",

@@ -1,4 +1,5 @@
 use std::{
+    ffi::OsString,
     path::{Path, PathBuf},
     time::Duration,
 };
@@ -15,6 +16,12 @@ use crate::{
 };
 
 const OPENCODE_PROTOCOL: &str = "acp/v1";
+/// The session permission mode the daemon derives from full autonomy.
+const FULL_AUTONOMY_PERMISSION_MODE: &str = "auto";
+/// `OpenCode`'s inline permissions config variable ("Inlined json permissions config").
+const PERMISSION_ENV: &str = "OPENCODE_PERMISSION";
+/// A top-level `"*"` rule covers built-in and MCP tools alike.
+const ALLOW_ALL_PERMISSION: &str = r#"{"*":"allow"}"#;
 const STOP_TIMEOUT: Duration = Duration::from_secs(2);
 const VERSION_TIMEOUT: Duration = Duration::from_secs(5);
 const MAX_VERSION_BYTES: usize = 64 * 1024;
@@ -34,7 +41,19 @@ impl OpenCodeAdapter {
 
     #[must_use]
     pub fn command(executable: &Path, request: &SessionRequest) -> CommandSpec {
-        CommandSpec::new(executable, &request.cwd).arg("acp")
+        let mut command = CommandSpec::new(executable, &request.cwd).arg("acp");
+        // Full autonomy is the one authority this adapter makes prompt-free, natively: the
+        // inline permission block outranks every OpenCode config file, so no
+        // `session/request_permission` is raised and no config file is written. Every other
+        // permission mode (and the probe, which carries none) leaves OpenCode's own
+        // permission configuration untouched; the adapter never widens authority on its own.
+        if request.permission_mode.as_deref() == Some(FULL_AUTONOMY_PERMISSION_MODE) {
+            command.env.insert(
+                OsString::from(PERMISSION_ENV),
+                OsString::from(ALLOW_ALL_PERMISSION),
+            );
+        }
+        command
     }
 
     fn executable_candidates(
