@@ -3,8 +3,11 @@ use lazoo_protocol::{
     MemorySourceArchive,
 };
 use lazoo_store::{
-    ArchiveMemoryTurnInput, FailMemorySummaryInput, SetMemoryPolicyInput, Store, StoreError,
+    ArchiveMemoryRawFramesInput, ArchiveMemoryTurnInput, FailMemorySummaryInput,
+    SetMemoryPolicyInput, Store, StoreError,
 };
+use sha2::Digest as _;
+use std::fmt::Write as _;
 use tempfile::tempdir;
 use uuid::Uuid;
 
@@ -30,8 +33,8 @@ fn seeded_store() -> (tempfile::TempDir, Store, Uuid, Uuid) {
          INSERT INTO conversations(id,contract_version,project_id,lead_employee_id,lead_employee_configuration_revision,revision,created_at,updated_at) VALUES('{project_conversation}',1,'{project}','{employee}',1,1,'2020-01-01T00:00:00Z','2020-01-01T00:00:00Z');
          INSERT INTO conversation_turns(id,contract_version,conversation_id,author_kind,recipient_employee_id,recipient_employee_configuration_revision,text,message_id,correlation_id,state,revision,transcript_bytes,transcript_truncated,created_at,updated_at) VALUES('{home_turn}',1,'{home_conversation}','user','{employee}',1,'home','{home_turn}','{home_turn}','completed',1,0,0,'2020-01-01T00:00:00Z','2020-01-01T00:00:00Z');
          INSERT INTO conversation_turns(id,contract_version,conversation_id,author_kind,recipient_employee_id,recipient_employee_configuration_revision,text,message_id,correlation_id,state,revision,transcript_bytes,transcript_truncated,created_at,updated_at) VALUES('{project_turn}',1,'{project_conversation}','user','{employee}',1,'project','{project_turn}','{project_turn}','completed',1,0,0,'2020-01-01T00:00:00Z','2020-01-01T00:00:00Z');
-         INSERT INTO memory_archives VALUES ('{home_turn}','homehash',NULL,'','homehash.zst',1,1,0,'2020-01-01T00:00:00Z');
-         INSERT INTO memory_archives VALUES ('{project_turn}','projecthash','{project}','{project}','projecthash.zst',1,1,0,'2020-01-01T00:00:00Z');
+         INSERT INTO memory_archives(source_turn_id,source_hash,project_id,scope_key,archive_name,compressed_bytes,uncompressed_bytes,truncated,created_at) VALUES ('{home_turn}','homehash',NULL,'','homehash.zst',1,1,0,'2020-01-01T00:00:00Z');
+         INSERT INTO memory_archives(source_turn_id,source_hash,project_id,scope_key,archive_name,compressed_bytes,uncompressed_bytes,truncated,created_at) VALUES ('{project_turn}','projecthash','{project}','{project}','projecthash.zst',1,1,0,'2020-01-01T00:00:00Z');
          INSERT INTO memory_records(id,revision,project_id,scope_key,source_turn_id,source_hash,record_type,text,confidence,importance,created_at,active) VALUES ('{home_id}',1,NULL,'','{home_turn}','homehash','fact','C++ literal quote phrase',1,10,'2020-01-01T00:00:00Z',1);
          INSERT INTO memory_records(id,revision,project_id,scope_key,source_turn_id,source_hash,record_type,text,confidence,importance,created_at,active) VALUES ('{project_id}',1,'{project}','{project}','{project_turn}','projecthash','constraint','project isolated architecture',1,99,'2020-01-01T00:00:00Z',1);
          PRAGMA foreign_keys=ON;"
@@ -597,4 +600,257 @@ fn quota_rejection_writes_no_file_and_existing_archive_retries_at_quota() {
             .unwrap(),
         first
     );
+}
+
+/// One completed Home turn in a fresh store, seeded as the quota test does.
+fn completed_home_turn(store: &Store) -> Uuid {
+    let conversation = Uuid::new_v4();
+    let employee = Uuid::new_v4();
+    let turn = Uuid::new_v4();
+    store.execute_for_test(&format!(
+        "PRAGMA foreign_keys=OFF;
+         INSERT INTO conversations(id,contract_version,project_id,lead_employee_id,lead_employee_configuration_revision,revision,created_at,updated_at) VALUES('{conversation}',1,NULL,'{employee}',1,1,'2020-01-01T00:00:00Z','2020-01-01T00:00:00Z');
+         INSERT INTO conversation_turns(id,contract_version,conversation_id,author_kind,recipient_employee_id,recipient_employee_configuration_revision,text,message_id,correlation_id,state,revision,transcript_bytes,transcript_truncated,created_at,updated_at) VALUES('{turn}',1,'{conversation}','user','{employee}',1,'raw source','{turn}','{turn}','completed',1,0,0,'2020-01-01T00:00:00Z','2020-01-01T00:00:00Z');
+         PRAGMA foreign_keys=ON;"
+    )).unwrap();
+    turn
+}
+
+fn raw_frames(count: usize, bytes_each: usize) -> Vec<serde_json::Value> {
+    (1..=count)
+        .map(|sequence| {
+            serde_json::json!({
+                "sequence": sequence,
+                "type": "textDelta",
+                "raw": {"text": "x".repeat(bytes_each), "token": "secret"}
+            })
+        })
+        .collect()
+}
+
+fn ndjson_lines(bytes: &[u8]) -> Vec<serde_json::Value> {
+    std::str::from_utf8(bytes)
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect()
+}
+
+fn home_policy_with(store: &Store, retention_enabled: bool, quota_bytes: u64, cap: u64) {
+    let current = store.memory_policy(None).unwrap();
+    store
+        .set_memory_policy(&SetMemoryPolicyInput {
+            project_id: None,
+            expected_revision: current.revision,
+            retention_enabled,
+            retention_days: 30,
+            quota_bytes,
+            max_source_bytes: cap,
+            allowed_types: current.allowed_types.clone(),
+            inject_enabled: true,
+        })
+        .unwrap();
+}
+
+#[test]
+fn raw_frame_archive_is_hashed_capped_and_counted_against_quota() {
+    let temp = tempdir().unwrap();
+    let store = Store::open_path(temp.path().join("raw.db")).unwrap();
+    let turn = completed_home_turn(&store);
+    let root = temp.path().join("raw-archives");
+    home_policy_with(&store, true, 1_048_576, 65_536);
+    let input = || ArchiveMemoryRawFramesInput {
+        source_turn_id: turn,
+        archive_root: root.clone(),
+        frames: raw_frames(100, 1000),
+        dropped_frames: 0,
+    };
+    let raw = store.archive_memory_raw_frames(input()).unwrap().unwrap();
+    assert!(raw.truncated);
+    assert!(raw.uncompressed_bytes <= 65_536);
+    assert!(raw.archive_name.contains("-raw-"));
+    assert_eq!(raw.source_turn_id, turn);
+    assert!(root.join(&raw.archive_name).is_file());
+
+    let bytes = store.read_memory_raw_frames(&root, turn).unwrap();
+    assert_eq!(bytes.len() as u64, raw.uncompressed_bytes);
+    let digest = sha2::Sha256::digest(&bytes)
+        .iter()
+        .fold(String::new(), |mut hex, byte| {
+            write!(hex, "{byte:02x}").unwrap();
+            hex
+        });
+    assert_eq!(digest, raw.source_hash);
+    let lines = ndjson_lines(&bytes);
+    assert_eq!(lines[0]["type"], "lazoo-raw-frames");
+    assert_eq!(lines[0]["sourceTurnId"], turn.to_string());
+    let trailer = lines.last().unwrap();
+    assert_eq!(trailer["type"], "lazoo-raw-frames-truncated");
+    let dropped = trailer["droppedFrames"].as_u64().unwrap();
+    assert!(dropped > 0);
+    assert_eq!(trailer["limitBytes"], 65_536);
+    assert_eq!(lines.len() as u64, 2 + 100 - dropped);
+    assert!(
+        lines[1..lines.len() - 1]
+            .iter()
+            .all(|frame| frame["raw"]["token"] == "[redacted]")
+    );
+    assert!(!std::str::from_utf8(&bytes).unwrap().contains("secret"));
+    // The same frames again return the recorded archive instead of a second file.
+    assert_eq!(
+        store.archive_memory_raw_frames(input()).unwrap().unwrap(),
+        raw
+    );
+
+    // Raw frames count against the one quota the canonical archive uses.
+    home_policy_with(&store, true, raw.compressed_bytes, 65_536);
+    assert!(matches!(
+        store.archive_memory_turn(&ArchiveMemoryTurnInput {
+            source_turn_id: turn,
+            project_id: None,
+            archive_root: root.clone(),
+        }),
+        Err(StoreError::InvalidRecord {
+            field: "memory quota",
+            ..
+        })
+    ));
+    assert!(store.list_memory_archive_errors(None).unwrap().is_empty());
+    assert!(store.read_memory_source(&root, turn).is_err());
+}
+
+#[test]
+fn raw_frame_archive_respects_retention_opt_out() {
+    let temp = tempdir().unwrap();
+    let store = Store::open_path(temp.path().join("opt-out.db")).unwrap();
+    let turn = completed_home_turn(&store);
+    let root = temp.path().join("opt-out-archives");
+    let input = |frames: Vec<serde_json::Value>| ArchiveMemoryRawFramesInput {
+        source_turn_id: turn,
+        archive_root: root.clone(),
+        frames,
+        dropped_frames: 0,
+    };
+    home_policy_with(&store, false, 1_048_576, 65_536);
+    assert!(matches!(
+        store.archive_memory_raw_frames(input(raw_frames(2, 16))),
+        Err(StoreError::InvalidRecord {
+            field: "memory retention",
+            ..
+        })
+    ));
+    assert!(!root.exists() || std::fs::read_dir(&root).unwrap().next().is_none());
+    assert!(matches!(
+        store.read_memory_raw_frames(&root, turn),
+        Err(StoreError::InvalidRecord {
+            field: "memory source",
+            ..
+        })
+    ));
+    // Nothing captured is nothing to retain, whatever the policy says.
+    assert!(
+        store
+            .archive_memory_raw_frames(input(Vec::new()))
+            .unwrap()
+            .is_none()
+    );
+    // Only a completed turn is retained, even with retention back on.
+    home_policy_with(&store, true, 1_048_576, 65_536);
+    store
+        .execute_for_test(&format!(
+            "UPDATE conversation_turns SET state='accepted' WHERE id='{turn}'"
+        ))
+        .unwrap();
+    assert!(matches!(
+        store.archive_memory_raw_frames(input(raw_frames(2, 16))),
+        Err(StoreError::InvalidRecord {
+            field: "memory source",
+            ..
+        })
+    ));
+    assert!(!root.exists() || std::fs::read_dir(&root).unwrap().next().is_none());
+}
+
+#[test]
+fn raw_frames_and_canonical_archive_coexist_and_cleanup_removes_both() {
+    let temp = tempdir().unwrap();
+    let store = Store::open_path(temp.path().join("both.db")).unwrap();
+    let turn = completed_home_turn(&store);
+    let root = temp.path().join("both-archives");
+    let canonical_input = ArchiveMemoryTurnInput {
+        source_turn_id: turn,
+        project_id: None,
+        archive_root: root.clone(),
+    };
+    let raw = store
+        .archive_memory_raw_frames(ArchiveMemoryRawFramesInput {
+            source_turn_id: turn,
+            archive_root: root.clone(),
+            frames: raw_frames(3, 32),
+            dropped_frames: 0,
+        })
+        .unwrap()
+        .unwrap();
+    assert!(!raw.truncated);
+    // A raw archive neither hides the turn from canonical archiving nor becomes a summary source.
+    assert!(
+        store
+            .list_memory_archive_candidates(10)
+            .unwrap()
+            .iter()
+            .any(|candidate| candidate.source_turn_id == turn)
+    );
+    assert!(store.enqueue_memory_summary(&raw).is_err());
+
+    let canonical = store.archive_memory_turn(&canonical_input).unwrap();
+    assert_ne!(canonical.archive_name, raw.archive_name);
+    assert!(store.list_memory_archive_candidates(10).unwrap().is_empty());
+    store.enqueue_memory_summary(&canonical).unwrap();
+    assert!(
+        std::str::from_utf8(&store.read_memory_source(&root, turn).unwrap())
+            .unwrap()
+            .contains("raw source")
+    );
+    assert_eq!(
+        ndjson_lines(&store.read_memory_raw_frames(&root, turn).unwrap()).len(),
+        4
+    );
+
+    let preview = store
+        .preview_memory_cleanup(None, "9999-01-01T00:00:00Z")
+        .unwrap();
+    assert_eq!(preview.archive_names.len(), 2);
+    assert_eq!(
+        preview.bytes,
+        raw.compressed_bytes + canonical.compressed_bytes
+    );
+    assert_eq!(store.apply_memory_cleanup(&root, &preview).unwrap(), 2);
+    assert!(!root.join(&raw.archive_name).exists());
+    assert!(!root.join(&canonical.archive_name).exists());
+    assert!(
+        store
+            .preview_memory_cleanup(None, "9999-01-01T00:00:00Z")
+            .unwrap()
+            .archive_names
+            .is_empty()
+    );
+    assert!(store.read_memory_source(&root, turn).is_err());
+    assert!(store.read_memory_raw_frames(&root, turn).is_err());
+
+    // Recovery replays one kind without touching the other: a raw write-pending intent whose
+    // file never landed is dropped while the re-created canonical archive stays readable.
+    let canonical = store.archive_memory_turn(&canonical_input).unwrap();
+    store.execute_for_test(&format!(
+        "PRAGMA foreign_keys=OFF;
+         INSERT INTO memory_archive_intents(source_turn_id,source_kind,source_hash,project_id,scope_key,archive_name,compressed_bytes,uncompressed_bytes,truncated,state,created_at)
+         VALUES('{turn}','raw-frames','rawhash',NULL,'','home-raw-missing.zst',1,1,0,'write-pending','2020-01-01T00:00:00Z');
+         PRAGMA foreign_keys=ON;"
+    )).unwrap();
+    assert_eq!(store.reconcile_memory_archives(&root).unwrap(), 1);
+    assert_eq!(
+        store.read_memory_source(&root, turn).unwrap().len() as u64,
+        canonical.uncompressed_bytes
+    );
+    assert!(store.read_memory_raw_frames(&root, turn).is_err());
+    assert!(store.list_memory_archive_errors(None).unwrap().is_empty());
 }

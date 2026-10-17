@@ -1,7 +1,7 @@
 use std::{
     future::poll_fn,
     sync::{
-        Arc,
+        Arc, Mutex,
         atomic::{AtomicU64, Ordering},
     },
 };
@@ -34,6 +34,38 @@ struct AppTurnObserver {
     app: App,
     turn_id: Uuid,
     ordinal: AtomicU64,
+    raw_frames: Mutex<RawFrameCapture>,
+}
+
+/// The adapter-redacted raw payloads of one live turn, kept until the turn ends. The buffer is
+/// bounded by the inherited policy cap, so a long turn holds no more than its archive could keep.
+struct RawFrameCapture {
+    /// `None` when retention is off or the turn is an internal summary: nothing is kept.
+    cap: Option<u64>,
+    bytes: u64,
+    frames: Vec<Value>,
+    dropped: u64,
+}
+
+impl RawFrameCapture {
+    fn push(&mut self, kind: &str, raw: Option<Value>) {
+        let (Some(cap), Some(raw)) = (self.cap, raw) else {
+            return;
+        };
+        // Adapters clone one native message into several events; keep each message once.
+        if raw.is_null() || self.frames.last().is_some_and(|last| last["raw"] == raw) {
+            return;
+        }
+        let sequence = self.frames.len() as u64 + self.dropped + 1;
+        let frame = json!({"sequence": sequence, "type": kind, "raw": raw});
+        let length = serde_json::to_vec(&frame).map_or(u64::MAX, |bytes| bytes.len() as u64);
+        if self.bytes.saturating_add(length) > cap {
+            self.dropped += 1;
+            return;
+        }
+        self.bytes += length;
+        self.frames.push(frame);
+    }
 }
 
 struct DeliveryTarget {
@@ -43,11 +75,17 @@ struct DeliveryTarget {
 }
 
 impl AppTurnObserver {
-    fn new(app: App, turn_id: Uuid) -> Self {
+    fn new(app: App, turn_id: Uuid, raw_cap: Option<u64>) -> Self {
         Self {
             app,
             turn_id,
             ordinal: AtomicU64::new(0),
+            raw_frames: Mutex::new(RawFrameCapture {
+                cap: raw_cap,
+                bytes: 0,
+                frames: Vec::new(),
+                dropped: 0,
+            }),
         }
     }
 
@@ -58,6 +96,21 @@ impl AppTurnObserver {
             format!("provider:{}:{action}:{ordinal}", self.turn_id),
         )
     }
+
+    fn capture_raw_frame(&self, kind: &str, raw: Option<Value>) {
+        if let Ok(mut capture) = self.raw_frames.lock() {
+            capture.push(kind, raw);
+        }
+    }
+
+    /// The buffered frames and the count dropped at the cap; a poisoned buffer keeps nothing.
+    fn take_raw_frames(&self) -> (Vec<Value>, u64) {
+        self.raw_frames
+            .lock()
+            .map_or((Vec::new(), 0), |mut capture| {
+                (std::mem::take(&mut capture.frames), capture.dropped)
+            })
+    }
 }
 
 impl TurnEventObserver for AppTurnObserver {
@@ -67,8 +120,9 @@ impl TurnEventObserver for AppTurnObserver {
             .store
             .get_turn(self.turn_id)
             .map_err(|error| observer_error(&error))?;
-        let payload = bounded_event_payload(event);
+        let (payload, raw) = bounded_event_payload(event);
         let (kind, provider, native_session_id, native_turn_id) = event_identity(event, &payload);
+        self.capture_raw_frame(&kind, raw);
         let cancellation_evidence = match event {
             ProviderEvent::Cancelled { .. } => true,
             ProviderEvent::TurnCompleted { status, .. } => {
@@ -490,15 +544,22 @@ impl App {
             let current = self.store.get_turn(turn.id).map_err(turn_store_error)?;
             return self.turn_result(current, None);
         }
-        let observer = AppTurnObserver::new(self.clone(), turn.id);
+        let read_only = self
+            .store
+            .is_memory_summary_turn(turn.id)
+            .map_err(turn_store_error)?;
+        // Internal summary turns are never sources; otherwise the inherited policy sets the cap.
+        let raw_cap = if read_only {
+            None
+        } else {
+            self.raw_frame_cap(turn.conversation_id)
+        };
+        let observer = AppTurnObserver::new(self.clone(), turn.id, raw_cap);
         let turn_request = TurnRequest {
             correlation_id: turn.correlation_id,
             prompt: self.prompt_with_memory(turn),
             permission_mode,
-            read_only: self
-                .store
-                .is_memory_summary_turn(turn.id)
-                .map_err(turn_store_error)?,
+            read_only,
         };
         let mut provider_future = live_turn.session.turn_observed(&turn_request, &observer);
         let provider_result = poll_fn(|context| {
@@ -510,6 +571,8 @@ impl App {
         })
         .await;
         self.live_turns.lock().await.remove(&turn.id);
+        self.archive_raw_frames(turn.id, observer.take_raw_frames())
+            .await;
 
         match provider_result {
             Ok(_) => self.finish_provider_delivery(turn.id, request_id),
@@ -965,12 +1028,15 @@ fn event_turn_id(event: &ProviderEvent) -> Option<String> {
     }
 }
 
-fn bounded_event_payload(event: &ProviderEvent) -> Value {
+/// The bounded canonical payload and, separately, the adapter-redacted `raw` payload it never
+/// carries; the raw payload goes to the raw-frame capture instead of the turn transcript.
+fn bounded_event_payload(event: &ProviderEvent) -> (Value, Option<Value>) {
     const MAX_EVENT_STRING_BYTES: usize = 60 * 1024;
     const MAX_EVENT_PAYLOAD_BYTES: usize = 64 * 1024;
     let mut payload = to_value(event);
+    let mut raw = None;
     if let Some(object) = payload.as_object_mut() {
-        object.remove("raw");
+        raw = object.remove("raw");
         for field in ["text", "output", "message"] {
             if let Some(Value::String(value)) = object.get_mut(field)
                 && value.len() > MAX_EVENT_STRING_BYTES
@@ -981,16 +1047,19 @@ fn bounded_event_payload(event: &ProviderEvent) -> Value {
         }
     }
     if serde_json::to_vec(&payload).is_ok_and(|bytes| bytes.len() <= MAX_EVENT_PAYLOAD_BYTES) {
-        payload
+        (payload, raw)
     } else {
         let (kind, provider, native_session_id, native_turn_id) = event_identity(event, &payload);
-        json!({
-            "type": kind,
-            "provider": provider,
-            "sessionId": native_session_id,
-            "turnId": native_turn_id,
-            "truncated": true
-        })
+        (
+            json!({
+                "type": kind,
+                "provider": provider,
+                "sessionId": native_session_id,
+                "turnId": native_turn_id,
+                "truncated": true
+            }),
+            raw,
+        )
     }
 }
 

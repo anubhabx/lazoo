@@ -1730,6 +1730,299 @@ async fn turn_submit_persists_before_provider_acceptance_and_acknowledges_on_evi
     assert_eq!(invalid_limit.code, "LZ-TURN-INVALID");
 }
 
+/// Warms the lead's session and runs one scripted turn to completion, returning its id after
+/// checking that no canonical event payload carries the provider's raw payload.
+async fn complete_scripted_turn(
+    app: &App,
+    backend: &FakeSessionBackend,
+    employee_id: uuid::Uuid,
+    conversation_id: uuid::Uuid,
+    events: Vec<ProviderEvent>,
+) -> uuid::Uuid {
+    backend.turn_events.lock().unwrap().extend(events);
+    app.handle(request(
+        "warm-raw-frames",
+        "session.warm",
+        json!({
+            "employeeId": employee_id,
+            "expectedEmployeeRevision": 1,
+            "idempotencyKey": "warm-raw-frames"
+        }),
+    ))
+    .await
+    .result
+    .unwrap();
+    let completed = app
+        .handle(request(
+            "submit-raw-frames",
+            "turn.submit",
+            json!({
+                "conversationId": conversation_id,
+                "author": {"kind": "user"},
+                "recipient": null,
+                "text": "Reply with done.",
+                "activateIfNeeded": false,
+                "maxAttempts": 3,
+                "idempotencyKey": "submit-raw-frames"
+            }),
+        ))
+        .await
+        .result
+        .unwrap();
+    assert_eq!(completed["turn"]["state"], "completed");
+    assert!(
+        completed["turn"]["events"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|event| event["payload"].get("raw").is_none())
+    );
+    completed["turn"]["id"].as_str().unwrap().parse().unwrap()
+}
+
+fn raw_frame_lines(store: &Store, root: &DataRoot, turn_id: uuid::Uuid) -> Vec<serde_json::Value> {
+    let bytes = store
+        .read_memory_raw_frames(&root.root().join("memory-archives"), turn_id)
+        .unwrap();
+    std::str::from_utf8(&bytes)
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect()
+}
+
+async fn set_global_memory_retention(app: &App, retention_enabled: bool, max_source_bytes: u64) {
+    app.handle(request(
+        "policy-raw-frames",
+        "memory.policy.set",
+        json!({
+            "global": true,
+            "expectedRevision": 1,
+            "retentionEnabled": retention_enabled,
+            "retentionDays": 30,
+            "quotaBytes": 268_435_456,
+            "maxSourceBytes": max_source_bytes,
+            "allowedTypes": ["fact"],
+            "injectEnabled": true
+        }),
+    ))
+    .await
+    .result
+    .unwrap();
+}
+
+fn raw_turn_started(raw: serde_json::Value) -> ProviderEvent {
+    ProviderEvent::TurnStarted {
+        provider: ProviderKind::Codex,
+        session_id: "native-1".to_owned(),
+        turn_id: Some("native-turn-1".to_owned()),
+        raw: Some(raw),
+    }
+}
+
+fn raw_turn_completed(raw: serde_json::Value) -> ProviderEvent {
+    ProviderEvent::TurnCompleted {
+        provider: ProviderKind::Codex,
+        session_id: "native-1".to_owned(),
+        turn_id: Some("native-turn-1".to_owned()),
+        status: "completed".to_owned(),
+        output: Some("done".to_owned()),
+        raw: Some(raw),
+    }
+}
+
+#[tokio::test]
+async fn completed_turn_archives_redacted_raw_provider_frames() {
+    let (_temporary, root, store, app, backend, employee_id, conversation_id) = turn_test_app();
+    let text_delta = ProviderEvent::TextDelta {
+        provider: ProviderKind::Codex,
+        session_id: "native-1".to_owned(),
+        turn_id: Some("native-turn-1".to_owned()),
+        text: "hello".to_owned(),
+        raw: Some(json!({"delta": "hello"})),
+    };
+    let turn_id = complete_scripted_turn(
+        &app,
+        &backend,
+        employee_id,
+        conversation_id,
+        vec![
+            raw_turn_started(json!({"private": "keep", "token": "secret"})),
+            text_delta.clone(),
+            text_delta,
+            raw_turn_completed(json!({"done": true})),
+        ],
+    )
+    .await;
+
+    let lines = raw_frame_lines(&store, &root, turn_id);
+    assert_eq!(lines[0]["type"], "lazoo-raw-frames");
+    assert_eq!(lines[0]["sourceTurnId"], turn_id.to_string());
+    // One native message cloned into two events is kept once, and nothing was dropped.
+    assert_eq!(lines.len(), 4);
+    assert_eq!(lines[1]["type"], "turnStarted");
+    assert_eq!(lines[1]["raw"]["private"], "keep");
+    assert_eq!(lines[1]["raw"]["token"], "[redacted]");
+    assert_eq!(lines[2]["type"], "textDelta");
+    assert_eq!(lines[2]["raw"]["delta"], "hello");
+    assert_eq!(lines[3]["type"], "turnCompleted");
+    assert_eq!(lines[3]["sequence"], 3);
+    assert!(!serde_json::to_string(&lines).unwrap().contains("secret"));
+    let archive_files = std::fs::read_dir(root.root().join("memory-archives"))
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+        .collect::<Vec<_>>();
+    assert_eq!(archive_files.len(), 1);
+    assert!(archive_files[0].contains("-raw-"));
+    // The raw kind is recorded as its own kind and leaves the turn a canonical candidate.
+    assert!(
+        store
+            .list_memory_archive_candidates(10)
+            .unwrap()
+            .iter()
+            .any(|candidate| candidate.source_turn_id == turn_id)
+    );
+    let archived = store
+        .list_events(0, 100)
+        .unwrap()
+        .into_iter()
+        .filter(|event| event.event_type == "memory.archived")
+        .collect::<Vec<_>>();
+    assert_eq!(archived.len(), 1);
+    assert_eq!(archived[0].payload["kind"], "raw-frames");
+    assert_eq!(archived[0].payload["archive"]["truncated"], false);
+}
+
+#[tokio::test]
+async fn raw_frame_capture_is_skipped_when_retention_is_disabled() {
+    let (_temporary, root, store, app, backend, employee_id, conversation_id) = turn_test_app();
+    set_global_memory_retention(&app, false, 4_194_304).await;
+    let turn_id = complete_scripted_turn(
+        &app,
+        &backend,
+        employee_id,
+        conversation_id,
+        vec![
+            raw_turn_started(json!({"private": "keep"})),
+            raw_turn_completed(json!({"done": true})),
+        ],
+    )
+    .await;
+
+    // Recovery at start creates the archive root; retention off leaves nothing inside it.
+    let archive_root = root.root().join("memory-archives");
+    assert!(!archive_root.exists() || std::fs::read_dir(&archive_root).unwrap().next().is_none());
+    assert!(matches!(
+        store.read_memory_raw_frames(&archive_root, turn_id),
+        Err(lazoo_store::StoreError::InvalidRecord {
+            field: "memory source",
+            ..
+        })
+    ));
+    assert!(
+        store
+            .list_events(0, 100)
+            .unwrap()
+            .iter()
+            .all(|event| event.event_type != "memory.archived")
+    );
+}
+
+#[tokio::test]
+async fn raw_frame_capture_is_bounded_by_the_policy_cap() {
+    let (_temporary, root, store, app, backend, employee_id, conversation_id) = turn_test_app();
+    set_global_memory_retention(&app, true, 4096).await;
+    let turn_id = complete_scripted_turn(
+        &app,
+        &backend,
+        employee_id,
+        conversation_id,
+        vec![
+            raw_turn_started(json!({"private": "keep"})),
+            ProviderEvent::TextDelta {
+                provider: ProviderKind::Codex,
+                session_id: "native-1".to_owned(),
+                turn_id: Some("native-turn-1".to_owned()),
+                text: "x".repeat(16 * 1024),
+                raw: Some(json!({"text": "y".repeat(16 * 1024)})),
+            },
+            raw_turn_completed(json!({"done": true})),
+        ],
+    )
+    .await;
+
+    let lines = raw_frame_lines(&store, &root, turn_id);
+    assert_eq!(lines.len(), 4);
+    assert_eq!(lines[1]["type"], "turnStarted");
+    assert_eq!(lines[1]["sequence"], 1);
+    // The oversized frame was dropped at the cap; the sequence gap shows where.
+    assert_eq!(lines[2]["type"], "turnCompleted");
+    assert_eq!(lines[2]["sequence"], 3);
+    assert_eq!(lines[3]["type"], "lazoo-raw-frames-truncated");
+    assert_eq!(lines[3]["droppedFrames"], 1);
+    assert_eq!(lines[3]["limitBytes"], 4096);
+    let bytes = store
+        .read_memory_raw_frames(&root.root().join("memory-archives"), turn_id)
+        .unwrap();
+    assert!(bytes.len() <= 4096);
+    let archived = store
+        .list_events(0, 100)
+        .unwrap()
+        .into_iter()
+        .find(|event| event.event_type == "memory.archived")
+        .unwrap();
+    assert_eq!(archived.payload["kind"], "raw-frames");
+    assert_eq!(archived.payload["archive"]["truncated"], true);
+    assert_eq!(
+        archived.payload["archive"]["uncompressedBytes"],
+        bytes.len()
+    );
+}
+
+#[test]
+fn raw_frame_archive_acceptance_contract_is_deterministic_and_backend_only() {
+    let repository = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let script_path = repository.join("scripts/acceptance/raw-frame-archive.ps1");
+    let script =
+        std::fs::read_to_string(&script_path).expect("raw frame archive acceptance script");
+
+    for required in [
+        "raw_frame_archive_is_hashed_capped_and_counted_against_quota",
+        "raw_frame_archive_respects_retention_opt_out",
+        "raw_frames_and_canonical_archive_coexist_and_cleanup_removes_both",
+        "version_eighteen_archives_upgrade_as_canonical_turn_archives",
+        "completed_turn_archives_redacted_raw_provider_frames",
+        "raw_frame_capture_is_skipped_when_retention_is_disabled",
+        "raw_frame_capture_is_bounded_by_the_policy_cap",
+        "store_enables_wal_foreign_keys_and_schema_version",
+        "rawFramesArchived",
+        "redacted",
+        "cappedWithTrailer",
+        "quotaShared",
+        "cleanupCoversBothKinds",
+        "optOutWritesNothing",
+        "schemaNineteen",
+        "providerSmokeAbsent",
+        "externalModelUseAbsent",
+        "uiChangesAbsent",
+        "deterministic-fake-transport",
+        "schemaVersion = 19",
+        "wireFramesWithoutEvents = 'NOT_COVERED'",
+        "nonCompletedTurns = 'NOT_COVERED'",
+    ] {
+        assert!(
+            script.contains(required),
+            "acceptance script must contain {required}"
+        );
+    }
+    for forbidden in ["provider', 'smoke", "LivePrompt"] {
+        assert!(
+            !script.contains(forbidden),
+            "acceptance script must not contain {forbidden}"
+        );
+    }
+}
+
 #[tokio::test]
 async fn task_authority_narrows_the_permission_mode_for_the_provider_turn() {
     let temporary = tempdir().unwrap();
@@ -3639,7 +3932,7 @@ async fn status_reports_protocol_store_and_boot_identity() {
     let result = response.result.unwrap();
 
     assert_eq!(result["protocolVersion"], 1);
-    assert_eq!(result["schemaVersion"], 18);
+    assert_eq!(result["schemaVersion"], 19);
     assert_eq!(result["journalMode"], "wal");
     assert!(
         result["bootId"]
@@ -4383,7 +4676,7 @@ fn employee_roster_acceptance_contract_is_backend_only() {
         "roster', 'refresh",
         "LZ-EMPLOYEE-STALE",
         "restartDurability",
-        "schemaVersion 18",
+        "schemaVersion 19",
         "providerSmokeAbsent",
     ] {
         assert!(
@@ -4421,7 +4714,7 @@ fn native_session_acceptance_contract_covers_containment_and_owner_loss() {
         "completeTreeTerminated",
         "nativeHostPid",
         "providerSmokeAbsent",
-        "schemaVersion 18",
+        "schemaVersion 19",
     ] {
         assert!(
             script.contains(required),
@@ -4451,7 +4744,7 @@ fn collaboration_bus_acceptance_contract_is_backend_only() {
         "deadLetterEvidence",
         "restartDurability",
         "auditOutboxEvidence",
-        "schemaVersion 18",
+        "schemaVersion 19",
         "providerSmokeAbsent",
         "desktopCapabilityExpansionAbsent",
     ] {
@@ -4587,7 +4880,7 @@ fn task_graph_acceptance_executes_backend_only_contract() {
     )
     .unwrap();
     assert_eq!(manifest["status"], "PASS");
-    assert_eq!(manifest["schemaVersion"], 18);
+    assert_eq!(manifest["schemaVersion"], 19);
     assert_eq!(manifest["mode"], "deterministic-fixture");
     for field in [
         "rootIdentity",
@@ -5768,7 +6061,7 @@ fn collaboration_tools_acceptance_contract_is_deterministic_and_backend_only() {
         "worker_turn_reports_failure_through_task_report_before_native_completion",
         "collaboration-tools-manifest.json",
         "deterministic-fake-transport",
-        "schemaVersion = 18",
+        "schemaVersion = 19",
     ] {
         assert!(
             script.contains(required),
@@ -6305,7 +6598,7 @@ async fn restart_owner_loss_and_emergency_spool_fold_into_startup_incidents_once
         .await
         .result
         .unwrap();
-    assert_eq!(status["schemaVersion"], 18);
+    assert_eq!(status["schemaVersion"], 19);
     assert_eq!(status["emergencyIncidentCount"], 1);
 }
 
@@ -6408,7 +6701,7 @@ fn minimum_incidents_acceptance_contract_is_deterministic_and_backend_only() {
         "incident_errors_use_exit_code_fifteen",
         "minimum-incidents-manifest.json",
         "deterministic-fake-transport",
-        "schemaVersion = 18",
+        "schemaVersion = 19",
     ] {
         assert!(
             script.contains(required),
@@ -6878,7 +7171,7 @@ fn result_delivery_acceptance_contract_is_deterministic_and_backend_only() {
         "externalModelUseAbsent",
         "uiChangesAbsent",
         "deterministic-fake-transport",
-        "schemaVersion = 18",
+        "schemaVersion = 19",
     ] {
         assert!(
             script.contains(required),
@@ -7385,7 +7678,7 @@ fn peer_messaging_acceptance_contract_is_deterministic_and_backend_only() {
         "externalModelUseAbsent",
         "uiChangesAbsent",
         "deterministic-fake-transport",
-        "schemaVersion = 18",
+        "schemaVersion = 19",
     ] {
         assert!(
             script.contains(required),
@@ -7508,7 +7801,7 @@ fn coalesced_notices_acceptance_contract_is_deterministic_and_backend_only() {
         "externalModelUseAbsent",
         "uiChangesAbsent",
         "deterministic-fake-transport",
-        "schemaVersion = 18",
+        "schemaVersion = 19",
     ] {
         assert!(
             script.contains(required),
@@ -7747,7 +8040,7 @@ fn activation_policy_acceptance_contract_is_deterministic_and_backend_only() {
         "externalModelUseAbsent",
         "uiChangesAbsent",
         "deterministic-fake-transport",
-        "schemaVersion = 18",
+        "schemaVersion = 19",
     ] {
         assert!(
             script.contains(required),
@@ -8114,7 +8407,7 @@ fn idle_suspension_acceptance_contract_is_deterministic_and_backend_only() {
         "externalModelUseAbsent",
         "uiChangesAbsent",
         "deterministic-fake-transport",
-        "schemaVersion = 18",
+        "schemaVersion = 19",
     ] {
         assert!(
             script.contains(required),
@@ -8401,7 +8694,7 @@ fn lead_remediation_acceptance_contract_is_deterministic_and_backend_only() {
         "externalModelUseAbsent",
         "uiChangesAbsent",
         "deterministic-fake-transport",
-        "schemaVersion = 18",
+        "schemaVersion = 19",
     ] {
         assert!(
             script.contains(required),
@@ -8443,7 +8736,7 @@ fn incident_thresholds_acceptance_contract_is_deterministic_and_backend_only() {
         "externalModelUseAbsent",
         "uiChangesAbsent",
         "deterministic-fake-transport",
-        "schemaVersion = 18",
+        "schemaVersion = 19",
     ] {
         assert!(
             script.contains(required),
@@ -8652,7 +8945,7 @@ fn user_notifications_acceptance_contract_is_deterministic_and_backend_only() {
         "externalModelUseAbsent",
         "uiChangesAbsent",
         "deterministic-fake-transport",
-        "schemaVersion = 18",
+        "schemaVersion = 19",
     ] {
         assert!(
             script.contains(required),
@@ -8746,7 +9039,7 @@ fn message_arrival_acceptance_contract_is_deterministic_and_backend_only() {
         "externalModelUseAbsent",
         "uiChangesAbsent",
         "deterministic-fake-transport",
-        "schemaVersion = 18",
+        "schemaVersion = 19",
     ] {
         assert!(
             script.contains(required),
@@ -8968,7 +9261,7 @@ fn message_priority_acceptance_contract_is_deterministic_and_backend_only() {
         "externalModelUseAbsent",
         "uiChangesAbsent",
         "deterministic-fake-transport",
-        "schemaVersion = 18",
+        "schemaVersion = 19",
     ] {
         assert!(
             script.contains(required),
@@ -9157,7 +9450,7 @@ fn configurable_thresholds_acceptance_contract_is_deterministic_and_backend_only
         "externalModelUseAbsent",
         "uiChangesAbsent",
         "deterministic-fake-transport",
-        "schemaVersion = 18",
+        "schemaVersion = 19",
     ] {
         assert!(
             script.contains(required),
@@ -9686,7 +9979,7 @@ fn desktop_inbox_acceptance_contract_is_deterministic_and_backend_only() {
         "externalModelUseAbsent",
         "uiChangesAbsent",
         "deterministic-fake-transport",
-        "schemaVersion = 18",
+        "schemaVersion = 19",
     ] {
         assert!(
             script.contains(required),
@@ -9868,7 +10161,7 @@ fn resource_accounting_acceptance_contract_is_deterministic_and_backend_only() {
         "externalModelUseAbsent",
         "uiChangesAbsent",
         "deterministic-fake-transport",
-        "schemaVersion = 18",
+        "schemaVersion = 19",
     ] {
         assert!(
             script.contains(required),
@@ -9905,7 +10198,7 @@ fn resource_budget_acceptance_contract_measures_lazoo_itself_without_a_provider(
         "$idleCpuCeiling = 0.01",
         "$routingCpuCeiling = 0.05",
         "$idleMemoryCeilingBytes = 350MB",
-        "schemaVersion = 18",
+        "schemaVersion = 19",
         "real-binaries-no-provider",
     ] {
         assert!(
@@ -10077,7 +10370,7 @@ fn conversation_rename_acceptance_contract_is_deterministic_and_backend_only() {
         "externalModelUseAbsent",
         "uiChangesAbsent",
         "deterministic-fake-transport",
-        "schemaVersion = 18",
+        "schemaVersion = 19",
     ] {
         assert!(
             script.contains(required),
@@ -10190,7 +10483,7 @@ fn provider_config_acceptance_contract_is_read_only_and_backend_only() {
         "externalModelUseAbsent",
         "uiChangesAbsent",
         "deterministic-fake-transport",
-        "schemaVersion = 18",
+        "schemaVersion = 19",
     ] {
         assert!(
             script.contains(required),
@@ -11022,7 +11315,7 @@ fn core_scenario_acceptance_contract_maps_every_step_to_evidence() {
         "externalModelUseAbsent",
         "uiChangesAbsent",
         "deterministic-fake-transport",
-        "schemaVersion = 18",
+        "schemaVersion = 19",
     ] {
         assert!(
             script.contains(required),
@@ -11374,7 +11667,7 @@ fn workspace_read_models_acceptance_contract_is_deterministic_and_backend_only()
         "externalModelUseAbsent",
         "uiChangesAbsent",
         "deterministic-fake-transport",
-        "schemaVersion = 18",
+        "schemaVersion = 19",
     ] {
         assert!(
             script.contains(required),
@@ -11686,7 +11979,7 @@ fn workspace_conversation_acceptance_contract_is_deterministic_and_backend_only(
         "externalModelUseAbsent",
         "uiChangesAbsent",
         "deterministic-fake-transport",
-        "schemaVersion = 18",
+        "schemaVersion = 19",
     ] {
         assert!(
             script.contains(required),
@@ -11850,7 +12143,7 @@ fn workspace_actions_acceptance_contract_is_deterministic_and_backend_only() {
         "externalModelUseAbsent",
         "uiChangesAbsent",
         "deterministic-fake-transport",
-        "schemaVersion = 18",
+        "schemaVersion = 19",
     ] {
         assert!(
             script.contains(required),
@@ -11988,7 +12281,7 @@ fn provider_migration_preview_acceptance_contract_is_deterministic_and_backend_o
         "externalModelUseAbsent",
         "uiChangesAbsent",
         "deterministic-fake-transport",
-        "schemaVersion = 18",
+        "schemaVersion = 19",
     ] {
         assert!(
             script.contains(required),
@@ -12509,7 +12802,7 @@ fn claude_full_autonomy_acceptance_contract_is_deterministic_and_backend_only() 
         "externalModelUseAbsent",
         "uiChangesAbsent",
         "deterministic-fake-transport",
-        "schemaVersion = 18",
+        "schemaVersion = 19",
     ] {
         assert!(
             script.contains(required),
