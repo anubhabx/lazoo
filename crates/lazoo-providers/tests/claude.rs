@@ -568,13 +568,14 @@ async fn claude_cancel_during_active_turn_kills_host_and_reports_cancelled() {
         .await
         .unwrap();
     let turn = TurnRequest::new("fixture");
+    let observer = PermissionObserver::new(true);
     let cancel = async {
         wait_for_file(cwd.path().join("turn-started")).await;
         session.cancel().await.unwrap();
     };
 
     let (events, ()) = tokio::time::timeout(std::time::Duration::from_secs(10), async {
-        tokio::join!(session.turn(&turn), cancel)
+        tokio::join!(session.turn_observed(&turn, &observer), cancel)
     })
     .await
     .expect("a cancelled turn ends long before the fake's 30 s stall");
@@ -593,6 +594,17 @@ async fn claude_cancel_during_active_turn_kills_host_and_reports_cancelled() {
             ProviderEvent::TurnCompleted { .. } | ProviderEvent::Error { .. }
         )
     }));
+    // The daemon records the cancellation from its observer, so the adapter must observe the
+    // `Cancelled` event and not only return it (a live cancel ended `uncertain` before this).
+    assert!(
+        observer
+            .events
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|event| matches!(event, ProviderEvent::Cancelled { .. })),
+        "the observer must see the cancellation"
+    );
     session.stop().await.unwrap();
     assert_host_gone(read_host_pid(cwd.path())).await;
 }

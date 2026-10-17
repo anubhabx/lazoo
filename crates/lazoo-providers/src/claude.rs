@@ -410,12 +410,19 @@ impl ClaudeSession {
                 Err(ProviderError::ProcessExited { .. })
                     if self.cancel_requested.load(Ordering::Acquire) =>
                 {
-                    events.push(ProviderEvent::Cancelled {
+                    let cancelled = ProviderEvent::Cancelled {
                         provider: ProviderKind::ClaudeCode,
                         session_id: self.session_id.clone(),
                         turn_id: Some(request.correlation_id.to_string()),
                         raw: None,
-                    });
+                    };
+                    // The daemon records a cancellation from its observer, not from the returned
+                    // events: a `Cancelled` that only came back in the return value left the turn
+                    // `accepted`, and it ended `uncertain` (found by the live gate on 2026-10-17).
+                    if let Some(observer) = observer {
+                        observer.observe(&cancelled)?;
+                    }
+                    events.push(cancelled);
                     return Ok(events);
                 }
                 Err(ProviderError::Timeout { .. }) if progress_remaining <= total_remaining => {
@@ -439,9 +446,15 @@ impl ClaudeSession {
                     || message.get("subtype").and_then(Value::as_str) != Some("init")
                     || session_id(&message).as_deref() != Some(self.session_id.as_str())
                 {
-                    return Err(ProviderError::InvalidEvent(
-                        "Claude Code emitted a frame before correlated startup init".to_owned(),
-                    ));
+                    return Err(ProviderError::InvalidEvent(format!(
+                        "Claude Code emitted a {}/{} frame for session {:?} before correlated startup init",
+                        message.get("type").and_then(Value::as_str).unwrap_or("?"),
+                        message
+                            .get("subtype")
+                            .and_then(Value::as_str)
+                            .unwrap_or("?"),
+                        session_id(&message).unwrap_or_default(),
+                    )));
                 }
                 let init = normalize_claude_message(&message)?;
                 if let Some(observer) = observer {
