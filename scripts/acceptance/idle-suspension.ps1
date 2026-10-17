@@ -37,6 +37,9 @@ $evidence = [ordered]@{
     unfinishedTurnKeepsSession = $false
     zeroTimeoutNeverSuspends = $false
     nextUserTurnStartsFreshSession = $false
+    codexStartsFreshWithReason = $false
+    claudeCodeResumedOnWake = $false
+    unresumableSuspensionSkippedWithReason = $false
     recordedTurnNotStranded = $false
     suspendedNoticeTurnsLeadWokenOnce = $false
     schemaEleven = $false
@@ -82,9 +85,16 @@ try {
     Invoke-Test 'lazooctl' 'cli' 'employee_cli_maps_mutations_and_roster_refresh'
     $evidence.cliMapsIdleTimeout = $true
 
-    Invoke-Test 'lazood' 'daemon' 'an_idle_session_suspends_after_its_employee_timeout_and_the_next_user_turn_starts_fresh'
+    Invoke-Test 'lazood' 'daemon' 'an_idle_codex_session_suspends_after_its_employee_timeout_and_the_next_user_turn_starts_fresh_with_a_recorded_reason'
     $evidence.quietSessionSuspended = $true
     $evidence.nextUserTurnStartsFreshSession = $true
+    $evidence.codexStartsFreshWithReason = $true
+
+    Invoke-Test 'lazood' 'daemon' 'an_idle_claude_code_session_suspends_and_the_next_user_turn_resumes_its_native_session'
+    $evidence.claudeCodeResumedOnWake = $true
+
+    Invoke-Test 'lazood' 'daemon' 'a_suspended_claude_code_session_that_never_completed_a_turn_is_not_resumed'
+    $evidence.unresumableSuspensionSkippedWithReason = $true
 
     Invoke-Test 'lazood' 'daemon' 'idle_suspension_waits_for_an_unfinished_turn_and_never_touches_a_zero_timeout'
     $evidence.unfinishedTurnKeepsSession = $true
@@ -135,7 +145,10 @@ try {
             suspendedSessions = 'IDLE_OWNED_BY_THIS_BOOT_WITH_NO_UNFINISHED_TURN'
             stopsPerSession = 'ONE'
             failedStopRetry = 'NEVER'
-            nativeThreadAfterSuspension = 'ENDED'
+            nativeThreadAfterSuspension = 'RESUMED_WHERE_THE_PROVIDER_CAN_CARRY_IT'
+            resumeProviders = 'CLAUDE_CODE_FULL_AUTONOMY_ONLY'
+            resumeLiveProof = 'NOT_RUN'
+            resumeSkippedReasons = 'task-session,memory-reserved,unsupported-provider,codex-dynamic-tools,no-completed-turn,owner-terminal-attached,working-directory-missing'
             toolCatalog = 'UNCHANGED'
         }
     }

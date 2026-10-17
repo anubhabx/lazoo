@@ -536,6 +536,21 @@ impl App {
         })
     }
 
+    /// Whether an owner terminal is, or is still opening, attached to `session_id`. A resume must
+    /// not start a second native process on a conversation the owner is driving.
+    pub(super) async fn session_has_live_attachment(&self, session_id: Uuid) -> bool {
+        let mut state = self.terminals.lock().await;
+        // An exit-status failure leaves the entry in place, which reads as still attached.
+        let _ = release_exited(&mut state, self.boot_id);
+        state
+            .attachments
+            .get(&session_id)
+            .copied()
+            .is_some_and(|bound| {
+                bound.is_none_or(|terminal_id| state.sessions.contains_key(&terminal_id))
+            })
+    }
+
     /// Takes the session's single attach slot, or returns the terminal an identical earlier
     /// request already opened. A slot whose terminal exited or was stopped is free again.
     async fn reserve_attachment(

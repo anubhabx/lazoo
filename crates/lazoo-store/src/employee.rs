@@ -719,6 +719,7 @@ fn query_roster_snapshot(connection: &Connection) -> Result<RosterSnapshot, Stor
                 connection,
                 employee.id,
                 employee.configuration_revision,
+                None,
             )?;
             let (availability, availability_reason) =
                 apply_session_availability(availability, availability_reason, session.as_ref());

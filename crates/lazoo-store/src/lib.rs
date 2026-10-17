@@ -66,7 +66,7 @@ pub use message::{
 };
 pub use session::{
     BeginIdleSessionStopInput, BeginSessionInput, BeginSessionStopInput, FailSessionInput,
-    FinishSessionStopInput, MarkSessionReadyInput,
+    FinishSessionStopInput, MarkSessionReadyInput, SessionResumeOutcome,
 };
 pub use task::{
     AcceptTaskInput, CancelTaskInput, ClaimTaskDispatchInput, DeferTaskDispatchInput,
