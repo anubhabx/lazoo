@@ -829,10 +829,19 @@ fn response_result(message: &Value, method: &str) -> Result<Value, ProviderError
     )))
 }
 
+/// Maps an ACP v1 `stopReason` onto the contract's completion vocabulary. The daemon records a
+/// turn as completed only for `completed` (and as cancelled or failed for those), so a raw `ACP`
+/// `end_turn` left an `OpenCode` turn `uncertain` until this mapping existed (found by the live
+/// `OpenCode` lifecycle on 2026-10-17). An unknown reason passes through unchanged, which the daemon
+/// treats as no completion evidence; the raw stop reason stays in the event's `raw` payload.
 fn stop_reason_string(value: &Value) -> String {
-    value
-        .as_str()
-        .map_or_else(|| value.to_string(), str::to_owned)
+    match value.as_str() {
+        Some("end_turn") => "completed".to_owned(),
+        Some("cancelled") => "cancelled".to_owned(),
+        Some("max_tokens" | "max_turn_requests" | "refusal") => "failed".to_owned(),
+        Some(other) => other.to_owned(),
+        None => value.to_string(),
+    }
 }
 
 /// Converts the small, understood ACP v1 permission subset into the durable approval shape.
@@ -974,6 +983,29 @@ fn serialize_params<T: Serialize>(value: &T) -> Result<Value, ProviderError> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn acp_stop_reasons_normalize_to_contract_statuses() {
+        assert_eq!(
+            super::stop_reason_string(&serde_json::json!("end_turn")),
+            "completed"
+        );
+        assert_eq!(
+            super::stop_reason_string(&serde_json::json!("cancelled")),
+            "cancelled"
+        );
+        for reason in ["max_tokens", "max_turn_requests", "refusal"] {
+            assert_eq!(
+                super::stop_reason_string(&serde_json::json!(reason)),
+                "failed"
+            );
+        }
+        assert_eq!(
+            super::stop_reason_string(&serde_json::json!("something_new")),
+            "something_new"
+        );
+        assert_eq!(super::stop_reason_string(&serde_json::json!(7)), "7");
+    }
+
     use super::*;
 
     fn permission(kind: &str, options: &Value) -> Value {
