@@ -28,9 +28,12 @@ because the host has little free memory.
   event refresh, error/retry, capability and terminal integration instructions.
 - [x] Repair event subscriptions so reconnects replay more than 1,024 durable
   events in bounded pages and live notification lag cannot skip durable events.
-- [ ] Independently review specification compliance and implementation quality,
+- [x] Independently review specification compliance and implementation quality,
   fix findings, then run the settled-tree deterministic gate and a bounded CLI
   stress check. Record exact results and remaining product limitations.
+
+Completed on 2026-10-29: [final verification](../../verification/2026-10-29-ui-backend-readiness.md)
+records 44 gate steps, 13 release native checks and 2,048 clean CLI stress calls.
 
 The initial audit identified real mismatches: launcher availability ignores
 provider authority restrictions; only Codex receives collaboration tools;
@@ -41,10 +44,12 @@ exist even though it does. The work above addresses these integration gaps.
 ## Native terminal decision
 
 The owner confirmed on 2026-10-28: **the actual native TUI must stay visible during
-orchestrated work**. Suspend-then-attach does not satisfy this requirement. The
-current implementation supports only the latter; concurrent native integration
-is now required work before this readiness goal can be called complete. Preserve
-Lazoo's sole ownership of canonical turns, authority and collaboration responses.
+orchestrated work**. The production implementation now provides a genuine Codex
+TUI view of the same controller-owned thread, including streaming and history
+reconnect while Lazoo retains canonical turns, authority and collaboration
+responses. The separate suspended attach operation remains available. Concurrent
+native integration for other providers remains outside this verified UI starting
+point. See the [live-view plan](2026-10-28-live-native-tui.md).
 
 ## Verification boundaries
 

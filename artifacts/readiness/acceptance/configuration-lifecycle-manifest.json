@@ -1,0 +1,74 @@
+{
+  "status": "PASS",
+  "startedAt": "2026-10-28T21:00:27.2018653Z",
+  "completedAt": "2026-10-28T21:00:34.4815686Z",
+  "durationMs": 7245,
+  "binarySha256": {
+    "daemon": "91cf1f470f9ddbfe323b1fbf147c46227ceeadb225199acc05c2969f0c87d88b",
+    "cli": "9f98b0a4f74f9300fc74e65c419c424382ba3705030afc17f89f6eb9678c5ba8"
+  },
+  "codex": {
+    "version": "codex-cli 0.165.0-alpha.1.2",
+    "executable": "C:\\Users\\anubhab\\AppData\\Local\\OpenAI\\Codex\\bin\\0ab0e7a8f3779036\\codex.exe",
+    "sha256": "0c09e45bc76433756eb2d492f6db0ce6f269967e6618f4a6ae73e2fa239694b8",
+    "probe": "version and daemon app-server handshake; no model"
+  },
+  "lifecycle": {
+    "preview": true,
+    "apply": true,
+    "lostReplyReplay": true,
+    "show": true,
+    "rollback": true
+  },
+  "boundaries": {
+    "codexHome": "disposable",
+    "dataRoot": "disposable",
+    "realProviderProfile": "NOT_READ_OR_WRITTEN",
+    "externalMcpConnection": "NOT_STARTED",
+    "modelRequest": "NOT_RUN",
+    "nativeAuth": "NOT_REQUIRED"
+  },
+  "commands": [
+    {
+      "command": "lazooctl --json status",
+      "exitCode": 0,
+      "durationMs": 211
+    },
+    {
+      "command": "lazooctl --json provider probe codex",
+      "exitCode": 0,
+      "durationMs": 2388
+    },
+    {
+      "command": "lazooctl --json provider config-preview --selection {\"provider\":\"codex\",\"name\":\"acceptance-fixture\",\"command\":\"fixture-mcp\",\"args\":[\"--no-connect\"],\"url\":null,\"enabled\":false,\"replace\":false,\"selectedSecretFields\":[]}",
+      "exitCode": 0,
+      "durationMs": 2201
+    },
+    {
+      "command": "lazooctl --json provider config-apply 597d9d4a-7725-431b-9fbe-5887883527bf --expected-revision 1",
+      "exitCode": 0,
+      "durationMs": 2217
+    },
+    {
+      "command": "lazooctl --json provider config-apply 597d9d4a-7725-431b-9fbe-5887883527bf --expected-revision 1",
+      "exitCode": 0,
+      "durationMs": 19
+    },
+    {
+      "command": "lazooctl --json provider config-show 597d9d4a-7725-431b-9fbe-5887883527bf",
+      "exitCode": 0,
+      "durationMs": 20
+    },
+    {
+      "command": "lazooctl --json provider config-rollback 597d9d4a-7725-431b-9fbe-5887883527bf --expected-revision 4",
+      "exitCode": 0,
+      "durationMs": 33
+    },
+    {
+      "command": "lazooctl --json system shutdown",
+      "exitCode": 0,
+      "durationMs": 19
+    }
+  ],
+  "failure": null
+}

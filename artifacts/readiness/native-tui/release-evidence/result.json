@@ -1,0 +1,35 @@
+{
+  "status": "PASS",
+  "run": "C:\\Users\\anubhab\\.codex\\worktrees\\backend-ui-readiness\\Orchestrator\\artifacts\\readiness\\native-tui\\production-45aa32d75f834f7089db527ab81d4fb9",
+  "profile": "release",
+  "startedAt": "2026-10-28T21:06:30.982346+00:00",
+  "completedAt": "2026-10-28T21:06:43.929738+00:00",
+  "sourceRevision": "feab4d556b3424d3b9b0b7ec9e155f62434b8a95",
+  "driverSha256": "b06cfab1e46b7e963a7a848f3777661f89cf2dc63932bfaef6fc716360e83c36",
+  "binarySha256": {
+    "lazood": "91cf1f470f9ddbfe323b1fbf147c46227ceeadb225199acc05c2969f0c87d88b",
+    "lazooctl": "9f98b0a4f74f9300fc74e65c419c424382ba3705030afc17f89f6eb9678c5ba8",
+    "lazoo-session-host": "9b32fef30fbf743c0e89b9f159ea72ee7e33284d6471e1861c75a5ceff6e49eb",
+    "nativeCodex": "0c09e45bc76433756eb2d492f6db0ce6f269967e6618f4a6ae73e2fa239694b8"
+  },
+  "nativeExecutable": "C:\\Users\\anubhab\\AppData\\Local\\OpenAI\\Codex\\bin\\0ab0e7a8f3779036\\codex.exe",
+  "nativeVersion": "0.165.0-alpha.1.2",
+  "errors": [],
+  "evidence": {
+    "idempotentView": true,
+    "genuineReadOnlyNativeTui": true,
+    "controllerStreamInNativeTui": true,
+    "collaborationToolAnsweredByLazoo": true,
+    "viewClosePreservesSession": true,
+    "nativeHistoryOnReconnect": true,
+    "closingViewPreservesPendingTurnAndApproval": true,
+    "approvalDecidedByLazoo": true,
+    "nativeStreamAfterApproval": true,
+    "nativeCommandWasDeclined": true,
+    "statusRecoversView": true,
+    "sessionStopClosesNativeTui": true,
+    "fourLocalModelRequests": true
+  },
+  "externalModelCalls": 0,
+  "localFixtureRequests": 4
+}

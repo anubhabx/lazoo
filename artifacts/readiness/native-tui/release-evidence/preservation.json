@@ -1,0 +1,33 @@
+{
+  "originalRun": "C:\\Users\\anubhab\\.codex\\worktrees\\backend-ui-readiness\\Orchestrator\\artifacts\\readiness\\native-tui\\production-45aa32d75f834f7089db527ab81d4fb9",
+  "files": [
+    {
+      "file": "result.json",
+      "sha256": "830c000abca303ca211dc9bdf16ab4a1eb43306982ca59e52cbf302889e97c80"
+    },
+    {
+      "file": "screen-final.txt",
+      "sha256": "051e2853ce9822934eb6784e9a9fbd64bf6ad332cb5b6bf932dabfeaa55f8e8c"
+    },
+    {
+      "file": "screen-final.bin",
+      "sha256": "a33a391190bdbbcc11281103c419bbf396fc3e97ea6cd1db20ee7b6ad66761ea"
+    },
+    {
+      "file": "screen-first.bin",
+      "sha256": "88965ed1f9c8f6a86fdc566c0a796c6bd2df4fb2ccccca992589d080c3ea76a2"
+    },
+    {
+      "file": "session.json",
+      "sha256": "44d52b97ac166aedee9d62c9390bb8248e89dd2714a30d26559b85aa37afeff7"
+    },
+    {
+      "file": "turn-first.json",
+      "sha256": "fcb81af79a6f49535e9e4ddfe89df30ad72a671961e242591653222a39924647"
+    },
+    {
+      "file": "turn-second.json",
+      "sha256": "33b9cbf38ac35e0eed49eb8bb1d834a537cdfe267def9df6c7436ace420115db"
+    }
+  ]
+}

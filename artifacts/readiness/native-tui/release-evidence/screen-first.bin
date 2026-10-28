@@ -1,0 +1,1461 @@
+[?9001h[?1004h[?2004h[?25l[2J[m[H]0;C:\Users\anubhab\AppData\Local\OpenAI\Codex\bin\0ab0e7a8f3779036\codex.exe[?25h[?2026h[?2026h[0 q[?2026l[?2026l[?2026h[?2026l[?2026h[?2026l[?2026h[?2026l[?25l[K
+  >_ [1mOpenAI Codex[22m[2m (v0.165.0-alpha.1.2)[22m[K
+     [2mloading[22m[K[2m
+  Resuming session…[22m[K
+[K[1m
+›[22m [2mAsk Codex to do anything[22m[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K[6;3H[?25h[?2026h[?2026l[?2026h[?2026l[?2026h[?2026l[?2026h[?2026l[?2026h[?2026l[?25l[2m[3;6H~\.codex\worktrees\backend-ui-readiness\Orchestrator\…\data\sessions\2491bcfa-9c7d-42d1-ac89-6a4b088b67a6[6;3H[?25h[?2026h[22m[?2026l[?2026h[?2026l[?2026h[?2026l[?2026h[?2026l[?2026h[?2026l[?2026h[?2026l[?2026h[?2026l[?2026h[?2026l[?2026h[?2026l[?2026h[?2026l[?2026h[?2026l[?2026h[?2026l[?2026h[?2026l[?2026h[?2026l[?2026h[?2026l]7501;state=idle:app=codex\[?2026h[0 q[?2026l[?25l[H[K
+[K[1m
+›[22m [2mViewing sub-agent — direct input is disabled[22m                                                                
+[K
+  probe-model default · ~\.codex\worktrees\backend-ui-readiness\Orchestrator\artifacts\readiness\native-tui\p…
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K[3;3H]0;Orchestrator[?25h[?2026h[?25l[H[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K[1m
+›[22m [2mViewing sub-agent — direct input is disabled[22m                                                                
+[K
+  probe-model default · ~\.codex\worktrees\backend-ui-readiness\Orchestrator\artifacts\readiness\native-tui\p…
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K[H[?25h
+[K
+  >_ [1mOpenAI Codex[22m[2m (v0.165.0-alpha.1.2)[22m[K
+     [2m~\.codex\worktrees\backend-ui-readiness\Orchestrator\…\data\sessions\2491bcfa-9c7d-42d1-ac89-6a4b088b67a6[22m
+[K[2m
+  To get started, describe a task or try one of these commands:[22m[K
+[K
+  /init[2m - create an AGENTS.md file with instructions for Codex[22m[K
+  /status[2m - show current session configuration[22m[K
+  /permissions[2m - choose what Codex is allowed to do[22m[K
+  /model[2m - choose what model and reasoning effort to use[22m[K
+  /review[2m - review any changes and find issues[22m[K
+[K
+■ failed to refresh skills: skills/list failed in TUI: skills/list transport error: remote app server at      
+`ws://127.0.0.1:57041/` transport failed: WebSocket protocol error: Connection reset without closing[K
+handshake: remote app server at `ws://127.0.0.1:57041/` transport failed: WebSocket protocol error: Connection
+reset without closing handshake[K
+[K
+■ failed to load skills on startup: skills/list failed in TUI: skills/list transport error: remote app server 
+at `ws://127.0.0.1:57041/` transport failed: WebSocket protocol error: Connection reset without closing       
+handshake: remote app server at `ws://127.0.0.1:57041/` transport failed: WebSocket protocol error: Connection[21;1H[0 q[?2026l[?2026h[?2026l[?25l[36;1H
+[21;1Hreset without closing handshake                                                                               
+                                                                                                              
+                                                                                                              [1m
+›[22m [2mViewing sub-agent — direct input is disabled[22m                                                                                                                                                                              
+  probe-model default · ~\.codex\worktrees\backend-ui-readiness\Orchestrator\artifacts\readiness\native-tui\p…                                                                                                              
+                                                                                                              
+                                                                                                              
+                                                                                                              
+                                                                                                              
+                                                                                                              
+                                                                                                              
+                                                                                                              
+                                                                                                              
+[24;3H[?25h[?2026h[0 q[?2026l[?25l[22;1H[K
+• [2mReconnecting to server…[22m [2m(0s)[22m[K
+                                                                                                              
+[K[1m
+›[22m [2mViewing sub-agent — direct input is disabled[22m                                                                
+[K
+  [1mctrl+c[22m quit[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K[26;3H[?25h[?2026h[?2026l[?2026h[?2026l[?2026h[?2026l[?2026h[?2026l[?2026h[?2026l[?2026h[?25l[?2026l[2m[23;1H◦[26;3H[?25h[?2026h[?2026l[22m[?2026h[?2026l[?2026h[?2026l[?2026h[?2026l[?2026h[?2026l[?2026h[?2026l[?2026h[?2026l[?2026h[?2026l[?2026h[?2026l[?2026h[?25l[?2026l[2m[23;28H1[26;3H[?25h[?2026h[22m[?2026l[?2026h[?2026l[?2026h[?2026l[?2026h[?2026l[?2026h[?25l[?2026l[23;1H•[26;3H[?25h[?2026h[?2026l[?2026h[?2026l[?2026h[?2026l[?2026h[?2026l[?2026h[?2026l[?2026h[?2026l[?25l[H[?25h[2J[3J[2J[3J[?25l[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K[H]0;⠋ Orchestrator[?25h[2J[3J[?25l[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K[H[?25h]7501;state=working:app=codex\[?2026h[?25l[K
+[K
+  >_ [1mOpenAI Codex[22m[2m (v0.165.0-alpha.1.2)[22m[K
+     [2m~\.codex\worktrees\backend-ui-readiness\Orchestrator\…\data\sessions\2491bcfa-9c7d-42d1-ac89-6a4b088b67a6[22m
+[K
+  [1mTip:[22m Use the [1mdesktop app[22m. Install it from ]8;id=24184-1;https://chatgpt.com/codex?app-landing-page=true\[4mhttps://chatgpt.com/codex?app-landing-page=true]8;;\[24m and run codex app.
+[K
+[K[1m[2m
+› [22mUse employees_list for the local test.[K
+[K
+[K
+• [1mCalled[22m employees_list[2m · 7ms[22m[K[2m
+  └ {"rosterRevision":3,"employees":[{"id":"3e782937-453e-4931-8c27-786f930d5349","name":"Native acceptance l…[22m
+[K
+■ failed to refresh skills: skills/list failed in TUI: skills/list transport error: remote app server at      
+`ws://127.0.0.1:57041/` transport failed: WebSocket protocol error: Connection reset without closing[K
+handshake: remote app server at `ws://127.0.0.1:57041/` transport failed: WebSocket protocol error: Connection
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K[17;1H[?25h[0 q[?2026l[?2026h[?2026l[?2026h[?2026l[?25l[36;1H
+[17;1Hreset without closing handshake                                                                               
+                                                                                                              
+• [2mWorking[22m [2m(0s • [22m[1mesc[22m[2m to interrupt)[22m                                                                             
+                                                                                                              
+                                                                                                              [1m
+›[22m [2mViewing sub-agent — direct input is disabled[22m                                                                
+                                                                                                              
+  probe-model default · ~\.codex\worktrees\backend-ui-readiness\Orchestrator\artifacts\readiness\native-tui\p…                                                                                                              
+                                                                                                              
+                                                                                                              
+                                                                                                              
+                                                                                                              
+                                                                                                              
+                                                                                                              
+                                                                                                              
+                                                                                                              
+                                                                                                              
+                                                                                                              
+[22;3H[?25h[?2026h[?2026l[?25l[?25l[2m[19;3HRecon[1Cecting to server…[22m [2m(0s)[22m[K[1m[24;3Hctrl+c[22m quit                                                                                                 ]0;Orchestrator[?25h[24;208H[H[?25h[2J[3J[?25l[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K[H[?25h[2J[3J[?25l[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K[H]0;⠋ Orchestrator[?25h[2J[3J[?25l[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K[H[?25h[?2026h[?25l[K
+[K
+  >_ [1mOpenAI Codex[22m[2m (v0.165.0-alpha.1.2)[22m[K
+     [2m~\.codex\worktrees\backend-ui-readiness\Orchestrator\…\data\sessions\2491bcfa-9c7d-42d1-ac89-6a4b088b67a6[22m
+[K
+  [1mTip:[22m Use [1m/side[22m to start a side conversation in a temporary fork without polluting the main thread.[K
+[K
+[K[1m[2m
+› [22mUse employees_list for the local test.[K
+[K
+[K
+• [1mCalled[22m employees_list[2m · 7ms[22m[K[2m
+  └ {"rosterRevision":3,"employees":[{"id":"3e782937-453e-4931-8c27-786f930d5349","name":"Native acceptance l…[22m
+[K
+■ failed to refresh skills: skills/list failed in TUI: skills/list transport error: remote app server at      
+`ws://127.0.0.1:57041/` transport failed: WebSocket protocol error: Connection reset without closing[K
+handshake: remote app server at `ws://127.0.0.1:57041/` transport failed: WebSocket protocol error: Connection
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K[17;1H[?25h[0 q[?2026l[?2026h[?2026l[?2026h[?2026l[?2026h[?2026l[?25l[36;1H
+[17;1Hreset without closing handshake                                                                               
+                                                                                                              
+• [2mReconnecting to server…[22m [2m(0s)[22m                                                                                
+                                                                                                              
+                                                                                                              [1m
+›[22m [2mViewing sub-agent — direct input is disabled[22m                                                                
+                                                                                                              
+  [1mctrl+c[22m quit                                                                                                                                                                                                               
+                                                                                                              
+                                                                                                              
+                                                                                                              
+                                                                                                              
+                                                                                                              
+                                                                                                              
+                                                                                                              
+                                                                                                              
+                                                                                                              
+                                                                                                              
+[22;3H]0;Orchestrator[?25h[?25l[H[?25h[2J[3J[2J[3J[?25l[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K[H]0;⠋ Orchestrator[?25h[2J[3J[?25l[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K[H[?25h[?2026h[?25l[K
+[K
+  >_ [1mOpenAI Codex[22m[2m (v0.165.0-alpha.1.2)[22m[K
+     [2m~\.codex\worktrees\backend-ui-readiness\Orchestrator\…\data\sessions\2491bcfa-9c7d-42d1-ac89-6a4b088b67a6[22m
+[K
+  [1mTip:[22m When plugins are enabled, use [1m/plugins[22m to browse plugins.[K
+[K
+[K[1m[2m
+› [22mUse employees_list for the local test.[K
+[K
+[K
+• [1mCalled[22m employees_list[2m · 7ms[22m[K[2m
+  └ {"rosterRevision":3,"employees":[{"id":"3e782937-453e-4931-8c27-786f930d5349","name":"Native acceptance l…[22m
+[K
+■ failed to refresh skills: skills/list failed in TUI: skills/list transport error: remote app server at      
+`ws://127.0.0.1:57041/` transport failed: WebSocket protocol error: Connection reset without closing[K
+handshake: remote app server at `ws://127.0.0.1:57041/` transport failed: WebSocket protocol error: Connection
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K[17;1H[?25h[0 q[?2026l[?2026h[?2026l[?2026h[?2026l[?25l[36;1H
+[17;1Hreset without closing handshake                                                                               
+                                                                                                              
+• [2mReconnecting to server…[22m [2m(0s)[22m                                                                                
+                                                                                                              
+                                                                                                              [1m
+›[22m [2mViewing sub-agent — direct input is disabled[22m                                                                
+                                                                                                              
+  [1mctrl+c[22m quit                                                                                                 
+                                                                                                              
+                                                                                                              
+                                                                                                              
+                                                                                                              
+                                                                                                              
+                                                                                                              
+                                                                                                              
+                                                                                                              
+                                                                                                              
+                                                                                                              
+                                                                                                              
+[22;3H[?25h]0;Orchestrator[?25l[H[?25h[2J[3J[2J[3J[?25l[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K[H]0;⠋ Orchestrator[?25h[2J[3J[?25l[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K[H[?25h[?2026h[?25l[K
+[K
+  >_ [1mOpenAI Codex[22m[2m (v0.165.0-alpha.1.2)[22m[K
+     [2m~\.codex\worktrees\backend-ui-readiness\Orchestrator\…\data\sessions\2491bcfa-9c7d-42d1-ac89-6a4b088b67a6[22m
+[K
+  [1mTip:[22m Use the [1mdesktop app[22m. Install it from ]8;id=24184-2;https://chatgpt.com/codex?app-landing-page=true\[4mhttps://chatgpt.com/codex?app-landing-page=true]8;;\[24m and run codex app.
+[K
+[K[1m[2m
+› [22mUse employees_list for the local test.[K
+[K
+[K
+• [1mCalled[22m employees_list[2m · 7ms[22m[K[2m
+  └ {"rosterRevision":3,"employees":[{"id":"3e782937-453e-4931-8c27-786f930d5349","name":"Native acceptance l…[22m
+[K
+■ failed to refresh skills: skills/list failed in TUI: skills/list transport error: remote app server at      
+`ws://127.0.0.1:57041/` transport failed: WebSocket protocol error: Connection reset without closing[K
+handshake: remote app server at `ws://127.0.0.1:57041/` transport failed: WebSocket protocol error: Connection
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K[17;1H[?25h[0 q[?2026l[?2026h[?2026l[?2026h[?2026l[?25l[36;1H
+[17;1Hreset without closing handshake                                                                               
+                                                                                                              
+• [2mReconnecting to server…[22m [2m(0s)[22m                                                                                
+                                                                                                              
+                                                                                                              [1m
+›[22m [2mViewing sub-agent — direct input is disabled[22m                                                                
+                                                                                                              
+  [1mctrl+c[22m quit                                                                                                                                                                                                               
+                                                                                                              
+                                                                                                              
+                                                                                                              
+                                                                                                              
+                                                                                                              
+                                                                                                              
+                                                                                                              
+                                                                                                              
+                                                                                                              
+                                                                                                              
+[22;3H[?25h[?2026h[?2026l]0;⠙ Orchestrator[?25l[H]0;Orchestrator[?25h[2J[3J[2J[3J[?25l[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K[H]0;⠋ Orchestrator[?25h[2J[3J[?25l[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K[H[?25h[?2026h[?25l[K
+[K
+  >_ [1mOpenAI Codex[22m[2m (v0.165.0-alpha.1.2)[22m[K
+     [2m~\.codex\worktrees\backend-ui-readiness\Orchestrator\…\data\sessions\2491bcfa-9c7d-42d1-ac89-6a4b088b67a6[22m
+[K
+  [1mTip:[22m Use [1m/title[22m to choose what appears in your terminal’s title.[K
+[K
+[K[1m[2m
+› [22mUse employees_list for the local test.[K
+[K
+[K
+• [1mCalled[22m employees_list[2m · 7ms[22m[K[2m
+  └ {"rosterRevision":3,"employees":[{"id":"3e782937-453e-4931-8c27-786f930d5349","name":"Native acceptance l…[22m
+[K
+■ failed to refresh skills: skills/list failed in TUI: skills/list transport error: remote app server at      
+`ws://127.0.0.1:57041/` transport failed: WebSocket protocol error: Connection reset without closing[K
+handshake: remote app server at `ws://127.0.0.1:57041/` transport failed: WebSocket protocol error: Connection
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K[17;1H[?25h[0 q[?2026l[?2026h[?2026l[?2026h[?2026l[?25l[36;1H
+[17;1Hreset without closing handshake                                                                               
+                                                                                                              
+• [2mReconnecting to server…[22m [2m(0s)[22m                                                                                
+                                                                                                              
+                                                                                                              [1m
+›[22m [2mViewing sub-agent — direct input is disabled[22m                                                                
+                                                                                                              
+  [1mctrl+c[22m quit                                                                                                                                                                                                               
+                                                                                                              
+                                                                                                              
+                                                                                                              
+                                                                                                              
+                                                                                                              
+                                                                                                              
+                                                                                                              
+                                                                                                              
+                                                                                                              
+                                                                                                              
+[22;3H[?25h[?2026h[?2026l]0;Orchestrator[?25l[H[?25h[2J[3J[2J[3J[?25l[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K[H]0;⠋ Orchestrator[?25h[2J[3J[?25l[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K[H[?25h[?2026h[?25l[K
+[K
+  >_ [1mOpenAI Codex[22m[2m (v0.165.0-alpha.1.2)[22m[K
+     [2m~\.codex\worktrees\backend-ui-readiness\Orchestrator\…\data\sessions\2491bcfa-9c7d-42d1-ac89-6a4b088b67a6[22m
+[K
+  [1mTip:[22m Use the [1mdesktop app[22m. Install it from ]8;id=24184-3;https://chatgpt.com/codex?app-landing-page=true\[4mhttps://chatgpt.com/codex?app-landing-page=true]8;;\[24m and run codex app.
+[K
+[K[1m[2m
+› [22mUse employees_list for the local test.[K
+[K
+[K
+• [1mCalled[22m employees_list[2m · 7ms[22m[K[2m
+  └ {"rosterRevision":3,"employees":[{"id":"3e782937-453e-4931-8c27-786f930d5349","name":"Native acceptance l…[22m
+[K
+■ failed to refresh skills: skills/list failed in TUI: skills/list transport error: remote app server at      
+`ws://127.0.0.1:57041/` transport failed: WebSocket protocol error: Connection reset without closing[K
+handshake: remote app server at `ws://127.0.0.1:57041/` transport failed: WebSocket protocol error: Connection
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K[17;1H[?25h[0 q[?2026l[?2026h[?2026l[?2026h[?2026l[?25l[36;1H
+[17;1Hreset without closing handshake                                                                               
+                                                                                                              
+• [2mWorking[22m [2m(0s • [22m[1mesc[22m[2m to interrupt)[22m                                                                             
+                                                                                                              
+                                                                                                              [1m
+›[22m [2mViewing sub-agent — direct input is disabled[22m                                                                
+                                                                                                              
+  probe-model default · ~\.codex\worktrees\backend-ui-readiness\Orchestrator\artifacts\readiness\native-tui\p…                                                                                                              
+                                                                                                              
+                                                                                                              
+                                                                                                              
+                                                                                                              
+                                                                                                              
+                                                                                                              
+                                                                                                              
+                                                                                                              
+                                                                                                              
+                                                                                                              
+[22;3H[?25h[?2026h[?2026l[?25l[2m[19;3HRecon[1Cecting to server…[22m [2m(0s)[22m[K[1m[24;3Hctrl+c[22m quit                                                                                                 [22;3H]0;⠙ Orchestrator[?25h[?25l[H]0;Orchestrator[?25h[2J[3J[2J[3J[?25l[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K[H]0;⠋ Orchestrator[?25h[2J[3J[?25l[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K[H[?25h[?2026h[?25l[K
+[K
+  >_ [1mOpenAI Codex[22m[2m (v0.165.0-alpha.1.2)[22m[K
+     [2m~\.codex\worktrees\backend-ui-readiness\Orchestrator\…\data\sessions\2491bcfa-9c7d-42d1-ac89-6a4b088b67a6[22m
+[K
+  [1mTip:[22m Use [1m/subagents[22m to switch between this session’s subagents.[K
+[K
+[K[1m[2m
+› [22mUse employees_list for the local test.[K
+[K
+[K
+• [1mCalled[22m employees_list[2m · 7ms[22m[K[2m
+  └ {"rosterRevision":3,"employees":[{"id":"3e782937-453e-4931-8c27-786f930d5349","name":"Native acceptance l…[22m
+[K
+■ failed to refresh skills: skills/list failed in TUI: skills/list transport error: remote app server at      
+`ws://127.0.0.1:57041/` transport failed: WebSocket protocol error: Connection reset without closing[K
+handshake: remote app server at `ws://127.0.0.1:57041/` transport failed: WebSocket protocol error: Connection
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K[17;1H[?25h[0 q[?2026l[?2026h[?2026l[?25l[36;1H
+[17;1Hreset without closing handshake                                                                               
+                                                                                                              
+• [2mWorking[22m [2m(0s • [22m[1mesc[22m[2m to interrupt)[22m                                                                             
+                                                                                                              
+                                                                                                              [1m
+›[22m [2mViewing sub-agent — direct input is disabled[22m                                                                
+                                                                                                              
+  probe-model default · ~\.codex\worktrees\backend-ui-readiness\Orchestrator\artifacts\readiness\native-tui\p…                                                                                                              
+                                                                                                              
+                                                                                                              
+                                                                                                              
+                                                                                                              
+                                                                                                              
+                                                                                                              
+                                                                                                              
+                                                                                                              
+                                                                                                              
+                                                                                                              
+[22;3H[?25h[?2026h[?2026l[?25l[2m[19;3HRecon[1Cecting to server…[22m [2m(0s)[22m[K[1m[24;3Hctrl+c[22m quit                                                                                                 [22;3H]0;⠙ Orchestrator[?25h[?25l[H]0;Orchestrator[?25h[2J[3J[2J[3J[?25l[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K[H]0;⠋ Orchestrator[?25h[2J[3J[?25l[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K[H[?25h[?2026h[?25l[K
+[K
+  >_ [1mOpenAI Codex[22m[2m (v0.165.0-alpha.1.2)[22m[K
+     [2m~\.codex\worktrees\backend-ui-readiness\Orchestrator\…\data\sessions\2491bcfa-9c7d-42d1-ac89-6a4b088b67a6[22m
+[K
+  [1mTip:[22m Use the [1mdesktop app[22m. Install it from ]8;id=24184-4;https://chatgpt.com/codex?app-landing-page=true\[4mhttps://chatgpt.com/codex?app-landing-page=true]8;;\[24m and run codex app.
+[K
+[K[1m[2m
+› [22mUse employees_list for the local test.[K
+[K
+[K
+• [1mCalled[22m employees_list[2m · 7ms[22m[K[2m
+  └ {"rosterRevision":3,"employees":[{"id":"3e782937-453e-4931-8c27-786f930d5349","name":"Native acceptance l…[22m
+[K
+■ failed to refresh skills: skills/list failed in TUI: skills/list transport error: remote app server at      
+`ws://127.0.0.1:57041/` transport failed: WebSocket protocol error: Connection reset without closing[K
+handshake: remote app server at `ws://127.0.0.1:57041/` transport failed: WebSocket protocol error: Connection
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K[17;1H[?25h[0 q[?2026l[?2026h[?2026l[?25l[36;1H
+[17;1Hreset without closing handshake                                                                               
+                                                                                                              
+• [2mWorking[22m [2m(0s • [22m[1mesc[22m[2m to interrupt)[22m                                                                             
+                                                                                                              
+                                                                                                              [1m
+›[22m [2mViewing sub-agent — direct input is disabled[22m                                                                
+                                                                                                              
+  probe-model default · ~\.codex\worktrees\backend-ui-readiness\Orchestrator\artifacts\readiness\native-tui\p…                                                                                                              
+                                                                                                              
+                                                                                                              
+                                                                                                              
+                                                                                                              
+                                                                                                              
+                                                                                                              
+                                                                                                              
+                                                                                                              
+                                                                                                              
+                                                                                                              
+[22;3H[?25h[?2026h[?2026l[?25l[?25l[2m[19;3HRecon[1Cecting to server…[22m [2m(0s)[22m[K[1m[24;3Hctrl+c[22m quit                                                                                                 ]0;Orchestrator[?25h[24;208H[H[?25h[2J[3J[2J[3J[?25l[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K[H]0;⠋ Orchestrator[?25h[2J[3J[?25l[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K[H[?25h[?2026h[?25l[K
+[K
+  >_ [1mOpenAI Codex[22m[2m (v0.165.0-alpha.1.2)[22m[K
+     [2m~\.codex\worktrees\backend-ui-readiness\Orchestrator\…\data\sessions\2491bcfa-9c7d-42d1-ac89-6a4b088b67a6[22m
+[K
+  [1mTip:[22m Use the [1mdesktop app[22m. Install it from ]8;id=24184-5;https://chatgpt.com/codex?app-landing-page=true\[4mhttps://chatgpt.com/codex?app-landing-page=true]8;;\[24m and run codex app.
+[K
+[K[1m[2m
+› [22mUse employees_list for the local test.[K
+[K
+[K
+• [1mCalled[22m employees_list[2m · 7ms[22m[K[2m
+  └ {"rosterRevision":3,"employees":[{"id":"3e782937-453e-4931-8c27-786f930d5349","name":"Native acceptance l…[22m
+[K[2m
+• [22mNATIVE_VIEW_CONTROLLER_STREAM_OK[K
+[K
+■ failed to refresh skills: skills/list failed in TUI: skills/list transport error: remote app server at      
+`ws://127.0.0.1:57041/` transport failed: WebSocket protocol error: Connection reset without closing[K
+handshake: remote app server at `ws://127.0.0.1:57041/` transport failed: WebSocket protocol error: Connection
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K[19;1H[?25h[0 q[?2026l[?2026h[?2026l[?2026h[?2026l[?25l[36;1H
+[19;1Hreset without closing handshake                                                                               
+                                                                                                              
+• [2mWorking[22m [2m(0s • [22m[1mesc[22m[2m to interrupt)[22m                                                                             
+                                                                                                              
+                                                                                                              [1m
+›[22m [2mViewing sub-agent — direct input is disabled[22m                                                                
+                                                                                                              
+  probe-model default · ~\.codex\worktrees\backend-ui-readiness\Orchestrator\artifacts\readiness\native-tui\p…                                                                                                              
+                                                                                                              
+                                                                                                              
+                                                                                                              
+                                                                                                              
+                                                                                                              
+                                                                                                              
+                                                                                                              
+                                                                                                              
+[24;3H[?25h[?2026h[?2026l[?25l[?25l[2m[21;3HRecon[1Cecting to server…[22m [2m(0s)[22m[K[1m[26;3Hctrl+c[22m quit                                                                                                 ]0;Orchestrator[?25h[26;208H[H[?25h[2J[3J[2J[3J[?25l[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K[H]0;⠋ Orchestrator[?25h[2J[3J[?25l[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K[H[?25h[?2026h[?25l[K
+[K
+  >_ [1mOpenAI Codex[22m[2m (v0.165.0-alpha.1.2)[22m[K
+     [2m~\.codex\worktrees\backend-ui-readiness\Orchestrator\…\data\sessions\2491bcfa-9c7d-42d1-ac89-6a4b088b67a6[22m
+[K
+  [1mTip:[22m Use the [1mdesktop app[22m. Install it from ]8;id=24184-6;https://chatgpt.com/codex?app-landing-page=true\[4mhttps://chatgpt.com/codex?app-landing-page=true]8;;\[24m and run codex app.
+[K
+[K[1m[2m
+› [22mUse employees_list for the local test.[K
+[K
+[K
+• [1mCalled[22m employees_list[2m · 7ms[22m[K[2m
+  └ {"rosterRevision":3,"employees":[{"id":"3e782937-453e-4931-8c27-786f930d5349","name":"Native acceptance l…[22m
+[K[2m
+• [22mNATIVE_VIEW_CONTROLLER_STREAM_OK[K
+[K
+■ failed to refresh skills: skills/list failed in TUI: skills/list transport error: remote app server at      
+`ws://127.0.0.1:57041/` transport failed: WebSocket protocol error: Connection reset without closing[K
+handshake: remote app server at `ws://127.0.0.1:57041/` transport failed: WebSocket protocol error: Connection
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K[19;1H[?25h[0 q[?2026l[?2026h[?2026l[?2026h[?2026l[?25l[36;1H
+[19;1Hreset without closing handshake                                                                               
+                                                                                                              
+• [2mWorking[22m [2m(0s • [22m[1mesc[22m[2m to interrupt)[22m                                                                             
+                                                                                                              
+                                                                                                              [1m
+›[22m [2mViewing sub-agent — direct input is disabled[22m                                                                
+                                                                                                              
+  probe-model default · ~\.codex\worktrees\backend-ui-readiness\Orchestrator\artifacts\readiness\native-tui\p…                                                                                                              
+                                                                                                              
+                                                                                                              
+                                                                                                              
+                                                                                                              
+                                                                                                              
+                                                                                                              
+                                                                                                              
+                                                                                                              
+[24;3H[?25h[?2026h[?2026l[?25l[2m[21;3HRecon[1Cecting to server…[22m [2m(0s)[22m[K[1m[26;3Hctrl+c[22m quit                                                                                                 [24;3H]0;⠙ Orchestrator[?25h[?25l[H]0;Orchestrator[?25h[2J[3J[2J[3J[?25l[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K[H]0;⠋ Orchestrator[?25h

@@ -1,53 +1,78 @@
-# Backend handoff: UI preparation in progress, updated 2026-10-29
+# Backend handoff: ready to start the Codex UI, updated 2026-10-29
 
-## Current owner request and branch
+## Current owner request and verified checkpoint
 
-The owner asked to get the backend to a point where UI development can comfortably
-begin, efficiently. Current work is on `codex/backend-ui-readiness`, based on
-`feat/core-v1-completion` at `9c7fa9d`; a fresh fetch confirmed that current
-`origin/main` (`dfa35f1`) is already included. The managed worktree is
-`C:\Users\anubhab\.codex\worktrees\backend-ui-readiness\Orchestrator`.
+The owner asked for a backend foundation on which UI development can comfortably
+begin and explicitly required the actual native TUI to remain visible during
+orchestrated work. That starting point is verified for Codex. Full core v1 and
+concurrent native views for other providers remain unfinished.
 
-Read [the readiness plan](superpowers/plans/2026-10-28-ui-readiness.md) and
-[the UI integration guide](UI-BACKEND-HANDOFF.md) before continuing. This section
-supersedes old statements below that no terminal transport exists or that the
-launcher is sufficient as an availability-only model. The dated records below
-remain historical verification, not current-run results.
+Work is on `codex/backend-ui-readiness` in
+`C:\Users\anubhab\.codex\worktrees\backend-ui-readiness\Orchestrator`, based on
+`feat/core-v1-completion` at `9c7fa9d` (including `origin/main` at `dfa35f1` when
+fetched at the start). Production source is checkpointed at
+`feab4d556b3424d3b9b0b7ec9e155f62434b8a95`; later changes only add evidence/docs.
+The original checkout remains separate. No PR was created or branch pushed here.
 
-Completed and independently reviewed so far:
+Start with [the UI integration guide](UI-BACKEND-HANDOFF.md),
+[the terminal client contract](superpowers/specs/2026-10-28-terminal-client-contract.md)
+and [the final verification](verification/2026-10-29-ui-backend-readiness.md).
+Both readiness plans are complete. No frontend changes were made.
 
-- Launcher per-lead authority choices enforce the employee ceiling and actual
-  daemon provider policy; unsupported employees are not advertised as startable.
-  The response exposes whether collaboration tools are available (currently Codex
-  only) and samples its event cursor before its source reads.
-- Direct user roots permanently refused for unsupported authority are atomically
-  closed with their message/task. The task evidence identifies a daemon refusal
-  on a user request, not native employee activity. Exact revision/state checks
-  protect races with submission, and temporary dormant/activation behavior is
-  preserved. Focused behavioral tests passed; the final full gate is still pending.
+Implemented and independently reviewed:
 
-Also implemented and reviewed: exclusive backward history paging, terminal
-attachment status/discovery, and durable event replay across reconnect/lag beyond
-1,024 rows. The initial preparation passed the full workspace test run (580 passed,
-14 intentionally ignored). This predates the concurrent native-view implementation.
-The final settled-tree gate remains pending.
+- Launcher authority choices obey the employee ceiling and daemon provider policy.
+  Collaboration tools and concurrent native-view support are explicit capabilities.
+- Permanent unsupported-authority refusals atomically settle the user turn, message
+  and root task, preserving idempotency, revision fences and temporary recovery.
+- Exclusive backward history paging retains current session/worker state. Durable
+  event replay crosses 1,024 rows and recovers notification lag without skipping.
+- Genuine Codex TUI runs in ConPTY against the same controller-owned app-server
+  thread. Its authenticated restricted view cannot submit native turns/config
+  changes or answer controller requests. Lazoo owns tools and approvals.
+- `session.terminal.view` and status fields provide revision/idempotency fences,
+  reconnect and cleanup. Closing a view preserves a pending turn and approval;
+  stopping the session closes its view. Suspended native attach stays separate.
+- The installed Codex `0.165.0-alpha.1.2` passed an actual native MCP parser review
+  and configuration preview/apply/replay/rollback. Only exact reviewed versions may
+  write configuration; adjacent unreviewed versions remain refused.
 
-The owner confirmed that the first UI must show the actual native TUI during
-orchestrated work. This is required backend work, not a pending scope choice.
-The local simulator prototype proved native streaming and a controller-owned tool
-call on Codex 0.153.4 and the discovered 0.165.0-alpha.1.2. Production work now adds
-a Codex-only broker, restricted native-view lease, private ConPTY environment,
-`session.terminal.view`, and explicit view capability/status. Follow
-[the live-view plan](superpowers/plans/2026-10-28-live-native-tui.md). Independent
-review found bootstrap, routing and cleanup issues; fixes and production-path
-acceptance are in progress. Prototype success alone is not readiness evidence.
-No live model calls or user configuration edits have been made by this work.
+Final verification on that source:
 
-Builds use `CARGO_BUILD_JOBS=1`, `CARGO_PROFILE_DEV_DEBUG=0`,
-`CARGO_PROFILE_TEST_DEBUG=0`, and `CARGO_INCREMENTAL=0` because host free memory is
-limited. Preserve those settings for the current target cache. The earlier
-authority/version/CPU/TUI limitations remain explicit; preparing UI integration
-does not mean all of core v1 is finished.
+- Full `scripts/gate.ps1`: **44/44 steps passed**, including 39 acceptance scripts,
+  strict clippy, format, release build and **607 workspace tests passed** (14
+  intentionally ignored). Count excludes nested filtered test invocations.
+- Release production native acceptance: **13/13 checks passed**, actual installed
+  Codex `0.165.0-alpha.1.2`, four local model-fixture requests, zero external model
+  requests. It proves native rendering, collaboration routing, approval decline,
+  history reconnect and close/reopen while an approval remains pending.
+- CLI stress: **2,048/2,048 passed at concurrency 16**, no stderr on success or
+  daemon stderr. Its daemon/CLI hashes match the release native run.
+- Evidence: `artifacts/readiness/ui-backend-final-manifest.json`. Fresh manifests
+  and native screen/turn evidence are preserved under `artifacts/readiness`;
+  historical tracked acceptance manifests were restored after hash-verified copies.
+
+The Codex TUI uses its built-in “Viewing sub-agent — direct input is disabled”
+label even for the lead. Prompts and approval decisions belong in Lazoo controls.
+The first UI must respect the capability table; other providers cannot currently
+be offered equivalent orchestration/native-view behavior. Remaining work includes
+non-Codex collaboration/views, broader governed authority, further configuration
+formats/plugins/skills, and unmeasured whole-product performance windows.
+Connectors, vectors and voice remain later phases. Fresh verification used local
+fixtures/disposable configuration; external account/model availability was not
+retested and personal provider configuration was not changed.
+
+Use `CARGO_BUILD_JOBS=1`, `CARGO_PROFILE_DEV_DEBUG=0`,
+`CARGO_PROFILE_TEST_DEBUG=0`, `CARGO_INCREMENTAL=0`, and `RUST_TEST_THREADS=2` for
+this host/cache. Keep Cargo jobs serialized. The next product work can implement
+the desktop bindings and UI using the guide; no unresolved prerequisite remains
+for that Codex UI starting point.
+
+## Historical checkpoints (superseded where the current section differs)
+
+The remainder records earlier work and dated limitations. In particular, the old
+pending native-TUI decision and uninterrupted-gate requirement below are resolved
+for the current Codex checkpoint above; they are retained as history.
 
 ## Owner checkpoint
 

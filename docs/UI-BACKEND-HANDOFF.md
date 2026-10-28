@@ -1,8 +1,10 @@
 # Backend integration guide for the first UI
 
-Work in progress: the 2026-10-28 readiness plan and final verification record
-determine which additions below have passed. The frontend is not implemented by
-this work. Full core v1 acceptance remains broader than UI preparation.
+Verified on 2026-10-29: this is the backend starting point for the first Codex UI,
+including its genuine native TUI during orchestrated work. The full gate passed
+44 steps, release native acceptance passed 13 checks, and all 2,048 CLI stress
+calls passed without stderr warnings. See the [verification record](verification/2026-10-29-ui-backend-readiness.md).
+The frontend is not implemented here. Full core v1 acceptance remains broader.
 
 ## Sources of truth
 
@@ -189,8 +191,9 @@ Production-path acceptance with the installed Codex 0.165.0-alpha.1.2 and a loca
 Responses simulator proved streaming, collaboration-tool routing, history after
 reopen, view close/reopen during a pending approval, decline propagation, status
 recovery, and session-stop cleanup. This tests real native rendering and backend
-ownership without consuming an external model. The final full gate is recorded
-separately; a native stream check does not replace it.
+ownership without consuming an external model. The release acceptance and final
+full gate both passed; their evidence and limits are in the
+[readiness verification](verification/2026-10-29-ui-backend-readiness.md).
 
 ## Remaining full-product work
 
