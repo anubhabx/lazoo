@@ -2,11 +2,22 @@
 
 **Date:** 2026-10-13
 
+**Backend update, 2026-10-28:** The launcher now exposes per-lead `authorityModes`,
+`authorityReason`, and `collaborationToolsAvailable`. Its top-level `authorityModes`
+is the vocabulary, not a promise that every lead supports every mode. Select only
+from the chosen lead's modes, and require `startable`. Modes never exceed the
+employee's configured authority. Only Codex currently receives Lazoo collaboration
+tools; other startable providers cannot yet orchestrate workers. The launcher
+captures its event high-water before combining reads, so later events can be
+replayed even if a write races the read. Terminal streaming is implemented; see
+the [native terminal client contract](2026-10-28-terminal-client-contract.md).
+The original review status below is historical and does not grant frontend approval.
+
 **Status:** Index for review. It gathers, on one page, every daemon surface the separately owned desktop is expected to bind, as implemented in pull requests #11 to #29 at schema 15, with the defaults the owner and the UI owner still have to ratify. It adds nothing: each row points at the design document that proposed it and the verification record that proved it. `UI BACKEND CONTRACT: GO` is not emitted by this document; it waits for that review.
 
 ## 1. How the desktop reads
 
-Every read model below is derived on each call from the durable ledgers and stored nowhere. Each result carries `eventHighWater`, the lowest audit-event sequence its reads reflect. The desktop keeps that mark, calls `events.subscribe { after: mark }` (the framed subscription in `lazood`'s server, which replays `events.list` from `after` and then streams), and re-reads a model, debounced to one read per 250 ms, when an event of the kinds listed for it arrives. Right after a read, `events.list { after: eventHighWater }` is empty; every later change appears after the mark; each re-read's mark covers the events seen. That invariant is proven for all four models by `the_desktop_resumes_every_read_model_from_its_event_high_water_without_loss` (pull request #25). On disconnect the desktop keeps the last models, shows its own `Unknown`, and resumes from its mark.
+Every read model below is derived on each call from the durable ledgers and stored nowhere. Each result carries `eventHighWater`, a conservative lower bound on the audit-event sequence its reads reflect. The desktop keeps that mark, calls `events.subscribe { after: mark }` (the framed subscription in `lazood`'s server, which replays `events.list` from `after` and then streams), and re-reads a model, debounced to one read per 250 ms, when an event of the kinds listed for it arrives. Events may already exist after the returned mark if a write raced the reads; replay them and refresh rather than assuming the response is an atomic snapshot. Replaying an already reflected event is safe. Reconnect behavior is covered by `the_desktop_resumes_every_read_model_from_its_event_high_water_without_loss` (pull request #25). On disconnect the desktop keeps the last models, shows its own `Unknown`, and resumes from its mark.
 
 ## 2. Read models
 
@@ -16,7 +27,7 @@ Every read model below is derived on each call from the durable ledgers and stor
 | `inbox.counts` (`lazooctl inbox counts`) | none | `counts: { unresolved, approvals, permissions, incidents, watching }`, `eventHighWater` | same | `LZ-INBOX-INVALID` | same |
 | `workspace.conversations` (`lazooctl workspace conversations`) | `projectId \| null` (Home), `limit 1..500` (200), `before` | `conversations: ConversationRow[]` (title, marker, worker counts, `lastResultAt`), `rememberedLeadId`, `truncated`, `nextBefore`, `eventHighWater` | `conversation.*`, `turn.*`, `task.*`, `approval.*`, `incident.*` | `LZ-WORKSPACE-INVALID`, `LZ-WORKSPACE-PROJECT-NOT-FOUND` | `2026-10-13-desktop-workspace-contract-design.md` §3.1, §4.1, §4.2; `verification/2026-10-13-workspace-read-models.md` (#18) |
 | `workspace.launcher` (`lazooctl workspace launcher`) | `projectId \| null` | `project`, `rosterRevision`, `leads: LeadCandidate[]` (`startable`, `blockingReason`), `rememberedLeadId`, `rememberedLeadBlockingReason`, `authorityModes`, `start` (two requests as data), `eventHighWater` | `employee.*`, `roster.*`, `session.*`, `conversation.created` | same | same, §3.2, §4.3 |
-| `workspace.conversation` (`lazooctl workspace show`) | `id`, `turnLimit 1..500` (50) | `conversation`, `title`, `scope`, `lead: LeadHeader` (lifecycle, session, authority, `actions`), `rootTask`, `turns` (newest N, oldest first) with `turnsTruncated`, `workers: WorkerCard[]` (eight states, `actions`), `attention: InboxItem[]`, `eventHighWater` | the sidebar's set plus `session.*`, `employee.*`, `roster.*`, `message.*` | `LZ-WORKSPACE-INVALID`, `LZ-CONVERSATION-NOT-FOUND` | same, §3.3, §4.4, §4.5, §6; `verification/2026-10-13-workspace-conversation.md` (#19), `-workspace-actions.md` (#20), `-workspace-action-guards.md` (#22) |
+| `workspace.conversation` (`lazooctl workspace show`) | `id`, `turnLimit 1..500` (50), optional exclusive `beforeTurnSequence` | `conversation`, `title`, `scope`, `lead: LeadHeader` (lifecycle, session, authority, `actions`), `rootTask`, `turns` (requested page, oldest first) with `turnsTruncated` and `nextBeforeTurnSequence`, `workers: WorkerCard[]` (eight states, `actions`), `attention: InboxItem[]`, `eventHighWater` | the sidebar's set plus `session.*`, `employee.*`, `roster.*`, `message.*` | `LZ-WORKSPACE-INVALID`, `LZ-CONVERSATION-NOT-FOUND` | same, §3.3, §4.4, §4.5, §6; `verification/2026-10-13-workspace-conversation.md` (#19), `-workspace-actions.md` (#20), `-workspace-action-guards.md` (#22) |
 
 Supporting reads the desktop may show beside them, unchanged by this index: `system.resources` and `session.resources` (#12), `provider.config` (#16), `provider.config.preview` (#24), `desktop.snapshot` (unchanged since the first slice).
 
@@ -53,7 +64,7 @@ Each was taken as proposed on the owner's direction to finish as much as possibl
 
 ## 5. Reserved and excluded
 
-`kind: permission` and the Permissions filter stay empty until terminal permission passthrough exists. Terminal streaming (ConPTY) binds to a separate framed contract that does not exist yet. The daemon emits no `inbox.*` or `workspace.*` event and stores no read state, dismissal, or selection.
+`kind: permission` and the Permissions filter stay empty until terminal permission passthrough exists. Terminal streaming (ConPTY) uses the separate authenticated byte channel described in the [native terminal client contract](2026-10-28-terminal-client-contract.md). Native session attachment currently requires a suspended session; concurrent TUI display during protocol-driven work is not implemented. The daemon emits no `inbox.*` or `workspace.*` event and stores no read state, dismissal, or selection.
 
 ## 6. What the review decides
 

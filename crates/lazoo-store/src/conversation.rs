@@ -77,6 +77,19 @@ pub struct FailTurnInput {
     pub failure_message: String,
 }
 
+/// Permanently settles a freshly recorded user root after the daemon rejects it before any
+/// provider submission has begun. This is deliberately narrower than `FailTurnInput`, which
+/// requires a claimed, submitting turn and an in-flight message attempt.
+#[derive(Clone, Debug)]
+pub struct FailRecordedRootTurnBeforeProviderInput {
+    pub request_id: String,
+    pub idempotency_key: String,
+    pub turn_id: Uuid,
+    pub expected_revision: u64,
+    pub failure_code: String,
+    pub failure_message: String,
+}
+
 #[derive(Clone, Debug)]
 pub struct RetryTurnInput {
     pub request_id: String,
@@ -754,6 +767,117 @@ impl Store {
             &input.request_id,
             input.turn_id,
             event_type_for_state(target, "turn.failed"),
+            &now,
+        )
+        .and_then(|result| commit_turn_result(transaction, result))
+    }
+
+    /// Atomically makes an incompatible user root terminal without creating provider evidence.
+    #[allow(clippy::too_many_lines)] // Keep the message settlement and root-task projection atomic.
+    pub fn fail_recorded_root_turn_before_provider(
+        &self,
+        input: &FailRecordedRootTurnBeforeProviderInput,
+    ) -> Result<TurnMutationResult, StoreError> {
+        validate_conversation_command_key(&input.idempotency_key)?;
+        validate_message_failure(&input.failure_code, &input.failure_message)?;
+        let mut connection = self.lock()?;
+        let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        if let Some(turn) = turn_for_command(&transaction, "turn.fail", &input.idempotency_key)? {
+            let result = turn_result(&transaction, turn, None)?;
+            transaction.commit()?;
+            return Ok(result);
+        }
+        let current = required_turn(&transaction, input.turn_id)?;
+        require_turn_revision(&current, input.expected_revision)?;
+        require_turn_state(&current, &[TurnState::Recorded], "recorded")?;
+        let task_id = current.task_id.ok_or(StoreError::TaskTurnLink {
+            task_id: current.id,
+            turn_id: current.id,
+        })?;
+        let root = task::required_task(&transaction, task_id)?;
+        if !matches!(current.author, MessageSender::User(_))
+            || task_id != current.id
+            || root.id != current.id
+            || root.root_task_id != current.id
+            || root.parent_task_id.is_some()
+            || root.state != TaskState::Accepted
+            || root.active_turn_id != Some(current.id)
+        {
+            return Err(StoreError::TaskTurnLink {
+                task_id,
+                turn_id: current.id,
+            });
+        }
+        let current_message = message::required_message(&transaction, current.message_id)?;
+        if current_message.delivery.state != MessageDeliveryState::Queued {
+            return Err(StoreError::TaskState {
+                task_id,
+                state: serialized_name(root.state)?,
+                expected: "queued canonical root message before provider submission",
+            });
+        }
+        let claimed = message::claim_message_tx(
+            &transaction,
+            &message::ClaimMessageInput {
+                request_id: format!("{}:claim", input.request_id),
+                idempotency_key: message_key(
+                    current.id,
+                    &format!("{}:claim", input.idempotency_key),
+                ),
+                message_id: current.message_id,
+                expected_revision: current_message.delivery.revision,
+            },
+        )?;
+        let attempt_id = claimed
+            .message
+            .attempts
+            .last()
+            .ok_or(StoreError::InvalidRecord {
+                field: "message_delivery_attempts",
+                message: "failed recorded root claim has no delivery attempt".to_owned(),
+            })?
+            .id;
+        message::fail_message_tx(
+            &transaction,
+            &message::FailMessageInput {
+                request_id: format!("{}:fail", input.request_id),
+                idempotency_key: message_key(
+                    current.id,
+                    &format!("{}:fail", input.idempotency_key),
+                ),
+                message_id: current.message_id,
+                expected_revision: claimed.message.delivery.revision,
+                attempt_id,
+                retryable: false,
+                failure_code: input.failure_code.clone(),
+                failure_message: input.failure_message.clone(),
+            },
+        )?;
+        let now = Utc::now().to_rfc3339();
+        transaction.execute(
+            "UPDATE conversation_turns SET state = 'terminal-failed', revision = revision + 1,
+                    failure_code = ?2, failure_message = ?3, terminal_at = ?4, updated_at = ?4
+             WHERE id = ?1",
+            params![
+                current.id.to_string(),
+                input.failure_code,
+                input.failure_message,
+                now,
+            ],
+        )?;
+        task::project_turn_tx(
+            &transaction,
+            current.id,
+            "turn-failed-before-provider",
+            &now,
+        )?;
+        effective_turn_result(
+            &transaction,
+            "turn.fail",
+            &input.idempotency_key,
+            &input.request_id,
+            current.id,
+            "turn.terminal-failed",
             &now,
         )
         .and_then(|result| commit_turn_result(transaction, result))

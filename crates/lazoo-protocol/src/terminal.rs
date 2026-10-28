@@ -78,6 +78,27 @@ pub struct SessionTerminalAttachResult {
     pub terminal: TerminalRecord,
 }
 
+/// Read-only recovery state for a session's owner terminal. `blocking_*` are stable UI data;
+/// a missing value means attachment is currently eligible.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct SessionTerminalStatusParams {
+    pub id: Uuid,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct SessionTerminalStatusResult {
+    pub boot_id: Uuid,
+    pub session_id: Uuid,
+    pub session_revision: u64,
+    pub opening: bool,
+    pub terminal: Option<TerminalRecord>,
+    pub attachable: bool,
+    pub blocking_code: Option<String>,
+    pub blocking_reason: Option<String>,
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct TerminalInput {

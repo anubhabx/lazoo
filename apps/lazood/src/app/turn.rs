@@ -17,9 +17,9 @@ use lazoo_providers::{
     ProviderKind, ToolCall, ToolResult, TurnEventObserver, TurnRequest,
 };
 use lazoo_store::{
-    BeginTurnSubmissionInput, CreateConversationInput, FailTurnInput, FinishTurnCancelInput,
-    MarkTurnUncertainInput, ObserveTurnInput, RecordTurnInput, RenameConversationInput,
-    RequestTurnCancelInput, RetryTurnInput, StoreError,
+    BeginTurnSubmissionInput, CreateConversationInput, FailRecordedRootTurnBeforeProviderInput,
+    FailTurnInput, FinishTurnCancelInput, MarkTurnUncertainInput, ObserveTurnInput,
+    RecordTurnInput, RenameConversationInput, RequestTurnCancelInput, RetryTurnInput, StoreError,
 };
 use serde_json::{Value, json};
 use tokio::time::{Duration, sleep};
@@ -302,8 +302,45 @@ impl App {
             return Ok(to_value(recorded));
         }
         require_task_delivery_available(&recorded)?;
-        self.deliver_recorded_turn(request, recorded, activate_if_needed)
+        match self
+            .deliver_recorded_turn(request, recorded.clone(), activate_if_needed)
             .await
+        {
+            Err(error) if error.code == "LZ-TASK-AUTHORITY-UNSUPPORTED" => {
+                self.settle_permanently_refused_recorded_root(request, &recorded, &error)?;
+                Err(error)
+            }
+            outcome => outcome,
+        }
+    }
+
+    fn settle_permanently_refused_recorded_root(
+        &self,
+        request: &JsonRpcRequest,
+        recorded: &TurnMutationResult,
+        refusal: &RpcError,
+    ) -> Result<(), RpcError> {
+        match self.store.fail_recorded_root_turn_before_provider(
+            &FailRecordedRootTurnBeforeProviderInput {
+                request_id: format!("{}:refused-before-provider", request.id),
+                idempotency_key: format!("turn:{}:refused-before-provider", recorded.turn.id),
+                turn_id: recorded.turn.id,
+                expected_revision: recorded.turn.revision,
+                failure_code: refusal.code.clone(),
+                failure_message: refusal.message.clone(),
+            },
+        ) {
+            Ok(_) => self.publish_events(),
+            Err(
+                StoreError::TurnStale { .. }
+                | StoreError::TurnState { .. }
+                | StoreError::TaskState { .. }
+                | StoreError::TaskTurnLink { .. }
+                | StoreError::MessageStale { .. }
+                | StoreError::MessageState { .. },
+            ) => Ok(()),
+            Err(error) => Err(turn_store_error(error)),
+        }
     }
 
     pub(super) async fn deliver_recorded_turn(

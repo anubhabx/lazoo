@@ -6,6 +6,13 @@ The name is a deliberately silly blend of **lazy** and **zoo**: wake the right e
 
 ## Status
 
+Backend preparation for UI implementation is tracked in
+[the integration guide](docs/UI-BACKEND-HANDOFF.md) and
+[the current handoff](docs/NEXT-SESSION.md). They distinguish supported launch
+capabilities, recoverable failures, history paging and terminal attachment from
+the remaining full-product and native-TUI gates. The desktop binding is still
+separate work.
+
 The first Windows control-plane slice, polished read-only desktop shell, native-provider adapters, durable employee roster, native-session ownership, collaboration bus, conversation/turn delivery, schema-7 automatic task dispatch, the schema-8 approval gate, Codex collaboration tools, the schema-9 incident ledger, lead notice delivery, peer messaging tools, coalesced notice turns, the schema-10 activation policy, schema-11 idle suspension, schema-12 bounded lead remediation, schema-13 user notifications, schema-14 message priority, and schema-15 configurable thresholds are implemented. Lazoo provides five native executables:
 
 - `lazoo-desktop.exe` opens a dark, command-first Tauri 2 control room for daemon health, projects, recent events, and recovered-incident count.

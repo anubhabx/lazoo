@@ -36,9 +36,9 @@ pub use configuration::{
     ConfigurationOperationState, CreateConfigurationPreviewInput, RecordConfigurationReceiptInput,
 };
 pub use conversation::{
-    BeginTurnSubmissionInput, CreateConversationInput, FailTurnInput, FinishTurnCancelInput,
-    MarkTurnUncertainInput, ObserveTurnInput, RecordTurnInput, RenameConversationInput,
-    RequestTurnCancelInput, RetryTurnInput,
+    BeginTurnSubmissionInput, CreateConversationInput, FailRecordedRootTurnBeforeProviderInput,
+    FailTurnInput, FinishTurnCancelInput, MarkTurnUncertainInput, ObserveTurnInput,
+    RecordTurnInput, RenameConversationInput, RequestTurnCancelInput, RetryTurnInput,
 };
 pub use delivery::{
     ConsumePeerMessageInput, ConsumeTaskResultInput, QueueIncidentNoticeInput,
@@ -221,6 +221,8 @@ pub enum StoreError {
     MessageValidation(#[from] lazoo_domain::MessageValidationError),
     #[error(transparent)]
     ConversationValidation(#[from] lazoo_domain::ConversationValidationError),
+    #[error(transparent)]
+    WorkspaceValidation(#[from] lazoo_domain::WorkspaceValidationError),
     #[error("conversation {conversation_id} was not found")]
     ConversationNotFound { conversation_id: Uuid },
     #[error("conversation {conversation_id} changed; current revision is {current_revision}")]

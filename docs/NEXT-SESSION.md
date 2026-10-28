@@ -1,4 +1,48 @@
-# Backend handoff: core v1 implementation, updated 2026-10-17
+# Backend handoff: UI preparation in progress, updated 2026-10-28
+
+## Current owner request and branch
+
+The owner asked to get the backend to a point where UI development can comfortably
+begin, efficiently. Current work is on `codex/backend-ui-readiness`, based on
+`feat/core-v1-completion` at `9c7fa9d`; a fresh fetch confirmed that current
+`origin/main` (`dfa35f1`) is already included. The managed worktree is
+`C:\Users\anubhab\.codex\worktrees\backend-ui-readiness\Orchestrator`.
+
+Read [the readiness plan](superpowers/plans/2026-10-28-ui-readiness.md) and
+[the UI integration guide](UI-BACKEND-HANDOFF.md) before continuing. This section
+supersedes old statements below that no terminal transport exists or that the
+launcher is sufficient as an availability-only model. The dated records below
+remain historical verification, not current-run results.
+
+Completed and independently reviewed so far:
+
+- Launcher per-lead authority choices enforce the employee ceiling and actual
+  daemon provider policy; unsupported employees are not advertised as startable.
+  The response exposes whether collaboration tools are available (currently Codex
+  only) and samples its event cursor before its source reads.
+- Direct user roots permanently refused for unsupported authority are atomically
+  closed with their message/task. The task evidence identifies a daemon refusal
+  on a user request, not native employee activity. Exact revision/state checks
+  protect races with submission, and temporary dormant/activation behavior is
+  preserved. Focused behavioral tests passed; the final full gate is still pending.
+
+In progress: backward history paging, terminal attachment status/discovery, final
+contract documentation, and a settled-tree full gate. Do not treat the branch as
+finished until the readiness verification record contains the fresh full results.
+
+The owner has been asked whether the first UI may use live activity with native
+terminal access after stopping, or must show the actual native TUI during
+orchestrated work. No answer has been received. Preserve the existing native-TUI
+requirement meanwhile. Installed Codex exposes a possible remote-TUI route, but
+sole approval/tool ownership over a multi-client transport is unproven; see
+[the read-only research](verification/2026-10-28-native-terminal-research.md).
+No live model calls or user configuration edits have been made by this work.
+
+Builds use `CARGO_BUILD_JOBS=1`, `CARGO_PROFILE_DEV_DEBUG=0`,
+`CARGO_PROFILE_TEST_DEBUG=0`, and `CARGO_INCREMENTAL=0` because host free memory is
+limited. Preserve those settings for the current target cache. The earlier
+authority/version/CPU/TUI limitations remain explicit; preparing UI integration
+does not mean all of core v1 is finished.
 
 ## Owner checkpoint
 

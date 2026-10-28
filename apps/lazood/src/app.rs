@@ -406,6 +406,7 @@ impl App {
             "session.stop" => self.stop_session(&request).await,
             "session.resources" => self.session_resources(&request.params).await,
             "session.terminal.attach" => self.session_terminal_attach(request.params).await,
+            "session.terminal.status" => self.session_terminal_status(request.params).await,
             "conversation.create" => self.create_conversation(&request),
             "conversation.list" => self.conversation_list(request.params),
             "conversation.show" => self.conversation_show(request.params),

@@ -9,8 +9,8 @@ use std::collections::BTreeMap;
 
 use lazoo_domain::{
     ConversationFacts, InboxCursor, WorkerFacts, conversation_marker, conversation_title,
-    lead_actions, lead_lifecycle, lead_startability, turn_in_flight, validate_workspace_limit,
-    worker_actions, worker_label, worker_state,
+    effective_authority, lead_actions, lead_lifecycle, lead_startability, turn_in_flight,
+    validate_workspace_limit, worker_actions, worker_label, worker_state,
 };
 use lazoo_protocol::{
     AuthorityMode, ConversationRow, InboxAttention, IncidentEscalation, IncidentState,
@@ -20,6 +20,7 @@ use lazoo_protocol::{
     WorkspaceConversationsResult, WorkspaceLauncherParams, WorkspaceLauncherResult, WorkspaceScope,
     WorkspaceStartAction,
 };
+use lazoo_providers::ProviderKind;
 use lazoo_store::{ConversationWorkspace, InboxSources, WorkerRow};
 use serde_json::{Value, json};
 use uuid::Uuid;
@@ -124,16 +125,35 @@ impl App {
         }))
     }
 
+    #[allow(clippy::too_many_lines)] // Keep one bounded launcher projection and its read ordering together.
     pub(super) fn workspace_launcher(&self, value: &Value) -> Result<Value, RpcError> {
         let params: WorkspaceLauncherParams = serde_json::from_value(value.clone())
             .map_err(|error| workspace_invalid(error.to_string()))?;
+        // Capture the lower bound before every read this response combines. A redundant refresh
+        // is safe; advertising a later mark than the response represents could lose an event.
+        let event_high_water = self.store.status().map_err(store_error)?.event_high_water;
         let project = self.require_project(params.project_id)?;
         let roster = self.store.roster_snapshot().map_err(store_error)?;
         let mut leads: Vec<LeadCandidate> = roster
             .entries
             .iter()
             .map(|entry| {
-                let (startable, blocking_reason) = lead_startability(entry);
+                let (availability_startable, availability_blocking_reason) =
+                    lead_startability(entry);
+                let provider = entry.employee.provider.parse::<ProviderKind>().ok();
+                let authority_modes = provider.map_or_else(Vec::new, |provider| {
+                    lead_authority_modes(provider, entry.employee.authority_mode)
+                });
+                let authority_reason = authority_modes
+                    .is_empty()
+                    .then(|| "the selected provider cannot enforce any authority mode".to_owned());
+                let (startable, blocking_reason) = if !availability_startable {
+                    (false, availability_blocking_reason)
+                } else if authority_modes.is_empty() {
+                    (false, authority_reason.clone())
+                } else {
+                    (true, None)
+                };
                 LeadCandidate {
                     employee_id: entry.employee.id,
                     name: entry.employee.name.clone(),
@@ -145,6 +165,10 @@ impl App {
                     checkout_policy: entry.employee.checkout_policy,
                     availability: entry.availability,
                     availability_reason: entry.availability_reason.clone(),
+                    authority_modes,
+                    authority_reason,
+                    collaboration_tools_available: provider
+                        .is_some_and(collaboration_tools_available),
                     startable,
                     blocking_reason,
                     configuration_revision: entry.employee.configuration_revision,
@@ -167,7 +191,6 @@ impl App {
                     |lead| lead.blocking_reason.clone(),
                 )
         });
-        let event_high_water = self.store.status().map_err(store_error)?.event_high_water;
         Ok(to_value(WorkspaceLauncherResult {
             version: WORKSPACE_CONTRACT_V1,
             project,
@@ -246,6 +269,31 @@ impl App {
     }
 }
 
+/// The authority modes a new session can serve, using the same policy applied when the daemon
+/// records and delivers turns. This must not claim modes above a provider or employee ceiling.
+fn lead_authority_modes(
+    provider: ProviderKind,
+    employee_authority: AuthorityMode,
+) -> Vec<AuthorityMode> {
+    [
+        AuthorityMode::Ask,
+        AuthorityMode::SelfDecision,
+        AuthorityMode::FullAutonomy,
+    ]
+    .into_iter()
+    .filter(|authority| {
+        let effective = effective_authority(*authority, *authority, employee_authority);
+        effective == *authority
+            && super::session_serves_authority(provider, effective, employee_authority)
+    })
+    .collect()
+}
+
+/// `start_new_session` only attaches Lazoo's collaboration tools to Codex sessions.
+const fn collaboration_tools_available(provider: ProviderKind) -> bool {
+    matches!(provider, ProviderKind::Codex)
+}
+
 fn workspace_invalid(message: impl Into<String>) -> RpcError {
     RpcError {
         code: "LZ-WORKSPACE-INVALID".to_owned(),
@@ -262,9 +310,17 @@ impl App {
             .map_err(|error| workspace_invalid(error.to_string()))?;
         validate_workspace_limit(params.turn_limit)
             .map_err(|error| workspace_invalid(error.to_string()))?;
+        if params
+            .before_turn_sequence
+            .is_some_and(|value| value == 0 || value > i64::MAX as u64)
+        {
+            return Err(workspace_invalid(
+                "beforeTurnSequence must be positive and fit a signed 64-bit sequence",
+            ));
+        }
         let workspace = self
             .store
-            .conversation_workspace(params.id, params.turn_limit)
+            .conversation_workspace_page(params.id, params.turn_limit, params.before_turn_sequence)
             .map_err(conversation_store_error)?;
         let conversation = &workspace.conversation;
         let project = self.require_project(conversation.project_id)?;
@@ -301,6 +357,7 @@ impl App {
             root_task: workspace.root_task,
             turns: workspace.turns,
             turns_truncated: workspace.turns_truncated,
+            next_before_turn_sequence: workspace.next_before_turn_sequence,
             workers,
             attention,
             event_high_water: workspace.event_high_water.min(sources.event_high_water),
@@ -444,5 +501,46 @@ fn conversation_store_error(error: lazoo_store::StoreError) -> RpcError {
             data: Some(json!({"conversationId": conversation_id})),
         },
         other => store_error(other),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use lazoo_protocol::AuthorityMode;
+    use lazoo_providers::ProviderKind;
+
+    use super::{collaboration_tools_available, lead_authority_modes};
+
+    #[test]
+    fn launcher_authority_modes_match_effective_session_authority() {
+        assert_eq!(
+            lead_authority_modes(ProviderKind::Codex, AuthorityMode::Ask),
+            vec![AuthorityMode::Ask]
+        );
+        assert_eq!(
+            lead_authority_modes(ProviderKind::ClaudeCode, AuthorityMode::Ask),
+            Vec::<AuthorityMode>::new()
+        );
+        assert_eq!(
+            lead_authority_modes(ProviderKind::ClaudeCode, AuthorityMode::FullAutonomy),
+            vec![AuthorityMode::FullAutonomy]
+        );
+        assert_eq!(
+            lead_authority_modes(ProviderKind::OpenCode, AuthorityMode::SelfDecision),
+            vec![AuthorityMode::Ask, AuthorityMode::SelfDecision]
+        );
+        assert_eq!(
+            lead_authority_modes(ProviderKind::OpenCode, AuthorityMode::FullAutonomy),
+            vec![AuthorityMode::FullAutonomy]
+        );
+        assert!(lead_authority_modes(ProviderKind::Antigravity, AuthorityMode::Ask).is_empty());
+        assert!(lead_authority_modes(ProviderKind::GrokBuild, AuthorityMode::Ask).is_empty());
+    }
+
+    #[test]
+    fn only_codex_leads_receive_collaboration_tools() {
+        assert!(collaboration_tools_available(ProviderKind::Codex));
+        assert!(!collaboration_tools_available(ProviderKind::ClaudeCode));
+        assert!(!collaboration_tools_available(ProviderKind::OpenCode));
     }
 }

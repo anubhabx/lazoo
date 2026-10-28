@@ -7,9 +7,9 @@ use std::{
 
 use lazoo_protocol::{
     EmployeeSessionRecord, RpcError, SessionLifecycleState, SessionTerminalAttachParams,
-    SessionTerminalAttachResult, TerminalInput, TerminalListResult, TerminalOpenParams,
-    TerminalOutput, TerminalOutputRequest, TerminalRecord, TerminalResizeParams,
-    TerminalShowParams, TerminalStopParams,
+    SessionTerminalAttachResult, SessionTerminalStatusParams, SessionTerminalStatusResult,
+    TerminalInput, TerminalListResult, TerminalOpenParams, TerminalOutput, TerminalOutputRequest,
+    TerminalRecord, TerminalResizeParams, TerminalShowParams, TerminalStopParams,
 };
 use lazoo_providers::{ProviderError, ProviderKind, attach_args};
 use lazoo_runtime::{TerminalCommand, TerminalError, TerminalSession};
@@ -48,6 +48,96 @@ struct Reservation {
 }
 
 impl App {
+    /// `session.terminal.status` is observational: it reap-checks terminal exit state like other
+    /// reads but never reserves a slot, starts a process, or publishes an event.
+    pub(super) async fn session_terminal_status(&self, params: Value) -> Result<Value, RpcError> {
+        let params: SessionTerminalStatusParams = serde_json::from_value(params)
+            .map_err(|error| super::invalid_params(error.to_string()))?;
+        let session = self
+            .store
+            .get_session(params.id)
+            .map_err(super::session_store_error)?;
+        let (opening, terminal, attached) = {
+            let mut state = self.terminals.lock().await;
+            release_exited(&mut state, self.boot_id)
+                .map_err(|error| attach_failed(&error, session.id))?;
+            let binding = state.attachments.get(&session.id).copied();
+            let terminal = binding.flatten().and_then(|id| {
+                state
+                    .sessions
+                    .get(&id)
+                    .and_then(|live| record(self.boot_id, id, live).ok())
+                    .or_else(|| {
+                        state
+                            .command_keys
+                            .values()
+                            .find(|key| key.id == id)
+                            .map(|key| key.last.clone())
+                    })
+            });
+            let attached = binding.is_some_and(|bound| {
+                bound.is_none_or(|terminal_id| state.sessions.contains_key(&terminal_id))
+            });
+            (binding == Some(None), terminal, attached)
+        };
+        let blocked: Option<(String, String)> = if attached {
+            Some((
+                "LZ-SESSION-ATTACHED".to_owned(),
+                "an owner terminal is already attached to this session".to_owned(),
+            ))
+        } else if session.state != SessionLifecycleState::Suspended {
+            Some((
+                "LZ-SESSION-STATE".to_owned(),
+                "only suspended sessions can be attached".to_owned(),
+            ))
+        } else if self
+            .store
+            .is_memory_summary_session(session.id)
+            .map_err(super::session_store_error)?
+        {
+            Some((
+                "LZ-MEMORY-SESSION-RESERVED".to_owned(),
+                "memory summary sessions are reserved and cannot be taken over".to_owned(),
+            ))
+        } else if self
+            .store
+            .active_session_for_employee(session.employee_id)
+            .map_err(super::session_store_error)?
+            .is_some()
+        {
+            Some((
+                "LZ-SESSION-CONFLICT".to_owned(),
+                "an active session already owns this employee".to_owned(),
+            ))
+        } else {
+            let probe = SessionTerminalAttachParams {
+                id: session.id,
+                expected_revision: session.revision,
+                columns: 80,
+                rows: 25,
+                idempotency_key: "status-probe".to_owned(),
+            };
+            match self.attach_command(&session, &probe) {
+                Err(error) => Some((error.code, error.message)),
+                Ok(open) => validate_open(&open)
+                    .err()
+                    .map(|reason| ("LZ-SESSION-ATTACH-FAILED".to_owned(), reason)),
+            }
+        };
+        let (blocking_code, blocking_reason) =
+            blocked.map_or((None, None), |(code, reason)| (Some(code), Some(reason)));
+        Ok(super::to_value(SessionTerminalStatusResult {
+            boot_id: self.boot_id,
+            session_id: session.id,
+            session_revision: session.revision,
+            opening,
+            terminal,
+            attachable: blocking_code.is_none(),
+            blocking_code,
+            blocking_reason,
+        }))
+    }
+
     pub(super) async fn terminal_control(
         &self,
         method: &str,

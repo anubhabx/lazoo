@@ -1,4 +1,7 @@
-use lazoo_protocol::{SessionTerminalAttachParams, SessionTerminalAttachResult, TerminalRecord};
+use lazoo_protocol::{
+    SessionTerminalAttachParams, SessionTerminalAttachResult, SessionTerminalStatusParams,
+    TerminalRecord,
+};
 use serde_json::json;
 use uuid::Uuid;
 
@@ -52,5 +55,16 @@ fn session_terminal_attach_contracts_are_strict_camel_case_and_wrap_a_plain_term
     assert_eq!(
         serde_json::from_value::<SessionTerminalAttachResult>(value).unwrap(),
         result
+    );
+}
+
+#[test]
+fn session_terminal_status_uses_a_strict_session_identifier() {
+    let id = Uuid::new_v4();
+    let status: SessionTerminalStatusParams = serde_json::from_value(json!({"id": id})).unwrap();
+    assert_eq!(status.id, id);
+    assert!(
+        serde_json::from_value::<SessionTerminalStatusParams>(json!({"id": id, "opening": true}))
+            .is_err()
     );
 }

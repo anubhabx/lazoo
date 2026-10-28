@@ -5,10 +5,10 @@ use lazoo_protocol::{
 };
 use lazoo_store::{
     AcceptTaskInput, BeginSessionInput, BeginTurnSubmissionInput, CancelTaskInput,
-    CreateConversationInput, CreateEmployeeInput, DelegateTaskInput, FailTurnInput,
-    FinishTurnCancelInput, MarkSessionReadyInput, MarkTurnUncertainInput, ObserveTurnInput,
-    RecordTurnInput, RegisterProjectInput, RequestTurnCancelInput, RetryTurnInput, Store,
-    StoreError,
+    CreateConversationInput, CreateEmployeeInput, DelegateTaskInput,
+    FailRecordedRootTurnBeforeProviderInput, FailTurnInput, FinishTurnCancelInput,
+    MarkSessionReadyInput, MarkTurnUncertainInput, ObserveTurnInput, RecordTurnInput,
+    RegisterProjectInput, RequestTurnCancelInput, RetryTurnInput, Store, StoreError,
 };
 use serde_json::json;
 use tempfile::tempdir;
@@ -88,6 +88,173 @@ fn record_turn(
             max_attempts: 3,
         })
         .unwrap()
+}
+
+#[test]
+fn recorded_root_can_be_terminally_refused_before_provider_submission() {
+    let temporary = tempdir().unwrap();
+    let store = Store::open_path(temporary.path().join("state.db")).unwrap();
+    let employee = store
+        .create_employee(&employee("lead", true, true))
+        .unwrap()
+        .employee;
+    let conversation =
+        create_conversation(&store, "refused-root-conversation", employee.id, None).conversation;
+    let recorded = record_turn(
+        &store,
+        "refused-root",
+        conversation.id,
+        user(),
+        None,
+        "a root that cannot reach the provider",
+    );
+
+    let refused = store
+        .fail_recorded_root_turn_before_provider(&FailRecordedRootTurnBeforeProviderInput {
+            request_id: "refuse-root-request".to_owned(),
+            idempotency_key: "refuse-root".to_owned(),
+            turn_id: recorded.turn.id,
+            expected_revision: recorded.turn.revision,
+            failure_code: "LZ-TASK-AUTHORITY-UNSUPPORTED".to_owned(),
+            failure_message: "the selected provider cannot enforce this task authority ceiling"
+                .to_owned(),
+        })
+        .unwrap();
+    assert_eq!(refused.turn.state, TurnState::TerminalFailed);
+    assert_eq!(refused.turn.revision, 2);
+    assert!(refused.turn.submitted_at.is_none());
+    assert!(refused.turn.accepted_at.is_none());
+    assert!(refused.turn.native_turn_id.is_none());
+    assert!(refused.turn.events.is_empty());
+    assert_eq!(
+        refused.message.delivery.state,
+        MessageDeliveryState::TerminalFailed
+    );
+    let root = store.get_task(recorded.turn.id).unwrap().task;
+    assert_eq!(root.state, TaskState::Failed);
+    assert!(root.active_turn_id.is_none());
+    let failed_evidence = store
+        .get_task(recorded.turn.id)
+        .unwrap()
+        .evidence
+        .pop()
+        .unwrap();
+    assert_eq!(failed_evidence.kind, TaskEvidenceKind::Failed);
+    assert_eq!(failed_evidence.actor, user());
+    assert_eq!(failed_evidence.session_id, None);
+    assert_eq!(
+        failed_evidence.detail["source"],
+        "daemon-pre-provider-rejection"
+    );
+
+    let replay = store
+        .fail_recorded_root_turn_before_provider(&FailRecordedRootTurnBeforeProviderInput {
+            request_id: "refuse-root-replay-request".to_owned(),
+            idempotency_key: "refuse-root".to_owned(),
+            turn_id: recorded.turn.id,
+            expected_revision: recorded.turn.revision,
+            failure_code: "LZ-TASK-AUTHORITY-UNSUPPORTED".to_owned(),
+            failure_message: "the selected provider cannot enforce this task authority ceiling"
+                .to_owned(),
+        })
+        .unwrap();
+    assert_eq!(replay.turn, refused.turn);
+    assert_eq!(replay.event_sequence, None);
+}
+
+#[test]
+fn refusing_a_recorded_root_leaves_stale_submitting_and_non_root_turns_untouched() {
+    let temporary = tempdir().unwrap();
+    let store = Store::open_path(temporary.path().join("state.db")).unwrap();
+    let employee = store
+        .create_employee(&employee("refusal-guards", true, true))
+        .unwrap()
+        .employee;
+    let conversation =
+        create_conversation(&store, "refusal-guards-conversation", employee.id, None).conversation;
+    let root = record_turn(
+        &store,
+        "refusal-guards-root",
+        conversation.id,
+        user(),
+        None,
+        "root",
+    );
+    let refusal = |turn_id, expected_revision| FailRecordedRootTurnBeforeProviderInput {
+        request_id: "refusal-guards-request".to_owned(),
+        idempotency_key: format!("refusal-guards-{turn_id}-{expected_revision}"),
+        turn_id,
+        expected_revision,
+        failure_code: "LZ-TASK-AUTHORITY-UNSUPPORTED".to_owned(),
+        failure_message: "the selected provider cannot enforce this task authority ceiling"
+            .to_owned(),
+    };
+
+    assert!(matches!(
+        store.fail_recorded_root_turn_before_provider(&refusal(root.turn.id, 0)),
+        Err(StoreError::TurnStale { .. })
+    ));
+    assert_eq!(
+        store.get_turn(root.turn.id).unwrap().state,
+        TurnState::Recorded
+    );
+    assert_eq!(
+        store
+            .get_message(root.message.envelope.id)
+            .unwrap()
+            .delivery
+            .state,
+        MessageDeliveryState::Queued
+    );
+
+    let session_id = warm_session(&store, employee.id, Uuid::from_u128(900));
+    let submitting = store
+        .begin_turn_submission(&BeginTurnSubmissionInput {
+            request_id: "refusal-guards-begin".to_owned(),
+            idempotency_key: "refusal-guards-begin".to_owned(),
+            turn_id: root.turn.id,
+            expected_revision: root.turn.revision,
+            owner_boot_id: Uuid::from_u128(900),
+            recipient_session_id: session_id,
+        })
+        .unwrap();
+    assert!(matches!(
+        store.fail_recorded_root_turn_before_provider(&refusal(
+            root.turn.id,
+            submitting.turn.revision
+        )),
+        Err(StoreError::TurnState { .. })
+    ));
+    assert_eq!(
+        store.get_turn(root.turn.id).unwrap().state,
+        TurnState::Submitting
+    );
+
+    let non_root = store
+        .record_turn(&RecordTurnInput {
+            request_id: "refusal-guards-follow-up-request".to_owned(),
+            idempotency_key: "refusal-guards-follow-up".to_owned(),
+            conversation_id: conversation.id,
+            author: user(),
+            recipient: None,
+            task_id: Some(root.turn.id),
+            authority_mode: AuthorityMode::Ask,
+            text: "follow-up".to_owned(),
+            activate_if_needed: false,
+            max_attempts: 3,
+        })
+        .unwrap();
+    assert!(matches!(
+        store.fail_recorded_root_turn_before_provider(&refusal(
+            non_root.turn.id,
+            non_root.turn.revision
+        )),
+        Err(StoreError::TaskTurnLink { .. })
+    ));
+    assert_eq!(
+        store.get_turn(non_root.turn.id).unwrap().state,
+        TurnState::Recorded
+    );
 }
 
 fn warm_session(store: &Store, employee_id: Uuid, owner_boot_id: Uuid) -> Uuid {
@@ -1318,4 +1485,77 @@ fn conversation_rename_is_revisioned_naturally_idempotent_and_validated() {
             "conversation.renamed"
         ]
     );
+}
+
+#[test]
+fn workspace_history_pages_backward_without_duplicates_or_cross_conversation_rows() {
+    let temporary = tempdir().unwrap();
+    let store = Store::open_path(temporary.path().join("state.db")).unwrap();
+    let lead = store
+        .create_employee(&employee("lead", true, true))
+        .unwrap()
+        .employee;
+    let conversation = create_conversation(&store, "history", lead.id, None).conversation;
+    let other = create_conversation(&store, "other-history", lead.id, None).conversation;
+    for index in 0..7 {
+        record_turn(
+            &store,
+            &format!("history-{index}"),
+            conversation.id,
+            user(),
+            None,
+            "history",
+        );
+    }
+    record_turn(&store, "other-turn", other.id, user(), None, "other");
+    let first = store
+        .conversation_workspace_page(conversation.id, 3, None)
+        .unwrap();
+    let first_ids: Vec<_> = first.turns.iter().map(|turn| turn.id).collect();
+    assert_eq!(first.turns.len(), 3);
+    let second = store
+        .conversation_workspace_page(conversation.id, 3, first.next_before_turn_sequence)
+        .unwrap();
+    let second_ids: Vec<_> = second.turns.iter().map(|turn| turn.id).collect();
+    let third = store
+        .conversation_workspace_page(conversation.id, 3, second.next_before_turn_sequence)
+        .unwrap();
+    assert_eq!(third.turns.len(), 1);
+    assert_eq!(third.next_before_turn_sequence, None);
+    for page in [&first, &second, &third] {
+        assert!(
+            page.turns
+                .windows(2)
+                .all(|pair| pair[0].sequence < pair[1].sequence)
+        );
+        assert!(
+            page.turns
+                .iter()
+                .all(|turn| turn.conversation_id == conversation.id)
+        );
+    }
+    assert!(first_ids.iter().all(|id| !second_ids.contains(id)));
+    assert!(
+        second
+            .turns
+            .iter()
+            .all(|turn| turn.conversation_id == conversation.id)
+    );
+    let newest = record_turn(
+        &store,
+        "history-new",
+        conversation.id,
+        user(),
+        None,
+        "newest",
+    );
+    let stable = store
+        .conversation_workspace_page(conversation.id, 3, first.next_before_turn_sequence)
+        .unwrap();
+    assert_eq!(
+        stable.turns.iter().map(|turn| turn.id).collect::<Vec<_>>(),
+        second_ids
+    );
+    assert_eq!(stable.latest_lead_turn.unwrap().0, newest.turn.id);
+    assert_eq!(stable.root_task.unwrap().id, newest.turn.id);
 }

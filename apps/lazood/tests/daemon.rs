@@ -12,7 +12,8 @@ use std::{
 
 use lazoo_protocol::{
     AuthorityMode, CheckoutMode, DesktopSnapshot, EmployeeCheckoutPolicy, JsonRpcRequest,
-    MessageDeliveryState, ProviderObservation, TurnState,
+    MessageDeliveryState, MessageSender, ProviderObservation, TaskEvidenceKind, TaskState,
+    TurnState,
 };
 use lazoo_providers::{
     DiscoveryEnvironment, PermissionDecision, PermissionKind, PermissionRequest, ProviderError,
@@ -460,6 +461,69 @@ fn configured_employee_named(
         })
         .unwrap()
         .employee
+}
+
+#[tokio::test]
+async fn workspace_launcher_blocks_available_leads_without_a_usable_authority_mode() {
+    let temporary = tempdir().unwrap();
+    let root = DataRoot::from_path(temporary.path().join("data"));
+    root.ensure().unwrap();
+    let store = Store::open_path(root.state_db()).unwrap();
+    let employee = store
+        .create_employee(&CreateEmployeeInput {
+            request_id: "create-antigravity-request".to_owned(),
+            idempotency_key: "create-antigravity".to_owned(),
+            name: "Ari".to_owned(),
+            provider: "antigravity".to_owned(),
+            role: "Lead".to_owned(),
+            instructions: String::new(),
+            model: None,
+            reasoning_effort: None,
+            native_settings: json!({}),
+            authority_mode: AuthorityMode::Ask,
+            checkout_policy: EmployeeCheckoutPolicy::Isolated,
+            activation_policy: lazoo_protocol::ActivationPolicy::Manual,
+            idle_timeout_seconds: 0,
+            enabled: true,
+            provider_observation: Some(ProviderObservation {
+                provider: "antigravity".to_owned(),
+                verification: "configured".to_owned(),
+                version: Some("test".to_owned()),
+                protocol: Some("app-server/v2".to_owned()),
+                capabilities: json!({"session": true}),
+                authentication: json!({"native": "ready", "external": "unknown"}),
+                degradation_reason: None,
+                checked_at: "2026-08-31T00:00:00Z".to_owned(),
+            }),
+        })
+        .unwrap()
+        .employee;
+    let app =
+        App::new_with_provider_environment(store, root, DiscoveryEnvironment::empty()).unwrap();
+
+    let launcher = app
+        .handle(request("launcher", "workspace.launcher", json!({})))
+        .await
+        .result
+        .unwrap();
+    let lead = launcher["leads"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|lead| lead["employeeId"] == json!(employee.id))
+        .unwrap();
+    assert_eq!(lead["availability"], "dormant");
+    assert_eq!(lead["authorityModes"], json!([]));
+    assert_eq!(
+        lead["authorityReason"],
+        "the selected provider cannot enforce any authority mode"
+    );
+    assert_eq!(lead["startable"], false);
+    assert_eq!(
+        lead["blockingReason"],
+        "the selected provider cannot enforce any authority mode"
+    );
+    assert_eq!(lead["collaborationToolsAvailable"], false);
 }
 
 fn message_test_app() -> (
@@ -2663,6 +2727,7 @@ async fn turn_submit_without_observed_evidence_never_acknowledges_message() {
 }
 
 #[tokio::test]
+#[allow(clippy::too_many_lines)] // One refusal and its atomic turn/message/task evidence plus replay.
 async fn task_turn_rejects_a_provider_without_authority_override_support_before_io() {
     let temporary = tempdir().unwrap();
     let root = DataRoot::from_path(temporary.path().join("data"));
@@ -2748,10 +2813,52 @@ async fn task_turn_rejects_a_provider_without_authority_override_support_before_
     let turn = store
         .get_turn(store.list_turns(conversation.id, 0, 100).unwrap()[0].id)
         .unwrap();
-    assert_eq!(turn.state, TurnState::Recorded);
+    assert_eq!(turn.state, TurnState::TerminalFailed);
+    assert!(turn.submitted_at.is_none());
+    assert!(turn.accepted_at.is_none());
+    assert!(turn.native_turn_id.is_none());
+    assert!(turn.events.is_empty());
     assert_eq!(
         store.get_message(turn.message_id).unwrap().delivery.state,
-        MessageDeliveryState::Queued
+        MessageDeliveryState::TerminalFailed
+    );
+    let root = store.get_task(turn.id).unwrap().task;
+    assert_eq!(root.state, TaskState::Failed);
+    assert!(root.active_turn_id.is_none());
+    let failed_evidence = store
+        .get_task(turn.id)
+        .unwrap()
+        .evidence
+        .into_iter()
+        .find(|evidence| evidence.kind == TaskEvidenceKind::Failed)
+        .unwrap();
+    assert!(matches!(failed_evidence.actor, MessageSender::User(_)));
+    assert_eq!(failed_evidence.session_id, None);
+    assert_eq!(
+        failed_evidence.detail["source"],
+        "daemon-pre-provider-rejection"
+    );
+
+    let replay = app
+        .handle(request(
+            "turn-submit-replay",
+            "turn.submit",
+            json!({
+                "conversationId": conversation.id,
+                "author": {"kind": "user"},
+                "recipient": null,
+                "text": "Unsupported provider fixture",
+                "idempotencyKey": "submit-claude"
+            }),
+        ))
+        .await
+        .result
+        .unwrap();
+    assert_eq!(replay["turn"]["state"], "terminal-failed");
+    assert_eq!(backend.turns.load(Ordering::SeqCst), 0);
+    assert_eq!(
+        store.get_message(turn.message_id).unwrap().attempts.len(),
+        1
     );
 }
 
@@ -4572,6 +4679,74 @@ fn stop_terminal_params(terminal: &serde_json::Value) -> serde_json::Value {
     })
 }
 
+#[tokio::test]
+async fn session_terminal_status_recovers_attachment_without_mutating_the_daemon() {
+    let (_temporary, store, app, backend, employee_id) = attach_test_app();
+    let session = suspended_session(&app, employee_id, "status").await;
+    let before = store.list_events(0, 1024).unwrap().len();
+    let status = |id: &str| {
+        app.handle(request(
+            id,
+            "session.terminal.status",
+            json!({"id": session["id"]}),
+        ))
+    };
+
+    let eligible = status("eligible").await.result.unwrap();
+    assert_eq!(eligible["attachable"], true);
+    assert_eq!(eligible["terminal"], serde_json::Value::Null);
+    assert_eq!(backend.starts.load(Ordering::SeqCst), 1);
+    assert_eq!(store.list_events(0, 1024).unwrap().len(), before);
+
+    let attached = app
+        .handle(request(
+            "attach",
+            "session.terminal.attach",
+            attach_params(&session, "status-attach"),
+        ))
+        .await
+        .result
+        .unwrap();
+    let terminal = attached["terminal"].clone();
+    let live = status("live").await.result.unwrap();
+    assert_eq!(live["attachable"], false);
+    assert_eq!(live["blockingCode"], "LZ-SESSION-ATTACHED");
+    assert_eq!(live["terminal"]["id"], terminal["id"]);
+
+    app.handle(request(
+        "stop-terminal",
+        "terminal.stop",
+        stop_terminal_params(&terminal),
+    ))
+    .await
+    .result
+    .unwrap();
+    let exited = status("exited").await.result.unwrap();
+    assert_eq!(exited["attachable"], true);
+    assert_eq!(exited["terminal"]["id"], terminal["id"]);
+    assert_eq!(exited["terminal"]["live"], false);
+}
+
+#[tokio::test]
+async fn session_terminal_status_refuses_a_missing_attach_working_directory() {
+    let (_temporary, _store, app, _backend, employee_id) = attach_test_app();
+    let session = suspended_session(&app, employee_id, "missing-cwd").await;
+    let session_id: uuid::Uuid = session["id"].as_str().unwrap().parse().unwrap();
+    std::fs::remove_dir_all(app.data_root().session_working_dir(session_id)).unwrap();
+    let status = app
+        .handle(request(
+            "missing-cwd-status",
+            "session.terminal.status",
+            json!({"id": session_id}),
+        ))
+        .await
+        .result
+        .unwrap();
+    assert_eq!(status["attachable"], false);
+    assert_eq!(status["blockingCode"], "LZ-SESSION-ATTACH-FAILED");
+    assert_eq!(status["blockingReason"], "terminal cwd must be a directory");
+}
+
 /// The owner takes over a finished Codex session: the terminal runs the discovered executable
 /// with the recorded native id in the session's own directory, a replay returns the same
 /// terminal, a second attach is refused while it lives, a stop frees the slot, and each attach
@@ -4707,6 +4882,17 @@ async fn session_terminal_attach_refuses_idle_sessions_stale_revisions_and_unkno
     let attach = |id: &str, params: serde_json::Value| {
         app.handle(request(id, "session.terminal.attach", params))
     };
+    let active_status = app
+        .handle(request(
+            "active-status",
+            "session.terminal.status",
+            json!({"id": warmed["id"]}),
+        ))
+        .await
+        .result
+        .unwrap();
+    assert_eq!(active_status["attachable"], false);
+    assert_eq!(active_status["blockingCode"], "LZ-SESSION-STATE");
 
     let idle = attach("idle", attach_params(&warmed, "idle"))
         .await
@@ -4831,6 +5017,17 @@ async fn session_terminal_attach_fails_closed_without_an_executable_or_a_resume_
             .unwrap()
             .employee;
         let session = suspended_session(&app, employee.id, provider).await;
+        let status = app
+            .handle(request(
+                "unsupported-status",
+                "session.terminal.status",
+                json!({"id": session["id"]}),
+            ))
+            .await
+            .result
+            .unwrap();
+        assert_eq!(status["attachable"], false);
+        assert_eq!(status["blockingCode"], "LZ-SESSION-ATTACH-UNSUPPORTED");
         let unsupported = app
             .handle(request(
                 provider,
@@ -12847,6 +13044,14 @@ async fn the_user_browses_a_space_and_its_launcher_through_the_daemon() {
         leads.iter().all(|lead| lead["startable"] == true),
         "{leads:?}"
     );
+    assert!(
+        leads.iter().all(|lead| {
+            lead["authorityModes"] == json!(["ask"])
+                && lead["authorityReason"].is_null()
+                && lead["collaborationToolsAvailable"] == true
+        }),
+        "{leads:?}"
+    );
     assert_eq!(leads[1]["availability"], "idle");
     assert_eq!(launcher["start"][0]["method"], "conversation.create");
     assert_eq!(launcher["start"][1]["method"], "turn.submit");
@@ -12884,6 +13089,9 @@ async fn the_user_browses_a_space_and_its_launcher_through_the_daemon() {
         .unwrap();
     assert_eq!(mira_lead["startable"], false);
     assert_eq!(mira_lead["blockingReason"], "Mira is disabled");
+    assert_eq!(mira_lead["authorityModes"], json!(["ask"]));
+    assert_eq!(mira_lead["authorityReason"], serde_json::Value::Null);
+    assert_eq!(mira_lead["collaborationToolsAvailable"], true);
     let refused = call(
         "launcher-bad",
         "workspace.launcher",
@@ -13001,6 +13209,16 @@ async fn the_user_opens_the_conversation_header_and_worker_dock_through_the_daem
         (
             "bad-limit",
             json!({"id": harness.conversation_id, "turnLimit": 0}),
+            "LZ-WORKSPACE-INVALID",
+        ),
+        (
+            "bad-before-zero",
+            json!({"id": harness.conversation_id, "beforeTurnSequence": 0}),
+            "LZ-WORKSPACE-INVALID",
+        ),
+        (
+            "bad-before-overflow",
+            json!({"id": harness.conversation_id, "beforeTurnSequence": 9_223_372_036_854_775_808_u64}),
             "LZ-WORKSPACE-INVALID",
         ),
         (

@@ -183,6 +183,9 @@ pub enum WorkspaceCommand {
         /// How many of the newest turns to include (1 to 500).
         #[arg(long, default_value_t = 50)]
         turn_limit: u32,
+        /// Exclusive sequence cursor for an older history page.
+        #[arg(long)]
+        before_turn_sequence: Option<u64>,
     },
 }
 
@@ -397,6 +400,10 @@ pub enum SessionCommand {
     },
     /// Process count, CPU time, and peak memory of a live session's native process tree.
     Resources {
+        id: Uuid,
+    },
+    /// Read-only owner-terminal recovery state for an employee session.
+    TerminalStatus {
         id: Uuid,
     },
     Stop {
@@ -797,8 +804,14 @@ async fn round_trip(
 /// legitimately wait on a provider turn, a probe, or a worktree and gets the long tier.
 fn response_timeout(method: &str) -> Duration {
     match method {
-        "system.status" | "system.resources" | "system.budget" | "project.list" | "events.list"
-        | "roster.get" | "provider.list" => SHORT_RESPONSE_TIMEOUT,
+        "system.status"
+        | "system.resources"
+        | "system.budget"
+        | "project.list"
+        | "events.list"
+        | "roster.get"
+        | "provider.list"
+        | "session.terminal.status" => SHORT_RESPONSE_TIMEOUT,
         _ => LONG_RESPONSE_TIMEOUT,
     }
 }
@@ -1008,9 +1021,13 @@ fn workspace_request(command: &WorkspaceCommand) -> (&'static str, Value, bool) 
             json!({"projectId": project_id}),
             false,
         ),
-        WorkspaceCommand::Show { id, turn_limit } => (
+        WorkspaceCommand::Show {
+            id,
+            turn_limit,
+            before_turn_sequence,
+        } => (
             "workspace.conversation",
-            json!({"id": id, "turnLimit": turn_limit}),
+            json!({"id": id, "turnLimit": turn_limit, "beforeTurnSequence": before_turn_sequence}),
             false,
         ),
     }
@@ -1572,6 +1589,9 @@ fn session_request(command: &SessionCommand) -> (&'static str, Value, bool) {
         SessionCommand::List => ("session.list", json!({}), false),
         SessionCommand::Show { id } => ("session.show", json!({"id": id}), false),
         SessionCommand::Resources { id } => ("session.resources", json!({"id": id}), false),
+        SessionCommand::TerminalStatus { id } => {
+            ("session.terminal.status", json!({"id": id}), false)
+        }
         SessionCommand::Stop {
             id,
             expected_revision,
@@ -1948,6 +1968,7 @@ mod tests {
             "events.list",
             "roster.get",
             "provider.list",
+            "session.terminal.status",
         ] {
             assert_eq!(response_timeout(method), SHORT_RESPONSE_TIMEOUT, "{method}");
         }
@@ -1964,5 +1985,23 @@ mod tests {
         assert_eq!(REQUEST_WRITE_TIMEOUT, Duration::from_secs(5));
         assert!(SHORT_RESPONSE_TIMEOUT < Duration::from_secs(30));
         assert!(LONG_RESPONSE_TIMEOUT > Duration::from_secs(300));
+    }
+
+    #[test]
+    fn read_contract_commands_map_the_new_cursor_and_terminal_status() {
+        let id = Uuid::new_v4();
+        let (method, params, _) = workspace_request(&WorkspaceCommand::Show {
+            id,
+            turn_limit: 7,
+            before_turn_sequence: Some(99),
+        });
+        assert_eq!(method, "workspace.conversation");
+        assert_eq!(
+            params,
+            json!({"id": id, "turnLimit": 7, "beforeTurnSequence": 99})
+        );
+        let (method, params, _) = session_request(&SessionCommand::TerminalStatus { id });
+        assert_eq!(method, "session.terminal.status");
+        assert_eq!(params, json!({"id": id}));
     }
 }
