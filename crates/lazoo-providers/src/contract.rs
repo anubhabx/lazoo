@@ -198,12 +198,31 @@ impl ProviderProbe {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Eq, PartialEq)]
 pub struct CommandSpec {
     pub executable: PathBuf,
     pub args: Vec<OsString>,
     pub cwd: PathBuf,
     pub env: BTreeMap<OsString, OsString>,
+}
+
+impl fmt::Debug for CommandSpec {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("CommandSpec")
+            .field("executable", &self.executable)
+            .field("args", &self.args)
+            .field("cwd", &self.cwd)
+            .field(
+                "env",
+                &self
+                    .env
+                    .keys()
+                    .map(|name| (name, "<redacted>"))
+                    .collect::<Vec<_>>(),
+            )
+            .finish()
+    }
 }
 
 impl CommandSpec {
@@ -544,6 +563,13 @@ pub trait TurnEventObserver: Send + Sync {
 pub trait ProviderSession: Send + Sync {
     fn id(&self) -> String;
     fn native_host_pid(&self) -> Option<u32>;
+    /// A native read-only view of this exact running session, without another controller.
+    fn native_view_available(&self) -> bool {
+        false
+    }
+    fn open_native_view(&self) -> AdapterFuture<'_, Option<crate::NativeViewLease>> {
+        Box::pin(async { Ok(None) })
+    }
     /// Job Object accounting for the session's native process tree; `None` when the session
     /// owns no job.
     fn resources(&self) -> Option<JobAccounting> {

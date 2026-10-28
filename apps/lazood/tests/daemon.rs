@@ -16,9 +16,9 @@ use lazoo_protocol::{
     TurnState,
 };
 use lazoo_providers::{
-    DiscoveryEnvironment, PermissionDecision, PermissionKind, PermissionRequest, ProviderError,
-    ProviderEvent, ProviderKind, SessionRequest, ToolCall, ToolResult, TurnEventObserver,
-    TurnRequest,
+    CodexAdapter, DiscoveryEnvironment, PermissionDecision, PermissionKind, PermissionRequest,
+    ProviderAdapter, ProviderError, ProviderEvent, ProviderKind, SessionRequest, ToolCall,
+    ToolResult, TurnEventObserver, TurnRequest,
 };
 use lazoo_runtime::DataRoot;
 use lazoo_store::{CreateConversationInput, CreateEmployeeInput, Store};
@@ -4734,6 +4734,216 @@ fn attach_params(session: &serde_json::Value, key: &str) -> serde_json::Value {
         "rows": 25,
         "idempotencyKey": key
     })
+}
+
+fn view_params(session: &serde_json::Value, key: &str) -> serde_json::Value {
+    json!({"id": session["id"], "expectedRevision": session["revision"], "columns": 80, "rows": 25, "idempotencyKey": key})
+}
+
+#[derive(Clone)]
+struct NativeViewBackend {
+    adapter: CodexAdapter,
+}
+struct NativeViewSession(lazoo_providers::CodexSession);
+
+impl ManagedSession for NativeViewSession {
+    fn id(&self) -> String {
+        lazoo_providers::ProviderSession::id(&self.0)
+    }
+
+    fn native_host_pid(&self) -> Option<u32> {
+        lazoo_providers::ProviderSession::native_host_pid(&self.0)
+    }
+
+    fn native_view_available(&self) -> bool {
+        lazoo_providers::ProviderSession::native_view_available(&self.0)
+    }
+
+    fn open_native_view(
+        &self,
+    ) -> lazoo_providers::AdapterFuture<'_, Option<lazoo_providers::NativeViewLease>> {
+        lazoo_providers::ProviderSession::open_native_view(&self.0)
+    }
+
+    fn turn_observed<'a>(
+        &'a self,
+        request: &'a TurnRequest,
+        observer: &'a dyn TurnEventObserver,
+    ) -> Pin<Box<dyn Future<Output = Result<Vec<ProviderEvent>, ProviderError>> + Send + 'a>> {
+        lazoo_providers::ProviderSession::turn_observed(&self.0, request, observer)
+    }
+
+    fn cancel(&self) -> Pin<Box<dyn Future<Output = Result<(), ProviderError>> + Send + '_>> {
+        lazoo_providers::ProviderSession::cancel(&self.0)
+    }
+
+    fn stop(&self) -> Pin<Box<dyn Future<Output = Result<(), ProviderError>> + Send + '_>> {
+        lazoo_providers::ProviderSession::stop(&self.0)
+    }
+}
+
+impl SessionBackend for NativeViewBackend {
+    fn start<'a>(
+        &'a self,
+        _provider: ProviderKind,
+        request: &'a SessionRequest,
+    ) -> SessionBackendFuture<'a> {
+        Box::pin(async move {
+            self.adapter
+                .start(request)
+                .await
+                .map(|session| Box::new(NativeViewSession(session)) as Box<dyn ManagedSession>)
+        })
+    }
+}
+
+fn native_view_fixture() -> (tempfile::TempDir, Store, App, uuid::Uuid) {
+    let temporary = tempdir().unwrap();
+    let root = DataRoot::from_path(temporary.path().join("data"));
+    root.ensure().unwrap();
+    let store = Store::open_path(root.state_db()).unwrap();
+    let employee = configured_employee(&store);
+    let repository = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .to_path_buf();
+    let executable = repository.join("target/debug/lazoo-turn-transport-fixture.exe");
+    assert!(
+        executable.is_file(),
+        "turn transport fixture must be built before this test"
+    );
+    let app = App::new_with_session_backend(
+        store.clone(),
+        root,
+        DiscoveryEnvironment::empty().with_known_location(ProviderKind::Codex, executable.clone()),
+        Arc::new(NativeViewBackend {
+            adapter: CodexAdapter::with_executable(executable),
+        }),
+    )
+    .unwrap();
+    (temporary, store, app, employee.id)
+}
+
+#[tokio::test]
+async fn session_terminal_view_uses_one_real_codex_lease_and_leaves_the_session_idle() {
+    let (_temporary, store, app, employee_id) = native_view_fixture();
+    let warmed = app.handle(request("native-view-warm", "session.warm", json!({"employeeId": employee_id, "expectedEmployeeRevision": 1, "idempotencyKey": "native-view-warm"}))).await.result.unwrap()["session"].clone();
+    let opened = app
+        .handle(request(
+            "native-view-open",
+            "session.terminal.view",
+            view_params(&warmed, "native-view"),
+        ))
+        .await
+        .result
+        .unwrap();
+    let replay = app
+        .handle(request(
+            "native-view-replay",
+            "session.terminal.view",
+            view_params(&warmed, "native-view"),
+        ))
+        .await
+        .result
+        .unwrap();
+    assert_eq!(opened, replay);
+    let changed = app.handle(request("native-view-conflict", "session.terminal.view", json!({"id": warmed["id"], "expectedRevision": warmed["revision"], "columns": 81, "rows": 25, "idempotencyKey": "native-view"}))).await.error.unwrap();
+    assert_eq!(changed.code, "LZ-SESSION-VIEW-CONFLICT");
+    let terminal = opened["terminal"].clone();
+    app.handle(request(
+        "native-view-close",
+        "terminal.stop",
+        stop_terminal_params(&terminal),
+    ))
+    .await
+    .result
+    .unwrap();
+    let dead_replay = app
+        .handle(request(
+            "native-view-dead-replay",
+            "session.terminal.view",
+            view_params(&warmed, "native-view"),
+        ))
+        .await
+        .result
+        .unwrap();
+    assert_eq!(dead_replay["terminal"]["id"], terminal["id"]);
+    assert_eq!(dead_replay["terminal"]["live"], false);
+    let changed_after_close = app
+        .handle(request(
+            "native-view-dead-conflict",
+            "session.terminal.view",
+            json!({"id": warmed["id"], "expectedRevision": warmed["revision"], "columns": 82, "rows": 25, "idempotencyKey": "native-view"}),
+        ))
+        .await
+        .error
+        .unwrap();
+    assert_eq!(changed_after_close.code, "LZ-SESSION-VIEW-CONFLICT");
+    let session_id: uuid::Uuid = warmed["id"].as_str().unwrap().parse().unwrap();
+    assert_eq!(
+        store.get_session(session_id).unwrap().state,
+        lazoo_protocol::SessionLifecycleState::Idle
+    );
+    let reopened = app
+        .handle(request(
+            "native-view-reopen",
+            "session.terminal.view",
+            view_params(&warmed, "native-view-fresh"),
+        ))
+        .await
+        .result
+        .unwrap();
+    assert_ne!(reopened["terminal"]["id"], terminal["id"]);
+    app.handle(request("native-view-stop-session", "session.stop", json!({"id": warmed["id"], "expectedRevision": warmed["revision"], "idempotencyKey": "native-view-stop"}))).await.result.unwrap();
+    let status = app
+        .handle(request(
+            "native-view-stopped-status",
+            "session.terminal.status",
+            json!({"id": warmed["id"]}),
+        ))
+        .await
+        .result
+        .unwrap();
+    assert_eq!(status["viewable"], false);
+    let stopped_terminal = app
+        .handle(request(
+            "native-view-stopped-terminal",
+            "terminal.show",
+            json!({"id": reopened["terminal"]["id"]}),
+        ))
+        .await
+        .result
+        .unwrap();
+    assert_eq!(stopped_terminal["live"], false);
+}
+
+#[tokio::test]
+async fn session_terminal_view_refuses_stale_and_unsupported_sessions_without_opening_a_terminal() {
+    let (_temporary, app, backend, employee_id) = session_test_app();
+    let warmed = app.handle(request("view-refusal-warm", "session.warm", json!({"employeeId": employee_id, "expectedEmployeeRevision": 1, "idempotencyKey": "view-refusal-warm"}))).await.result.unwrap()["session"].clone();
+    let stale = app
+        .handle(request(
+            "view-refusal-stale",
+            "session.terminal.view",
+            json!({"id": warmed["id"], "expectedRevision": 1, "columns": 80, "rows": 25, "idempotencyKey": "view-refusal-stale"}),
+        ))
+        .await
+        .error
+        .unwrap();
+    assert_eq!(stale.code, "LZ-SESSION-STALE");
+    let unsupported = app
+        .handle(request(
+            "view-refusal-unsupported",
+            "session.terminal.view",
+            view_params(&warmed, "view-refusal-unsupported"),
+        ))
+        .await
+        .error
+        .unwrap();
+    assert_eq!(unsupported.code, "LZ-SESSION-VIEW-UNSUPPORTED");
+    assert_eq!(backend.starts.load(Ordering::SeqCst), 1);
 }
 
 fn stop_terminal_params(terminal: &serde_json::Value) -> serde_json::Value {

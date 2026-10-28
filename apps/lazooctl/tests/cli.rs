@@ -424,6 +424,38 @@ fn session_cli_maps_attach_with_default_terminal_size_and_session_exit_codes() {
 }
 
 #[test]
+fn session_cli_maps_view_with_the_attach_revision_and_terminal_fences() {
+    let session_id = "00000000-0000-4000-8000-000000000002";
+    let command = Cli::try_parse_from([
+        "lazooctl",
+        "session",
+        "view",
+        session_id,
+        "--expected-revision",
+        "4",
+        "--columns",
+        "120",
+        "--rows",
+        "40",
+        "--idempotency-key",
+        "view-rhea",
+    ])
+    .unwrap()
+    .command;
+    assert_eq!(
+        command_request(&command),
+        (
+            "session.terminal.view",
+            json!({
+                "id": session_id, "expectedRevision": 4, "columns": 120, "rows": 40,
+                "idempotencyKey": "view-rhea"
+            }),
+            false
+        )
+    );
+}
+
+#[test]
 fn provider_cli_maps_list_probe_and_explicit_smoke_commands() {
     let list = Cli::try_parse_from(["lazooctl", "provider", "list"]).unwrap();
     assert_eq!(

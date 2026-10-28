@@ -1,9 +1,9 @@
-use std::sync::Mutex;
+use std::{ffi::OsString, sync::Mutex};
 
 use lazoo_providers::{
-    DiscoverySource, ExecutableCandidate, ProviderCapabilities, ProviderError, ProviderEvent,
-    ProviderKind, ProviderSession, ProviderVerification, ToolCall, ToolResult, TurnEventObserver,
-    TurnRequest, attach_args, rank_candidates, redact_json,
+    CommandSpec, DiscoverySource, ExecutableCandidate, ProviderCapabilities, ProviderError,
+    ProviderEvent, ProviderKind, ProviderSession, ProviderVerification, ToolCall, ToolResult,
+    TurnEventObserver, TurnRequest, attach_args, rank_candidates, redact_json,
 };
 use serde_json::json;
 
@@ -131,6 +131,20 @@ fn redaction_removes_nested_secret_like_values() {
             "array": [{"password": "[REDACTED]"}]
         }),
     );
+}
+
+#[test]
+fn command_spec_debug_keeps_environment_keys_but_redacts_values() {
+    let mut command = CommandSpec::new(r"C:\Tools\codex.exe", r"C:\workspace");
+    command.env.insert(
+        OsString::from("CODEX_NATIVE_VIEW_TOKEN"),
+        OsString::from("super-secret-bearer"),
+    );
+
+    let debug = format!("{command:?}");
+    assert!(debug.contains("CODEX_NATIVE_VIEW_TOKEN"));
+    assert!(!debug.contains("super-secret-bearer"));
+    assert!(debug.contains("<redacted>"));
 }
 
 #[test]

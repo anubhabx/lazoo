@@ -169,6 +169,7 @@ impl App {
                     authority_reason,
                     collaboration_tools_available: provider
                         .is_some_and(collaboration_tools_available),
+                    native_view_supported: provider.is_some_and(native_view_supported),
                     startable,
                     blocking_reason,
                     configuration_revision: entry.employee.configuration_revision,
@@ -291,6 +292,11 @@ fn lead_authority_modes(
 
 /// `start_new_session` only attaches Lazoo's collaboration tools to Codex sessions.
 const fn collaboration_tools_available(provider: ProviderKind) -> bool {
+    matches!(provider, ProviderKind::Codex)
+}
+
+/// Only Codex currently has the controller-isolated native live-view bridge.
+const fn native_view_supported(provider: ProviderKind) -> bool {
     matches!(provider, ProviderKind::Codex)
 }
 
@@ -509,7 +515,7 @@ mod tests {
     use lazoo_protocol::AuthorityMode;
     use lazoo_providers::ProviderKind;
 
-    use super::{collaboration_tools_available, lead_authority_modes};
+    use super::{collaboration_tools_available, lead_authority_modes, native_view_supported};
 
     #[test]
     fn launcher_authority_modes_match_effective_session_authority() {
@@ -542,5 +548,13 @@ mod tests {
         assert!(collaboration_tools_available(ProviderKind::Codex));
         assert!(!collaboration_tools_available(ProviderKind::ClaudeCode));
         assert!(!collaboration_tools_available(ProviderKind::OpenCode));
+    }
+
+    #[test]
+    fn only_codex_leads_advertise_native_live_view_support() {
+        assert!(native_view_supported(ProviderKind::Codex));
+        assert!(!native_view_supported(ProviderKind::ClaudeCode));
+        assert!(!native_view_supported(ProviderKind::OpenCode));
+        assert!(!native_view_supported(ProviderKind::Antigravity));
     }
 }

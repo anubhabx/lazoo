@@ -141,3 +141,65 @@ fn failed_spawn_returns_without_a_session() {
     ));
     assert!(matches!(failed, Err(TerminalError::Windows(_))));
 }
+
+#[test]
+fn command_environment_overlay_is_visible_only_to_its_child() {
+    const KEY: &str = "LAZOO_TERMINAL_OVERLAY_TEST";
+    const VALUE: &str = "private=child=value";
+    assert!(
+        std::env::var_os(KEY).is_none(),
+        "test key already exists in parent"
+    );
+
+    let session = TerminalSession::spawn(
+        command(&["/Q", "/C", "echo %LAZOO_TERMINAL_OVERLAY_TEST%"])
+            .env("lazoo_terminal_overlay_test", VALUE),
+    )
+    .unwrap();
+    let output = wait_for(&session, VALUE.as_bytes());
+    assert!(
+        output
+            .windows(VALUE.len())
+            .any(|bytes| bytes == VALUE.as_bytes())
+    );
+    session.stop().unwrap();
+
+    assert!(
+        std::env::var_os(KEY).is_none(),
+        "child overlay changed parent"
+    );
+    let sibling = TerminalSession::spawn(command(&[
+        "/Q",
+        "/C",
+        "if defined LAZOO_TERMINAL_OVERLAY_TEST (echo inherited) else (echo clean)",
+    ]))
+    .unwrap();
+    assert!(
+        wait_for(&sibling, b"clean")
+            .windows(5)
+            .any(|bytes| bytes == b"clean")
+    );
+    sibling.stop().unwrap();
+}
+
+#[test]
+fn command_environment_overlay_rejects_invalid_names_and_values() {
+    for command in [
+        command(&["/Q", "/C", "echo no"]).env("BAD=NAME", "value"),
+        command(&["/Q", "/C", "echo no"]).env("BAD\0NAME", "value"),
+        command(&["/Q", "/C", "echo no"]).env("VALID_NAME", "bad\0value"),
+    ] {
+        assert!(matches!(
+            TerminalSession::spawn(command),
+            Err(TerminalError::InvalidEnvironment)
+        ));
+    }
+}
+
+#[test]
+fn command_debug_redacts_environment_overlay_values() {
+    let command = command(&["/Q", "/C", "echo no"]).env("BEARER_TOKEN", "very-secret-value");
+    let debug = format!("{command:?}");
+    assert!(!debug.contains("very-secret-value"));
+    assert!(debug.contains("BEARER_TOKEN"));
+}

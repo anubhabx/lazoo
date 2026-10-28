@@ -108,6 +108,17 @@ pub enum ProviderSessionHandle {
 }
 
 impl ProviderSession for ProviderSessionHandle {
+    fn native_view_available(&self) -> bool {
+        matches!(self, Self::Codex(session) if session.native_view_available())
+    }
+
+    fn open_native_view(&self) -> AdapterFuture<'_, Option<crate::NativeViewLease>> {
+        match self {
+            Self::Codex(session) => session.open_native_view(),
+            _ => Box::pin(async { Ok(None) }),
+        }
+    }
+
     fn id(&self) -> String {
         match self {
             Self::Codex(session) => session.id(),

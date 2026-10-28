@@ -1,4 +1,4 @@
-# Backend handoff: UI preparation in progress, updated 2026-10-28
+# Backend handoff: UI preparation in progress, updated 2026-10-29
 
 ## Current owner request and branch
 
@@ -26,15 +26,21 @@ Completed and independently reviewed so far:
   protect races with submission, and temporary dormant/activation behavior is
   preserved. Focused behavioral tests passed; the final full gate is still pending.
 
-In progress: backward history paging, terminal attachment status/discovery, final
-contract documentation, and a settled-tree full gate. Do not treat the branch as
-finished until the readiness verification record contains the fresh full results.
+Also implemented and reviewed: exclusive backward history paging, terminal
+attachment status/discovery, and durable event replay across reconnect/lag beyond
+1,024 rows. The initial preparation passed the full workspace test run (580 passed,
+14 intentionally ignored). This predates the concurrent native-view implementation.
+The final settled-tree gate remains pending.
 
 The owner confirmed that the first UI must show the actual native TUI during
 orchestrated work. This is required backend work, not a pending scope choice.
-Installed Codex exposes a possible remote-TUI route, but
-sole approval/tool ownership over a multi-client transport is unproven; see
-[the read-only research](verification/2026-10-28-native-terminal-research.md).
+The local simulator prototype proved native streaming and a controller-owned tool
+call on Codex 0.153.4 and the discovered 0.165.0-alpha.1.2. Production work now adds
+a Codex-only broker, restricted native-view lease, private ConPTY environment,
+`session.terminal.view`, and explicit view capability/status. Follow
+[the live-view plan](superpowers/plans/2026-10-28-live-native-tui.md). Independent
+review found bootstrap, routing and cleanup issues; fixes and production-path
+acceptance are in progress. Prototype success alone is not readiness evidence.
 No live model calls or user configuration edits have been made by this work.
 
 Builds use `CARGO_BUILD_JOBS=1`, `CARGO_PROFILE_DEV_DEBUG=0`,

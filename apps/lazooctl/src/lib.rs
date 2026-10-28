@@ -406,6 +406,18 @@ pub enum SessionCommand {
     TerminalStatus {
         id: Uuid,
     },
+    /// Open the genuine native TUI for an eligible active session without a second controller.
+    View {
+        id: Uuid,
+        #[arg(long)]
+        expected_revision: u64,
+        #[arg(long, default_value_t = 80)]
+        columns: u16,
+        #[arg(long, default_value_t = 25)]
+        rows: u16,
+        #[arg(long)]
+        idempotency_key: Option<String>,
+    },
     Stop {
         id: Uuid,
         #[arg(long)]
@@ -1592,6 +1604,23 @@ fn session_request(command: &SessionCommand) -> (&'static str, Value, bool) {
         SessionCommand::TerminalStatus { id } => {
             ("session.terminal.status", json!({"id": id}), false)
         }
+        SessionCommand::View {
+            id,
+            expected_revision,
+            columns,
+            rows,
+            idempotency_key,
+        } => (
+            "session.terminal.view",
+            json!({
+                "id": id,
+                "expectedRevision": expected_revision,
+                "columns": columns,
+                "rows": rows,
+                "idempotencyKey": idempotency_key.clone().unwrap_or_else(|| Uuid::new_v4().to_string()),
+            }),
+            false,
+        ),
         SessionCommand::Stop {
             id,
             expected_revision,

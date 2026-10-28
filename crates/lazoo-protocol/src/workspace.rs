@@ -107,6 +107,9 @@ pub struct LeadCandidate {
     /// Whether the session receives Lazoo's collaboration tools. A conversational session can
     /// be startable without being able to orchestrate workers.
     pub collaboration_tools_available: bool,
+    /// Whether this provider has Lazoo's native live-view bridge. This is a provider capability,
+    /// not current session eligibility; inspect `session.terminal.status` for that truth.
+    pub native_view_supported: bool,
     pub startable: bool,
     pub blocking_reason: Option<String>,
     pub configuration_revision: u64,

@@ -1,8 +1,9 @@
 # Native terminal client contract
 
-This document describes the implemented backend transport. It does not claim that
-a native TUI can display the session concurrently with Lazoo driving that session,
-or that the desktop has implemented its terminal renderer.
+This document describes the implemented backend transport. Codex concurrent native
+viewing uses it through `session.terminal.view`; other providers retain the
+limitations in the [UI handoff](../../UI-BACKEND-HANDOFF.md). The desktop terminal
+renderer is still frontend work.
 
 ## Ownership and control
 
@@ -20,11 +21,14 @@ Control requests use the normal authenticated JSON-RPC pipe. Existing methods:
 | `terminal.resize` | Resize one terminal | `id`, `expectedRevision`, `expectedBootId` |
 | `terminal.stop` | Stop and reap its contained process tree | `id`, `expectedRevision`, `expectedBootId` |
 | `session.terminal.attach` | Resume a suspended employee session in an owner terminal | Session `id`, `expectedRevision`, `columns`, `rows`, `idempotencyKey` |
-| `session.terminal.status` | Recover attachment and eligibility after reconnect | Session `id`; returns current `sessionRevision` and `bootId` |
+| `session.terminal.view` | Open a read-only native Codex TUI while Lazoo keeps driving the same session | Session `id`, `expectedRevision`, `columns`, `rows`, `idempotencyKey` |
+| `session.terminal.status` | Recover attachment/view and eligibility after reconnect | Session `id`; returns current `sessionRevision` and `bootId` |
 
 The status result contains `sessionId`, `sessionRevision`, `bootId`, `opening`,
 nullable `terminal`, `attachable`, nullable `blockingCode`, and nullable
-`blockingReason`. It does not reserve an attachment or activate a session.
+`blockingReason`. The concurrent-view fields are `viewable`, nullable
+`viewBlockingCode`, nullable `viewBlockingReason`, `viewOpening`, and nullable
+`viewTerminal`. It does not reserve an attachment/view or activate a session.
 Use the live terminal's ID and byte offset to reconnect. A retained exited record
 has `live: false`; it is metadata, not retained screen content. Eligibility is
 advisory: the attach mutation rechecks revision, ownership and native command
@@ -36,6 +40,13 @@ must be suspended; summary-worker sessions and providers without a proven resume
 command are refused. The backend derives the executable, resume ID and working
 directory from its own records. Active native ownership and attachment reservations
 are checked to prevent two processes from driving the same saved conversation.
+
+A view uses the controller-owned app-server through an authenticated, restricted
+read bridge. The private bearer environment never enters `TerminalRecord` or the
+frontend. There is one view per active session. Use a fresh logical key after a
+view closes; exact replay of an old key reconciles that prior operation. Closing
+the view preserves canonical work and approvals. Stopping the session closes its
+view. The native TUI disables its composer; prompts and decisions use Lazoo RPCs.
 
 `TerminalRecord` carries `id`, `bootId`, `revision`, dimensions, `pid`, executable,
 arguments, working directory, `live`, and nullable `exitCode`. These are lifecycle

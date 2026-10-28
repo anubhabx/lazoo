@@ -75,6 +75,14 @@ pub type SessionBackendFuture<'a> =
 pub trait ManagedSession: Send + Sync {
     fn id(&self) -> String;
     fn native_host_pid(&self) -> Option<u32>;
+    fn native_view_available(&self) -> bool {
+        false
+    }
+    fn open_native_view(
+        &self,
+    ) -> lazoo_providers::AdapterFuture<'_, Option<lazoo_providers::NativeViewLease>> {
+        Box::pin(async { Ok(None) })
+    }
     /// Job Object accounting for the native process tree; `None` when there is no job.
     fn resources(&self) -> Option<JobAccounting> {
         None
@@ -170,6 +178,16 @@ struct ProviderSessionBackend {
 }
 
 impl ManagedSession for ProviderSessionHandle {
+    fn native_view_available(&self) -> bool {
+        ProviderSession::native_view_available(self)
+    }
+
+    fn open_native_view(
+        &self,
+    ) -> lazoo_providers::AdapterFuture<'_, Option<lazoo_providers::NativeViewLease>> {
+        ProviderSession::open_native_view(self)
+    }
+
     fn id(&self) -> String {
         ProviderSession::id(self)
     }
@@ -407,6 +425,7 @@ impl App {
             "session.stop" => self.stop_session(&request).await,
             "session.resources" => self.session_resources(&request.params).await,
             "session.terminal.attach" => self.session_terminal_attach(request.params).await,
+            "session.terminal.view" => self.session_terminal_view(request.params).await,
             "session.terminal.status" => self.session_terminal_status(request.params).await,
             "conversation.create" => self.create_conversation(&request),
             "conversation.list" => self.conversation_list(request.params),
@@ -1140,6 +1159,7 @@ impl App {
         }
 
         let session_id = stopping.session.id;
+        self.close_native_view_for_session(session_id).await;
         let session = self.live_sessions.lock().await.remove(&session_id);
         let Some(session) = session else {
             self.record_session_failure(

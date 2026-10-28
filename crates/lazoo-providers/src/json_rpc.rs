@@ -43,14 +43,6 @@ impl JsonRpcControl {
         Ok(id)
     }
 
-    pub(crate) async fn send_uncorrelated_request(
-        &self,
-        method: &str,
-        params: Value,
-    ) -> Result<(), ProviderError> {
-        self.send_request(method, params).await.map(|_| ())
-    }
-
     pub(crate) async fn notify(
         &self,
         method: &str,

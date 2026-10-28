@@ -41,7 +41,8 @@ turn handling to retain evidence instead of losing a request silently. Stop and
 drop terminate the owned process tree, cancel reader tasks and release waiters.
 
 Each session view uses an ephemeral loopback WebSocket listener and a random
-256-bit bearer capability. Reject browser Origins, absent/wrong tokens and extra
+bearer capability with at least 244 bits of entropy (two UUIDv4 values). Reject
+browser Origins, absent/wrong tokens and extra
 viewer connections. A lease owns the listener and token; a new open creates a
 fresh lease after the old one closes. Bind a view to exactly one native thread.
 Secrets never enter protocol records, command arguments, errors or logs.

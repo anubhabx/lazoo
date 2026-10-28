@@ -43,15 +43,20 @@ wait, reporting, and peer-message tools. It is currently true only for Codex.
 A startable conversational provider with that field false cannot be presented
 as providing automatic team orchestration.
 
+`nativeViewSupported` is a separate provider capability: it says whether Lazoo can
+offer the controller-isolated genuine native TUI path at all. It is not a claim
+that a particular lead is currently eligible to open one; use
+`session.terminal.status.viewable` and its blocking fields for that live truth.
+
 Current daemon policy, independently of whether a provider is installed or logged in:
 
-| Provider | Conversation authority offered by Lazoo | Collaboration tools |
-| --- | --- | --- |
-| Codex | Modes up to the employee's configured ceiling | Yes |
-| OpenCode | Ask/Self Decision up to a governed employee's ceiling; only Full Autonomy for a Full Autonomy employee | No |
-| Claude Code | Full Autonomy only, and only for a Full Autonomy employee | No |
-| Antigravity | No governed conversation delivery | No |
-| Grok Build | Excluded from core v1 and refused for governed delivery | No |
+| Provider | Conversation authority offered by Lazoo | Collaboration tools | Native live view |
+| --- | --- | --- | --- |
+| Codex | Modes up to the employee's configured ceiling | Yes | Yes |
+| OpenCode | Ask/Self Decision up to a governed employee's ceiling; only Full Autonomy for a Full Autonomy employee | No | No |
+| Claude Code | Full Autonomy only, and only for a Full Autonomy employee | No | No |
+| Antigravity | No governed conversation delivery | No | No |
+| Grok Build | Excluded from core v1 and refused for governed delivery | No | No |
 
 These are Lazoo implementation limits, not claims about every feature of the
 vendor products. OpenCode governed starts also inspect configuration for native
@@ -134,12 +139,11 @@ lazooctl --json workspace show <conversation-id> --turn-limit 50 --before-turn-s
 
 Follow the [terminal client contract](superpowers/specs/2026-10-28-terminal-client-contract.md)
 for authenticated framing, byte offsets, output gaps, boot/revision fencing, and
-input acknowledgement uncertainty. An actual native TUI is available through
-attachment to a suspended Codex or Claude session. A live protocol-driven session
-cannot currently be mirrored into that TUI. The existing product brief requires
-native terminals. On 2026-10-28 the owner explicitly required the actual native
-TUI to remain visible during orchestrated work. Concurrent native integration is
-therefore a readiness blocker; suspend-then-attach does not satisfy the first UI.
+input acknowledgement uncertainty. Codex now has a genuine concurrent native TUI
+view of the same thread Lazoo controls. `session.terminal.view` opens it without
+stopping the employee or granting another path to submit turns or approvals.
+The separate `session.terminal.attach` operation remains a takeover of a suspended
+Codex or Claude session. Other providers do not yet support concurrent views.
 
 Given `lead.session.id` or a worker card's session ID, call
 `session.terminal.status { id }` (CLI: `session terminal-status <id>`). Its fields
@@ -148,19 +152,45 @@ are `bootId`, `sessionId`, `sessionRevision`, `opening`, nullable `terminal`,
 attachment returns the terminal record needed for reconnect and byte I/O; an
 opening attachment must be allowed to settle before sending another request.
 Known incompatibility is data, while missing sessions and storage faults remain
-RPC errors. An exited terminal may retain metadata until the bounded cache evicts
-it; its screen bytes are not retained by that metadata.
+RPC errors. Additional fields describe the concurrent view: `viewable`, nullable
+`viewBlockingCode`/`viewBlockingReason`, `viewOpening`, and nullable `viewTerminal`.
+Prefer reconnecting the returned live view over opening another one. Status reads
+neither reserve a slot nor activate an employee. An exited terminal may retain
+metadata until the bounded cache evicts it; metadata does not retain screen bytes.
 
 Use `sessionRevision` for a new explicit attach request and the terminal's own
 revision/boot ID for resize/stop. Eligibility is advisory and is checked again
-when attaching. Status reads do not reserve slots or activate employees. Terminal
+when attaching or viewing. Terminal
 exit is observed through bounded status/output polling, so session audit events
 alone are not an exit notification stream.
+
+For an active Codex session, send `session.terminal.view` with `id`,
+`expectedRevision`, `columns`, `rows`, and `idempotencyKey` (CLI: `session view`).
+Retain the key and exact payload to reconcile a lost reply. A changed payload for
+that key is refused; opening a new view after closing the old one needs a new key.
+The current contract allows one view per session and eight total live terminals.
+Terminal keys and view metadata are bounded and expire with daemon restart.
+
+The native TUI advertises read-only viewing using Codex's own “Viewing sub-agent”
+label, including for a lead. Send prompts and approval decisions through Lazoo's
+controls. Native navigation and scrolling remain available, while the restricted
+bridge refuses native turn/configuration mutations. Closing the terminal preserves
+the canonical turn and pending approval; stopping the employee closes its view.
+The loopback bearer capability stays in a private child environment and is never
+part of UI data or terminal arguments. The UI needs only the existing authenticated
+terminal byte transport, not access to the private provider WebSocket.
+
+Production-path acceptance with the installed Codex 0.165.0-alpha.1.2 and a local
+Responses simulator proved streaming, collaboration-tool routing, history after
+reopen, view close/reopen during a pending approval, decline propagation, status
+recovery, and session-stop cleanup. This tests real native rendering and backend
+ownership without consuming an external model. The final full gate is recorded
+separately; a native stream check does not replace it.
 
 ## Remaining full-product work
 
 Non-Codex collaboration tools, broader native authority coverage, concurrent native
-TUI integration, additional configuration federation formats/plugins/skills, and
+TUI support for other providers, additional configuration federation formats/plugins/skills, and
 the remaining whole-product performance windows are not completed by this guide.
 Connectors, vectors, and voice remain later phases. The summary worker remains
 opt-in and unconfigured by default. Historical live-provider results must be

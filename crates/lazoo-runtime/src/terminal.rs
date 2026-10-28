@@ -2,8 +2,10 @@
 //! no persistence or tracing of terminal bytes: callers own any audit policy above this layer.
 
 use std::{
+    cmp::Ordering,
     collections::VecDeque,
     ffi::{OsStr, OsString, c_void},
+    fmt,
     os::windows::ffi::OsStrExt,
     path::PathBuf,
     sync::{
@@ -32,9 +34,9 @@ use windows::{
             },
             Pipes::CreatePipe,
             Threading::{
-                CREATE_SUSPENDED, CreateProcessW, DeleteProcThreadAttributeList,
-                EXTENDED_STARTUPINFO_PRESENT, GetCurrentProcess, GetCurrentThread,
-                GetExitCodeProcess, InitializeProcThreadAttributeList,
+                CREATE_SUSPENDED, CREATE_UNICODE_ENVIRONMENT, CreateProcessW,
+                DeleteProcThreadAttributeList, EXTENDED_STARTUPINFO_PRESENT, GetCurrentProcess,
+                GetCurrentThread, GetExitCodeProcess, InitializeProcThreadAttributeList,
                 LPPROC_THREAD_ATTRIBUTE_LIST, PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE,
                 PROCESS_INFORMATION, ResumeThread, STARTF_USESTDHANDLES, STARTUPINFOEXW,
                 TerminateProcess, UpdateProcThreadAttribute, WaitForSingleObject,
@@ -51,13 +53,37 @@ const OUTPUT_CAPACITY: usize = 1024 * 1024;
 const INPUT_QUEUE_CAPACITY: usize = 32;
 const SHUTDOWN_WAIT_MS: u32 = 2_000;
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+type EnvironmentEntry = (Vec<u16>, Vec<u16>);
+
+#[derive(Clone, Eq, PartialEq)]
 pub struct TerminalCommand {
     executable: PathBuf,
     arguments: Vec<OsString>,
     cwd: PathBuf,
     cols: u16,
     rows: u16,
+    environment: Vec<(OsString, OsString)>,
+}
+
+impl fmt::Debug for TerminalCommand {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("TerminalCommand")
+            .field("executable", &self.executable)
+            .field("arguments", &self.arguments)
+            .field("cwd", &self.cwd)
+            .field("cols", &self.cols)
+            .field("rows", &self.rows)
+            .field(
+                "environment",
+                &self
+                    .environment
+                    .iter()
+                    .map(|(name, _)| (name, "<redacted>"))
+                    .collect::<Vec<_>>(),
+            )
+            .finish()
+    }
 }
 
 impl TerminalCommand {
@@ -73,6 +99,7 @@ impl TerminalCommand {
             cwd: cwd.into(),
             cols,
             rows,
+            environment: Vec::new(),
         }
     }
     #[must_use]
@@ -83,6 +110,13 @@ impl TerminalCommand {
     #[must_use]
     pub fn args(mut self, arguments: impl IntoIterator<Item = impl Into<OsString>>) -> Self {
         self.arguments.extend(arguments.into_iter().map(Into::into));
+        self
+    }
+    /// Adds an internal-only environment override for this spawned process.
+    /// Values are never exposed through terminal metadata or `Debug` output.
+    #[must_use]
+    pub fn env(mut self, name: impl Into<OsString>, value: impl Into<OsString>) -> Self {
+        self.environment.push((name.into(), value.into()));
         self
     }
     #[must_use]
@@ -99,6 +133,8 @@ impl TerminalCommand {
 pub enum TerminalError {
     #[error("terminal dimensions must be in 1..={MAX_DIMENSION}")]
     InvalidDimensions,
+    #[error("terminal environment names cannot contain NUL or '=' and values cannot contain NUL")]
+    InvalidEnvironment,
     #[error("terminal input exceeds {MAX_INPUT} bytes")]
     InputTooLarge,
     #[error("terminal output request exceeds {MAX_READ} bytes")]
@@ -154,8 +190,10 @@ impl TerminalSession {
             cwd,
             cols,
             rows,
+            environment,
         } = command;
         validate_dimensions(cols, rows)?;
+        let environment = environment_block(&environment)?;
         // These are the application-facing ends.  ConPTY owns the opposite ends after creation.
         let (input_read, input_write) = pipe()?;
         let (output_read, output_write) = pipe()?;
@@ -191,8 +229,8 @@ impl TerminalSession {
                 None,
                 None,
                 false,
-                CREATE_SUSPENDED | EXTENDED_STARTUPINFO_PRESENT,
-                None,
+                CREATE_SUSPENDED | CREATE_UNICODE_ENVIRONMENT | EXTENDED_STARTUPINFO_PRESENT,
+                Some(environment.as_ptr().cast()),
                 PCWSTR(cwd.as_ptr()),
                 (&raw const startup).cast(),
                 &raw mut process_info,
@@ -377,6 +415,119 @@ fn validate_dimensions(cols: u16, rows: u16) -> Result<(), TerminalError> {
         Ok(())
     }
 }
+
+fn environment_block(overrides: &[(OsString, OsString)]) -> Result<Vec<u16>, TerminalError> {
+    let mut environment = inherited_environment()?;
+    for (name, value) in overrides {
+        let name = name.encode_wide().collect::<Vec<_>>();
+        let value = value.encode_wide().collect::<Vec<_>>();
+        if name.is_empty()
+            || name
+                .iter()
+                .any(|unit| *unit == 0 || *unit == u16::from(b'='))
+            || value.contains(&0)
+        {
+            return Err(TerminalError::InvalidEnvironment);
+        }
+        if let Some(entry) = environment
+            .iter_mut()
+            .find(|(existing, _)| environment_name_cmp(existing, &name) == Ordering::Equal)
+        {
+            *entry = (name, value);
+        } else {
+            environment.push((name, value));
+        }
+    }
+    environment.sort_by(|(left, _), (right, _)| environment_name_cmp(left, right));
+    Ok(serialize_environment(environment))
+}
+
+fn serialize_environment(entries: impl IntoIterator<Item = EnvironmentEntry>) -> Vec<u16> {
+    let mut block = Vec::new();
+    for (name, value) in entries {
+        block.extend(name);
+        block.push(u16::from(b'='));
+        block.extend(value);
+        block.push(0);
+    }
+    // A Windows Unicode environment block ends with an empty entry. Empty blocks need two NULs.
+    if block.is_empty() {
+        block.push(0);
+    }
+    block.push(0);
+    block
+}
+
+fn inherited_environment() -> Result<Vec<EnvironmentEntry>, TerminalError> {
+    let raw = unsafe { GetEnvironmentStringsW() };
+    if raw.is_null() {
+        return Err(TerminalError::Windows(windows::core::Error::from_thread()));
+    }
+    let mut environment = Vec::new();
+    let mut start = raw;
+    unsafe {
+        loop {
+            let mut end = start;
+            while *end != 0 {
+                end = end.add(1);
+            }
+            if end == start {
+                break;
+            }
+            let entry = std::slice::from_raw_parts(start, end.offset_from(start).cast_unsigned());
+            if let Some((name, value)) = split_environment_entry(entry) {
+                environment.push((name.to_vec(), value.to_vec()));
+            }
+            start = end.add(1);
+        }
+        let _ = FreeEnvironmentStringsW(raw);
+    }
+    Ok(environment)
+}
+
+fn split_environment_entry(entry: &[u16]) -> Option<(&[u16], &[u16])> {
+    let equals = if entry.first() == Some(&u16::from(b'=')) {
+        entry[1..]
+            .iter()
+            .position(|unit| *unit == u16::from(b'='))
+            .map(|offset| offset + 1)
+    } else {
+        entry.iter().position(|unit| *unit == u16::from(b'='))
+    }?;
+    Some((&entry[..equals], &entry[equals + 1..]))
+}
+
+fn environment_name_cmp(left: &[u16], right: &[u16]) -> Ordering {
+    let result = unsafe {
+        CompareStringOrdinal(
+            left.as_ptr(),
+            i32::try_from(left.len()).expect("Windows environment name fits i32"),
+            right.as_ptr(),
+            i32::try_from(right.len()).expect("Windows environment name fits i32"),
+            1,
+        )
+    };
+    match result {
+        1 => Ordering::Less,
+        2 => Ordering::Equal,
+        3 => Ordering::Greater,
+        _ => left.cmp(right),
+    }
+}
+
+#[link(name = "kernel32")]
+unsafe extern "system" {
+    fn CompareStringOrdinal(
+        left: *const u16,
+        left_len: i32,
+        right: *const u16,
+        right_len: i32,
+        ignore_case: i32,
+    ) -> i32;
+    fn GetEnvironmentStringsW() -> *mut u16;
+    fn FreeEnvironmentStringsW(environment: *mut u16) -> i32;
+}
+
 fn wide(value: &OsStr) -> Vec<u16> {
     value.encode_wide().chain(Some(0)).collect()
 }
@@ -653,5 +804,17 @@ mod tests {
         }
         assert_eq!(actual[0], executable.into_os_string());
         assert_eq!(&actual[1..], &arguments);
+    }
+
+    #[test]
+    fn environment_serialization_double_terminates_empty_and_nonempty_blocks() {
+        assert_eq!(serialize_environment(Vec::new()), vec![0, 0]);
+        assert_eq!(
+            serialize_environment(vec![(
+                "NAME".encode_utf16().collect(),
+                "value".encode_utf16().collect(),
+            )]),
+            "NAME=value\0\0".encode_utf16().collect::<Vec<_>>(),
+        );
     }
 }

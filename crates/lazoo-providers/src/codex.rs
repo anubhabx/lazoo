@@ -1,7 +1,7 @@
 use std::{
     cmp,
     path::{Path, PathBuf},
-    sync::RwLock,
+    sync::{Arc, RwLock},
     time::{Duration, Instant},
 };
 
@@ -13,9 +13,14 @@ use crate::{
     DiscoveryEnvironment, ExecutableCandidate, PermissionDecision, PermissionKind,
     PermissionRequest, ProviderAdapter, ProviderCapabilities, ProviderError, ProviderEvent,
     ProviderKind, ProviderProbe, ProviderSession, ProviderVerification, SessionRequest, ToolCall,
-    ToolResult, ToolSpec, TurnEventObserver, TurnRequest, json_rpc::JsonRpcControl,
-    json_rpc::JsonRpcProcess, json_rpc::response_id, redact_json,
+    ToolResult, ToolSpec, TurnEventObserver, TurnRequest,
+    codex_broker::{CodexBroker, CodexBrokerControl},
+    json_rpc::JsonRpcProcess,
+    json_rpc::response_id,
+    redact_json,
 };
+
+use crate::codex_broker::CodexBrokerReadHandle;
 
 const MAX_PERMISSION_COMMAND_BYTES: usize = 4096;
 const MAX_PERMISSION_ACTION_BYTES: usize = 1024;
@@ -202,10 +207,10 @@ impl CodexAdapter {
             .into_iter()
             .next()
             .ok_or(ProviderError::NotDetected(ProviderKind::Codex))?;
-        let mut process = JsonRpcProcess::spawn(&Self::command(&candidate.path, &request.cwd))?;
+        let process = CodexBroker::spawn(&Self::command(&candidate.path, &request.cwd))?;
         // Dynamic tools are an experimental app-server field; opt in only when Lazoo declares them.
-        initialize(
-            &mut process,
+        let initialize_result = initialize_broker(
+            &process,
             request.startup_timeout(),
             !request.tools.is_empty(),
         )
@@ -238,8 +243,14 @@ impl CodexAdapter {
         let native_host_pid = process.native_host_pid();
         let job = Some(process.job());
         let control = process.control();
+        let new_empty_thread = Arc::new(std::sync::atomic::AtomicBool::new(!resumed));
+        let live_view = process.read_handle(
+            session_id.clone(),
+            initialize_result,
+            Arc::clone(&new_empty_thread),
+        );
         Ok(CodexSession {
-            process: Mutex::new(process),
+            process,
             control,
             session_id,
             native_host_pid,
@@ -247,6 +258,11 @@ impl CodexAdapter {
             resumed,
             request: request.clone(),
             active_turn: RwLock::new(None),
+            turn_gate: Mutex::new(()),
+            live_view,
+            live_bootstrap: result,
+            executable: candidate.path,
+            new_empty_thread,
         })
     }
 }
@@ -281,20 +297,28 @@ impl ProviderAdapter for CodexAdapter {
 
 #[derive(Debug)]
 pub struct CodexSession {
-    process: Mutex<JsonRpcProcess>,
-    control: JsonRpcControl,
+    process: CodexBroker,
+    control: CodexBrokerControl,
     session_id: String,
     native_host_pid: Option<u32>,
     job: Option<std::sync::Arc<lazoo_runtime::JobObject>>,
     resumed: bool,
     request: SessionRequest,
     active_turn: RwLock<Option<String>>,
+    turn_gate: Mutex<()>,
+    live_view: CodexBrokerReadHandle,
+    live_bootstrap: Value,
+    executable: PathBuf,
+    new_empty_thread: Arc<std::sync::atomic::AtomicBool>,
 }
 
 impl CodexSession {
     async fn run_turn(&self, request: &TurnRequest) -> Result<Vec<ProviderEvent>, ProviderError> {
-        let mut process = self.process.lock().await;
-        let result = process
+        let _turn_gate = self.turn_gate.lock().await;
+        self.new_empty_thread
+            .store(false, std::sync::atomic::Ordering::Release);
+        let result = self
+            .process
             .request(
                 "turn/start",
                 turn_start_params(&self.session_id, &self.request, request)?,
@@ -311,7 +335,7 @@ impl CodexSession {
             .to_owned();
         self.set_active_turn(Some(turn_id));
         let outcome = self
-            .collect_turn(&mut process, self.initial_turn_events(), None, None)
+            .collect_turn(self.initial_turn_events(), None, None)
             .await;
         self.set_active_turn(None);
         outcome
@@ -322,8 +346,11 @@ impl CodexSession {
         request: &TurnRequest,
         observer: &dyn TurnEventObserver,
     ) -> Result<Vec<ProviderEvent>, ProviderError> {
-        let mut process = self.process.lock().await;
-        let result = process
+        let _turn_gate = self.turn_gate.lock().await;
+        self.new_empty_thread
+            .store(false, std::sync::atomic::Ordering::Release);
+        let result = self
+            .process
             .request(
                 "turn/start",
                 turn_start_params(&self.session_id, &self.request, request)?,
@@ -359,7 +386,7 @@ impl CodexSession {
         events.push(started);
 
         let outcome = self
-            .collect_turn(&mut process, events, Some(observer), Some(&turn_id))
+            .collect_turn(events, Some(observer), Some(&turn_id))
             .await;
         if let Err(error @ ProviderError::Observer(_)) = &outcome {
             self.interrupt_after_observer_error(&turn_id, error).await;
@@ -393,7 +420,6 @@ impl CodexSession {
 
     async fn collect_turn(
         &self,
-        process: &mut JsonRpcProcess,
         mut events: Vec<ProviderEvent>,
         observer: Option<&dyn TurnEventObserver>,
         accepted_turn_id: Option<&str>,
@@ -417,7 +443,7 @@ impl CodexSession {
                     millis: self.request.progress_timeout_millis,
                 })?;
             let wait = cmp::min(total_remaining, progress_remaining);
-            let message = match process.next_message(wait, "Codex turn progress").await {
+            let message = match self.process.next_message(wait, "Codex turn progress").await {
                 Err(ProviderError::Timeout { .. }) if progress_remaining <= total_remaining => {
                     return Err(ProviderError::Stalled {
                         millis: self.request.progress_timeout_millis,
@@ -485,9 +511,28 @@ impl CodexSession {
             *active = value;
         }
     }
+
+    /// Internal native-view data. The cloned handle is read-only and cannot answer server calls.
+    #[must_use]
+    pub(crate) fn live_view_bootstrap(&self) -> (CodexBrokerReadHandle, Value, PathBuf, PathBuf) {
+        (
+            self.live_view.clone(),
+            self.live_bootstrap.clone(),
+            self.executable.clone(),
+            self.request.cwd.clone(),
+        )
+    }
 }
 
 impl ProviderSession for CodexSession {
+    fn native_view_available(&self) -> bool {
+        self.native_view_supported()
+    }
+
+    fn open_native_view(&self) -> AdapterFuture<'_, Option<crate::NativeViewLease>> {
+        Box::pin(async move { self.open_native_view_lease().await.map(Some) })
+    }
+
     fn id(&self) -> String {
         self.session_id.clone()
     }
@@ -532,7 +577,7 @@ impl ProviderSession for CodexSession {
     }
 
     fn stop(&self) -> AdapterFuture<'_, ()> {
-        Box::pin(async move { self.process.lock().await.stop(STOP_TIMEOUT).await })
+        Box::pin(async move { self.process.stop(STOP_TIMEOUT).await })
     }
 }
 
@@ -1032,6 +1077,30 @@ fn truncate_utf8(value: &mut String, maximum: usize) {
 
 async fn initialize(
     process: &mut JsonRpcProcess,
+    wait: Duration,
+    experimental_api: bool,
+) -> Result<Value, ProviderError> {
+    let result = process
+        .request(
+            "initialize",
+            json!({
+                "clientInfo": {
+                    "name": "lazoo",
+                    "title": "Lazoo",
+                    "version": env!("CARGO_PKG_VERSION")
+                },
+                "capabilities": {"experimentalApi": experimental_api}
+            }),
+            wait,
+            "Codex initialization",
+        )
+        .await?;
+    process.control().notify("initialized", None).await?;
+    Ok(result)
+}
+
+async fn initialize_broker(
+    process: &CodexBroker,
     wait: Duration,
     experimental_api: bool,
 ) -> Result<Value, ProviderError> {

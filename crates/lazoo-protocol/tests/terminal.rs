@@ -1,6 +1,6 @@
 use lazoo_protocol::{
     SessionTerminalAttachParams, SessionTerminalAttachResult, SessionTerminalStatusParams,
-    TerminalRecord,
+    SessionTerminalViewParams, SessionTerminalViewResult, TerminalRecord,
 };
 use serde_json::json;
 use uuid::Uuid;
@@ -66,5 +66,62 @@ fn session_terminal_status_uses_a_strict_session_identifier() {
     assert!(
         serde_json::from_value::<SessionTerminalStatusParams>(json!({"id": id, "opening": true}))
             .is_err()
+    );
+}
+
+#[test]
+fn session_terminal_view_reuses_the_revision_fenced_attach_shape() {
+    let session_id = Uuid::new_v4();
+    let params: SessionTerminalViewParams = serde_json::from_value(json!({
+        "id": session_id,
+        "expectedRevision": 4,
+        "columns": 120,
+        "rows": 40,
+        "idempotencyKey": "view-rhea"
+    }))
+    .unwrap();
+    assert_eq!(
+        (
+            params.id,
+            params.expected_revision,
+            params.columns,
+            params.rows
+        ),
+        (session_id, 4, 120, 40)
+    );
+    assert!(
+        serde_json::from_value::<SessionTerminalViewParams>(json!({
+            "id": session_id, "expectedRevision": 4, "columns": 120, "rows": 40,
+            "idempotencyKey": "view-rhea", "authority": "full-autonomy"
+        }))
+        .is_err()
+    );
+
+    let terminal = TerminalRecord {
+        id: Uuid::new_v4(),
+        boot_id: Uuid::new_v4(),
+        pid: 4242,
+        executable: r"C:\tools\codex.exe".to_owned(),
+        args: vec!["app-server".to_owned()],
+        cwd: r"C:\lazoo\sessions\one".to_owned(),
+        columns: 120,
+        rows: 40,
+        revision: 1,
+        live: true,
+        exit_code: None,
+    };
+    let result = SessionTerminalViewResult {
+        session_id,
+        terminal: terminal.clone(),
+    };
+    assert_eq!(
+        serde_json::to_value(&result).unwrap()["sessionId"],
+        json!(session_id)
+    );
+    assert_eq!(
+        serde_json::from_value::<SessionTerminalViewResult>(serde_json::to_value(result).unwrap())
+            .unwrap()
+            .terminal,
+        terminal
     );
 }

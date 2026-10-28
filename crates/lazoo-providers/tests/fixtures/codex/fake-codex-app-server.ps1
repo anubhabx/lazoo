@@ -32,6 +32,49 @@ while ($null -ne ($line = [Console]::In.ReadLine())) {
         'thread/resume' {
             Write-Message @{ id = $message.id; result = @{ thread = @{ id = 'thread-1' } } }
         }
+        'thread/read' {
+            Write-Message @{ id = $message.id; result = @{ thread = @{ id = 'thread-1'; cwd = (Get-Location).Path; canAcceptDirectInput = $true } } }
+        }
+        'thread/turns/list' {
+            Write-Message @{ id = $message.id; error = @{ code = -32044; message = 'fixture history unavailable' } }
+        }
+        'thread/items/list' {
+            Write-Message @{ id = $message.id; error = @{ code = -32044; message = 'fixture history unavailable' } }
+        }
+        'account/read' {
+            Write-Message @{ id = $message.id; result = @{ account = @{ id = 'fixture' } } }
+        }
+        'model/list' {
+            Write-Message @{ id = $message.id; result = @{ data = @(); nextCursor = $null } }
+        }
+        'configRequirements/read' {
+            if (@($message.params.PSObject.Properties).Count -ne 0) {
+                Write-Message @{ id = $message.id; error = @{ code = -32602; message = 'configRequirements/read requires canonical empty params' } }
+            } else {
+                Write-Message @{ id = $message.id; result = @{} }
+            }
+        }
+        'hooks/list' {
+            if ($message.params.PSObject.Properties.Name -contains 'limit') {
+                Write-Message @{ id = $message.id; error = @{ code = -32602; message = 'hooks/list rejects pagination fields' } }
+            } else {
+                Write-Message @{ id = $message.id; result = @{ data = @(); nextCursor = $null } }
+            }
+        }
+        'skills/list' {
+            if ($message.params.PSObject.Properties.Name -contains 'limit') {
+                Write-Message @{ id = $message.id; error = @{ code = -32602; message = 'skills/list rejects pagination fields' } }
+            } else {
+                Write-Message @{ id = $message.id; result = @{ data = @(); nextCursor = $null } }
+            }
+        }
+        'plugin/list' {
+            if ($message.params.PSObject.Properties.Name -contains 'limit') {
+                Write-Message @{ id = $message.id; error = @{ code = -32602; message = 'plugin/list rejects pagination fields' } }
+            } else {
+                Write-Message @{ id = $message.id; result = @{ data = @(); nextCursor = $null } }
+            }
+        }
         'turn/start' {
             $message.params | ConvertTo-Json -Depth 20 -Compress |
                 Set-Content -LiteralPath (Join-Path (Get-Location) 'fake-codex-turn-start.json') -Encoding utf8

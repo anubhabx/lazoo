@@ -4,8 +4,10 @@ use std::{
     path::{Path, PathBuf},
     process::Command,
     sync::{Mutex, OnceLock},
+    time::Duration,
 };
 
+use futures_util::{SinkExt, StreamExt};
 use lazoo_providers::{
     AdapterFuture, CodexAdapter, DiscoveryEnvironment, PermissionDecision, PermissionKind,
     PermissionRequest, ProviderAdapter, ProviderCapabilities, ProviderError, ProviderEvent,
@@ -15,6 +17,14 @@ use lazoo_providers::{
 };
 use serde_json::json;
 use tempfile::tempdir;
+use tokio_tungstenite::{
+    MaybeTlsStream, WebSocketStream, connect_async,
+    tungstenite::{
+        Message,
+        client::IntoClientRequest,
+        http::header::{AUTHORIZATION, ORIGIN},
+    },
+};
 
 #[derive(Default)]
 struct CollectingObserver {
@@ -551,6 +561,277 @@ fn lazoo_tools() -> Vec<ToolSpec> {
 fn read_fixture_json(directory: &Path, name: &str) -> serde_json::Value {
     let text = fs::read_to_string(directory.join(name)).unwrap();
     serde_json::from_str(text.trim_start_matches('\u{feff}').trim()).unwrap()
+}
+
+async fn native_view_request(
+    viewer: &mut WebSocketStream<MaybeTlsStream<tokio::net::TcpStream>>,
+    id: u64,
+    method: &str,
+    params: serde_json::Value,
+) -> serde_json::Value {
+    viewer
+        .send(Message::Text(
+            json!({"id": id, "method": method, "params": params})
+                .to_string()
+                .into(),
+        ))
+        .await
+        .unwrap();
+    loop {
+        let message = tokio::time::timeout(Duration::from_secs(2), viewer.next())
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        let reply: serde_json::Value =
+            serde_json::from_str(message.into_text().unwrap().as_ref()).unwrap();
+        if reply["id"] == json!(id) {
+            return reply;
+        }
+    }
+}
+
+fn native_view_request_with_token(
+    descriptor: &lazoo_providers::NativeViewLaunchDescriptor,
+    token: &str,
+) -> tokio_tungstenite::tungstenite::handshake::client::Request {
+    let mut request = descriptor.remote_url().into_client_request().unwrap();
+    request
+        .headers_mut()
+        .insert(AUTHORIZATION, format!("Bearer {token}").parse().unwrap());
+    request
+}
+
+#[tokio::test]
+#[allow(clippy::too_many_lines)] // One authenticated viewer lifecycle exercises each authority boundary.
+async fn native_view_websocket_is_authenticated_read_only_and_preserves_history_errors() {
+    ensure_session_host();
+    let temporary = tempdir().unwrap();
+    let session = CodexAdapter::with_executable(fake_codex())
+        .start(&SessionRequest::new(temporary.path()))
+        .await
+        .unwrap();
+    let lease = session.open_native_view().await.unwrap().unwrap();
+    let descriptor = lease.launch_descriptor();
+    let command = descriptor.command();
+    let token = command
+        .env
+        .get(&OsString::from("LAZOO_NATIVE_VIEW_TOKEN"))
+        .unwrap()
+        .to_string_lossy()
+        .into_owned();
+
+    assert!(
+        connect_async(native_view_request_with_token(&descriptor, "wrong"))
+            .await
+            .is_err()
+    );
+    let mut origin_request = native_view_request_with_token(&descriptor, &token);
+    origin_request
+        .headers_mut()
+        .insert(ORIGIN, "https://example.invalid".parse().unwrap());
+    assert!(connect_async(origin_request).await.is_err());
+
+    let (mut viewer, _) = connect_async(native_view_request_with_token(&descriptor, &token))
+        .await
+        .unwrap();
+    assert!(
+        connect_async(native_view_request_with_token(&descriptor, &token))
+            .await
+            .is_err()
+    );
+
+    let initialize = native_view_request(&mut viewer, 1, "initialize", json!({})).await;
+    assert_eq!(initialize["result"]["userAgent"], "fake-codex-app-server");
+    let requirements =
+        native_view_request(&mut viewer, 11, "configRequirements/read", json!({})).await;
+    assert_eq!(requirements["result"], json!({}), "{requirements}");
+    let hooks = native_view_request(
+        &mut viewer,
+        12,
+        "hooks/list",
+        json!({"cwds":[temporary.path().to_string_lossy()],"forceReload":true}),
+    )
+    .await;
+    assert_eq!(hooks["result"]["data"], json!([]));
+    let resumed = native_view_request(
+        &mut viewer,
+        2,
+        "thread/resume",
+        json!({"threadId":"thread-1", "approvalPolicy":"never", "cwd":"C:\\other"}),
+    )
+    .await;
+    assert_eq!(resumed["result"]["thread"]["id"], "thread-1");
+    assert_eq!(resumed["result"]["thread"]["canAcceptDirectInput"], false);
+    let thread_read = native_view_request(
+        &mut viewer,
+        20,
+        "thread/read",
+        json!({"threadId":"thread-1"}),
+    )
+    .await;
+    assert_eq!(
+        thread_read["result"]["thread"]["canAcceptDirectInput"],
+        false
+    );
+    let thread_list = native_view_request(&mut viewer, 21, "thread/list", json!({})).await;
+    assert_eq!(
+        thread_list["result"]["data"][0]["canAcceptDirectInput"],
+        false
+    );
+
+    let wrong_thread =
+        native_view_request(&mut viewer, 3, "thread/read", json!({"threadId":"other"})).await;
+    assert_eq!(wrong_thread["error"]["code"], -32001);
+    let mutation = native_view_request(
+        &mut viewer,
+        4,
+        "turn/start",
+        json!({"threadId":"thread-1", "input":[]}),
+    )
+    .await;
+    assert_eq!(mutation["error"]["code"], -32001);
+    viewer
+        .send(Message::Text(
+            json!({"id":"approval-1","result":{"decision":"accept"}})
+                .to_string()
+                .into(),
+        ))
+        .await
+        .unwrap();
+    let response_refusal: serde_json::Value = serde_json::from_str(
+        viewer
+            .next()
+            .await
+            .unwrap()
+            .unwrap()
+            .into_text()
+            .unwrap()
+            .as_ref(),
+    )
+    .unwrap();
+    assert_eq!(response_refusal["error"]["code"], -32600);
+    assert!(!temporary.path().join("fake-codex-turn-start.json").exists());
+
+    let empty_history = native_view_request(
+        &mut viewer,
+        5,
+        "thread/items/list",
+        json!({"threadId":"thread-1", "limit":5}),
+    )
+    .await;
+    assert_eq!(empty_history["result"]["data"], json!([]));
+
+    session
+        .turn(&TurnRequest::new("fixture turn"))
+        .await
+        .unwrap();
+    let history_error = native_view_request(
+        &mut viewer,
+        6,
+        "thread/items/list",
+        json!({"threadId":"thread-1", "limit":5}),
+    )
+    .await;
+    assert_eq!(history_error["error"]["code"], -32001);
+
+    let mut closed = lease.closed_subscription();
+    session.stop().await.unwrap();
+    tokio::time::timeout(Duration::from_secs(2), closed.changed())
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(lease.is_closed());
+}
+
+#[tokio::test]
+async fn native_view_buffers_notifications_until_successful_thread_resume() {
+    ensure_session_host();
+    let temporary = tempdir().unwrap();
+    let session = CodexAdapter::with_executable(fake_codex())
+        .start(&SessionRequest::new(temporary.path()))
+        .await
+        .unwrap();
+    let lease = session.open_native_view().await.unwrap().unwrap();
+    let descriptor = lease.launch_descriptor();
+    let token = descriptor
+        .command()
+        .env
+        .get(&OsString::from("LAZOO_NATIVE_VIEW_TOKEN"))
+        .unwrap()
+        .to_string_lossy()
+        .into_owned();
+    let (mut viewer, _) = connect_async(native_view_request_with_token(&descriptor, &token))
+        .await
+        .unwrap();
+
+    session
+        .turn(&TurnRequest::new("notification before viewer resume"))
+        .await
+        .unwrap();
+    assert!(
+        tokio::time::timeout(Duration::from_millis(100), viewer.next())
+            .await
+            .is_err()
+    );
+    let resumed = native_view_request(
+        &mut viewer,
+        1,
+        "thread/resume",
+        json!({"threadId":"thread-1"}),
+    )
+    .await;
+    assert_eq!(resumed["result"]["thread"]["canAcceptDirectInput"], false);
+    let notification: serde_json::Value = serde_json::from_str(
+        tokio::time::timeout(Duration::from_secs(2), viewer.next())
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap()
+            .into_text()
+            .unwrap()
+            .as_ref(),
+    )
+    .unwrap();
+    assert_eq!(notification["method"], "turn/started");
+    session.stop().await.unwrap();
+}
+
+#[tokio::test]
+async fn native_view_close_terminates_a_nonreading_viewer() {
+    ensure_session_host();
+    let temporary = tempdir().unwrap();
+    let session = CodexAdapter::with_executable(fake_codex())
+        .start(&SessionRequest::new(temporary.path()))
+        .await
+        .unwrap();
+    let lease = session.open_native_view().await.unwrap().unwrap();
+    let descriptor = lease.launch_descriptor();
+    let token = descriptor
+        .command()
+        .env
+        .get(&OsString::from("LAZOO_NATIVE_VIEW_TOKEN"))
+        .unwrap()
+        .to_string_lossy()
+        .into_owned();
+    let (mut viewer, _) = connect_async(native_view_request_with_token(&descriptor, &token))
+        .await
+        .unwrap();
+    viewer
+        .send(Message::Text(
+            json!({"id":1,"method":"thread/resume","params":{"threadId":"thread-1"}})
+                .to_string()
+                .into(),
+        ))
+        .await
+        .unwrap();
+    lease.close();
+    assert!(
+        tokio::time::timeout(Duration::from_secs(2), viewer.next())
+            .await
+            .is_ok()
+    );
+    session.stop().await.unwrap();
 }
 
 #[test]

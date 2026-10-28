@@ -2,6 +2,8 @@ mod acp;
 mod antigravity;
 mod claude;
 mod codex;
+mod codex_broker;
+mod codex_view;
 mod config;
 mod config_apply;
 mod contract;
@@ -21,6 +23,7 @@ pub use codex::{
     CodexAdapter, CodexSession, normalize_codex_message, normalize_codex_permission_request,
     normalize_codex_tool_call,
 };
+pub use codex_view::{NativeViewLaunchDescriptor, NativeViewLease};
 pub use config::{
     ConfigurationFormat, DiscoveredIntegration, IntegrationKind, IntegrationTransport,
     PROVIDER_CONFIGURATION_V1, ProviderConfigurationFile, ProviderConfigurationReport,

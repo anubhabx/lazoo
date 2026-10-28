@@ -64,7 +64,7 @@ Each was taken as proposed on the owner's direction to finish as much as possibl
 
 ## 5. Reserved and excluded
 
-`kind: permission` and the Permissions filter stay empty until terminal permission passthrough exists. Terminal streaming (ConPTY) uses the separate authenticated byte channel described in the [native terminal client contract](2026-10-28-terminal-client-contract.md). Native session attachment currently requires a suspended session; concurrent TUI display during protocol-driven work is not implemented. The daemon emits no `inbox.*` or `workspace.*` event and stores no read state, dismissal, or selection.
+`kind: permission` and the Permissions filter stay empty until terminal permission passthrough exists. Terminal streaming (ConPTY) uses the separate authenticated byte channel described in the [native terminal client contract](2026-10-28-terminal-client-contract.md). `session.terminal.attach` requires a suspended session. Codex also supports concurrent read-only native display through `session.terminal.view`; prompts and approvals remain in Lazoo controls. See the [UI handoff](../../UI-BACKEND-HANDOFF.md) for view capability, status, and reconnect behavior. The daemon emits no `inbox.*` or `workspace.*` event and stores no read state, dismissal, or selection.
 
 ## 6. What the review decides
 

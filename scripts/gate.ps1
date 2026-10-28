@@ -76,9 +76,9 @@ try {
             @('format', 'cargo fmt --all -- --check', @('fmt', '--all', '--', '--check')),
             @('clippy', 'cargo clippy --workspace --all-targets --locked -- -D warnings',
                 @('clippy', '--workspace', '--all-targets', '--locked', '--', '-D', 'warnings')),
-            # Integration fixtures resolve this normal-profile sibling beside their test binary.
-            @('test-host', 'cargo build -p lazoo-session-host --locked',
-                @('build', '-p', 'lazoo-session-host', '--locked')),
+            # Integration fixtures resolve these normal-profile siblings beside their test binary.
+            @('test-host', 'cargo build -p lazoo-session-host -p lazoo-turn-transport-fixture --locked',
+                @('build', '-p', 'lazoo-session-host', '-p', 'lazoo-turn-transport-fixture', '--locked')),
             @('test', 'cargo test --workspace --locked', @('test', '--workspace', '--locked')),
             @('release', 'cargo build --workspace --release --locked',
                 @('build', '--workspace', '--release', '--locked'))

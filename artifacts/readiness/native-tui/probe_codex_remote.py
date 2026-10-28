@@ -1,4 +1,4 @@
-"""Bounded native-TUI startup probe, not production code. Sends no model turns.
+"""Bounded native-TUI feasibility probe. Uses only a local model simulator.
 
 Dependencies: python -m pip install --target .deps websockets==17.3
 All processes, provider state, logs and terminal output belong to one disposable run.
@@ -21,7 +21,7 @@ sys.path.insert(0, str(BASE / ".deps"))
 from websockets.asyncio.server import serve
 
 REPO = BASE.parents[2]
-CODEX = Path(r"C:\nvm4w\nodejs\node_modules\@openai\codex\node_modules\@openai\codex-win32-x64\vendor\x86_64-pc-windows-msvc\bin\codex.exe")
+CODEX = Path(os.environ.get("LAZOO_PROBE_CODEX", r"C:\nvm4w\nodejs\node_modules\@openai\codex\node_modules\@openai\codex-win32-x64\vendor\x86_64-pc-windows-msvc\bin\codex.exe"))
 
 
 async def main():
