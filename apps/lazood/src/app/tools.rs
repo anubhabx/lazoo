@@ -9,8 +9,8 @@
 use lazoo_domain::MAX_INCIDENT_REMEDIES;
 use lazoo_protocol::{
     AuthorityMode, ConversationTurnRecord, IncidentRemedyKind, IncidentSource, IncidentState,
-    MessageDeliveryState, MessageEndpoint, MessageRecord, MessageReference, RpcError, TaskDetail,
-    TaskReportKind, TaskState, TurnState,
+    MemoryRecordType, MemorySearchParams, MessageDeliveryState, MessageEndpoint, MessageRecord,
+    MessageReference, RpcError, TaskDetail, TaskReportKind, TaskState, TurnState,
 };
 use lazoo_providers::{ToolCall, ToolResult, ToolSpec};
 use lazoo_store::{
@@ -34,6 +34,11 @@ const MAX_OUTPUT_BYTES: usize = 16 * 1024;
 #[allow(clippy::too_many_lines)] // The catalog is one declaration, read top to bottom.
 pub(super) fn collaboration_tools() -> Vec<ToolSpec> {
     vec![
+        ToolSpec {
+            name: "memory_search".to_owned(),
+            description: "Search saved memory only within the current conversation's project. The caller cannot select another project, employee, conversation, task, or branch. Results retain source citations.".to_owned(),
+            input_schema: json!({"type":"object","required":["query"],"properties":{"query":{"type":"string","maxLength":512},"types":{"type":"array","items":{"type":"string","enum":["decision","action","achievement","question","failure","constraint","fact","summary"]}},"limit":{"type":"integer","minimum":1,"maximum":8}},"additionalProperties":false}),
+        },
         ToolSpec {
             name: "employees_list".to_owned(),
             description: "List the live Lazoo employee roster: id, name, role, provider, \
@@ -253,6 +258,18 @@ struct ReplyArguments {
     #[serde(default)]
     references: Vec<MessageReference>,
 }
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct MemorySearchArguments {
+    query: String,
+    #[serde(default)]
+    types: Vec<MemoryRecordType>,
+    #[serde(default = "default_memory_tool_limit")]
+    limit: u32,
+}
+const fn default_memory_tool_limit() -> u32 {
+    8
+}
 
 impl App {
     /// Answers one collaboration tool call for a daemon-owned turn. Every error becomes a
@@ -294,6 +311,7 @@ impl App {
             )
         });
         match call.name.as_str() {
+            "memory_search" => self.tool_memory_search(call, &turn),
             "employees_list" => self.tool_employees_list(actor),
             "task_delegate" => self.tool_task_delegate(turn_id, call, task_id?, actor),
             "task_wait" => self.tool_task_wait(turn_id, call, task_id?, actor).await,
@@ -308,6 +326,56 @@ impl App {
                 format!("unknown Lazoo tool: {other}"),
             )),
         }
+    }
+
+    fn tool_memory_search(
+        &self,
+        call: &ToolCall,
+        turn: &ConversationTurnRecord,
+    ) -> Result<Value, RpcError> {
+        let arguments: MemorySearchArguments = tool_arguments(call)?;
+        if arguments.query.len() > 512 || arguments.limit == 0 || arguments.limit > 8 {
+            return Err(tool_error(
+                "LZ-TOOL-INVALID",
+                "memory query or limit is out of bounds",
+            ));
+        }
+        let conversation = self
+            .store
+            .get_conversation(turn.conversation_id)
+            .map_err(task_store_error)?;
+        let records = self
+            .store
+            .search_memory(&MemorySearchParams {
+                project_id: conversation.project_id,
+                employee_id: None,
+                conversation_id: conversation
+                    .project_id
+                    .is_none()
+                    .then_some(turn.conversation_id),
+                task_id: None,
+                root_task_id: None,
+                branch: None,
+                query: arguments.query,
+                record_types: arguments.types,
+                limit: arguments.limit,
+            })
+            .map_err(task_store_error)?;
+        let mut bounded = Vec::new();
+        for record in records {
+            let mut candidate_records = bounded.clone();
+            candidate_records.push(record.clone());
+            let candidate = json!({"records": candidate_records});
+            if serde_json::to_vec(&candidate)
+                .map_err(|error| tool_error("LZ-TOOL-INVALID", error.to_string()))?
+                .len()
+                > MAX_OUTPUT_BYTES
+            {
+                break;
+            }
+            bounded.push(record);
+        }
+        Ok(json!({"records": bounded, "conversationId": turn.conversation_id}))
     }
 
     fn tool_employees_list(&self, actor: MessageEndpoint) -> Result<Value, RpcError> {

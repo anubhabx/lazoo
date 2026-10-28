@@ -1,5 +1,6 @@
 # Rust and Tauri build output
 target/
+target-memory-store*/
 dist/
 !apps/lazoo-desktop/ui/dist/
 !apps/lazoo-desktop/ui/dist/**

@@ -41,6 +41,22 @@ async fn oversized_frame_is_rejected_before_payload_read() {
 }
 
 #[tokio::test]
+async fn channel_specific_frame_limit_rejects_before_body_allocation() {
+    let bytes = 16385_u32.to_le_bytes();
+    let mut reader = bytes.as_slice();
+    let error = lazoo_ipc::read_frame_bounded(&mut reader, 16384)
+        .await
+        .unwrap_err();
+    assert!(matches!(
+        error,
+        IpcError::FrameTooLarge {
+            actual: 16385,
+            maximum: 16384
+        }
+    ));
+}
+
+#[tokio::test]
 async fn write_frame_rejects_oversized_payload() {
     let (mut writer, _reader) = duplex(32);
     let payload = vec![0_u8; MAX_FRAME_BYTES + 1];
@@ -189,4 +205,24 @@ async fn pipe_dacl_contains_only_owner_and_system_grants() {
     assert!(!sddl.contains(";;;AU)"));
     assert!(!sddl.contains(";;;AN)"));
     assert!(!sddl.contains(";;;NU)"));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn cancelled_accept_preserves_the_listener() {
+    let temporary = tempdir().unwrap();
+    let installation =
+        Installation::load_or_create(&DataRoot::from_path(temporary.path())).unwrap();
+    let owner = OwnerSecurity::current().unwrap();
+    let mut server = PipeServer::bind(&installation, &owner).unwrap();
+    assert!(
+        timeout(Duration::from_millis(10), server.accept())
+            .await
+            .is_err()
+    );
+    let (server_side, client_side) = tokio::join!(
+        server.accept(),
+        PipeClient::connect(&installation, "after-cancel", "0.1.0")
+    );
+    assert!(server_side.is_ok());
+    assert!(client_side.is_ok());
 }

@@ -343,15 +343,16 @@ impl Store {
                 |row| row.get(0),
             )?;
             let existing = query_provider_observation(&transaction, &observation.provider)?;
+            let observation = merge_provider_observation(existing.as_ref(), observation);
             if used_by_employee > 0
                 && existing
                     .as_ref()
-                    .is_none_or(|current| !effective_observation_equal(current, observation))
+                    .is_none_or(|current| !effective_observation_equal(current, &observation))
             {
                 effective_change = true;
                 changed_providers.push(observation.provider.clone());
             }
-            upsert_provider_observation(&transaction, observation)?;
+            write_provider_observation(&transaction, &observation)?;
         }
         let now = Utc::now().to_rfc3339();
         let (roster_revision, event_sequence) = if effective_change {
@@ -425,7 +426,73 @@ fn insert_processed_response(
     Ok(())
 }
 
+/// The single choke point for every observation write (employee create, employee update, and
+/// roster refresh all land here or in the refresh loop, which applies the same merge): a
+/// probe that cannot see authentication must not undo a model answer that proved readiness.
 fn upsert_provider_observation(
+    transaction: &Transaction<'_>,
+    observation: &ProviderObservation,
+) -> Result<(), StoreError> {
+    let existing = query_provider_observation(transaction, &observation.provider)?;
+    let merged = merge_provider_observation(existing.as_ref(), observation);
+    write_provider_observation(transaction, &merged)
+}
+
+/// The observation to store when `incoming` arrives over `existing`.
+///
+/// A stored `verified` observation (a model answered through the native channel, recorded by
+/// `provider.smoke`) is sticky against a probe that merely cannot see authentication: when the
+/// incoming verification is `detected`, `unverified`, or `configured`, the version and protocol
+/// are unchanged, and neither channel reports `blocked` or `needs-login`, the row stays
+/// `verified` and keeps its `ready` native state, while the rest of the fresh probe (version,
+/// capabilities, external state, check time) is taken as reported. Anything else replaces the
+/// row exactly as before: a `degraded` or `not-detected` probe, a blocked or login-needing
+/// state, an incoming `verified`, or a changed version or protocol, because a replaced binary
+/// must be verified again.
+pub(crate) fn merge_provider_observation(
+    existing: Option<&ProviderObservation>,
+    incoming: &ProviderObservation,
+) -> ProviderObservation {
+    let Some(existing) = existing else {
+        return incoming.clone();
+    };
+    let weaker = matches!(
+        incoming.verification.as_str(),
+        "detected" | "unverified" | "configured"
+    );
+    let blocked = ["native", "external"].iter().any(|channel| {
+        matches!(
+            incoming
+                .authentication
+                .get(channel)
+                .and_then(serde_json::Value::as_str),
+            Some("blocked" | "needs-login")
+        )
+    });
+    if existing.verification != "verified"
+        || !weaker
+        || blocked
+        || existing.provider != incoming.provider
+        || existing.version != incoming.version
+        || existing.protocol != incoming.protocol
+    {
+        return incoming.clone();
+    }
+    let mut merged = incoming.clone();
+    "verified".clone_into(&mut merged.verification);
+    if existing
+        .authentication
+        .get("native")
+        .and_then(serde_json::Value::as_str)
+        == Some("ready")
+        && let Some(object) = merged.authentication.as_object_mut()
+    {
+        object.insert("native".to_owned(), serde_json::Value::from("ready"));
+    }
+    merged
+}
+
+fn write_provider_observation(
     transaction: &Transaction<'_>,
     observation: &ProviderObservation,
 ) -> Result<(), StoreError> {
@@ -719,6 +786,7 @@ fn query_roster_snapshot(connection: &Connection) -> Result<RosterSnapshot, Stor
                 connection,
                 employee.id,
                 employee.configuration_revision,
+                None,
             )?;
             let (availability, availability_reason) =
                 apply_session_availability(availability, availability_reason, session.as_ref());

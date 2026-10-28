@@ -17,6 +17,46 @@ use super::{App, to_value};
 /// cancellation and expiry are observed promptly.
 const APPROVAL_POLL_INTERVAL: Duration = Duration::from_millis(250);
 
+/// Async cancellation can drop the observer future before its polling loop sees the turn state.
+/// Close the durable pending record synchronously in that case; a concurrent human decision is
+/// protected by the revision check and wins harmlessly.
+struct PendingApprovalGuard {
+    app: App,
+    approval_id: Uuid,
+    owner_boot_id: Uuid,
+    expected_revision: u64,
+    armed: bool,
+}
+
+impl PendingApprovalGuard {
+    fn disarm(&mut self) {
+        self.armed = false;
+    }
+}
+
+impl Drop for PendingApprovalGuard {
+    fn drop(&mut self) {
+        if !self.armed {
+            return;
+        }
+        if self
+            .app
+            .store
+            .close_approval(&CloseApprovalInput {
+                approval_id: self.approval_id,
+                owner_boot_id: self.owner_boot_id,
+                expected_revision: self.expected_revision,
+                state: ApprovalState::Cancelled,
+                failure_code: "LZ-APPROVAL-OBSERVER-DROPPED".to_owned(),
+                failure_message: "the provider approval observer stopped waiting".to_owned(),
+            })
+            .is_ok()
+        {
+            let _ = self.app.publish_events();
+        }
+    }
+}
+
 impl App {
     /// Governs one provider approval request for a daemon-owned turn. The request is durable
     /// before any decision; policy answers immediately, otherwise the provider waits for the local
@@ -26,6 +66,15 @@ impl App {
         turn_id: Uuid,
         request: &PermissionRequest,
     ) -> Result<PermissionDecision, RpcError> {
+        if self
+            .store
+            .is_memory_summary_turn(turn_id)
+            .map_err(approval_store_error)?
+        {
+            // Scheduled summarization consumes the supplied source only. It cannot request
+            // commands or edits, even if the employee's ordinary task policy is broader.
+            return Ok(PermissionDecision::Decline);
+        }
         let kind = match request.kind {
             PermissionKind::CommandExecution => ApprovalKind::CommandExecution,
             PermissionKind::FileChange => ApprovalKind::FileChange,
@@ -47,6 +96,13 @@ impl App {
             .map_err(approval_store_error)?;
         self.publish_events()?;
         let mut approval = requested.approval;
+        let mut pending_guard = PendingApprovalGuard {
+            app: self.clone(),
+            approval_id: approval.id,
+            owner_boot_id: self.boot_id,
+            expected_revision: approval.revision,
+            armed: true,
+        };
         while approval.state == ApprovalState::Pending {
             tokio::select! {
                 () = self.approval_notify.notified() => {}
@@ -99,6 +155,7 @@ impl App {
                 Err(error) => return Err(approval_store_error(error)),
             }
         }
+        pending_guard.disarm();
         Ok(if approval.state == ApprovalState::Approved {
             PermissionDecision::Approve
         } else {

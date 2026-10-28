@@ -283,7 +283,7 @@ try {
     $daemon = Start-Daemon
     $gates.outerCodexContextIsolated = 'PASS'
     $status = Wait-Status
-    Assert-Equal $status.schemaVersion 15 'schema 15'
+    Assert-Equal $status.schemaVersion 19 'schema 19'
     Assert-Equal $status.journalMode 'wal' 'SQLite journal mode'
     $gates.schema8 = 'PASS'
 
@@ -552,7 +552,7 @@ try {
         completedAt = [DateTime]::UtcNow.ToString('o')
         durationMs = $stopwatch.ElapsedMilliseconds
         protocolVersion = 1
-        schemaVersion = 15
+        schemaVersion = 19
         isolatedDataRoot = $script:dataRoot
         temporaryDataRetained = $false
         commands = $commandSnapshot

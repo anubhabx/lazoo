@@ -1,16 +1,16 @@
 use std::{
     future::poll_fn,
     sync::{
-        Arc,
+        Arc, Mutex,
         atomic::{AtomicU64, Ordering},
     },
 };
 
 use lazoo_protocol::{
-    CancelTurnParams, ConversationDetail, ConversationListParams, ConversationShowParams,
-    CreateConversationParams, EmployeeAvailability, JsonRpcRequest, MessageSender,
-    RenameConversationParams, RetryTurnParams, RpcError, SessionLifecycleState, SubmitTurnParams,
-    TaskState, TurnListParams, TurnMutationResult, TurnShowParams, TurnState,
+    AuthorityMode, CancelTurnParams, ConversationDetail, ConversationListParams,
+    ConversationShowParams, CreateConversationParams, EmployeeAvailability, JsonRpcRequest,
+    MessageSender, RenameConversationParams, RetryTurnParams, RpcError, SessionLifecycleState,
+    SubmitTurnParams, TaskState, TurnListParams, TurnMutationResult, TurnShowParams, TurnState,
 };
 use lazoo_providers::{
     AdapterFuture, PermissionDecision, PermissionRequest, ProviderError, ProviderEvent,
@@ -34,6 +34,38 @@ struct AppTurnObserver {
     app: App,
     turn_id: Uuid,
     ordinal: AtomicU64,
+    raw_frames: Mutex<RawFrameCapture>,
+}
+
+/// The adapter-redacted raw payloads of one live turn, kept until the turn ends. The buffer is
+/// bounded by the inherited policy cap, so a long turn holds no more than its archive could keep.
+struct RawFrameCapture {
+    /// `None` when retention is off or the turn is an internal summary: nothing is kept.
+    cap: Option<u64>,
+    bytes: u64,
+    frames: Vec<Value>,
+    dropped: u64,
+}
+
+impl RawFrameCapture {
+    fn push(&mut self, kind: &str, raw: Option<Value>) {
+        let (Some(cap), Some(raw)) = (self.cap, raw) else {
+            return;
+        };
+        // Adapters clone one native message into several events; keep each message once.
+        if raw.is_null() || self.frames.last().is_some_and(|last| last["raw"] == raw) {
+            return;
+        }
+        let sequence = self.frames.len() as u64 + self.dropped + 1;
+        let frame = json!({"sequence": sequence, "type": kind, "raw": raw});
+        let length = serde_json::to_vec(&frame).map_or(u64::MAX, |bytes| bytes.len() as u64);
+        if self.bytes.saturating_add(length) > cap {
+            self.dropped += 1;
+            return;
+        }
+        self.bytes += length;
+        self.frames.push(frame);
+    }
 }
 
 struct DeliveryTarget {
@@ -43,11 +75,17 @@ struct DeliveryTarget {
 }
 
 impl AppTurnObserver {
-    fn new(app: App, turn_id: Uuid) -> Self {
+    fn new(app: App, turn_id: Uuid, raw_cap: Option<u64>) -> Self {
         Self {
             app,
             turn_id,
             ordinal: AtomicU64::new(0),
+            raw_frames: Mutex::new(RawFrameCapture {
+                cap: raw_cap,
+                bytes: 0,
+                frames: Vec::new(),
+                dropped: 0,
+            }),
         }
     }
 
@@ -58,6 +96,21 @@ impl AppTurnObserver {
             format!("provider:{}:{action}:{ordinal}", self.turn_id),
         )
     }
+
+    fn capture_raw_frame(&self, kind: &str, raw: Option<Value>) {
+        if let Ok(mut capture) = self.raw_frames.lock() {
+            capture.push(kind, raw);
+        }
+    }
+
+    /// The buffered frames and the count dropped at the cap; a poisoned buffer keeps nothing.
+    fn take_raw_frames(&self) -> (Vec<Value>, u64) {
+        self.raw_frames
+            .lock()
+            .map_or((Vec::new(), 0), |mut capture| {
+                (std::mem::take(&mut capture.frames), capture.dropped)
+            })
+    }
 }
 
 impl TurnEventObserver for AppTurnObserver {
@@ -67,8 +120,9 @@ impl TurnEventObserver for AppTurnObserver {
             .store
             .get_turn(self.turn_id)
             .map_err(|error| observer_error(&error))?;
-        let payload = bounded_event_payload(event);
+        let (payload, raw) = bounded_event_payload(event);
         let (kind, provider, native_session_id, native_turn_id) = event_identity(event, &payload);
+        self.capture_raw_frame(&kind, raw);
         let cancellation_evidence = match event {
             ProviderEvent::Cancelled { .. } => true,
             ProviderEvent::TurnCompleted { status, .. } => {
@@ -143,7 +197,20 @@ impl TurnEventObserver for AppTurnObserver {
     }
 
     fn call_tool<'a>(&'a self, call: &'a ToolCall) -> AdapterFuture<'a, ToolResult> {
-        Box::pin(async move { Ok(self.app.call_collaboration_tool(self.turn_id, call).await) })
+        Box::pin(async move {
+            if self
+                .app
+                .store
+                .is_memory_summary_turn(self.turn_id)
+                .map_err(|error| observer_error(&error))?
+            {
+                return Ok(ToolResult {
+                    success: false,
+                    content: json!({"error": {"code": "LZ-MEMORY-WORKER-READ-ONLY", "message": "Summary workers use only their supplied source and cannot call tools"}}),
+                });
+            }
+            Ok(self.app.call_collaboration_tool(self.turn_id, call).await)
+        })
     }
 }
 
@@ -318,7 +385,15 @@ impl App {
             .provider
             .parse::<ProviderKind>()
             .map_err(|_| turn_invalid("the recipient employee has an unknown provider"))?;
-        if provider != ProviderKind::Codex {
+        // A turn runs under its task's effective authority (a user turn's root task, a
+        // dispatch turn's child, a notice turn's recipient task); with no task it fails closed.
+        let authority = turn
+            .task_id
+            .map(|task_id| self.store.get_task(task_id))
+            .transpose()
+            .map_err(turn_store_error)?
+            .map_or(AuthorityMode::Ask, |detail| detail.task.effective_authority);
+        if !super::session_serves_authority(provider, authority, employee.authority_mode) {
             return Err(turn_failure(
                 if turn.task_id.is_some() {
                     "LZ-TASK-AUTHORITY-UNSUPPORTED"
@@ -328,7 +403,7 @@ impl App {
                 if turn.task_id.is_some() {
                     "the selected provider cannot enforce this task authority ceiling"
                 } else {
-                    "conversation turn delivery currently supports only Codex"
+                    "conversation turn delivery supports Codex, OpenCode (whose launch must match the turn's authority), and Claude Code under full autonomy"
                 },
                 turn.id,
             ));
@@ -342,6 +417,24 @@ impl App {
                 && session.employee_configuration_revision == employee.configuration_revision)
                 .then_some(session.id)
         });
+        // Summary source data must never share native context with an employee's normal work,
+        // or with another project's summary. Every summary starts a fresh session.
+        if let Some(session_id) = current_session_id
+            && (self
+                .store
+                .is_memory_summary_turn(turn.id)
+                .map_err(turn_store_error)?
+                || self
+                    .store
+                    .is_memory_summary_session(session_id)
+                    .map_err(turn_store_error)?)
+        {
+            return Err(turn_failure(
+                "LZ-MEMORY-SESSION-RESERVED",
+                "memory summaries require a fresh dedicated employee session",
+                turn.id,
+            ));
+        }
         Ok(DeliveryTarget {
             employee,
             provider,
@@ -369,6 +462,15 @@ impl App {
                     owner_boot_id: self.boot_id,
                 })
                 .map_err(turn_store_error)?;
+            if self
+                .store
+                .is_memory_summary_turn(turn.id)
+                .map_err(turn_store_error)?
+            {
+                self.store
+                    .reserve_memory_summary_session(turn.id, starting.session.id, self.boot_id)
+                    .map_err(turn_store_error)?;
+            }
             self.publish_events()?;
             let ready = if starting.event_sequence.is_some() {
                 self.start_new_session(target.employee, target.provider, starting, None)
@@ -428,6 +530,24 @@ impl App {
         submitting: TurnMutationResult,
         live_turn: Arc<LiveTurn>,
     ) -> Result<Value, RpcError> {
+        let turn_id = submitting.turn.id;
+        let session_id = submitting.turn.recipient.session_id;
+        let result = self
+            .run_registered_submitting_turn(request_id, submitting, live_turn)
+            .await;
+        if let Some(session_id) = session_id {
+            self.stop_resumed_session_after_failed_first_turn(turn_id, session_id)
+                .await;
+        }
+        result
+    }
+
+    async fn run_registered_submitting_turn(
+        &self,
+        request_id: &str,
+        submitting: TurnMutationResult,
+        live_turn: Arc<LiveTurn>,
+    ) -> Result<Value, RpcError> {
         let turn = &submitting.turn;
         let permission_mode = submitting
             .task
@@ -442,11 +562,22 @@ impl App {
             let current = self.store.get_turn(turn.id).map_err(turn_store_error)?;
             return self.turn_result(current, None);
         }
-        let observer = AppTurnObserver::new(self.clone(), turn.id);
+        let read_only = self
+            .store
+            .is_memory_summary_turn(turn.id)
+            .map_err(turn_store_error)?;
+        // Internal summary turns are never sources; otherwise the inherited policy sets the cap.
+        let raw_cap = if read_only {
+            None
+        } else {
+            self.raw_frame_cap(turn.conversation_id)
+        };
+        let observer = AppTurnObserver::new(self.clone(), turn.id, raw_cap);
         let turn_request = TurnRequest {
             correlation_id: turn.correlation_id,
-            prompt: turn.text.clone(),
+            prompt: self.prompt_with_memory(turn),
             permission_mode,
+            read_only,
         };
         let mut provider_future = live_turn.session.turn_observed(&turn_request, &observer);
         let provider_result = poll_fn(|context| {
@@ -458,6 +589,8 @@ impl App {
         })
         .await;
         self.live_turns.lock().await.remove(&turn.id);
+        self.archive_raw_frames(turn.id, observer.take_raw_frames())
+            .await;
 
         match provider_result {
             Ok(_) => self.finish_provider_delivery(turn.id, request_id),
@@ -913,12 +1046,15 @@ fn event_turn_id(event: &ProviderEvent) -> Option<String> {
     }
 }
 
-fn bounded_event_payload(event: &ProviderEvent) -> Value {
+/// The bounded canonical payload and, separately, the adapter-redacted `raw` payload it never
+/// carries; the raw payload goes to the raw-frame capture instead of the turn transcript.
+fn bounded_event_payload(event: &ProviderEvent) -> (Value, Option<Value>) {
     const MAX_EVENT_STRING_BYTES: usize = 60 * 1024;
     const MAX_EVENT_PAYLOAD_BYTES: usize = 64 * 1024;
     let mut payload = to_value(event);
+    let mut raw = None;
     if let Some(object) = payload.as_object_mut() {
-        object.remove("raw");
+        raw = object.remove("raw");
         for field in ["text", "output", "message"] {
             if let Some(Value::String(value)) = object.get_mut(field)
                 && value.len() > MAX_EVENT_STRING_BYTES
@@ -929,16 +1065,19 @@ fn bounded_event_payload(event: &ProviderEvent) -> Value {
         }
     }
     if serde_json::to_vec(&payload).is_ok_and(|bytes| bytes.len() <= MAX_EVENT_PAYLOAD_BYTES) {
-        payload
+        (payload, raw)
     } else {
         let (kind, provider, native_session_id, native_turn_id) = event_identity(event, &payload);
-        json!({
-            "type": kind,
-            "provider": provider,
-            "sessionId": native_session_id,
-            "turnId": native_turn_id,
-            "truncated": true
-        })
+        (
+            json!({
+                "type": kind,
+                "provider": provider,
+                "sessionId": native_session_id,
+                "turnId": native_turn_id,
+                "truncated": true
+            }),
+            raw,
+        )
     }
 }
 

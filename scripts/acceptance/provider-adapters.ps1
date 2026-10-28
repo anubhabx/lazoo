@@ -2,11 +2,27 @@ param(
     [Parameter(Mandatory = $true)]
     [ValidateSet('codex', 'opencode', 'grok-build', 'antigravity', 'claude-code')]
     [string]$Provider,
-    [switch]$HandshakeOnly
+    [switch]$HandshakeOnly,
+    [switch]$SkipBuild
 )
 
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
+
+# Owner scope update, 2026-10-16: Grok is excluded from core v1 acceptance.
+# Retain its historical evidence, but do not let it satisfy or block a required gate.
+$requiredCoreProviders = @('codex', 'opencode', 'antigravity', 'claude-code')
+
+function Get-CoreProviderStatus([Collections.IDictionary]$Entries, [string[]]$RequiredProviders) {
+    if (@($RequiredProviders | Where-Object { -not $Entries.Contains($_) }).Count -gt 0) {
+        return 'PARTIAL'
+    }
+    $statuses = @($RequiredProviders | ForEach-Object { $Entries[$_].status })
+    if ($statuses -contains 'FAIL') { return 'FAIL' }
+    if ($statuses -contains 'BLOCKED') { return 'BLOCKED' }
+    if (@($statuses | Where-Object { $_ -ne 'PASS' }).Count -gt 0) { return 'UNVERIFIED' }
+    return 'PASS'
+}
 
 function ConvertTo-PathHash([string]$Path) {
     $sha256 = [Security.Cryptography.SHA256]::Create()
@@ -111,16 +127,18 @@ $expectations = @{
 New-Item -ItemType Directory -Force -Path $artifactDir, $dataRoot | Out-Null
 
 try {
-    $buildTimer = [Diagnostics.Stopwatch]::StartNew()
-    & $cargoExe build -p lazood -p lazooctl --release --locked
-    $buildExit = $LASTEXITCODE
-    $buildTimer.Stop()
-    $script:commands.Add([ordered]@{
-        command = 'cargo build -p lazood -p lazooctl --release --locked'
-        exitCode = $buildExit
-        durationMs = $buildTimer.ElapsedMilliseconds
-    })
-    if ($buildExit -ne 0) { throw "release provider binaries failed to build with exit $buildExit" }
+    if (-not $SkipBuild) {
+        $buildTimer = [Diagnostics.Stopwatch]::StartNew()
+        & $cargoExe build --workspace --release --locked
+        $buildExit = $LASTEXITCODE
+        $buildTimer.Stop()
+        $script:commands.Add([ordered]@{
+            command = 'cargo build --workspace --release --locked'
+            exitCode = $buildExit
+            durationMs = $buildTimer.ElapsedMilliseconds
+        })
+        if ($buildExit -ne 0) { throw "release provider binaries failed to build with exit $buildExit" }
+    }
     if (-not (Test-Path -LiteralPath $script:daemonExe) -or -not (Test-Path -LiteralPath $script:ctlExe)) {
         throw 'release provider binaries were not found after build'
     }
@@ -161,7 +179,13 @@ try {
     $outputMatched = $false
     $eventTypes = @()
     $usage = $null
-    if (-not $HandshakeOnly -and $handshakeStatus -eq 'PASS') {
+    $knownAuthenticationMissing = $null -ne $probe -and
+        $probe.authentication.native -in @('needs-login', 'blocked') -and
+        $probe.authentication.external -ne 'ready'
+    if (-not $HandshakeOnly -and $handshakeStatus -eq 'PASS' -and $knownAuthenticationMissing) {
+        $modelBlocker = 'native authentication is required and no ready external credential was reported; no model prompt was sent'
+    }
+    if (-not $HandshakeOnly -and $handshakeStatus -eq 'PASS' -and -not $knownAuthenticationMissing) {
         $expectation = $expectations[$Provider]
         $smokeResult = Invoke-Ctl @('provider', 'smoke', $Provider, '--prompt', $expectation.Prompt)
         if ($smokeResult.ExitCode -ne 0) {
@@ -214,6 +238,10 @@ try {
         startedAt = $startedAt.ToString('o')
         completedAt = [DateTime]::UtcNow.ToString('o')
         durationMs = $timer.ElapsedMilliseconds
+        binaries = [ordered]@{
+            daemonSha256 = (Get-FileHash -LiteralPath $script:daemonExe -Algorithm SHA256).Hash
+            cliSha256 = (Get-FileHash -LiteralPath $script:ctlExe -Algorithm SHA256).Hash
+        }
         executable = [ordered]@{
             detected = [bool]$candidate.detected
             fileName = if ($executablePath -ne '') { [IO.Path]::GetFileName($executablePath) } else { $null }
@@ -267,21 +295,12 @@ try {
     if ($null -ne $entry) {
         $providerEntries = Read-ExistingProviders $manifestPath
         $providerEntries[$Provider] = $entry
-        $statuses = @($providerEntries.Values | ForEach-Object { $_.status })
-        $manifestStatus = if ($providerEntries.Count -lt 5) {
-            'PARTIAL'
-        } elseif ($statuses -contains 'FAIL') {
-            'FAIL'
-        } elseif ($statuses -contains 'BLOCKED') {
-            'BLOCKED'
-        } elseif ($statuses -contains 'UNVERIFIED') {
-            'UNVERIFIED'
-        } else {
-            'PASS'
-        }
+        $manifestStatus = Get-CoreProviderStatus $providerEntries $requiredCoreProviders
         $manifest = [ordered]@{
             schemaVersion = 1
             status = $manifestStatus
+            requiredProviders = $requiredCoreProviders
+            excludedProviders = @([ordered]@{ provider = 'grok-build'; reason = 'Excluded by owner on 2026-10-16' })
             generatedAt = [DateTime]::UtcNow.ToString('o')
             platform = [Environment]::OSVersion.VersionString
             rustcVersion = (& rustc --version)
@@ -293,3 +312,8 @@ try {
 }
 
 Write-Output "$($entry.status) provider=$Provider manifest=$manifestPath"
+if ($HandshakeOnly) {
+    if ($entry.handshake.status -ne 'PASS') { exit 1 }
+} elseif ($entry.status -ne 'PASS') {
+    exit 1
+}

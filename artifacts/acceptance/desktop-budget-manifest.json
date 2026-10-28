@@ -1,0 +1,1130 @@
+{
+  "status": "PASS",
+  "schemaVersion": 19,
+  "mode": "real-binaries-with-desktop",
+  "memoryBasis": "private-working-set",
+  "startedAt": "2026-10-17T11:34:53.0784154Z",
+  "durationMs": 145231,
+  "processorCount": 12,
+  "failure": null,
+  "targets": {
+    "idleCpuShare": 0.01,
+    "routingCpuShare": 0.05,
+    "idleWorkingSetBytes": 367001600,
+    "activeWorkingSetBytes": 786432000,
+    "windowSeconds": 60,
+    "fullWindows": false,
+    "settleSeconds": 20,
+    "sampleIntervalMillis": 1000,
+    "cpuGate": "worst rolling 30-second mean (and worst rolling 5-minute mean when the window is at least 300 seconds), as a share of total machine capacity",
+    "memoryBasis": "private-working-set",
+    "memoryGate": "peak, over the window, of the summed private working set (Task Manager Memory column semantics) across the measured processes; the summed working set is recorded beside it as workingSetUpperBoundMiB and is not gated",
+    "briefWording": "PROJECT-BRIEF section 20.1 and acceptance: measurements use rolling 30-second and 5-minute windows, not a single Task Manager sample. The memory notion is Task Manager's: the Memory column is the private working set per process (performance counter Working Set - Private), so shared WebView2 pages are counted once at most.",
+    "memorySource": "cim:Win32_PerfFormattedData_PerfProc_Process.WorkingSetPrivate",
+    "memorySourceTransientFallbackSamples": 0,
+    "memoryProcessSamplesWithoutPrivateWorkingSet": 0
+  },
+  "verdicts": {
+    "idle": {
+      "cpuShareGated": 0.0007360514394209173,
+      "cpuShareTarget": 0.01,
+      "memoryBasis": "private-working-set",
+      "privateWorkingSetBytesGated": 133156864,
+      "workingSetUpperBoundBytes": 437309440,
+      "workingSetUpperBoundMiB": 417.1,
+      "privateWorkingSetMiB": 127.0,
+      "memoryBytesTarget": 367001600,
+      "workingSetUpperBoundUnderTarget": false
+    },
+    "routing": {
+      "cpuShareGated": 0.002739899316941374,
+      "cpuShareTarget": 0.05,
+      "memoryBasis": "private-working-set",
+      "privateWorkingSetBytesGated": 134668288,
+      "workingSetUpperBoundBytes": 439017472,
+      "workingSetUpperBoundMiB": 418.7,
+      "privateWorkingSetMiB": 128.4,
+      "memoryBytesTarget": 786432000,
+      "workingSetUpperBoundUnderTarget": true,
+      "privateWorkingSetAlsoUnderIdleTarget": true
+    }
+  },
+  "measurements": {
+    "idle": {
+      "windowSeconds": 60,
+      "sampleCount": 59,
+      "measuredWallMillis": 59692,
+      "totalCpuMillis": 373,
+      "cpuShareMean": 0.0005207293663299068,
+      "cpuShareMeanPeakSample1s": 0.009617607145753874,
+      "cpuShareRollingMax30s": 0.0007360514394209173,
+      "cpuShareRollingMax5min": null,
+      "rolling5minNote": "not computed: window shorter than 300 seconds (use -FullWindows)",
+      "privateWorkingSetBytesMean": 127889200,
+      "privateWorkingSetBytesPeak": 133156864,
+      "workingSetBytesMean": 430194896,
+      "workingSetBytesPeak": 437309440,
+      "privateBytesPeak": 195452928,
+      "liveProcessCountPeak": 10,
+      "groups": {
+        "daemon": {
+          "cpuMillis": 15,
+          "cpuShare": 2.0940859235787138E-05,
+          "privateWorkingSetBytesPeak": 3399680
+        },
+        "desktop": {
+          "cpuMillis": 16,
+          "cpuShare": 2.2336916518172948E-05,
+          "privateWorkingSetBytesPeak": 4390912
+        },
+        "keeper": {
+          "cpuMillis": 15,
+          "cpuShare": 2.0940859235787138E-05,
+          "privateWorkingSetBytesPeak": 1253376
+        },
+        "keeper-other": {
+          "cpuMillis": 0,
+          "cpuShare": 0.0,
+          "privateWorkingSetBytesPeak": 851968
+        },
+        "webview2": {
+          "cpuMillis": 327,
+          "cpuShare": 0.0004565107313401596,
+          "privateWorkingSetBytesPeak": 123322368
+        }
+      },
+      "extra": {},
+      "samples": [
+        [
+          24583.0,
+          0.0,
+          424439808,
+          131588096
+        ],
+        [
+          25573.0,
+          0.0,
+          424435712,
+          131588096
+        ],
+        [
+          26646.0,
+          0.0,
+          424435712,
+          131637248
+        ],
+        [
+          27577.0,
+          0.0,
+          424505344,
+          131588096
+        ],
+        [
+          28579.0,
+          0.0,
+          421220352,
+          128352256
+        ],
+        [
+          29636.0,
+          0.0,
+          421220352,
+          119697408
+        ],
+        [
+          30579.0,
+          0.00133,
+          412520448,
+          120156160
+        ],
+        [
+          31574.0,
+          0.00126,
+          421949440,
+          129945600
+        ],
+        [
+          32641.0,
+          0.00359,
+          432218112,
+          128864256
+        ],
+        [
+          33583.0,
+          0.0,
+          432205824,
+          128765952
+        ],
+        [
+          34582.0,
+          0.0,
+          432050176,
+          128761856
+        ],
+        [
+          35634.0,
+          0.0,
+          432046080,
+          128761856
+        ],
+        [
+          36582.0,
+          0.0,
+          432046080,
+          128761856
+        ],
+        [
+          37582.0,
+          0.0,
+          432050176,
+          128761856
+        ],
+        [
+          38652.0,
+          0.0,
+          432050176,
+          128761856
+        ],
+        [
+          39570.0,
+          0.0,
+          432050176,
+          118476800
+        ],
+        [
+          40581.0,
+          0.0,
+          421765120,
+          118476800
+        ],
+        [
+          41640.0,
+          0.0,
+          421765120,
+          131256320
+        ],
+        [
+          42568.0,
+          0.00144,
+          434728960,
+          131252224
+        ],
+        [
+          43569.0,
+          0.0,
+          434724864,
+          131252224
+        ],
+        [
+          44645.0,
+          0.0,
+          434651136,
+          131248128
+        ],
+        [
+          45577.0,
+          0.00134,
+          434647040,
+          131248128
+        ],
+        [
+          46572.0,
+          0.0,
+          434647040,
+          131248128
+        ],
+        [
+          47632.0,
+          0.0,
+          434647040,
+          131248128
+        ],
+        [
+          48580.0,
+          0.0,
+          434647040,
+          131248128
+        ],
+        [
+          49571.0,
+          0.0,
+          434647040,
+          122011648
+        ],
+        [
+          50642.0,
+          0.0,
+          425410560,
+          122011648
+        ],
+        [
+          51573.0,
+          0.0,
+          425410560,
+          133156864
+        ],
+        [
+          52578.0,
+          0.00133,
+          437309440,
+          133152768
+        ],
+        [
+          53644.0,
+          0.0,
+          437305344,
+          133152768
+        ],
+        [
+          54569.0,
+          0.0,
+          437231616,
+          133148672
+        ],
+        [
+          55577.0,
+          0.0,
+          437227520,
+          133148672
+        ],
+        [
+          56644.0,
+          0.0,
+          437227520,
+          133148672
+        ],
+        [
+          57572.0,
+          0.0,
+          437227520,
+          133148672
+        ],
+        [
+          58579.0,
+          0.0,
+          437227520,
+          133148672
+        ],
+        [
+          59635.0,
+          0.0,
+          437227520,
+          122863616
+        ],
+        [
+          60569.0,
+          0.0,
+          426983424,
+          122630144
+        ],
+        [
+          61579.0,
+          0.00132,
+          422526976,
+          128712704
+        ],
+        [
+          62635.0,
+          0.00867,
+          431947776,
+          128581632
+        ],
+        [
+          63574.0,
+          0.0,
+          433020928,
+          129040384
+        ],
+        [
+          64574.0,
+          0.0,
+          432840704,
+          129040384
+        ],
+        [
+          65640.0,
+          0.0,
+          432185344,
+          128385024
+        ],
+        [
+          66574.0,
+          0.0,
+          432185344,
+          128385024
+        ],
+        [
+          67578.0,
+          0.0,
+          432173056,
+          128368640
+        ],
+        [
+          68639.0,
+          0.0,
+          432152576,
+          128348160
+        ],
+        [
+          69578.0,
+          0.0,
+          432148480,
+          118059008
+        ],
+        [
+          70573.0,
+          0.0,
+          421855232,
+          118038528
+        ],
+        [
+          71644.0,
+          0.0,
+          421871616,
+          128622592
+        ],
+        [
+          72579.0,
+          0.00962,
+          432586752,
+          128618496
+        ],
+        [
+          73572.0,
+          0.0,
+          432582656,
+          128561152
+        ],
+        [
+          74637.0,
+          0.0,
+          432476160,
+          128552960
+        ],
+        [
+          75582.0,
+          0.0,
+          432467968,
+          128552960
+        ],
+        [
+          76574.0,
+          0.0,
+          432467968,
+          128552960
+        ],
+        [
+          77629.0,
+          0.0,
+          432324608,
+          126771200
+        ],
+        [
+          78576.0,
+          0.0,
+          430686208,
+          126771200
+        ],
+        [
+          79568.0,
+          0.0,
+          430686208,
+          116486144
+        ],
+        [
+          80638.0,
+          0.0,
+          420401152,
+          116486144
+        ],
+        [
+          81574.0,
+          0.0,
+          420401152,
+          127434752
+        ],
+        [
+          82580.0,
+          0.00133,
+          431407104,
+          127422464
+        ]
+      ],
+      "samplesColumns": [
+        "elapsedMs",
+        "cpuShare",
+        "workingSetBytes",
+        "privateWorkingSetBytes"
+      ]
+    },
+    "routing": {
+      "windowSeconds": 60,
+      "sampleCount": 60,
+      "measuredWallMillis": 60490,
+      "totalCpuMillis": 1798,
+      "cpuShareMean": 0.0024769788483728176,
+      "cpuShareMeanPeakSample1s": 0.009612367138735289,
+      "cpuShareRollingMax30s": 0.002739899316941374,
+      "cpuShareRollingMax5min": null,
+      "rolling5minNote": "not computed: window shorter than 300 seconds (use -FullWindows)",
+      "privateWorkingSetBytesMean": 129727966,
+      "privateWorkingSetBytesPeak": 134668288,
+      "workingSetBytesMean": 434231228,
+      "workingSetBytesPeak": 439017472,
+      "privateBytesPeak": 197648384,
+      "liveProcessCountPeak": 10,
+      "groups": {
+        "daemon": {
+          "cpuMillis": 1516,
+          "cpuShare": 0.002088487171375524,
+          "privateWorkingSetBytesPeak": 3502080
+        },
+        "desktop": {
+          "cpuMillis": 16,
+          "cpuShare": 2.2042080964385475E-05,
+          "privateWorkingSetBytesPeak": 4366336
+        },
+        "keeper": {
+          "cpuMillis": 0,
+          "cpuShare": 0.0,
+          "privateWorkingSetBytesPeak": 1236992
+        },
+        "keeper-other": {
+          "cpuMillis": 0,
+          "cpuShare": 0.0,
+          "privateWorkingSetBytesPeak": 851968
+        },
+        "webview2": {
+          "cpuMillis": 266,
+          "cpuShare": 0.00036644959603290855,
+          "privateWorkingSetBytesPeak": 124772352
+        }
+      },
+      "extra": {
+        "calls": 2500,
+        "workload": "status, project list, events list, inbox counts, roster show in a loop, plus one project registration"
+      },
+      "samples": [
+        [
+          85262.0,
+          0.00939,
+          431370240,
+          127295488
+        ],
+        [
+          86232.0,
+          0.00129,
+          431329280,
+          127307776
+        ],
+        [
+          87345.0,
+          0.0012,
+          431329280,
+          127307776
+        ],
+        [
+          88232.0,
+          0.00291,
+          429690880,
+          125669376
+        ],
+        [
+          89280.0,
+          0.00127,
+          429690880,
+          125669376
+        ],
+        [
+          90298.0,
+          0.00254,
+          421048320,
+          117043200
+        ],
+        [
+          91273.0,
+          0.00137,
+          421068800,
+          117043200
+        ],
+        [
+          92245.0,
+          0.00266,
+          437768192,
+          133492736
+        ],
+        [
+          93348.0,
+          0.00242,
+          437694464,
+          133296128
+        ],
+        [
+          94303.0,
+          0.00541,
+          437317632,
+          133206016
+        ],
+        [
+          95267.0,
+          0.00138,
+          437309440,
+          133197824
+        ],
+        [
+          96294.0,
+          0.00122,
+          437309440,
+          133197824
+        ],
+        [
+          97248.0,
+          0.0014,
+          437309440,
+          133197824
+        ],
+        [
+          98282.0,
+          0.0,
+          437309440,
+          133197824
+        ],
+        [
+          99299.0,
+          0.00131,
+          437309440,
+          133197824
+        ],
+        [
+          100252.0,
+          0.0,
+          427089920,
+          122978304
+        ],
+        [
+          101303.0,
+          0.0,
+          427089920,
+          122978304
+        ],
+        [
+          102335.0,
+          0.0025,
+          438898688,
+          134668288
+        ],
+        [
+          103296.0,
+          0.00269,
+          438870016,
+          134033408
+        ],
+        [
+          104261.0,
+          0.0,
+          438169600,
+          134021120
+        ],
+        [
+          105355.0,
+          0.00236,
+          438165504,
+          134017024
+        ],
+        [
+          106246.0,
+          0.0015,
+          438165504,
+          134017024
+        ],
+        [
+          107278.0,
+          0.0025,
+          438165504,
+          134017024
+        ],
+        [
+          108303.0,
+          0.0026,
+          434888704,
+          130740224
+        ],
+        [
+          109268.0,
+          0.0013,
+          434888704,
+          130527232
+        ],
+        [
+          110306.0,
+          0.00128,
+          424390656,
+          120242176
+        ],
+        [
+          111330.0,
+          0.00252,
+          424390656,
+          120242176
+        ],
+        [
+          112292.0,
+          0.00667,
+          435159040,
+          130904064
+        ],
+        [
+          113247.0,
+          0.00271,
+          435171328,
+          130985984
+        ],
+        [
+          114351.0,
+          0.00475,
+          435081216,
+          130834432
+        ],
+        [
+          115242.0,
+          0.0014,
+          435007488,
+          130830336
+        ],
+        [
+          116276.0,
+          0.00258,
+          435007488,
+          130830336
+        ],
+        [
+          117307.0,
+          0.00251,
+          435044352,
+          130764800
+        ],
+        [
+          118261.0,
+          0.00541,
+          434913280,
+          130732032
+        ],
+        [
+          119300.0,
+          0.00128,
+          434913280,
+          130732032
+        ],
+        [
+          120318.0,
+          0.00508,
+          424665088,
+          120483840
+        ],
+        [
+          121276.0,
+          0.00139,
+          424644608,
+          120643584
+        ],
+        [
+          122230.0,
+          0.00961,
+          438083584,
+          133148672
+        ],
+        [
+          123329.0,
+          0.00114,
+          438095872,
+          133144576
+        ],
+        [
+          124293.0,
+          0.0,
+          437968896,
+          133029888
+        ],
+        [
+          125259.0,
+          0.00276,
+          437964800,
+          132956160
+        ],
+        [
+          126352.0,
+          0.0,
+          437764096,
+          132825088
+        ],
+        [
+          127237.0,
+          0.00141,
+          437764096,
+          132825088
+        ],
+        [
+          128277.0,
+          0.0,
+          437764096,
+          132825088
+        ],
+        [
+          129305.0,
+          0.00259,
+          437764096,
+          132825088
+        ],
+        [
+          130265.0,
+          0.0,
+          425820160,
+          120881152
+        ],
+        [
+          131296.0,
+          0.00121,
+          425820160,
+          120881152
+        ],
+        [
+          132347.0,
+          0.00626,
+          438984704,
+          133849088
+        ],
+        [
+          133301.0,
+          0.00271,
+          439017472,
+          133840896
+        ],
+        [
+          134265.0,
+          0.00138,
+          438775808,
+          133693440
+        ],
+        [
+          135352.0,
+          0.00238,
+          438628352,
+          133521408
+        ],
+        [
+          136231.0,
+          0.00446,
+          438575104,
+          133480448
+        ],
+        [
+          137259.0,
+          0.00251,
+          438571008,
+          133480448
+        ],
+        [
+          138357.0,
+          0.00357,
+          438571008,
+          133480448
+        ],
+        [
+          139238.0,
+          0.00303,
+          438571008,
+          133480448
+        ],
+        [
+          140264.0,
+          0.00122,
+          426647552,
+          121556992
+        ],
+        [
+          141353.0,
+          0.00237,
+          426647552,
+          121556992
+        ],
+        [
+          142232.0,
+          0.00304,
+          436219904,
+          130994176
+        ],
+        [
+          143262.0,
+          0.00251,
+          436219904,
+          130994176
+        ],
+        [
+          144359.0,
+          0.00357,
+          435998720,
+          130863104
+        ]
+      ],
+      "samplesColumns": [
+        "elapsedMs",
+        "cpuShare",
+        "workingSetBytes",
+        "privateWorkingSetBytes"
+      ]
+    }
+  },
+  "infrastructureJobIncludingCli": {
+    "idle": {
+      "cpuMillis": 63,
+      "wallMillis": 60803,
+      "processesEnrolledInWindow": 2,
+      "cpuShareIncludingCli": 8.634442379487854E-05,
+      "daemonReportedRolling30sCpuPercentAtEnd": {
+        "state": "ready",
+        "cpuPercent": 0
+      }
+    },
+    "routing": {
+      "cpuMillis": 37173,
+      "wallMillis": 61123,
+      "processesEnrolledInWindow": 2503,
+      "cpuShareIncludingCli": 0.05068059486608969,
+      "daemonReportedRolling30sCpuPercentAtEnd": {
+        "state": "ready",
+        "cpuPercent": 5
+      }
+    },
+    "note": "informational, not gated: the daemon infrastructure job (keeper, daemon and every lazooctl that ran; desktop excluded). The routing figure includes the lazooctl load generator."
+  },
+  "daemonAccounting": {
+    "beforeIdle": {
+      "sampledAt": "2026-10-17T11:35:15.8980110Z",
+      "systemResources": {
+        "pid": 13072,
+        "bootId": "ed756bc6-43ee-462b-8f18-0e2b9dcd3f8e",
+        "uptimeMillis": 22576,
+        "cpuMillis": 46,
+        "userCpuMillis": 15,
+        "kernelCpuMillis": 31,
+        "workingSetBytes": 13021184,
+        "peakWorkingSetBytes": 13021184,
+        "handleCount": 133,
+        "liveSessions": 0,
+        "sampledAt": "2026-10-17T11:35:15.877Z"
+      },
+      "systemBudget": {
+        "enforced": true,
+        "hardCapPercent": 20,
+        "softThresholdPercent": 15,
+        "activeProcesses": 3,
+        "totalProcesses": 7,
+        "cpuMillis": 92,
+        "peakJobMemoryBytes": 8626176,
+        "thirtySeconds": {
+          "state": "warming"
+        },
+        "fiveMinutes": {
+          "state": "warming"
+        },
+        "throttleBackground": false,
+        "desktopIncluded": false,
+        "providerTreesIncluded": false,
+        "sampledAt": "2026-10-17T11:35:15.895Z"
+      }
+    },
+    "afterIdle": {
+      "sampledAt": "2026-10-17T11:36:16.7008440Z",
+      "systemResources": {
+        "pid": 13072,
+        "bootId": "ed756bc6-43ee-462b-8f18-0e2b9dcd3f8e",
+        "uptimeMillis": 83381,
+        "cpuMillis": 62,
+        "userCpuMillis": 31,
+        "kernelCpuMillis": 31,
+        "workingSetBytes": 13107200,
+        "peakWorkingSetBytes": 13127680,
+        "handleCount": 136,
+        "liveSessions": 0,
+        "sampledAt": "2026-10-17T11:36:16.682Z"
+      },
+      "systemBudget": {
+        "enforced": true,
+        "hardCapPercent": 20,
+        "softThresholdPercent": 15,
+        "activeProcesses": 3,
+        "totalProcesses": 9,
+        "cpuMillis": 155,
+        "peakJobMemoryBytes": 8626176,
+        "thirtySeconds": {
+          "state": "ready",
+          "cpuPercent": 0
+        },
+        "fiveMinutes": {
+          "state": "warming"
+        },
+        "throttleBackground": false,
+        "desktopIncluded": false,
+        "providerTreesIncluded": false,
+        "sampledAt": "2026-10-17T11:36:16.698Z"
+      }
+    },
+    "afterRouting": {
+      "sampledAt": "2026-10-17T11:37:17.8244807Z",
+      "systemResources": {
+        "pid": 13072,
+        "bootId": "ed756bc6-43ee-462b-8f18-0e2b9dcd3f8e",
+        "uptimeMillis": 144505,
+        "cpuMillis": 1577,
+        "userCpuMillis": 765,
+        "kernelCpuMillis": 812,
+        "workingSetBytes": 13307904,
+        "peakWorkingSetBytes": 13340672,
+        "handleCount": 132,
+        "liveSessions": 0,
+        "sampledAt": "2026-10-17T11:37:17.806Z"
+      },
+      "systemBudget": {
+        "enforced": true,
+        "hardCapPercent": 20,
+        "softThresholdPercent": 15,
+        "activeProcesses": 3,
+        "totalProcesses": 2512,
+        "cpuMillis": 37328,
+        "peakJobMemoryBytes": 8708096,
+        "thirtySeconds": {
+          "state": "ready",
+          "cpuPercent": 5
+        },
+        "fiveMinutes": {
+          "state": "warming"
+        },
+        "throttleBackground": false,
+        "desktopIncluded": false,
+        "providerTreesIncluded": false,
+        "sampledAt": "2026-10-17T11:37:17.821Z"
+      }
+    }
+  },
+  "processes": [
+    {
+      "pid": 7012,
+      "name": "msedgewebview2",
+      "group": "webview2"
+    },
+    {
+      "pid": 13072,
+      "name": "lazood",
+      "group": "daemon"
+    },
+    {
+      "pid": 13176,
+      "name": "msedgewebview2",
+      "group": "webview2"
+    },
+    {
+      "pid": 13192,
+      "name": "msedgewebview2",
+      "group": "webview2"
+    },
+    {
+      "pid": 22368,
+      "name": "msedgewebview2",
+      "group": "webview2"
+    },
+    {
+      "pid": 24836,
+      "name": "conhost",
+      "group": "keeper-other"
+    },
+    {
+      "pid": 25632,
+      "name": "lazoo-desktop",
+      "group": "desktop"
+    },
+    {
+      "pid": 25696,
+      "name": "lazoo-keeper",
+      "group": "keeper"
+    },
+    {
+      "pid": 26188,
+      "name": "msedgewebview2",
+      "group": "webview2"
+    },
+    {
+      "pid": 26580,
+      "name": "msedgewebview2",
+      "group": "webview2"
+    }
+  ],
+  "gates": {
+    "build": "SKIPPED_BY_CALLER",
+    "schemaVersion": "PASS",
+    "desktopConnectedToDaemon": "PASS",
+    "webView2Attributed": "PASS",
+    "noProviderProcess": "PASS",
+    "idleCpuUnderOnePercent": "PASS",
+    "idleMemoryUnder350MiB": "PASS",
+    "routingCpuUnderFivePercent": "PASS",
+    "activeMemoryUnder750MiB": "PASS",
+    "allProcessesReadable": "PASS",
+    "plannedShutdown": "PASS",
+    "cleanup": "PASS"
+  },
+  "commands": [
+    {
+      "command": "lazooctl --json status",
+      "exitCode": 0,
+      "durationMs": 88
+    },
+    {
+      "command": "lazooctl --json project register C:\\Users\\anubhab\\AppData\\Local\\Temp\\lazoo-desktop-budget-d315d3f2f6c949acb05197ab468b31b6\\repository --name Desktop budget --idempotency-key desktop-budget-d315d3f2f6c949acb05197ab468b31b6",
+      "exitCode": 0,
+      "durationMs": 77
+    },
+    {
+      "command": "lazooctl --json system resources",
+      "exitCode": 0,
+      "durationMs": 16
+    },
+    {
+      "command": "lazooctl --json system resources",
+      "exitCode": 0,
+      "durationMs": 15
+    },
+    {
+      "command": "lazooctl --json system shutdown",
+      "exitCode": 0,
+      "durationMs": 28
+    }
+  ],
+  "binaries": {
+    "desktop": "C:\\workspace\\Orchestrator\\target\\release\\lazoo-desktop.exe",
+    "desktopSha256": "9df5ef807cf381ae8ac2a42a167b7c62b14b4e9cb8df2e9e7990ba62e3a1464f",
+    "desktopUiDistIndexSha256": "9ae6f96364382d6fc6140b245a3a5bd54c0707529300772628e9f95811fb8687",
+    "uiAssetsBuiltByThisRun": false
+  },
+  "keeper": {
+    "stdoutBytes": 0,
+    "stderrBytes": 0,
+    "stderr": ""
+  },
+  "notes": {
+    "memory": "The memory targets are judged on the summed private working set (memoryBasis private-working-set, Task Manager Memory column semantics). WorkingSet64 summed across processes counts pages shared between WebView2 processes more than once, so it is an upper bound on resident memory; it is recorded as workingSetUpperBoundMiB beside the gated figure and is not gated. PrivateMemorySize64 (committed private bytes) peak is recorded too and is neither.",
+    "readiness": "desktop readiness used one UI Automation probe (as desktop-shell.ps1 does) before the settle period; that probe can switch WebView2 accessibility on, which makes the figures conservative.",
+    "cli": "the gated figures do not count the lazooctl processes that drive the routing window (the load generator), as in resource-budget.ps1. The daemon infrastructure job does enroll them, so infrastructureJobIncludingCli records the keeper + daemon + CLI figure beside it.",
+    "webview2": "WebView2 processes are attributed as descendants of the desktop process by parent PID; WebView2 processes of other applications are not counted."
+  },
+  "boundaries": {
+    "mode": "real-binaries-with-desktop",
+    "desktopUi": "UNCHANGED",
+    "modelUse": "NONE",
+    "providerSmoke": "NOT_RUN",
+    "externalModelUse": "NOT_RUN",
+    "measured": "KEEPER_DAEMON_DESKTOP_AND_WEBVIEW2_DESCENDANTS",
+    "notMeasured": "CLI_LOAD_GENERATOR_FAILURE_STORM_MEMORY_INDEXING_TERMINAL_STREAMING_VOICE",
+    "scenarios": "IDLE_AND_ROUTING_WITH_DESKTOP_OPEN",
+    "enforcement": "NONE"
+  }
+}

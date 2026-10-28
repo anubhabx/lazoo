@@ -328,8 +328,8 @@ impl App {
                 state: session.state,
                 native_host_pid: session.native_host_pid,
                 working_directory: Some(
-                    self.root
-                        .session_working_dir(session.id)
+                    self.session_directory(session.id)
+                        .unwrap_or_else(|_| self.root.session_working_dir(session.id))
                         .to_string_lossy()
                         .into_owned(),
                 ),

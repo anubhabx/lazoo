@@ -2,9 +2,9 @@
 //! approval, task, and incident rows that `lazoo_domain` turns into items, under one lock with
 //! the event high-water mark they reflect.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
-use lazoo_protocol::{ApprovalRecord, EmployeeRecord, IncidentRecord, TaskRecord};
+use lazoo_protocol::{ApprovalRecord, EmployeeRecord, IncidentRecord, TaskRecord, TaskState};
 use rusqlite::{Connection, OptionalExtension, params};
 use uuid::Uuid;
 
@@ -14,7 +14,7 @@ use crate::{
     employee::{parse_uuid, query_employees},
     incident::{INCIDENT_COLUMNS, raw_incident, read_incident},
     scalar_count,
-    task::{TASK_RECORD_COLUMNS, raw_task, task_from_raw},
+    task::{TASK_RECORD_COLUMNS, has_active_descendants, raw_task, task_from_raw},
 };
 
 /// Rows that can be unresolved Inbox items: pending approvals, `proposed` and `uncertain`
@@ -24,6 +24,9 @@ use crate::{
 pub struct InboxSources {
     pub approvals: Vec<ApprovalRecord>,
     pub tasks: Vec<TaskRecord>,
+    /// The listed tasks that still have an unfinished descendant: `task.cancel` and a
+    /// completed or cancelled `task.resolve` refuse them.
+    pub active_descendants: BTreeSet<Uuid>,
     pub incidents: Vec<(IncidentRecord, Option<Uuid>)>,
     pub employees: BTreeMap<Uuid, EmployeeRecord>,
     pub event_high_water: u64,
@@ -67,6 +70,16 @@ impl Store {
             rows.map(|row| task_from_raw(row?))
                 .collect::<Result<Vec<_>, _>>()?
         };
+        let active_descendants = tasks
+            .iter()
+            .filter(|task| task.state == TaskState::Uncertain)
+            .map(|task| Ok((task.id, has_active_descendants(&connection, task.id)?)))
+            .filter_map(|entry: Result<(Uuid, bool), StoreError>| match entry {
+                Ok((id, true)) => Some(Ok(id)),
+                Ok((_, false)) => None,
+                Err(error) => Some(Err(error)),
+            })
+            .collect::<Result<BTreeSet<_>, _>>()?;
         let incidents = {
             let mut statement = connection.prepare(&format!(
                 "SELECT {INCIDENT_COLUMNS} FROM incidents
@@ -83,6 +96,7 @@ impl Store {
         Ok(InboxSources {
             approvals,
             tasks,
+            active_descendants,
             incidents,
             employees: employees_by_id(&connection)?,
             event_high_water: event_high_water(&connection)?,

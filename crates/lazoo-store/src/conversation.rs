@@ -491,6 +491,17 @@ impl Store {
         let current = required_turn(&transaction, input.turn_id)?;
         require_turn_revision(&current, input.expected_revision)?;
         require_turn_state(&current, &[TurnState::Recorded], "recorded")?;
+        let reserved_for_another_turn: bool = transaction.query_row(
+            "SELECT EXISTS(SELECT 1 FROM memory_summary_attempts WHERE session_id=?1 AND turn_id<>?2)",
+            params![input.recipient_session_id.to_string(), input.turn_id.to_string()],
+            |row| row.get(0),
+        )?;
+        if reserved_for_another_turn {
+            return Err(StoreError::InvalidRecord {
+                field: "recipient_session_id",
+                message: "session is reserved for a private memory summary".to_owned(),
+            });
+        }
         let owned_session = require_owned_idle_session(
             &transaction,
             &current,

@@ -1,0 +1,212 @@
+{
+  "schemaVersion": 1,
+  "startedAt": "2026-10-15T18:57:08.167861+00:00",
+  "mode": "native-cli-same-stream-flags-90-second-observation",
+  "sessionId": "d4f876c0-3995-4f22-a28e-259d0d713e5a",
+  "status": "PASS",
+  "frames": [
+    {
+      "elapsedSeconds": 0.859,
+      "type": "system",
+      "subtype": "hook_started"
+    },
+    {
+      "elapsedSeconds": 0.859,
+      "type": "system",
+      "subtype": "hook_started"
+    },
+    {
+      "elapsedSeconds": 0.859,
+      "type": "system",
+      "subtype": "hook_started"
+    },
+    {
+      "elapsedSeconds": 0.859,
+      "type": "system",
+      "subtype": "hook_started"
+    },
+    {
+      "elapsedSeconds": 1.078,
+      "type": "system",
+      "subtype": "hook_response"
+    },
+    {
+      "elapsedSeconds": 1.109,
+      "type": "system",
+      "subtype": "hook_response"
+    },
+    {
+      "elapsedSeconds": 2.5,
+      "type": "system",
+      "subtype": "hook_response"
+    },
+    {
+      "elapsedSeconds": 2.594,
+      "type": "system",
+      "subtype": "hook_response"
+    },
+    {
+      "elapsedSeconds": 4.172,
+      "type": "system",
+      "subtype": "init",
+      "model": "claude-fable-5-1"
+    },
+    {
+      "elapsedSeconds": 4.172,
+      "type": "system",
+      "subtype": "status"
+    },
+    {
+      "elapsedSeconds": 8.844,
+      "type": "user",
+      "subtype": null
+    },
+    {
+      "elapsedSeconds": 8.844,
+      "type": "stream_event",
+      "subtype": null,
+      "streamEventType": "message_start"
+    },
+    {
+      "elapsedSeconds": 8.844,
+      "type": "stream_event",
+      "subtype": null,
+      "streamEventType": "content_block_start"
+    },
+    {
+      "elapsedSeconds": 9.156,
+      "type": "system",
+      "subtype": "commands_changed"
+    },
+    {
+      "elapsedSeconds": 10.562,
+      "type": "system",
+      "subtype": "thinking_tokens"
+    },
+    {
+      "elapsedSeconds": 10.562,
+      "type": "stream_event",
+      "subtype": null,
+      "streamEventType": "content_block_delta"
+    },
+    {
+      "elapsedSeconds": 10.64,
+      "type": "system",
+      "subtype": "commands_changed"
+    },
+    {
+      "elapsedSeconds": 12.531,
+      "type": "system",
+      "subtype": "thinking_tokens"
+    },
+    {
+      "elapsedSeconds": 12.531,
+      "type": "stream_event",
+      "subtype": null,
+      "streamEventType": "content_block_delta"
+    },
+    {
+      "elapsedSeconds": 12.531,
+      "type": "stream_event",
+      "subtype": null,
+      "streamEventType": "content_block_delta"
+    },
+    {
+      "elapsedSeconds": 12.531,
+      "type": "system",
+      "subtype": "thinking_tokens"
+    },
+    {
+      "elapsedSeconds": 12.531,
+      "type": "stream_event",
+      "subtype": null,
+      "streamEventType": "content_block_delta"
+    },
+    {
+      "elapsedSeconds": 12.547,
+      "type": "assistant",
+      "subtype": null
+    },
+    {
+      "elapsedSeconds": 12.547,
+      "type": "stream_event",
+      "subtype": null,
+      "streamEventType": "content_block_stop"
+    },
+    {
+      "elapsedSeconds": 12.547,
+      "type": "stream_event",
+      "subtype": null,
+      "streamEventType": "content_block_start"
+    },
+    {
+      "elapsedSeconds": 12.547,
+      "type": "stream_event",
+      "subtype": null,
+      "streamEventType": "content_block_delta"
+    },
+    {
+      "elapsedSeconds": 12.547,
+      "type": "stream_event",
+      "subtype": null,
+      "streamEventType": "content_block_delta"
+    },
+    {
+      "elapsedSeconds": 12.547,
+      "type": "stream_event",
+      "subtype": null,
+      "streamEventType": "content_block_delta"
+    },
+    {
+      "elapsedSeconds": 12.547,
+      "type": "stream_event",
+      "subtype": null,
+      "streamEventType": "content_block_delta"
+    },
+    {
+      "elapsedSeconds": 12.547,
+      "type": "assistant",
+      "subtype": null
+    },
+    {
+      "elapsedSeconds": 12.547,
+      "type": "stream_event",
+      "subtype": null,
+      "streamEventType": "content_block_stop"
+    },
+    {
+      "elapsedSeconds": 12.547,
+      "type": "stream_event",
+      "subtype": null,
+      "streamEventType": "message_delta"
+    },
+    {
+      "elapsedSeconds": 12.547,
+      "type": "stream_event",
+      "subtype": null,
+      "streamEventType": "message_stop"
+    },
+    {
+      "elapsedSeconds": 12.547,
+      "type": "rate_limit_event",
+      "subtype": null
+    },
+    {
+      "elapsedSeconds": 13.844,
+      "type": "result",
+      "subtype": "success"
+    }
+  ],
+  "modelPromptCount": 1,
+  "result": {
+    "subtype": "success",
+    "is_error": false,
+    "duration_ms": 11202,
+    "duration_api_ms": 7554,
+    "num_turns": 1,
+    "terminal_reason": "completed"
+  },
+  "outputMatched": true,
+  "elapsedSeconds": 13.844,
+  "completedAt": "2026-10-15T18:57:22.924123+00:00"
+}

@@ -213,6 +213,13 @@ pub struct AntigravitySession {
 
 impl AntigravitySession {
     async fn run_turn(&self, request: &TurnRequest) -> Result<Vec<ProviderEvent>, ProviderError> {
+        if request.read_only {
+            return Err(ProviderError::Unsupported {
+                provider: ProviderKind::Antigravity,
+                capability: "read-only turns",
+                detail: None,
+            });
+        }
         if self.stopped.load(Ordering::Acquire) {
             return Err(ProviderError::Protocol(
                 "Antigravity session has already stopped".to_owned(),

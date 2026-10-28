@@ -4,10 +4,30 @@ use std::{
 };
 
 use lazoo_providers::{
-    DiscoveryEnvironment, GrokAdapter, ProviderAdapter, ProviderEvent, ProviderKind,
-    ProviderSession, ProviderVerification, SessionRequest, TurnRequest, normalize_acp_message,
+    AdapterFuture, DiscoveryEnvironment, GrokAdapter, PermissionDecision, PermissionRequest,
+    ProviderAdapter, ProviderError, ProviderEvent, ProviderKind, ProviderSession,
+    ProviderVerification, SessionRequest, TurnEventObserver, TurnRequest, normalize_acp_message,
 };
 use serde_json::json;
+use tempfile::tempdir;
+
+struct DecliningObserver;
+
+impl TurnEventObserver for DecliningObserver {
+    fn observe(&self, _event: &ProviderEvent) -> Result<(), ProviderError> {
+        Ok(())
+    }
+    fn decide_permission<'a>(
+        &'a self,
+        _request: &'a PermissionRequest,
+    ) -> AdapterFuture<'a, PermissionDecision> {
+        Box::pin(async { Ok(PermissionDecision::Decline) })
+    }
+}
+
+fn fake_acp() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/acp/fake-acp.cmd")
+}
 
 #[test]
 fn grok_launch_preserves_model_reasoning_and_fail_closed_permissions() {
@@ -88,6 +108,29 @@ fn grok_acp_updates_normalize_tools_terminal_permissions_and_usage() {
 fn grok_resume_uses_negotiated_session_capability() {
     assert!(GrokAdapter::capabilities(&json!({"loadSession": true})).resume);
     assert!(!GrokAdapter::capabilities(&json!({"loadSession": false})).resume);
+}
+
+#[tokio::test]
+async fn grok_public_session_forwards_observed_acp_permissions() {
+    let temporary = tempdir().unwrap();
+    let session = GrokAdapter::with_executable(fake_acp())
+        .start(&SessionRequest::new(temporary.path()))
+        .await
+        .unwrap();
+    let events = session
+        .turn_observed(&TurnRequest::new("EXECUTE"), &DecliningObserver)
+        .await
+        .unwrap();
+    assert!(
+        events
+            .iter()
+            .any(|event| matches!(event, ProviderEvent::PermissionRequested { .. }))
+    );
+    let text = std::fs::read_to_string(temporary.path().join("fake-acp-response-1.json")).unwrap();
+    let response: serde_json::Value =
+        serde_json::from_str(text.trim_start_matches('\u{feff}').trim()).unwrap();
+    assert_eq!(response["result"]["outcome"]["outcome"], "cancelled");
+    session.stop().await.unwrap();
 }
 
 #[tokio::test]

@@ -7,13 +7,22 @@ pub async fn read_frame<R>(reader: &mut R) -> Result<Vec<u8>, IpcError>
 where
     R: AsyncRead + Unpin,
 {
+    read_frame_bounded(reader, MAX_FRAME_BYTES).await
+}
+
+/// Reject a frame over the channel-specific bound before allocating or reading its body.
+pub async fn read_frame_bounded<R>(reader: &mut R, maximum: usize) -> Result<Vec<u8>, IpcError>
+where
+    R: AsyncRead + Unpin,
+{
+    let maximum = maximum.min(MAX_FRAME_BYTES);
     let mut length = [0_u8; 4];
     reader.read_exact(&mut length).await?;
     let length = u32::from_le_bytes(length) as usize;
-    if length > MAX_FRAME_BYTES {
+    if length > maximum {
         return Err(IpcError::FrameTooLarge {
             actual: length,
-            maximum: MAX_FRAME_BYTES,
+            maximum,
         });
     }
 

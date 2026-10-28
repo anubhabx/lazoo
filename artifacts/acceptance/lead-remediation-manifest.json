@@ -1,64 +1,64 @@
 {
   "status": "PASS",
-  "schemaVersion": 15,
+  "schemaVersion": 19,
   "mode": "deterministic-fake-transport",
-  "startedAt": "2026-10-12T22:49:38.7453633Z",
-  "durationMs": 5823,
+  "startedAt": "2026-10-17T12:00:54.8647814Z",
+  "durationMs": 4814,
   "commands": [
     {
       "command": "cargo test -p lazoo-domain --test incident remediation_escalates_unless_a_remedy_holds_through_the_window --locked -- --exact",
       "exitCode": 0,
-      "durationMs": 264
+      "durationMs": 251
     },
     {
       "command": "cargo test -p lazoo-domain --test delivery incident_notice_states_the_code_title_action_and_boundary --locked -- --exact",
       "exitCode": 0,
-      "durationMs": 247
+      "durationMs": 244
     },
     {
       "command": "cargo test -p lazoo-store --test delivery a_promoted_child_incident_gives_the_lead_two_remedies_inside_its_window --locked -- --exact",
       "exitCode": 0,
-      "durationMs": 456
+      "durationMs": 428
     },
     {
       "command": "cargo test -p lazoo-store --test delivery the_sweep_escalates_an_unremedied_window_and_keeps_a_remedy_that_held --locked -- --exact",
       "exitCode": 0,
-      "durationMs": 478
+      "durationMs": 406
     },
     {
       "command": "cargo test -p lazoo-store --test delivery incidents_with_no_lead_to_remediate_go_to_the_user_at_promotion --locked -- --exact",
       "exitCode": 0,
-      "durationMs": 445
+      "durationMs": 398
     },
     {
       "command": "cargo test -p lazoo-store --test store version_eleven_priority_incidents_upgrade_straight_to_the_user --locked -- --exact",
       "exitCode": 0,
-      "durationMs": 1266
+      "durationMs": 711
     },
     {
       "command": "cargo test -p lazooctl --test cli incident_cli_maps_list_show_acknowledge_and_resolve --locked -- --exact",
       "exitCode": 0,
-      "durationMs": 299
+      "durationMs": 294
     },
     {
       "command": "cargo test -p lazood --test daemon a_lead_remedies_a_promoted_child_incident_in_its_notice_turn_within_the_bound --locked -- --exact",
       "exitCode": 0,
-      "durationMs": 608
+      "durationMs": 534
     },
     {
       "command": "cargo test -p lazood --test daemon an_unremedied_window_reaches_the_user_on_the_sweep_and_nothing_else_changes --locked -- --exact",
       "exitCode": 0,
-      "durationMs": 611
+      "durationMs": 547
     },
     {
       "command": "cargo test -p lazood --test daemon lead_turn_lists_employees_delegates_and_waits_through_collaboration_tools --locked -- --exact",
       "exitCode": 0,
-      "durationMs": 621
+      "durationMs": 538
     },
     {
       "command": "cargo test -p lazoo-store --test store store_enables_wal_foreign_keys_and_schema_version --locked -- --exact",
       "exitCode": 0,
-      "durationMs": 416
+      "durationMs": 385
     },
     {
       "command": "git diff --quiet and git diff --cached --quiet -- apps/lazoo-desktop",

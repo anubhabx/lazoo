@@ -2,9 +2,12 @@ mod approval;
 mod conversation;
 mod inbox;
 mod incident;
+mod memory;
 mod message;
 mod rpc;
 mod task;
+mod terminal;
+mod terminal_stream;
 mod types;
 mod workspace;
 
@@ -33,6 +36,10 @@ pub use incident::{
     IncidentUserNotification, ResetIncidentThresholdParams, ResolveIncidentParams,
     SetIncidentThresholdParams,
 };
+pub use memory::{
+    MEMORY_CONTRACT_V1, MemoryCleanupPreview, MemoryContextPack, MemoryPolicy, MemoryQueueState,
+    MemoryRecord, MemoryRecordType, MemorySearchParams, MemorySourceArchive, MemorySummaryJob,
+};
 pub use message::{
     AcknowledgeMessageParams, CancelMessageParams, ClaimMessageParams, FailMessageParams,
     MESSAGE_ENVELOPE_V1, MESSAGE_ENVELOPE_V2, MessageActivationIntent, MessageDeadLetter,
@@ -49,6 +56,8 @@ pub use task::{
     TaskReconcileResult, TaskRecord, TaskReportKind, TaskResolution, TaskRole, TaskShowParams,
     TaskState, TaskSummary, TaskWorkspaceKind,
 };
+pub use terminal::*;
+pub use terminal_stream::*;
 pub use types::{
     ActivationPolicy, AuthorityMode, CheckoutMode, CreateEmployeeParams, DaemonResources,
     DesktopSnapshot, DisableEmployeeParams, EmployeeAvailability, EmployeeCheckoutPolicy,

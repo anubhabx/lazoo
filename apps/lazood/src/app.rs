@@ -1,10 +1,20 @@
 mod approval;
+mod configuration;
 mod delivery;
 mod idle;
 mod inbox;
 mod incident;
+mod memory;
+mod memory_context;
+mod memory_worker;
+mod memory_worker_cleanup;
+mod memory_worker_execution;
+#[cfg(test)]
+mod memory_worker_tests;
 mod resources;
+mod resume;
 mod task;
+mod terminal;
 mod tools;
 mod turn;
 mod workspace;
@@ -224,6 +234,9 @@ pub struct App {
     store_changed: Arc<Notify>,
     approval_timeout: Duration,
     user_notifier: Arc<dyn UserNotifier>,
+    resource_budget: Option<Arc<resources::ResourceBudget>>,
+    resource_budget_error: Option<String>,
+    terminals: Arc<Mutex<terminal::TerminalState>>,
 }
 
 /// How long a provider waits for the local user before a pending approval expires and is
@@ -312,7 +325,12 @@ impl App {
             store_changed: Arc::new(Notify::new()),
             approval_timeout: DEFAULT_APPROVAL_TIMEOUT,
             user_notifier: Arc::new(lazoo_runtime::NativeNotifier),
+            resource_budget: None,
+            resource_budget_error: None,
+            terminals: Arc::new(Mutex::new(terminal::TerminalState::default())),
         };
+        app.configuration_recover_startup()?;
+        app.memory_recover()?;
         app.note_startup_incidents(&sessions.sessions, &messages.messages, &turns.turns, &tasks);
         Ok(app)
     }
@@ -331,6 +349,7 @@ impl App {
         self
     }
 
+    #[allow(clippy::too_many_lines)] // One declarative RPC dispatch table, kept together for auditing.
     pub async fn handle(&self, request: JsonRpcRequest) -> JsonRpcResponse {
         if request.jsonrpc != "2.0" {
             return failure(
@@ -342,6 +361,25 @@ impl App {
         }
         let result = match request.method.as_str() {
             "system.status" => self.status(),
+            "system.budget" => self.system_budget(&request.params),
+            "memory.policy.show" => self.memory_policy_show(&request.params),
+            "memory.policy.set" => self.memory_policy_set(&request.params),
+            "memory.archive" => self.memory_archive(&request.params),
+            "memory.search" => self.memory_search(&request.params),
+            "memory.context" => self.memory_context(&request.params),
+            "memory.cleanup.preview" => self.memory_cleanup_preview(&request.params),
+            "memory.cleanup.apply" => self.memory_cleanup_apply(&request.params),
+            "memory.queue.status" => self.memory_queue_status(&request.params),
+            "memory.worker.show" => self.memory_worker_show(request.params),
+            "memory.worker.configure" => self.memory_worker_configure(request.params),
+            "provider.config.select.preview" => {
+                self.configuration_select_preview(request.params).await
+            }
+            "provider.config.apply" => self.configuration_apply(request.params).await,
+            "provider.config.rollback" => self.configuration_rollback(request.params),
+            "provider.config.operations.show" => self.configuration_show(request.params),
+            "terminal.open" | "terminal.list" | "terminal.show" | "terminal.resize"
+            | "terminal.stop" => self.terminal_control(&request.method, request.params).await,
             "project.register" => self.register(&request),
             "project.list" => self
                 .store
@@ -352,6 +390,7 @@ impl App {
             "desktop.snapshot" => self.desktop_snapshot(&request.params),
             "provider.list" => self.provider_list(&request.params),
             "provider.config" => self.provider_config(&request.params),
+            "provider.config.preview" => self.provider_config_preview(&request.params),
             "provider.probe" => self.provider_probe(request.params).await,
             "provider.smoke" => self.provider_smoke(request.params).await,
             "employee.create" => self.create_employee(&request).await,
@@ -366,6 +405,7 @@ impl App {
             "session.show" => self.session_show(request.params),
             "session.stop" => self.stop_session(&request).await,
             "session.resources" => self.session_resources(&request.params).await,
+            "session.terminal.attach" => self.session_terminal_attach(request.params).await,
             "conversation.create" => self.create_conversation(&request),
             "conversation.list" => self.conversation_list(request.params),
             "conversation.show" => self.conversation_show(request.params),
@@ -564,6 +604,15 @@ impl App {
         )))
     }
 
+    /// Brief section 16.1 step 6: the migration preview over the discovery report, derived on
+    /// every call. Nothing is selected, written, or stored.
+    fn provider_config_preview(&self, params: &Value) -> Result<Value, RpcError> {
+        require_empty_params(params, "provider.config.preview")?;
+        Ok(to_value(lazoo_providers::migration_preview(
+            &lazoo_providers::discover_provider_configuration(&self.provider_environment),
+        )))
+    }
+
     async fn provider_probe(&self, value: Value) -> Result<Value, RpcError> {
         let params: ProviderProbeParams =
             serde_json::from_value(value).map_err(|error| invalid_params(error.to_string()))?;
@@ -590,15 +639,20 @@ impl App {
             .map_err(provider_error)?;
         let request = SessionRequest::new(cwd).with_permission_mode("untrusted");
         let session = self
-            .providers
+            .session_backend
             .start(provider, &request)
             .await
             .map_err(provider_error)?;
-        let session_id = ProviderSession::id(&session);
-        let turn = session.turn(&TurnRequest::new(params.prompt)).await;
-        let stop = ProviderSession::stop(&session).await;
+        let session_id = session.id();
+        let turn = session
+            .turn_observed(&TurnRequest::new(params.prompt), &SmokeObserver)
+            .await;
+        let stop = session.stop().await;
         let events = turn.map_err(provider_error)?;
         stop.map_err(provider_error)?;
+        if smoke_turn_answered(&events) {
+            self.record_verified_observation(provider).await?;
+        }
         let (events, transcript_truncated) = concise_events(events);
         Ok(to_value(ProviderSmokeResult {
             provider: provider.to_string(),
@@ -607,6 +661,57 @@ impl App {
             transcript_truncated,
             checked_at: Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true),
         }))
+    }
+
+    /// A smoke turn that a model answered is the only evidence of model readiness the product
+    /// has, so it is recorded as the provider's `verified` observation through the same store
+    /// path a roster refresh uses (the roster revision advances and `roster.refreshed` is
+    /// emitted only when the effective observation changed).
+    ///
+    /// The version, protocol, capabilities, and check time come from a fresh probe taken now.
+    /// A probe that finds the binary gone or degraded cannot describe the provider that just
+    /// answered, so the stored observation is used instead; with neither there is nothing
+    /// truthful to record and the smoke result is returned unchanged. Authentication is
+    /// `native: ready`, since a model answered through the native channel, and `external` stays
+    /// as the base observation reported it, else `unknown`.
+    async fn record_verified_observation(&self, provider: ProviderKind) -> Result<(), RpcError> {
+        let fresh = self.observe_provider(provider).await;
+        let usable = !matches!(fresh.verification.as_str(), "not-detected" | "degraded");
+        let base = if usable {
+            Some(fresh)
+        } else {
+            self.store
+                .roster_snapshot()
+                .map_err(store_error)?
+                .entries
+                .into_iter()
+                .find_map(|entry| {
+                    entry
+                        .provider_observation
+                        .filter(|observation| observation.provider == provider.to_string())
+                })
+        };
+        let Some(mut observation) = base else {
+            return Ok(());
+        };
+        let external = observation
+            .authentication
+            .get("external")
+            .and_then(Value::as_str)
+            .unwrap_or("unknown")
+            .to_owned();
+        "verified".clone_into(&mut observation.verification);
+        observation.degradation_reason = None;
+        observation.authentication = json!({"native": "ready", "external": external});
+        let key = format!("provider-smoke:{}", Uuid::new_v4());
+        self.store
+            .refresh_provider_observations(&RefreshProviderObservationsInput {
+                request_id: key.clone(),
+                idempotency_key: key,
+                observations: vec![observation],
+            })
+            .map_err(store_error)?;
+        self.publish_events()
     }
 
     async fn create_employee(&self, request: &JsonRpcRequest) -> Result<Value, RpcError> {
@@ -851,11 +956,17 @@ impl App {
         working_directory: Option<std::path::PathBuf>,
     ) -> Result<lazoo_protocol::SessionMutationResult, RpcError> {
         let session_id = starting.session.id;
-        let working_directory = if let Some(working_directory) = working_directory {
-            Ok(working_directory)
+        // Task dispatch passes its own workspace and never resumes; every other start may
+        // continue the employee's suspended predecessor.
+        let resume = if working_directory.is_none() {
+            self.decide_session_resume(&employee, provider, session_id)
+                .await
         } else {
-            self.root.ensure_session_working_dir(session_id)
+            resume::ResumeDecision::Fresh
         };
+        let working_directory = working_directory
+            .or_else(|| resume.working_directory())
+            .map_or_else(|| self.root.ensure_session_working_dir(session_id), Ok);
         let Ok(working_directory) = working_directory else {
             self.record_session_failure(
                 session_id,
@@ -879,6 +990,9 @@ impl App {
         }
         if provider == ProviderKind::Codex {
             session_request = session_request.with_tools(tools::collaboration_tools());
+        }
+        if let Some(native_session_id) = resume.native_session_id() {
+            session_request = session_request.resume(native_session_id);
         }
 
         let Ok(session) = self.session_backend.start(provider, &session_request).await else {
@@ -934,6 +1048,7 @@ impl App {
                 return Err(session_store_error(error));
             }
         };
+        self.record_resume_decision(session_id, &resume, &ready.session);
         self.publish_events()?;
         Ok(ready)
     }
@@ -1309,6 +1424,55 @@ fn require_session_idempotency_key(value: &str) -> Result<(), RpcError> {
     }
 }
 
+/// Whether a provider enforces a task authority ceiling, so Lazoo may deliver turns and
+/// dispatch tasks to it. Codex: its approval requests are bridged into the schema-8 ledger under
+/// every authority. `OpenCode`: under every authority too, because the adapter launches
+/// `opencode acp` with an inline `OPENCODE_PERMISSION` block chosen by the permission mode
+/// (allow-all for `auto`; for `ask` and `accept-edits` every governed tool asks and only the
+/// read-only tools are allowed by name) and the ACP bridge admits only command and file-change
+/// requests into the ledger, declining every other kind. Claude Code: only `full-autonomy`,
+/// which maps to its `auto` permission mode, the one mode in which no prompt can occur; under
+/// `ask` and `self-decision` its prompts stay where Lazoo cannot answer them. Antigravity has no
+/// prompt-free mode, and Grok Build (ACP) is not launched with a governed permission block, so
+/// both stay refused.
+pub(crate) const fn provider_enforces_authority(
+    provider: ProviderKind,
+    authority: AuthorityMode,
+) -> bool {
+    match provider {
+        ProviderKind::Codex | ProviderKind::OpenCode => true,
+        ProviderKind::ClaudeCode => matches!(authority, AuthorityMode::FullAutonomy),
+        ProviderKind::GrokBuild | ProviderKind::Antigravity => false,
+    }
+}
+
+/// Whether the session the employee's authority launches can serve a turn or task at
+/// `authority`. `OpenCode` takes its permission block at launch and ACP cannot narrow it per
+/// turn, so a session launched prompt-free (a `full-autonomy` employee) never serves a narrower
+/// `ask` or `self-decision` turn: that would run it without the approvals the turn requires. A
+/// governed session (`ask`, `self-decision`) serves any authority up to its own, and the
+/// approval observer applies the turn's authority to each request.
+pub(crate) const fn session_serves_authority(
+    provider: ProviderKind,
+    authority: AuthorityMode,
+    employee_authority: AuthorityMode,
+) -> bool {
+    provider_enforces_authority(provider, authority)
+        && !(matches!(provider, ProviderKind::OpenCode)
+            && matches!(employee_authority, AuthorityMode::FullAutonomy)
+            && !matches!(authority, AuthorityMode::FullAutonomy))
+}
+
+/// Whether a provider may run the memory worker's summary turns. Besides the governed `ask`
+/// ceiling the summary turn must be read-only. The daemon declines every permission request on a
+/// summary turn, but `OpenCode`'s ACP adapter rejects a `read_only` turn request
+/// ("read-only turns" unsupported), so a summary could neither be proven read-only nor run there;
+/// it stays excluded.
+pub(crate) const fn provider_runs_memory_summaries(provider: ProviderKind) -> bool {
+    provider_enforces_authority(provider, AuthorityMode::Ask)
+        && !matches!(provider, ProviderKind::OpenCode)
+}
+
 const fn authority_permission_mode(authority: AuthorityMode) -> &'static str {
     match authority {
         AuthorityMode::Ask => "ask",
@@ -1438,6 +1602,32 @@ fn discovery_source_name(source: DiscoverySource) -> &'static str {
         DiscoverySource::PersistedMachinePath => "persisted-machine-path",
         DiscoverySource::KnownLocation => "known-location",
     }
+}
+
+/// The smoke turn declines every permission request, as `ProviderSession::turn` does, and
+/// keeps no events of its own.
+struct SmokeObserver;
+
+impl TurnEventObserver for SmokeObserver {
+    fn observe(&self, _event: &ProviderEvent) -> Result<(), ProviderError> {
+        Ok(())
+    }
+}
+
+/// Whether a model answered: the turn completed, no provider error was reported, and the
+/// completion is not a failed, interrupted, or cancelled one. ACP reports its stop reason
+/// (for example `end_turn`) as the completion status, so only the unsuccessful ones are named.
+fn smoke_turn_answered(events: &[ProviderEvent]) -> bool {
+    events
+        .iter()
+        .all(|event| !matches!(event, ProviderEvent::Error { .. }))
+        && events.iter().any(|event| {
+            matches!(
+                event,
+                ProviderEvent::TurnCompleted { status, .. }
+                    if !matches!(status.as_str(), "failed" | "interrupted" | "cancelled")
+            )
+        })
 }
 
 fn concise_events(events: Vec<lazoo_providers::ProviderEvent>) -> (Vec<Value>, bool) {

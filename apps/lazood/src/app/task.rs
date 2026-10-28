@@ -154,7 +154,11 @@ impl App {
                 task_id,
             )
         })?;
-        if provider != ProviderKind::Codex {
+        if !super::session_serves_authority(
+            provider,
+            task.effective_authority,
+            employee.authority_mode,
+        ) {
             return Err(task_failure(
                 "LZ-TASK-AUTHORITY-UNSUPPORTED",
                 "the selected provider cannot enforce this task authority ceiling",

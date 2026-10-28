@@ -35,7 +35,7 @@ fn store_enables_wal_foreign_keys_and_schema_version() {
 
     let status = store.status().unwrap();
 
-    assert_eq!(status.schema_version, 15);
+    assert_eq!(status.schema_version, 19);
     assert_eq!(status.journal_mode.to_lowercase(), "wal");
     assert!(status.foreign_keys);
     assert_no_foreign_key_violations(&temporary.path().join("lazoo.db"));
@@ -75,7 +75,7 @@ fn version_one_database_upgrades_to_version_eight_without_rewriting_version_one(
 
     let store = Store::open_path(&database).unwrap();
 
-    assert_eq!(store.status().unwrap().schema_version, 15);
+    assert_eq!(store.status().unwrap().schema_version, 19);
     store
         .execute_for_test(
             "INSERT INTO employees (
@@ -136,7 +136,7 @@ fn version_two_database_upgrades_to_version_seven_with_session_tables() {
 
     let store = Store::open_path(&database).unwrap();
 
-    assert_eq!(store.status().unwrap().schema_version, 15);
+    assert_eq!(store.status().unwrap().schema_version, 19);
     store
         .execute_for_test(
             "INSERT INTO employees (
@@ -210,7 +210,7 @@ fn version_three_database_upgrades_to_version_seven_with_message_tables() {
 
     let store = Store::open_path(&database).unwrap();
 
-    assert_eq!(store.status().unwrap().schema_version, 15);
+    assert_eq!(store.status().unwrap().schema_version, 19);
     store
         .execute_for_test(
             "INSERT INTO employees (
@@ -344,7 +344,7 @@ fn version_four_database_upgrades_to_version_seven_without_losing_message_histor
     drop(connection);
 
     let store = Store::open_path(&database).unwrap();
-    assert_eq!(store.status().unwrap().schema_version, 15);
+    assert_eq!(store.status().unwrap().schema_version, 19);
 
     let message = store.get_message(message_id).unwrap();
     assert_eq!(message.envelope.version, 1);
@@ -526,7 +526,7 @@ fn version_five_turns_backfill_conservative_task_identity_and_state() {
     drop(connection);
 
     let store = Store::open_path(&database).unwrap();
-    assert_eq!(store.status().unwrap().schema_version, 15);
+    assert_eq!(store.status().unwrap().schema_version, 19);
     drop(store);
 
     let connection = Connection::open(&database).unwrap();
@@ -759,7 +759,7 @@ fn version_eleven_priority_incidents_upgrade_straight_to_the_user() {
     drop(connection);
 
     let store = Store::open_path(&database).unwrap();
-    assert_eq!(store.status().unwrap().schema_version, 15);
+    assert_eq!(store.status().unwrap().schema_version, 19);
     let open_priority = store.get_incident(uuid::Uuid::from_u128(1)).unwrap();
     assert_eq!(open_priority.escalation, IncidentEscalation::User);
     assert_eq!(
@@ -858,7 +858,7 @@ fn version_thirteen_incident_notices_upgrade_as_priority_messages() {
     drop(connection);
 
     let store = Store::open_path(&database).unwrap();
-    assert_eq!(store.status().unwrap().schema_version, 15);
+    assert_eq!(store.status().unwrap().schema_version, 19);
     for (id, priority) in [
         (2, MessagePriority::Priority),
         (3, MessagePriority::Normal),
@@ -868,5 +868,131 @@ fn version_thirteen_incident_notices_upgrade_as_priority_messages() {
         assert_eq!(message.envelope.priority, priority, "message {id}");
     }
     drop(store);
+    assert_no_foreign_key_violations(&database);
+}
+
+/// Two completed Home turns with the schema-18 archive rows: one archive and one error intent,
+/// both inserted positionally as that schema laid them out.
+fn seed_schema_eighteen_archives(connection: &rusqlite::Connection) {
+    use rusqlite::params;
+
+    let at = "2026-10-17T00:00:00Z";
+    let employee = uuid::Uuid::from_u128(1).to_string();
+    let conversation = uuid::Uuid::from_u128(2).to_string();
+    let archived_turn = uuid::Uuid::from_u128(3).to_string();
+    let pending_turn = uuid::Uuid::from_u128(4).to_string();
+    connection
+        .execute(
+            "INSERT INTO employees (
+                id, name, provider, role, instructions, native_settings_json,
+                authority_mode, checkout_policy, enabled, configuration_revision,
+                created_at, updated_at
+             ) VALUES (?1, 'Rhea', 'codex', '', '', '{}', 'ask', 'isolated', 1, 1, ?2, ?2)",
+            params![employee, at],
+        )
+        .unwrap();
+    connection
+        .execute(
+            "INSERT INTO conversations (
+                id, contract_version, project_id, lead_employee_id,
+                lead_employee_configuration_revision, revision, created_at, updated_at
+             ) VALUES (?1, 1, NULL, ?2, 1, 1, ?3, ?3)",
+            params![conversation, employee, at],
+        )
+        .unwrap();
+    for turn in [&archived_turn, &pending_turn] {
+        connection
+            .execute(
+                "INSERT INTO messages (
+                    id, envelope_version, idempotency_key, correlation_id, sender_kind,
+                    sender_employee_id, recipient_employee_id, kind, body_json,
+                    references_json, created_at
+                 ) VALUES (?1, 1, ?1, ?1, 'employee', ?2, ?2, 'peer', '{}', '[]', ?3)",
+                params![turn, employee, at],
+            )
+            .unwrap();
+        connection
+            .execute(
+                "INSERT INTO conversation_turns (
+                    id, contract_version, conversation_id, author_kind, recipient_employee_id,
+                    recipient_employee_configuration_revision, text, message_id, correlation_id,
+                    state, revision, transcript_bytes, transcript_truncated, created_at, updated_at
+                 ) VALUES (?1, 1, ?2, 'user', ?3, 1, 'archived', ?1, ?1, 'completed', 1, 0, 0, ?4, ?4)",
+                params![turn, conversation, employee, at],
+            )
+            .unwrap();
+    }
+    connection
+        .execute(
+            "INSERT INTO memory_archives VALUES (?1, 'turnhash', NULL, '', 'home-turnhash.zst', 10, 20, 0, ?2)",
+            params![archived_turn, at],
+        )
+        .unwrap();
+    connection
+        .execute(
+            "INSERT INTO memory_archive_intents VALUES (?1, 'pendinghash', NULL, '', 'home-pendinghash.zst', 5, 9, 1, 'error', ?2)",
+            params![pending_turn, at],
+        )
+        .unwrap();
+}
+
+#[test]
+fn version_eighteen_archives_upgrade_as_canonical_turn_archives() {
+    let migrations = [
+        include_str!("../../../migrations/0001_control_plane.sql"),
+        include_str!("../../../migrations/0002_employee_roster.sql"),
+        include_str!("../../../migrations/0003_employee_sessions.sql"),
+        include_str!("../../../migrations/0004_collaboration_bus.sql"),
+        include_str!("../../../migrations/0005_conversations.sql"),
+        include_str!("../../../migrations/0006_task_graph.sql"),
+        include_str!("../../../migrations/0007_task_dispatch.sql"),
+        include_str!("../../../migrations/0008_approvals.sql"),
+        include_str!("../../../migrations/0009_incidents.sql"),
+        include_str!("../../../migrations/0010_activation_policy.sql"),
+        include_str!("../../../migrations/0011_idle_suspension.sql"),
+        include_str!("../../../migrations/0012_lead_remediation.sql"),
+        include_str!("../../../migrations/0013_user_notifications.sql"),
+        include_str!("../../../migrations/0014_message_priority.sql"),
+        include_str!("../../../migrations/0015_incident_thresholds.sql"),
+        include_str!("../../../migrations/0016_memory.sql"),
+        include_str!("../../../migrations/0017_configuration.sql"),
+        include_str!("../../../migrations/0018_memory_worker.sql"),
+    ];
+    let (_temporary, database, connection) = database_at(&migrations);
+    seed_schema_eighteen_archives(&connection);
+    drop(connection);
+
+    let store = Store::open_path(&database).unwrap();
+    assert_eq!(store.status().unwrap().schema_version, 19);
+    let preview = store
+        .preview_memory_cleanup(None, "9999-01-01T00:00:00Z")
+        .unwrap();
+    assert_eq!(preview.archive_names, vec!["home-turnhash.zst".to_owned()]);
+    assert_eq!(preview.bytes, 10);
+    let errors = store.list_memory_archive_errors(None).unwrap();
+    assert_eq!(errors.len(), 1);
+    assert_eq!(errors[0].archive_name, "home-pendinghash.zst");
+    drop(store);
+
+    let connection = rusqlite::Connection::open(&database).unwrap();
+    for table in ["memory_archives", "memory_archive_intents"] {
+        let kinds: Vec<String> = connection
+            .prepare(&format!("SELECT source_kind FROM {table}"))
+            .unwrap()
+            .query_map([], |row| row.get(0))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        assert_eq!(kinds, vec!["turn".to_owned()], "{table}");
+    }
+    let index_count: i64 = connection
+        .query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND name='memory_archive_intents_name'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(index_count, 1);
+    drop(connection);
     assert_no_foreign_key_violations(&database);
 }

@@ -9,7 +9,123 @@ use serde_json::{Value, json};
 
 use super::{App, invalid_params, session_store_error, to_value};
 
+pub(super) struct ResourceBudget {
+    governor: lazoo_runtime::InfrastructureGovernor,
+    rolling: std::sync::Mutex<lazoo_runtime::RollingBudget>,
+    assessment: std::sync::Mutex<Option<lazoo_runtime::BudgetAssessment>>,
+    started: std::time::Instant,
+}
+
+impl ResourceBudget {
+    fn sample(&self) -> Result<(), String> {
+        let point = self
+            .governor
+            .point_sample()
+            .map_err(|error| error.to_string())?;
+        let next = self
+            .rolling
+            .lock()
+            .map_err(|_| "resource sampler lock poisoned")?
+            .observe(lazoo_runtime::BudgetSample {
+                elapsed: self.started.elapsed(),
+                cumulative_cpu: std::time::Duration::from_millis(
+                    point
+                        .user_cpu_millis
+                        .saturating_add(point.kernel_cpu_millis),
+                ),
+            })
+            .map_err(|error| error.to_string())?;
+        *self
+            .assessment
+            .lock()
+            .map_err(|_| "resource sampler lock poisoned")? = Some(next);
+        Ok(())
+    }
+}
+
 impl App {
+    pub(super) fn background_throttled(&self) -> bool {
+        self.resource_budget.as_ref().is_none_or(|budget| {
+            budget.assessment.lock().map_or(true, |value| {
+                value.is_none_or(|assessment| assessment.throttle_background)
+            })
+        })
+    }
+
+    #[must_use]
+    pub fn with_resource_governor(
+        mut self,
+        result: Result<lazoo_runtime::InfrastructureGovernor, String>,
+    ) -> Self {
+        match result {
+            Ok(governor) => {
+                let processors = u32::try_from(
+                    std::thread::available_parallelism().map_or(1, std::num::NonZeroUsize::get),
+                )
+                .unwrap_or(u32::MAX);
+                self.resource_budget = Some(std::sync::Arc::new(ResourceBudget {
+                    governor,
+                    rolling: std::sync::Mutex::new(
+                        lazoo_runtime::RollingBudget::new(processors)
+                            .expect("logical processor count is positive"),
+                    ),
+                    assessment: std::sync::Mutex::new(None),
+                    started: std::time::Instant::now(),
+                }));
+            }
+            Err(error) => self.resource_budget_error = Some(error),
+        }
+        self
+    }
+
+    pub(crate) async fn run_resource_sampler(&self) {
+        let Some(budget) = &self.resource_budget else {
+            return;
+        };
+        let mut ticks = tokio::time::interval(std::time::Duration::from_secs(1));
+        ticks.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        loop {
+            ticks.tick().await;
+            if let Err(error) = budget.sample() {
+                if let Ok(mut assessment) = budget.assessment.lock() {
+                    *assessment = None;
+                }
+                tracing::warn!(%error, "resource sample unavailable");
+            }
+        }
+    }
+
+    pub(super) fn system_budget(&self, value: &Value) -> Result<Value, RpcError> {
+        super::require_empty_params(value, "system.budget")?;
+        let Some(budget) = &self.resource_budget else {
+            return Ok(
+                json!({"enforced": false, "reason": self.resource_budget_error.as_deref()
+                .unwrap_or("this daemon has not enrolled in an infrastructure job"),
+                "desktopIncluded": false, "providerTreesIncluded": false}),
+            );
+        };
+        let point = budget.governor.point_sample().map_err(|error| RpcError {
+            code: "LZ-RESOURCES".to_owned(),
+            message: error.to_string(),
+            data: None,
+        })?;
+        let assessment = budget.assessment.lock().map_err(|_| RpcError {
+            code: "LZ-RESOURCES".to_owned(),
+            message: "resource sampler lock poisoned".to_owned(),
+            data: None,
+        })?;
+        Ok(json!({
+            "enforced": true, "hardCapPercent": 20, "softThresholdPercent": 15,
+            "activeProcesses": point.active_processes, "totalProcesses": point.total_processes,
+            "cpuMillis": point.user_cpu_millis.saturating_add(point.kernel_cpu_millis),
+            "peakJobMemoryBytes": point.peak_job_memory_bytes,
+            "thirtySeconds": window_json(assessment.map(|value| value.thirty_seconds)),
+            "fiveMinutes": window_json(assessment.map(|value| value.five_minutes)),
+            "throttleBackground": assessment.is_none_or(|value| value.throttle_background),
+            "desktopIncluded": false, "providerTreesIncluded": false, "sampledAt": now(),
+        }))
+    }
+
     /// Job Object accounting for one session that is live in this daemon. A session that is
     /// not live (never started here, suspended, or stopped) has no tree to measure.
     pub(super) async fn session_resources(&self, value: &Value) -> Result<Value, RpcError> {
@@ -66,6 +182,15 @@ impl App {
             live_sessions,
             sampled_at: now(),
         }))
+    }
+}
+
+fn window_json(window: Option<lazoo_runtime::WindowState>) -> Value {
+    match window {
+        Some(lazoo_runtime::WindowState::Ready {
+            aggregate_machine_cpu_percent,
+        }) => json!({"state": "ready", "cpuPercent": aggregate_machine_cpu_percent}),
+        _ => json!({"state": "warming"}),
     }
 }
 

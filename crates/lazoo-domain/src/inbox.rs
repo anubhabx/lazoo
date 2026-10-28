@@ -149,10 +149,13 @@ pub(crate) fn approval_actions(approval: &ApprovalRecord) -> Vec<InboxAction> {
 
 /// A `proposed` task waits for `task.accept`; an `uncertain` one waits for `task.resolve`; a
 /// terminal task that was once either is the archive. Anything else is not an Inbox item.
+/// An uncertain task with an unfinished descendant can only be resolved as failed, so that is
+/// the one resolution it offers.
 #[must_use]
 pub fn task_inbox_item(
     task: &TaskRecord,
     once_uncertain: bool,
+    active_descendants: bool,
     employees: &InboxEmployees,
 ) -> Option<InboxItem> {
     let (kind, attention) = match task.state {
@@ -222,7 +225,16 @@ pub fn task_inbox_item(
         deadline: None,
         detail,
         actions: if attention == InboxAttention::ActionRequired {
-            task_actions(kind, task)
+            let mut actions = task_actions(kind, task);
+            if active_descendants {
+                actions.retain(|action| {
+                    !matches!(
+                        action.action.as_str(),
+                        "cancel" | "resolve-completed" | "resolve-cancelled"
+                    )
+                });
+            }
+            actions
         } else {
             Vec::new()
         },

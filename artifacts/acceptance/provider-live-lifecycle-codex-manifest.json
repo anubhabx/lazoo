@@ -1,0 +1,181 @@
+{
+  "manifestVersion": 1,
+  "status": "PASS",
+  "outcome": "PASS",
+  "failure": null,
+  "mode": "live-native-subscription",
+  "schemaVersion": 19,
+  "startedAt": "2026-10-17T09:56:48.9261735Z",
+  "completedAt": "2026-10-17T09:57:28.3830962Z",
+  "durationMs": 39440,
+  "provider": "codex",
+  "providerVersion": "codex-cli 0.153.4",
+  "authenticationChannel": "native-account",
+  "authenticationChannelNote": "Variables matching the provider scrub pattern (outer agent session variables and, for Claude Code and Codex, API credentials) were removed from the daemon environment (names only recorded); the owner provider configuration was neither read nor changed",
+  "scrubbedEnvironmentVariableNames": [],
+  "liveTurnsSent": 3,
+  "liveTurnCap": 3,
+  "turnTimeoutSeconds": 240,
+  "isolatedDataRoot": "C:\\Users\\anubhab\\AppData\\Local\\Temp\\lazoo-live-codex-d12158227fa443f0b875d37cfc22aee2\\data",
+  "temporaryDataRetained": false,
+  "prompts": {
+    "messaging": "Remember the code word PELICAN for later in this conversation. Reply with exactly LAZOO_CODEX_OK and nothing else. Do not use tools.",
+    "cancellation": "Count slowly from 1 to 400, one number per line, with no other text. Do not use tools.",
+    "resume": "Reply with exactly the code word I asked you to remember, and nothing else. Do not use tools."
+  },
+  "turns": {
+    "messaging": {
+      "prompt": "Remember the code word PELICAN for later in this conversation. Reply with exactly LAZOO_CODEX_OK and nothing else. Do not use tools.",
+      "state": "completed",
+      "output": "LAZOO_CODEX_OK",
+      "durationMs": 8925
+    },
+    "cancellation": {
+      "prompt": "Count slowly from 1 to 400, one number per line, with no other text. Do not use tools.",
+      "state": "cancelled",
+      "cancelRequestToCancelledMs": 95,
+      "submitReturnedMs": 446,
+      "submitExitCode": 0,
+      "turnCompletedEvents": 0,
+      "turnCancelledEvents": 1,
+      "sessionStateAfterCancel": "idle",
+      "sessionAfterCancel": "STILL_USABLE_IDLE"
+    },
+    "resume": {
+      "prompt": "Reply with exactly the code word I asked you to remember, and nothing else. Do not use tools.",
+      "state": "completed",
+      "output": "I don’t have the code word in this conversation.",
+      "durationMs": 13961,
+      "newSessionId": "5ac1dd9c-55d1-406b-a8fb-a86ec6572b97",
+      "newNativeSessionId": "01a1494b-444e-7482-ad50-9f22195ea3cb",
+      "sessionResumedEvents": 0,
+      "sessionResumeSkippedEvents": 1,
+      "expectedWake": "fresh",
+      "expectedSkipReason": "codex-dynamic-tools"
+    }
+  },
+  "turnDurationsMs": {
+    "turn1": 8925,
+    "turn2": 446,
+    "turn3": 13961
+  },
+  "pollCalls": 9,
+  "commands": [
+    {
+      "command": "lazooctl --json provider probe codex",
+      "exitCode": 0,
+      "durationMs": 3769
+    },
+    {
+      "command": "lazooctl --json employee create Cora --provider codex --role Lead --idle-timeout-seconds 0 --idempotency-key lead-d12158227fa443f0b875d37cfc22aee2",
+      "exitCode": 0,
+      "durationMs": 3555
+    },
+    {
+      "command": "lazooctl --json conversation create bc8e4986-70a6-4d5e-9469-e351079039b7 --title Codex live lifecycle --idempotency-key conversation-d12158227fa443f0b875d37cfc22aee2",
+      "exitCode": 0,
+      "durationMs": 134
+    },
+    {
+      "command": "lazooctl --json turn submit 3fe68dc8-ccaa-4892-8fd2-7be55e7648ef --text Remember the code word PELICAN for later in this conversation. Reply with exactly LAZOO_CODEX_OK and nothing else. Do not use tools. --activate-if-needed --idempotency-key turn1-d12158227fa443f0b875d37cfc22aee2",
+      "exitCode": 0,
+      "durationMs": 8925
+    },
+    {
+      "command": "lazooctl --json session show 17622a50-1d2d-4b7a-8fb0-186c4dac6ca5",
+      "exitCode": 0,
+      "durationMs": 21
+    },
+    {
+      "command": "lazooctl --json turn cancel e6209291-74ca-4796-a8e0-8239fa3877a4 --expected-revision 3 --idempotency-key cancel-1-d12158227fa443f0b875d37cfc22aee2",
+      "exitCode": 0,
+      "durationMs": 74
+    },
+    {
+      "command": "lazooctl --json turn submit 3fe68dc8-ccaa-4892-8fd2-7be55e7648ef --text Count slowly from 1 to 400, one number per line, with no other text. Do not use tools. --activate-if-needed --idempotency-key turn2-d12158227fa443f0b875d37cfc22aee2",
+      "exitCode": 0,
+      "durationMs": 446
+    },
+    {
+      "command": "lazooctl --json turn show e6209291-74ca-4796-a8e0-8239fa3877a4",
+      "exitCode": 0,
+      "durationMs": 16
+    },
+    {
+      "command": "lazooctl --json session show 17622a50-1d2d-4b7a-8fb0-186c4dac6ca5",
+      "exitCode": 0,
+      "durationMs": 15
+    },
+    {
+      "command": "lazooctl --json events list --after 0 --limit 1024",
+      "exitCode": 0,
+      "durationMs": 23
+    },
+    {
+      "command": "lazooctl --json session stop 17622a50-1d2d-4b7a-8fb0-186c4dac6ca5 --expected-revision 2 --idempotency-key stop-d12158227fa443f0b875d37cfc22aee2",
+      "exitCode": 0,
+      "durationMs": 2073
+    },
+    {
+      "command": "lazooctl --json session show 17622a50-1d2d-4b7a-8fb0-186c4dac6ca5",
+      "exitCode": 0,
+      "durationMs": 21
+    },
+    {
+      "command": "lazooctl --json turn submit 3fe68dc8-ccaa-4892-8fd2-7be55e7648ef --text Reply with exactly the code word I asked you to remember, and nothing else. Do not use tools. --activate-if-needed --idempotency-key turn3-d12158227fa443f0b875d37cfc22aee2",
+      "exitCode": 0,
+      "durationMs": 13961
+    },
+    {
+      "command": "lazooctl --json session show 5ac1dd9c-55d1-406b-a8fb-a86ec6572b97",
+      "exitCode": 0,
+      "durationMs": 19
+    },
+    {
+      "command": "lazooctl --json events list --after 0 --limit 1024",
+      "exitCode": 0,
+      "durationMs": 31
+    },
+    {
+      "command": "lazooctl --json system shutdown",
+      "exitCode": 0,
+      "durationMs": 18
+    }
+  ],
+  "gates": {
+    "authentication": "PASS",
+    "messaging": "PASS",
+    "cancellation": "PASS",
+    "resume": "PASS",
+    "plannedShutdown": "PASS"
+  },
+  "evidence": {
+    "authentication": {
+      "native": "ready",
+      "external": "unknown",
+      "verification": "configured",
+      "version": "codex-cli 0.162.0-alpha.17.2"
+    },
+    "sessionId": "17622a50-1d2d-4b7a-8fb0-186c4dac6ca5",
+    "nativeSessionId": "01a1494b-11fc-71a1-8d1c-f00638fc67c1",
+    "cancelledEventPayloads": [
+      "{\"turn\":{\"sequence\":2,\"version\":1,\"id\":\"e6209291-74ca-4796-a8e0-8239fa3877a4\",\"conversationId\":\"3fe68dc8-ccaa-4892-8fd2-7be55e7648ef\",\"taskId\":\"e6209291-74ca-4796-a8e0-8239fa3877a4\",\"author\":{\"kind\":\"user\"},\"recipient\":{\"employeeId\":\"bc8e4986-70a6-4d5e-9469-e351079039b7\",\"sessionId\":\"17622a50-1d2d-4b7a-8fb0-186c4dac6ca5\"},\"recipientEmployeeConfigurationRevision\":1,\"text\":\"Count slowly from 1 to 40"
+    ],
+    "stoppedBy": "lazooctl session stop",
+    "firstSessionNativeTreeProcessesAtStop": 16,
+    "firstSessionNativeTreeSurvivors": 0,
+    "resumedPayloads": [],
+    "resumeSkippedPayloads": [
+      "{\"sessionId\":\"5ac1dd9c-55d1-406b-a8fb-a86ec6572b97\",\"priorSessionId\":\"17622a50-1d2d-4b7a-8fb0-186c4dac6ca5\",\"reason\":\"codex-dynamic-tools\"}"
+    ],
+    "freshStartAnswerRecalledCodeWord": false,
+    "freshStartAnswer": "I don’t have the code word in this conversation.",
+    "shutdownTreeProcesses": 16
+  },
+  "boundaries": {
+    "permissions": "NOT_EXERCISED_PROMPTS_USE_NO_TOOLS",
+    "deterministicGate": "EXCLUDED",
+    "userProviderConfiguration": "UNTOUCHED",
+    "forkOfLiveSession": "NOT_RUN_SECTION_27_DECISION"
+  }
+}

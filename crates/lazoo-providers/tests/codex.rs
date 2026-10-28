@@ -230,6 +230,30 @@ async fn codex_turn_permission_override_narrows_the_session_default() {
 }
 
 #[tokio::test]
+async fn codex_read_only_turn_uses_native_read_only_no_network_policy() {
+    ensure_session_host();
+    let temporary = tempdir().unwrap();
+    let session = CodexAdapter::with_executable(fake_codex())
+        .start(&SessionRequest::new(temporary.path()))
+        .await
+        .unwrap();
+    session
+        .turn(&TurnRequest::new("inspect").read_only())
+        .await
+        .unwrap();
+    session.stop().await.unwrap();
+    let request_text =
+        fs::read_to_string(temporary.path().join("fake-codex-turn-start.json")).unwrap();
+    let request: serde_json::Value =
+        serde_json::from_str(request_text.trim_start_matches('\u{feff}')).unwrap();
+    assert_eq!(request["approvalPolicy"], "untrusted");
+    assert_eq!(
+        request["sandboxPolicy"],
+        serde_json::json!({"type":"readOnly","networkAccess":false})
+    );
+}
+
+#[tokio::test]
 async fn observed_codex_rejection_interrupts_the_accepted_native_turn() {
     ensure_session_host();
     let temporary = tempdir().unwrap();
@@ -682,7 +706,8 @@ async fn codex_sessions_without_tools_stay_stable_and_resume_with_tools_fails_cl
         error,
         ProviderError::Unsupported {
             provider: ProviderKind::Codex,
-            capability: "dynamic tools on thread/resume"
+            capability: "dynamic tools on thread/resume",
+            ..
         }
     ));
 }

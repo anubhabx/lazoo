@@ -184,6 +184,24 @@ impl Store {
         query_tasks(&connection, input)
     }
 
+    /// The retained task workspace the dispatch that ran in `session_id` worked in, or `None`
+    /// for a session that never carried a task dispatch.
+    pub fn task_workspace_for_session(
+        &self,
+        session_id: Uuid,
+    ) -> Result<Option<String>, StoreError> {
+        let connection = self.lock()?;
+        connection
+            .query_row(
+                "SELECT workspace_path FROM task_dispatches WHERE session_id = ?1",
+                [session_id.to_string()],
+                |row| row.get::<_, Option<String>>(0),
+            )
+            .optional()
+            .map(Option::flatten)
+            .map_err(StoreError::from)
+    }
+
     pub fn get_task(&self, task_id: Uuid) -> Result<TaskDetail, StoreError> {
         let connection = self.lock()?;
         let task = required_task(&connection, task_id)?;
@@ -2142,7 +2160,10 @@ fn require_no_active_descendants(connection: &Connection, task_id: Uuid) -> Resu
     }
 }
 
-fn has_active_descendants(connection: &Connection, task_id: Uuid) -> Result<bool, StoreError> {
+pub(crate) fn has_active_descendants(
+    connection: &Connection,
+    task_id: Uuid,
+) -> Result<bool, StoreError> {
     let active: i64 = connection.query_row(
         "WITH RECURSIVE descendants(id, state) AS (
             SELECT id, state FROM tasks WHERE parent_task_id = ?1

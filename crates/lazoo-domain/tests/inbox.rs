@@ -201,7 +201,8 @@ fn a_pending_approval_needs_the_user_and_a_decided_one_is_the_archive() {
 
 #[test]
 fn proposed_and_uncertain_tasks_need_the_user_and_running_ones_are_not_items() {
-    let proposal = task_inbox_item(&task(4, TaskState::Proposed), false, &employees()).unwrap();
+    let proposal =
+        task_inbox_item(&task(4, TaskState::Proposed), false, false, &employees()).unwrap();
     assert_eq!(proposal.kind, InboxKind::TaskProposal);
     assert_eq!(proposal.attention, InboxAttention::ActionRequired);
     assert_eq!(proposal.severity, InboxSeverity::Normal);
@@ -216,7 +217,19 @@ fn proposed_and_uncertain_tasks_need_the_user_and_running_ones_are_not_items() {
         json!({"id": Uuid::from_u128(4), "expectedRevision": 1, "actor": {"kind": "user"}})
     );
 
-    let uncertain = task_inbox_item(&task(5, TaskState::Uncertain), false, &employees()).unwrap();
+    let uncertain =
+        task_inbox_item(&task(5, TaskState::Uncertain), false, false, &employees()).unwrap();
+    // With an unfinished descendant only the failed resolution would be accepted.
+    let blocked =
+        task_inbox_item(&task(5, TaskState::Uncertain), false, true, &employees()).unwrap();
+    assert_eq!(
+        blocked
+            .actions
+            .iter()
+            .map(|action| action.action.as_str())
+            .collect::<Vec<_>>(),
+        ["resolve-failed"]
+    );
     assert_eq!(uncertain.kind, InboxKind::TaskUncertain);
     assert_eq!(uncertain.severity, InboxSeverity::Priority);
     assert_eq!(uncertain.subtype, "task-uncertain");
@@ -248,15 +261,15 @@ fn proposed_and_uncertain_tasks_need_the_user_and_running_ones_are_not_items() {
         TaskState::Running,
         TaskState::CancelRequested,
     ] {
-        assert!(task_inbox_item(&task(6, state), true, &employees()).is_none());
+        assert!(task_inbox_item(&task(6, state), true, false, &employees()).is_none());
     }
-    let archived = task_inbox_item(&task(7, TaskState::Failed), true, &employees()).unwrap();
+    let archived = task_inbox_item(&task(7, TaskState::Failed), true, false, &employees()).unwrap();
     assert_eq!(archived.kind, InboxKind::TaskUncertain);
     assert_eq!(archived.attention, InboxAttention::Resolved);
     assert_eq!(archived.state, "failed");
     assert!(archived.actions.is_empty());
     let archived_proposal =
-        task_inbox_item(&task(8, TaskState::Cancelled), false, &employees()).unwrap();
+        task_inbox_item(&task(8, TaskState::Cancelled), false, false, &employees()).unwrap();
     assert_eq!(archived_proposal.kind, InboxKind::TaskProposal);
 }
 
@@ -352,8 +365,8 @@ fn counts_filters_and_order_follow_attention_then_deadline_then_age() {
             &employees,
         )
         .unwrap(),
-        task_inbox_item(&task(5, TaskState::Uncertain), false, &employees).unwrap(),
-        task_inbox_item(&task(4, TaskState::Proposed), false, &employees).unwrap(),
+        task_inbox_item(&task(5, TaskState::Uncertain), false, false, &employees).unwrap(),
+        task_inbox_item(&task(4, TaskState::Proposed), false, false, &employees).unwrap(),
         approval_inbox_item(&approval(1, ApprovalState::Pending), &employees),
     ];
     sort_unresolved_inbox(&mut items);
@@ -395,7 +408,7 @@ fn counts_filters_and_order_follow_attention_then_deadline_then_age() {
 
     let mut archive = vec![
         approval_inbox_item(&approval(2, ApprovalState::Expired), &employees),
-        task_inbox_item(&task(7, TaskState::Failed), true, &employees).unwrap(),
+        task_inbox_item(&task(7, TaskState::Failed), true, false, &employees).unwrap(),
     ];
     assert!(
         archive

@@ -1,7 +1,15 @@
-use std::path::PathBuf;
+mod configuration;
+mod memory;
+mod memory_worker;
+mod terminal;
+pub use memory::MemoryCommand;
+pub use memory_worker::MemoryWorkerCommand;
+pub use terminal::TerminalCommand;
+
+use std::{io, path::PathBuf, time::Duration};
 
 use clap::{Parser, Subcommand};
-use lazoo_ipc::{IpcError, PipeClient};
+use lazoo_ipc::{AuthenticatedConnection, IpcError, PipeClient};
 use lazoo_protocol::{
     ActivationPolicy, ApprovalDecision, ApprovalState, AuthorityMode, CheckoutMode,
     EmployeeCheckoutPolicy, InboxFilter, IncidentEscalation, IncidentPriority, IncidentState,
@@ -11,7 +19,17 @@ use lazoo_protocol::{
 use lazoo_runtime::{DataRoot, Installation, RuntimeError};
 use serde_json::{Value, json};
 use thiserror::Error;
+use tokio::time::timeout;
 use uuid::Uuid;
+
+/// Mirrors the daemon's `REQUEST_TIMEOUT`: a request it has not read within 5 s is dropped there.
+const REQUEST_WRITE_TIMEOUT: Duration = Duration::from_secs(5);
+/// Read-only ledger queries. Kept under the stress harness's 30 s kill so a stalled daemon is a
+/// recorded, labelled failure instead of an opaque harness kill.
+const SHORT_RESPONSE_TIMEOUT: Duration = Duration::from_secs(20);
+/// Every other RPC. Above the 300 s provider turn deadline (`lazoo-providers` contract) plus
+/// native start/stop; raise it only together with that deadline.
+const LONG_RESPONSE_TIMEOUT: Duration = Duration::from_secs(600);
 
 #[derive(Debug, Parser)]
 #[command(name = "lazooctl", version, about = "Lazoo local control client")]
@@ -24,6 +42,8 @@ pub struct Cli {
 
 #[derive(Debug, Subcommand)]
 pub enum Command {
+    #[command(subcommand)]
+    MemoryWorker(MemoryWorkerCommand),
     Status,
     #[command(subcommand)]
     Project(ProjectCommand),
@@ -55,6 +75,10 @@ pub enum Command {
     Workspace(WorkspaceCommand),
     #[command(subcommand)]
     System(SystemCommand),
+    #[command(subcommand)]
+    Terminal(TerminalCommand),
+    #[command(subcommand)]
+    Memory(MemoryCommand),
 }
 
 #[derive(Debug, Subcommand)]
@@ -229,6 +253,8 @@ pub enum EventsCommand {
 
 #[derive(Debug, Subcommand)]
 pub enum SystemCommand {
+    /// Infrastructure CPU cap and rolling aggregate measurements.
+    Budget,
     Shutdown,
     /// The daemon's own CPU time, working set, and handle count.
     Resources,
@@ -236,10 +262,32 @@ pub enum SystemCommand {
 
 #[derive(Debug, Subcommand)]
 pub enum ProviderCommand {
+    /// Preview one explicitly selected MCP entry without changing provider files.
+    ConfigPreview {
+        #[arg(long, value_parser = parse_json_value)]
+        selection: Value,
+    },
+    ConfigApply {
+        operation_id: Uuid,
+        #[arg(long)]
+        expected_revision: u64,
+    },
+    ConfigRollback {
+        operation_id: Uuid,
+        #[arg(long)]
+        expected_revision: u64,
+    },
+    ConfigShow {
+        operation_id: Uuid,
+    },
     List,
     /// Read every known provider configuration file, with secrets redacted, and name
     /// duplicate and conflicting integrations across providers. Writes nothing.
     Config,
+    /// The migration preview over that discovery: per integration, whether Lazoo would manage
+    /// it as is, merge an exact duplicate across providers, or need your choice for a
+    /// same-name conflict. Selects and writes nothing.
+    Preview,
     Probe {
         provider: String,
     },
@@ -355,6 +403,19 @@ pub enum SessionCommand {
         id: Uuid,
         #[arg(long)]
         expected_revision: u64,
+        #[arg(long)]
+        idempotency_key: Option<String>,
+    },
+    /// Reopen a suspended Claude Code or Codex session's native harness in an owner terminal.
+    /// Use `terminal read`, `terminal write`, and `terminal stop` on the returned terminal.
+    Attach {
+        id: Uuid,
+        #[arg(long)]
+        expected_revision: u64,
+        #[arg(long, default_value_t = 80)]
+        columns: u16,
+        #[arg(long, default_value_t = 25)]
+        rows: u16,
         #[arg(long)]
         idempotency_key: Option<String>,
     },
@@ -677,6 +738,22 @@ pub async fn execute(cli: &Cli) -> Result<Vec<String>, CliError> {
 pub async fn execute_with(cli: &Cli, mut emit: impl FnMut(String)) -> Result<(), CliError> {
     let root = DataRoot::resolve()?;
     let installation = Installation::load_or_create(&root)?;
+    if let Command::Terminal(
+        command @ (TerminalCommand::Read { .. } | TerminalCommand::Write { .. }),
+    ) = &cli.command
+    {
+        let output = terminal::execute_io(command, &installation)
+            .await
+            .map_err(|message| {
+                CliError::Rpc(RpcError {
+                    code: "LZ-TERMINAL-IO".to_owned(),
+                    message,
+                    data: None,
+                })
+            })?;
+        emit(render_result(&output, cli.json)?);
+        return Ok(());
+    }
     let (method, params, follows) = command_request(&cli.command);
     let mut connection =
         PipeClient::connect(&installation, "lazooctl", env!("CARGO_PKG_VERSION")).await?;
@@ -686,11 +763,11 @@ pub async fn execute_with(cli: &Cli, mut emit: impl FnMut(String)) -> Result<(),
         method: method.to_owned(),
         params,
     };
-    connection.send_json(&request).await?;
-    let response: JsonRpcResponse = connection.receive_json().await?;
+    let response = round_trip(&mut connection, &request, response_timeout(method)).await?;
     let result = response_result(response)?;
     emit(render_result(&result, cli.json)?);
     if follows {
+        // Following events is open-ended by design: the user ends it, not a deadline.
         loop {
             let notification: Value = connection.receive_json().await?;
             let event = notification.get("params").cloned().unwrap_or(notification);
@@ -700,9 +777,45 @@ pub async fn execute_with(cli: &Cli, mut emit: impl FnMut(String)) -> Result<(),
     Ok(())
 }
 
+/// One bounded request/response exchange. A daemon that never reads or never answers becomes
+/// the existing `LZ-IPC` timed-out error (exit 3) with a message naming the phase.
+async fn round_trip(
+    connection: &mut AuthenticatedConnection,
+    request: &JsonRpcRequest,
+    response_deadline: Duration,
+) -> Result<JsonRpcResponse, CliError> {
+    timeout(REQUEST_WRITE_TIMEOUT, connection.send_json(request))
+        .await
+        .map_err(|_| timed_out("daemon request write timed out"))??;
+    timeout(response_deadline, connection.receive_json())
+        .await
+        .map_err(|_| timed_out("daemon response timed out"))?
+        .map_err(CliError::Ipc)
+}
+
+/// Read-only ledger queries answer from the store and get the short tier; everything else may
+/// legitimately wait on a provider turn, a probe, or a worktree and gets the long tier.
+fn response_timeout(method: &str) -> Duration {
+    match method {
+        "system.status" | "system.resources" | "system.budget" | "project.list" | "events.list"
+        | "roster.get" | "provider.list" => SHORT_RESPONSE_TIMEOUT,
+        _ => LONG_RESPONSE_TIMEOUT,
+    }
+}
+
+fn timed_out(message: &'static str) -> CliError {
+    CliError::Ipc(IpcError::Io(io::Error::new(
+        io::ErrorKind::TimedOut,
+        message,
+    )))
+}
+
 #[must_use]
 pub fn command_request(command: &Command) -> (&'static str, Value, bool) {
     match command {
+        Command::MemoryWorker(command) => memory_worker::command_request(command),
+        Command::Terminal(command) => terminal::command_request(command),
+        Command::Memory(command) => memory::command_request(command),
         Command::Status => ("system.status", json!({}), false),
         Command::Project(ProjectCommand::Register {
             path,
@@ -731,7 +844,33 @@ pub fn command_request(command: &Command) -> (&'static str, Value, bool) {
             true,
         ),
         Command::Provider(ProviderCommand::List) => ("provider.list", json!({}), false),
+        Command::Provider(ProviderCommand::ConfigPreview { selection }) => {
+            let (method, params) = configuration::preview_request(selection);
+            (method, params, false)
+        }
+        Command::Provider(ProviderCommand::ConfigApply {
+            operation_id,
+            expected_revision,
+        }) => {
+            let (method, params) = configuration::apply_request(*operation_id, *expected_revision);
+            (method, params, false)
+        }
+        Command::Provider(ProviderCommand::ConfigRollback {
+            operation_id,
+            expected_revision,
+        }) => {
+            let (method, params) =
+                configuration::rollback_request(*operation_id, *expected_revision);
+            (method, params, false)
+        }
+        Command::Provider(ProviderCommand::ConfigShow { operation_id }) => {
+            let (method, params) = configuration::show_request(*operation_id);
+            (method, params, false)
+        }
         Command::Provider(ProviderCommand::Config) => ("provider.config", json!({}), false),
+        Command::Provider(ProviderCommand::Preview) => {
+            ("provider.config.preview", json!({}), false)
+        }
         Command::Provider(ProviderCommand::Probe { provider }) => {
             ("provider.probe", json!({"provider": provider}), false)
         }
@@ -760,6 +899,7 @@ pub fn command_request(command: &Command) -> (&'static str, Value, bool) {
         Command::Workspace(command) => workspace_request(command),
         Command::System(SystemCommand::Shutdown) => ("system.shutdown", json!({}), false),
         Command::System(SystemCommand::Resources) => ("system.resources", json!({}), false),
+        Command::System(SystemCommand::Budget) => ("system.budget", json!({}), false),
     }
 }
 
@@ -1445,6 +1585,23 @@ fn session_request(command: &SessionCommand) -> (&'static str, Value, bool) {
             }),
             false,
         ),
+        SessionCommand::Attach {
+            id,
+            expected_revision,
+            columns,
+            rows,
+            idempotency_key,
+        } => (
+            "session.terminal.attach",
+            json!({
+                "id": id,
+                "expectedRevision": expected_revision,
+                "columns": columns,
+                "rows": rows,
+                "idempotencyKey": idempotency_key.clone().unwrap_or_else(|| Uuid::new_v4().to_string()),
+            }),
+            false,
+        ),
     }
 }
 
@@ -1715,5 +1872,97 @@ fn parse_employee_activation_policy(value: &str) -> Result<ActivationPolicy, Str
         "manual" => Ok(ActivationPolicy::Manual),
         "notice-turns" => Ok(ActivationPolicy::NoticeTurns),
         _ => Err("expected manual or notice-turns".to_owned()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::Instant;
+
+    use lazoo_ipc::PipeServer;
+    use lazoo_runtime::OwnerSecurity;
+
+    use super::*;
+
+    /// A daemon that reads the request and never answers must surface as the labelled `LZ-IPC`
+    /// timeout (exit 3) at the deadline, not hang until a harness kills the CLI.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn stalled_daemon_response_times_out_cleanly() {
+        let temporary = tempfile::tempdir().unwrap();
+        let installation =
+            Installation::load_or_create(&DataRoot::from_path(temporary.path())).unwrap();
+        let mut server =
+            PipeServer::bind(&installation, &OwnerSecurity::current().unwrap()).unwrap();
+        let (server_side, client_side) = tokio::join!(
+            server.accept(),
+            PipeClient::connect(&installation, "lazooctl", "0.1.0")
+        );
+        let mut daemon = server_side.unwrap();
+        let mut client = client_side.unwrap();
+        let stalled = tokio::spawn(async move {
+            let received: JsonRpcRequest = daemon.receive_json().await.unwrap();
+            assert_eq!(received.method, "system.status");
+            // Keep the connection open and never reply until the test aborts this task.
+            std::future::pending::<()>().await;
+        });
+        let request = JsonRpcRequest {
+            jsonrpc: "2.0".to_owned(),
+            id: "stalled".to_owned(),
+            method: "system.status".to_owned(),
+            params: json!({}),
+        };
+
+        let started = Instant::now();
+        let error = timeout(
+            Duration::from_secs(5),
+            round_trip(&mut client, &request, Duration::from_millis(200)),
+        )
+        .await
+        .expect("a stalled daemon must not hang the CLI")
+        .unwrap_err();
+        let elapsed = started.elapsed();
+        stalled.abort();
+
+        assert!(elapsed < Duration::from_secs(2), "{elapsed:?}");
+        match &error {
+            CliError::Ipc(IpcError::Io(source)) => {
+                assert_eq!(source.kind(), io::ErrorKind::TimedOut);
+                assert_eq!(source.to_string(), "daemon response timed out");
+            }
+            other => panic!("expected an IPC timeout, got {other:?}"),
+        }
+        assert_eq!(error.exit_code(), 3);
+        assert_eq!(
+            error.to_string(),
+            "IPC I/O failed: daemon response timed out"
+        );
+    }
+
+    #[test]
+    fn response_timeout_tiers_read_only_queries_short_and_everything_else_long() {
+        for method in [
+            "system.status",
+            "system.resources",
+            "system.budget",
+            "project.list",
+            "events.list",
+            "roster.get",
+            "provider.list",
+        ] {
+            assert_eq!(response_timeout(method), SHORT_RESPONSE_TIMEOUT, "{method}");
+        }
+        for method in [
+            "provider.smoke",
+            "task.create",
+            "session.warm",
+            "roster.refresh",
+        ] {
+            assert_eq!(response_timeout(method), LONG_RESPONSE_TIMEOUT, "{method}");
+        }
+        // The daemon's REQUEST_TIMEOUT, the stress harness's 30 s kill, and the 300 s provider
+        // turn deadline are the three fixed points these tiers are placed against.
+        assert_eq!(REQUEST_WRITE_TIMEOUT, Duration::from_secs(5));
+        assert!(SHORT_RESPONSE_TIMEOUT < Duration::from_secs(30));
+        assert!(LONG_RESPONSE_TIMEOUT > Duration::from_secs(300));
     }
 }

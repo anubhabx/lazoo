@@ -35,6 +35,65 @@ fn git_init(path: &Path) {
     assert!(status.success());
 }
 
+#[tokio::test]
+async fn provider_completed_and_failed_terminal_events_finish_governed_turns() {
+    for (status, expected) in [
+        ("completed", TurnState::Completed),
+        ("failed", TurnState::TerminalFailed),
+    ] {
+        let (_temporary, harness) = approval_harness(
+            AuthorityMode::Ask,
+            Duration::from_secs(1),
+            Vec::new(),
+            status,
+        );
+        warm_lead(&harness).await;
+        let response = submit_governed_turn(&harness, "ask").await.unwrap();
+        assert!(response.error.is_none(), "{response:?}");
+        let result = response.result.unwrap();
+        assert_eq!(
+            result["turn"]["state"],
+            serde_json::to_value(expected).unwrap()
+        );
+    }
+}
+
+#[tokio::test]
+async fn dropped_provider_approval_observer_closes_pending_record() {
+    let (_temporary, harness) = approval_harness(
+        AuthorityMode::Ask,
+        Duration::from_secs(60),
+        vec![permission_request(
+            PermissionKind::CommandExecution,
+            "cargo test",
+            false,
+        )],
+        "completed",
+    );
+    warm_lead(&harness).await;
+    let submission = submit_governed_turn(&harness, "ask");
+    let pending = wait_for_pending_approval(&harness).await;
+    let approval_id: uuid::Uuid = pending["id"].as_str().unwrap().parse().unwrap();
+    submission.abort();
+    let _ = submission.await;
+    let closed = timeout(Duration::from_secs(2), async {
+        loop {
+            let approval = harness.store.get_approval(approval_id).unwrap();
+            if approval.state != lazoo_protocol::ApprovalState::Pending {
+                return approval;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    assert_eq!(closed.state, lazoo_protocol::ApprovalState::Cancelled);
+    assert_eq!(
+        closed.failure_code.as_deref(),
+        Some("LZ-APPROVAL-OBSERVER-DROPPED")
+    );
+}
+
 fn git(path: &Path, args: &[&str]) {
     let status = Command::new("git")
         .arg("-C")
@@ -64,6 +123,9 @@ fn test_app() -> (tempfile::TempDir, App) {
         App::new_with_provider_environment(store, root, DiscoveryEnvironment::empty()).unwrap(),
     )
 }
+
+/// The provider and permission mode one session start asked for.
+type SessionStart = (ProviderKind, Option<String>);
 
 #[derive(Clone)]
 struct FakeSessionBackend {
@@ -95,6 +157,10 @@ struct FakeSessionBackend {
     tool_calls: Arc<Mutex<Vec<ToolCall>>>,
     tool_results: Arc<Mutex<Vec<ToolResult>>>,
     session_tools: Arc<Mutex<Vec<Vec<String>>>>,
+    /// The native session id each start asked to resume; starts that begin fresh add nothing.
+    resume_ids: Arc<Mutex<Vec<String>>>,
+    /// The provider and permission mode of every session start, in order.
+    session_permission_modes: Arc<Mutex<Vec<SessionStart>>>,
 }
 
 impl Default for FakeSessionBackend {
@@ -123,6 +189,8 @@ impl Default for FakeSessionBackend {
             tool_calls: Arc::new(Mutex::new(Vec::new())),
             tool_results: Arc::new(Mutex::new(Vec::new())),
             session_tools: Arc::new(Mutex::new(Vec::new())),
+            resume_ids: Arc::new(Mutex::new(Vec::new())),
+            session_permission_modes: Arc::new(Mutex::new(Vec::new())),
         }
     }
 }
@@ -254,7 +322,7 @@ impl ManagedSession for FakeManagedSession {
 impl SessionBackend for FakeSessionBackend {
     fn start<'a>(
         &'a self,
-        _provider: ProviderKind,
+        provider: ProviderKind,
         request: &'a SessionRequest,
     ) -> SessionBackendFuture<'a> {
         Box::pin(async move {
@@ -274,8 +342,19 @@ impl SessionBackend for FakeSessionBackend {
                 .lock()
                 .unwrap()
                 .push(request.tools.iter().map(|tool| tool.name.clone()).collect());
+            self.session_permission_modes
+                .lock()
+                .unwrap()
+                .push((provider, request.permission_mode.clone()));
+            if let Some(resumed) = &request.session_id {
+                self.resume_ids.lock().unwrap().push(resumed.clone());
+            }
             Ok(Box::new(FakeManagedSession {
-                id: format!("native-{number}"),
+                // A resumed native session keeps its id, as Claude Code's `--resume` does.
+                id: request
+                    .session_id
+                    .clone()
+                    .unwrap_or_else(|| format!("native-{number}")),
                 stops: Arc::clone(&self.stops),
                 turns: Arc::clone(&self.turns),
                 cancels: Arc::clone(&self.cancels),
@@ -537,7 +616,7 @@ async fn accepted_projectless_child_dispatches_automatically_through_the_canonic
     let app = App::new_with_session_backend(
         store.clone(),
         root.clone(),
-        DiscoveryEnvironment::empty(),
+        DiscoveryEnvironment::empty().with_known_location(ProviderKind::Codex, CMD_EXE),
         Arc::new(backend.clone()),
     )
     .unwrap();
@@ -639,6 +718,51 @@ async fn accepted_projectless_child_dispatches_automatically_through_the_canonic
         backend.working_directories.lock().unwrap().last(),
         Some(&root.projectless_task_working_dir(task_id))
     );
+
+    // The owner takes over the suspended worker session: its terminal opens in the retained task
+    // workspace, not in the generic session directory.
+    let worker_session_id = dispatch.session_id.unwrap();
+    wait_until(|| {
+        store.get_session(worker_session_id).unwrap().state
+            == lazoo_protocol::SessionLifecycleState::Suspended
+    })
+    .await;
+    let worker_session = store.get_session(worker_session_id).unwrap();
+    let attached = app
+        .handle(request(
+            "dispatch-attach",
+            "session.terminal.attach",
+            json!({
+                "id": worker_session_id,
+                "expectedRevision": worker_session.revision,
+                "columns": 80,
+                "rows": 25,
+                "idempotencyKey": "dispatch-attach"
+            }),
+        ))
+        .await
+        .result
+        .unwrap();
+    assert_eq!(
+        attached["terminal"]["cwd"],
+        dispatch.workspace_path.unwrap()
+    );
+    assert_eq!(
+        attached["terminal"]["args"],
+        json!(["resume", worker_session.native_session_id.unwrap()])
+    );
+    app.handle(request(
+        "dispatch-attach-stop",
+        "terminal.stop",
+        json!({
+            "id": attached["terminal"]["id"],
+            "expectedRevision": attached["terminal"]["revision"],
+            "expectedBootId": attached["terminal"]["bootId"]
+        }),
+    ))
+    .await
+    .result
+    .unwrap();
     dispatcher.abort();
     let _ = dispatcher.await;
 }
@@ -1669,6 +1793,308 @@ async fn turn_submit_persists_before_provider_acceptance_and_acknowledges_on_evi
         .error
         .unwrap();
     assert_eq!(invalid_limit.code, "LZ-TURN-INVALID");
+}
+
+/// Warms the lead's session and runs one scripted turn to completion, returning its id after
+/// checking that no canonical event payload carries the provider's raw payload.
+async fn complete_scripted_turn(
+    app: &App,
+    backend: &FakeSessionBackend,
+    employee_id: uuid::Uuid,
+    conversation_id: uuid::Uuid,
+    events: Vec<ProviderEvent>,
+) -> uuid::Uuid {
+    backend.turn_events.lock().unwrap().extend(events);
+    app.handle(request(
+        "warm-raw-frames",
+        "session.warm",
+        json!({
+            "employeeId": employee_id,
+            "expectedEmployeeRevision": 1,
+            "idempotencyKey": "warm-raw-frames"
+        }),
+    ))
+    .await
+    .result
+    .unwrap();
+    let completed = app
+        .handle(request(
+            "submit-raw-frames",
+            "turn.submit",
+            json!({
+                "conversationId": conversation_id,
+                "author": {"kind": "user"},
+                "recipient": null,
+                "text": "Reply with done.",
+                "activateIfNeeded": false,
+                "maxAttempts": 3,
+                "idempotencyKey": "submit-raw-frames"
+            }),
+        ))
+        .await
+        .result
+        .unwrap();
+    assert_eq!(completed["turn"]["state"], "completed");
+    assert!(
+        completed["turn"]["events"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|event| event["payload"].get("raw").is_none())
+    );
+    completed["turn"]["id"].as_str().unwrap().parse().unwrap()
+}
+
+fn raw_frame_lines(store: &Store, root: &DataRoot, turn_id: uuid::Uuid) -> Vec<serde_json::Value> {
+    let bytes = store
+        .read_memory_raw_frames(&root.root().join("memory-archives"), turn_id)
+        .unwrap();
+    std::str::from_utf8(&bytes)
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect()
+}
+
+async fn set_global_memory_retention(app: &App, retention_enabled: bool, max_source_bytes: u64) {
+    app.handle(request(
+        "policy-raw-frames",
+        "memory.policy.set",
+        json!({
+            "global": true,
+            "expectedRevision": 1,
+            "retentionEnabled": retention_enabled,
+            "retentionDays": 30,
+            "quotaBytes": 268_435_456,
+            "maxSourceBytes": max_source_bytes,
+            "allowedTypes": ["fact"],
+            "injectEnabled": true
+        }),
+    ))
+    .await
+    .result
+    .unwrap();
+}
+
+fn raw_turn_started(raw: serde_json::Value) -> ProviderEvent {
+    ProviderEvent::TurnStarted {
+        provider: ProviderKind::Codex,
+        session_id: "native-1".to_owned(),
+        turn_id: Some("native-turn-1".to_owned()),
+        raw: Some(raw),
+    }
+}
+
+fn raw_turn_completed(raw: serde_json::Value) -> ProviderEvent {
+    ProviderEvent::TurnCompleted {
+        provider: ProviderKind::Codex,
+        session_id: "native-1".to_owned(),
+        turn_id: Some("native-turn-1".to_owned()),
+        status: "completed".to_owned(),
+        output: Some("done".to_owned()),
+        raw: Some(raw),
+    }
+}
+
+#[tokio::test]
+async fn completed_turn_archives_redacted_raw_provider_frames() {
+    let (_temporary, root, store, app, backend, employee_id, conversation_id) = turn_test_app();
+    let text_delta = ProviderEvent::TextDelta {
+        provider: ProviderKind::Codex,
+        session_id: "native-1".to_owned(),
+        turn_id: Some("native-turn-1".to_owned()),
+        text: "hello".to_owned(),
+        raw: Some(json!({"delta": "hello"})),
+    };
+    let turn_id = complete_scripted_turn(
+        &app,
+        &backend,
+        employee_id,
+        conversation_id,
+        vec![
+            raw_turn_started(json!({"private": "keep", "token": "secret"})),
+            text_delta.clone(),
+            text_delta,
+            raw_turn_completed(json!({"done": true})),
+        ],
+    )
+    .await;
+
+    // The archive's `memory.archived` row is published with the turn, never left for the next
+    // unrelated write: the conversation-delivery gate reads `pendingOutbox` right after a turn.
+    let status = app
+        .handle(request("status-raw-frames", "system.status", json!({})))
+        .await
+        .result
+        .unwrap();
+    assert_eq!(status["pendingOutbox"], 0);
+
+    let lines = raw_frame_lines(&store, &root, turn_id);
+    assert_eq!(lines[0]["type"], "lazoo-raw-frames");
+    assert_eq!(lines[0]["sourceTurnId"], turn_id.to_string());
+    // One native message cloned into two events is kept once, and nothing was dropped.
+    assert_eq!(lines.len(), 4);
+    assert_eq!(lines[1]["type"], "turnStarted");
+    assert_eq!(lines[1]["raw"]["private"], "keep");
+    assert_eq!(lines[1]["raw"]["token"], "[redacted]");
+    assert_eq!(lines[2]["type"], "textDelta");
+    assert_eq!(lines[2]["raw"]["delta"], "hello");
+    assert_eq!(lines[3]["type"], "turnCompleted");
+    assert_eq!(lines[3]["sequence"], 3);
+    assert!(!serde_json::to_string(&lines).unwrap().contains("secret"));
+    let archive_files = std::fs::read_dir(root.root().join("memory-archives"))
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+        .collect::<Vec<_>>();
+    assert_eq!(archive_files.len(), 1);
+    assert!(archive_files[0].contains("-raw-"));
+    // The raw kind is recorded as its own kind and leaves the turn a canonical candidate.
+    assert!(
+        store
+            .list_memory_archive_candidates(10)
+            .unwrap()
+            .iter()
+            .any(|candidate| candidate.source_turn_id == turn_id)
+    );
+    let archived = store
+        .list_events(0, 100)
+        .unwrap()
+        .into_iter()
+        .filter(|event| event.event_type == "memory.archived")
+        .collect::<Vec<_>>();
+    assert_eq!(archived.len(), 1);
+    assert_eq!(archived[0].payload["kind"], "raw-frames");
+    assert_eq!(archived[0].payload["archive"]["truncated"], false);
+}
+
+#[tokio::test]
+async fn raw_frame_capture_is_skipped_when_retention_is_disabled() {
+    let (_temporary, root, store, app, backend, employee_id, conversation_id) = turn_test_app();
+    set_global_memory_retention(&app, false, 4_194_304).await;
+    let turn_id = complete_scripted_turn(
+        &app,
+        &backend,
+        employee_id,
+        conversation_id,
+        vec![
+            raw_turn_started(json!({"private": "keep"})),
+            raw_turn_completed(json!({"done": true})),
+        ],
+    )
+    .await;
+
+    // Recovery at start creates the archive root; retention off leaves nothing inside it.
+    let archive_root = root.root().join("memory-archives");
+    assert!(!archive_root.exists() || std::fs::read_dir(&archive_root).unwrap().next().is_none());
+    assert!(matches!(
+        store.read_memory_raw_frames(&archive_root, turn_id),
+        Err(lazoo_store::StoreError::InvalidRecord {
+            field: "memory source",
+            ..
+        })
+    ));
+    assert!(
+        store
+            .list_events(0, 100)
+            .unwrap()
+            .iter()
+            .all(|event| event.event_type != "memory.archived")
+    );
+}
+
+#[tokio::test]
+async fn raw_frame_capture_is_bounded_by_the_policy_cap() {
+    let (_temporary, root, store, app, backend, employee_id, conversation_id) = turn_test_app();
+    set_global_memory_retention(&app, true, 4096).await;
+    let turn_id = complete_scripted_turn(
+        &app,
+        &backend,
+        employee_id,
+        conversation_id,
+        vec![
+            raw_turn_started(json!({"private": "keep"})),
+            ProviderEvent::TextDelta {
+                provider: ProviderKind::Codex,
+                session_id: "native-1".to_owned(),
+                turn_id: Some("native-turn-1".to_owned()),
+                text: "x".repeat(16 * 1024),
+                raw: Some(json!({"text": "y".repeat(16 * 1024)})),
+            },
+            raw_turn_completed(json!({"done": true})),
+        ],
+    )
+    .await;
+
+    let lines = raw_frame_lines(&store, &root, turn_id);
+    assert_eq!(lines.len(), 4);
+    assert_eq!(lines[1]["type"], "turnStarted");
+    assert_eq!(lines[1]["sequence"], 1);
+    // The oversized frame was dropped at the cap; the sequence gap shows where.
+    assert_eq!(lines[2]["type"], "turnCompleted");
+    assert_eq!(lines[2]["sequence"], 3);
+    assert_eq!(lines[3]["type"], "lazoo-raw-frames-truncated");
+    assert_eq!(lines[3]["droppedFrames"], 1);
+    assert_eq!(lines[3]["limitBytes"], 4096);
+    let bytes = store
+        .read_memory_raw_frames(&root.root().join("memory-archives"), turn_id)
+        .unwrap();
+    assert!(bytes.len() <= 4096);
+    let archived = store
+        .list_events(0, 100)
+        .unwrap()
+        .into_iter()
+        .find(|event| event.event_type == "memory.archived")
+        .unwrap();
+    assert_eq!(archived.payload["kind"], "raw-frames");
+    assert_eq!(archived.payload["archive"]["truncated"], true);
+    assert_eq!(
+        archived.payload["archive"]["uncompressedBytes"],
+        bytes.len()
+    );
+}
+
+#[test]
+fn raw_frame_archive_acceptance_contract_is_deterministic_and_backend_only() {
+    let repository = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let script_path = repository.join("scripts/acceptance/raw-frame-archive.ps1");
+    let script =
+        std::fs::read_to_string(&script_path).expect("raw frame archive acceptance script");
+
+    for required in [
+        "raw_frame_archive_is_hashed_capped_and_counted_against_quota",
+        "raw_frame_archive_respects_retention_opt_out",
+        "raw_frames_and_canonical_archive_coexist_and_cleanup_removes_both",
+        "version_eighteen_archives_upgrade_as_canonical_turn_archives",
+        "completed_turn_archives_redacted_raw_provider_frames",
+        "raw_frame_capture_is_skipped_when_retention_is_disabled",
+        "raw_frame_capture_is_bounded_by_the_policy_cap",
+        "store_enables_wal_foreign_keys_and_schema_version",
+        "rawFramesArchived",
+        "redacted",
+        "cappedWithTrailer",
+        "quotaShared",
+        "cleanupCoversBothKinds",
+        "optOutWritesNothing",
+        "schemaNineteen",
+        "providerSmokeAbsent",
+        "externalModelUseAbsent",
+        "uiChangesAbsent",
+        "deterministic-fake-transport",
+        "schemaVersion = 19",
+        "wireFramesWithoutEvents = 'NOT_COVERED'",
+        "nonCompletedTurns = 'NOT_COVERED'",
+    ] {
+        assert!(
+            script.contains(required),
+            "acceptance script must contain {required}"
+        );
+    }
+    for forbidden in ["provider', 'smoke", "LivePrompt"] {
+        assert!(
+            !script.contains(forbidden),
+            "acceptance script must not contain {forbidden}"
+        );
+    }
 }
 
 #[tokio::test]
@@ -3580,7 +4006,7 @@ async fn status_reports_protocol_store_and_boot_identity() {
     let result = response.result.unwrap();
 
     assert_eq!(result["protocolVersion"], 1);
-    assert_eq!(result["schemaVersion"], 15);
+    assert_eq!(result["schemaVersion"], 19);
     assert_eq!(result["journalMode"], "wal");
     assert!(
         result["bootId"]
@@ -4071,6 +4497,470 @@ async fn session_stale_revision_has_a_stable_error_family() {
     assert_eq!(error.data.unwrap(), json!({"currentRevision": 2}));
 }
 
+const CMD_EXE: &str = r"C:\Windows\System32\cmd.exe";
+
+/// The session harness with cmd.exe standing in for the Codex executable: known locations are
+/// not name-filtered, and cmd.exe ignores `resume <id>` and stays interactive on stdin.
+fn attach_test_app() -> (
+    tempfile::TempDir,
+    Store,
+    App,
+    FakeSessionBackend,
+    uuid::Uuid,
+) {
+    let temporary = tempdir().unwrap();
+    let root = DataRoot::from_path(temporary.path().join("data"));
+    root.ensure().unwrap();
+    let store = Store::open_path(root.state_db()).unwrap();
+    let employee = configured_employee(&store);
+    let backend = FakeSessionBackend::default();
+    let app = App::new_with_session_backend(
+        store.clone(),
+        root,
+        DiscoveryEnvironment::empty().with_known_location(ProviderKind::Codex, CMD_EXE),
+        Arc::new(backend.clone()),
+    )
+    .unwrap();
+    (temporary, store, app, backend, employee.id)
+}
+
+/// Warms one session for `employee_id` and stops it, returning the suspended session record.
+async fn suspended_session(app: &App, employee_id: uuid::Uuid, key: &str) -> serde_json::Value {
+    let warmed = app
+        .handle(request(
+            key,
+            "session.warm",
+            json!({
+                "employeeId": employee_id,
+                "expectedEmployeeRevision": 1,
+                "idempotencyKey": format!("{key}-warm")
+            }),
+        ))
+        .await
+        .result
+        .unwrap();
+    app.handle(request(
+        key,
+        "session.stop",
+        json!({
+            "id": warmed["session"]["id"],
+            "expectedRevision": warmed["session"]["revision"],
+            "idempotencyKey": format!("{key}-stop")
+        }),
+    ))
+    .await
+    .result
+    .unwrap()["session"]
+        .clone()
+}
+
+fn attach_params(session: &serde_json::Value, key: &str) -> serde_json::Value {
+    json!({
+        "id": session["id"],
+        "expectedRevision": session["revision"],
+        "columns": 80,
+        "rows": 25,
+        "idempotencyKey": key
+    })
+}
+
+fn stop_terminal_params(terminal: &serde_json::Value) -> serde_json::Value {
+    json!({
+        "id": terminal["id"],
+        "expectedRevision": terminal["revision"],
+        "expectedBootId": terminal["bootId"]
+    })
+}
+
+/// The owner takes over a finished Codex session: the terminal runs the discovered executable
+/// with the recorded native id in the session's own directory, a replay returns the same
+/// terminal, a second attach is refused while it lives, a stop frees the slot, and each attach
+/// is audited while the session row itself stays suspended at its revision.
+#[tokio::test]
+#[allow(clippy::too_many_lines)] // One owner session: attach, replay, refuse, stop, re-attach, audit.
+async fn session_terminal_attach_resumes_a_suspended_codex_session_in_an_owner_terminal() {
+    let (_temporary, _store, app, backend, employee_id) = attach_test_app();
+    let session = suspended_session(&app, employee_id, "attach").await;
+    let session_id: uuid::Uuid = session["id"].as_str().unwrap().parse().unwrap();
+    let attach = |id: &str, params: serde_json::Value| {
+        app.handle(request(id, "session.terminal.attach", params))
+    };
+
+    let attached = attach("attach-1", attach_params(&session, "attach-1"))
+        .await
+        .result
+        .unwrap();
+    assert_eq!(attached["sessionId"], session["id"]);
+    let terminal = attached["terminal"].clone();
+    assert_eq!(terminal["executable"], CMD_EXE);
+    assert_eq!(terminal["args"], json!(["resume", "native-1"]));
+    assert_eq!(
+        terminal["cwd"],
+        app.data_root()
+            .session_working_dir(session_id)
+            .to_string_lossy()
+            .into_owned()
+    );
+    assert_eq!(terminal["live"], true);
+    assert_eq!(terminal["revision"], 1);
+
+    let replayed = attach("attach-1-replay", attach_params(&session, "attach-1"))
+        .await
+        .result
+        .unwrap();
+    assert_eq!(replayed["terminal"]["id"], terminal["id"]);
+
+    let refused = attach("attach-2", attach_params(&session, "attach-2"))
+        .await
+        .error
+        .unwrap();
+    assert_eq!(refused.code, "LZ-SESSION-ATTACHED");
+    assert_eq!(
+        refused.data.unwrap(),
+        json!({"sessionId": session["id"], "terminalId": terminal["id"]})
+    );
+
+    let stopped = app
+        .handle(request(
+            "terminal-stop",
+            "terminal.stop",
+            stop_terminal_params(&terminal),
+        ))
+        .await
+        .result
+        .unwrap();
+    assert_eq!(stopped["live"], false);
+
+    let reattached = attach("attach-3", attach_params(&session, "attach-3"))
+        .await
+        .result
+        .unwrap();
+    assert_ne!(reattached["terminal"]["id"], terminal["id"]);
+    assert_eq!(reattached["terminal"]["live"], true);
+    assert_eq!(reattached["terminal"]["args"], terminal["args"]);
+
+    let shown = app
+        .handle(request("show", "session.show", json!({"id": session_id})))
+        .await
+        .result
+        .unwrap();
+    assert_eq!(
+        shown, session,
+        "the attach changes nothing on the session row"
+    );
+    assert_eq!(backend.starts.load(Ordering::SeqCst), 1);
+    assert_eq!(backend.stops.load(Ordering::SeqCst), 1);
+
+    let events = app
+        .handle(request(
+            "events",
+            "events.list",
+            json!({"after": 0, "limit": 1024}),
+        ))
+        .await
+        .result
+        .unwrap();
+    let audited = events
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|event| event["eventType"] == "session.terminal.attached")
+        .map(|event| event["payload"].clone())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        audited,
+        vec![
+            json!({"sessionId": session["id"], "terminalId": terminal["id"]}),
+            json!({"sessionId": session["id"], "terminalId": reattached["terminal"]["id"]}),
+        ]
+    );
+
+    app.handle(request(
+        "terminal-stop-2",
+        "terminal.stop",
+        stop_terminal_params(&reattached["terminal"]),
+    ))
+    .await
+    .result
+    .unwrap();
+}
+
+/// Only a suspended session may be taken over: an idle session has a live protocol host, a
+/// stale revision, an unknown id, and malformed requests are refused before anything spawns.
+#[tokio::test]
+async fn session_terminal_attach_refuses_idle_sessions_stale_revisions_and_unknown_ids() {
+    let (_temporary, _store, app, backend, employee_id) = attach_test_app();
+    let warmed = app
+        .handle(request(
+            "warm",
+            "session.warm",
+            json!({
+                "employeeId": employee_id,
+                "expectedEmployeeRevision": 1,
+                "idempotencyKey": "warm-rhea"
+            }),
+        ))
+        .await
+        .result
+        .unwrap()["session"]
+        .clone();
+    let attach = |id: &str, params: serde_json::Value| {
+        app.handle(request(id, "session.terminal.attach", params))
+    };
+
+    let idle = attach("idle", attach_params(&warmed, "idle"))
+        .await
+        .error
+        .unwrap();
+    assert_eq!(idle.code, "LZ-SESSION-STATE");
+    assert_eq!(idle.data.unwrap(), json!({"sessionId": warmed["id"]}));
+    assert_eq!(backend.starts.load(Ordering::SeqCst), 1);
+    assert_eq!(backend.stops.load(Ordering::SeqCst), 0);
+
+    let suspended = app
+        .handle(request(
+            "stop",
+            "session.stop",
+            json!({
+                "id": warmed["id"],
+                "expectedRevision": warmed["revision"],
+                "idempotencyKey": "stop-rhea"
+            }),
+        ))
+        .await
+        .result
+        .unwrap()["session"]
+        .clone();
+    let stale = attach("stale", attach_params(&warmed, "stale"))
+        .await
+        .error
+        .unwrap();
+    assert_eq!(stale.code, "LZ-SESSION-STALE");
+    assert_eq!(
+        stale.data.unwrap(),
+        json!({"currentRevision": suspended["revision"]})
+    );
+
+    let unknown = attach(
+        "unknown",
+        attach_params(
+            &json!({"id": uuid::Uuid::new_v4(), "revision": 1}),
+            "unknown",
+        ),
+    )
+    .await
+    .error
+    .unwrap();
+    assert_eq!(unknown.code, "LZ-SESSION-NOT-FOUND");
+
+    let mut zero = attach_params(&suspended, "zero");
+    zero["expectedRevision"] = json!(0);
+    assert_eq!(
+        attach("zero", zero).await.error.unwrap().code,
+        "LZ-SESSION-INVALID"
+    );
+    assert_eq!(
+        attach("blank", attach_params(&suspended, ""))
+            .await
+            .error
+            .unwrap()
+            .code,
+        "LZ-SESSION-INVALID"
+    );
+    let mut unexpected = attach_params(&suspended, "unexpected");
+    unexpected["authority"] = json!("full-autonomy");
+    assert_eq!(
+        attach("unexpected", unexpected).await.error.unwrap().code,
+        "LZ-INVALID-PARAMS"
+    );
+
+    let terminals = app
+        .handle(request("terminals", "terminal.list", json!({})))
+        .await
+        .result
+        .unwrap();
+    assert_eq!(terminals["terminals"], json!([]));
+}
+
+/// Without a discovered executable there is nothing to run, and providers without a documented
+/// resume command are refused by name rather than guessed at.
+#[tokio::test]
+async fn session_terminal_attach_fails_closed_without_an_executable_or_a_resume_command() {
+    let (_temporary, app, _backend, employee_id) = session_test_app();
+    let session = suspended_session(&app, employee_id, "undetected").await;
+    let undetected = app
+        .handle(request(
+            "undetected",
+            "session.terminal.attach",
+            attach_params(&session, "undetected"),
+        ))
+        .await
+        .error
+        .unwrap();
+    assert_eq!(undetected.code, "LZ-PROVIDER-NOT-DETECTED");
+
+    let (_temporary, store, app, _backend, _codex) = attach_test_app();
+    for (name, provider) in [("Noor", "opencode"), ("Ivo", "antigravity")] {
+        let employee = store
+            .create_employee(&CreateEmployeeInput {
+                request_id: format!("{name}-request"),
+                idempotency_key: format!("create-{name}"),
+                name: name.to_owned(),
+                provider: provider.to_owned(),
+                role: "Worker".to_owned(),
+                instructions: String::new(),
+                model: Some("test-model".to_owned()),
+                reasoning_effort: Some("low".to_owned()),
+                native_settings: json!({}),
+                authority_mode: AuthorityMode::Ask,
+                checkout_policy: EmployeeCheckoutPolicy::Isolated,
+                activation_policy: lazoo_protocol::ActivationPolicy::Manual,
+                idle_timeout_seconds: 0,
+                enabled: true,
+                provider_observation: Some(ProviderObservation {
+                    provider: provider.to_owned(),
+                    verification: "configured".to_owned(),
+                    version: Some("test".to_owned()),
+                    protocol: Some("test".to_owned()),
+                    capabilities: json!({"session": true}),
+                    authentication: json!({"native": "ready"}),
+                    degradation_reason: None,
+                    checked_at: "2026-10-17T00:00:00Z".to_owned(),
+                }),
+            })
+            .unwrap()
+            .employee;
+        let session = suspended_session(&app, employee.id, provider).await;
+        let unsupported = app
+            .handle(request(
+                provider,
+                "session.terminal.attach",
+                attach_params(&session, provider),
+            ))
+            .await
+            .error
+            .unwrap();
+        assert_eq!(
+            unsupported.code, "LZ-SESSION-ATTACH-UNSUPPORTED",
+            "{provider}"
+        );
+        assert_eq!(
+            unsupported.data.unwrap(),
+            json!({"sessionId": session["id"]})
+        );
+    }
+    let terminals = app
+        .handle(request("terminals", "terminal.list", json!({})))
+        .await
+        .result
+        .unwrap();
+    assert_eq!(terminals["terminals"], json!([]));
+}
+
+/// An attached suspended session does not block the employee: a new warm session starts as
+/// usual in a different directory, and the owner's terminal stays live beside it.
+#[tokio::test]
+async fn session_terminal_attach_leaves_the_employee_free_for_new_sessions() {
+    let (_temporary, _store, app, backend, employee_id) = attach_test_app();
+    let session = suspended_session(&app, employee_id, "first").await;
+    let attached = app
+        .handle(request(
+            "attach",
+            "session.terminal.attach",
+            attach_params(&session, "attach"),
+        ))
+        .await
+        .result
+        .unwrap();
+
+    let warmed = app
+        .handle(request(
+            "warm-again",
+            "session.warm",
+            json!({
+                "employeeId": employee_id,
+                "expectedEmployeeRevision": 1,
+                "idempotencyKey": "warm-again"
+            }),
+        ))
+        .await
+        .result
+        .unwrap();
+    assert_eq!(warmed["session"]["state"], "idle");
+    assert_ne!(warmed["session"]["id"], session["id"]);
+    assert_eq!(warmed["session"]["nativeSessionId"], "native-2");
+    assert_eq!(backend.starts.load(Ordering::SeqCst), 2);
+
+    let terminal = app
+        .handle(request(
+            "terminal",
+            "terminal.show",
+            json!({"id": attached["terminal"]["id"]}),
+        ))
+        .await
+        .result
+        .unwrap();
+    assert_eq!(terminal["live"], true);
+    app.handle(request(
+        "terminal-stop",
+        "terminal.stop",
+        stop_terminal_params(&attached["terminal"]),
+    ))
+    .await
+    .result
+    .unwrap();
+}
+
+#[test]
+fn session_terminal_attach_acceptance_contract_is_real_binary_and_backend_only() {
+    let repository = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let script_path = repository.join("scripts/acceptance/session-terminal-attach.ps1");
+    let script =
+        std::fs::read_to_string(&script_path).expect("session terminal attach acceptance script");
+
+    for required in [
+        "[switch]$SkipBuild",
+        "lazoo-turn-transport-fixture.exe",
+        "'codex.exe'",
+        "LAZOO_TURN_FIXTURE_THREAD_ID",
+        "'session', 'warm'",
+        "'session', 'attach'",
+        "'session', 'stop'",
+        "'terminal', 'write'",
+        "'terminal', 'read'",
+        "'terminal', 'stop'",
+        "LZ-SESSION-STATE",
+        "LZ-SESSION-ATTACHED",
+        "LZ-SESSION-NOT-FOUND",
+        "session.terminal.attached",
+        "idleAttachRefused",
+        "resumeArgumentsFromRecords",
+        "cwdFromRecords",
+        "oneLiveTerminalPerSession",
+        "terminalBytesRoundTrip",
+        "reattachAfterStop",
+        "sessionRecordUnchanged",
+        "auditEventRecorded",
+        "providerSmokeAbsent",
+        "externalModelUseAbsent",
+        "uiChangesAbsent",
+        "real-binaries-disposable-data-root-no-provider",
+        "schemaVersion = 19",
+        "session-terminal-attach-manifest.json",
+    ] {
+        assert!(
+            script.contains(required),
+            "acceptance script must contain {required}"
+        );
+    }
+    for forbidden in ["provider', 'smoke", "LivePrompt", "claude.exe"] {
+        assert!(
+            !script.contains(forbidden),
+            "acceptance script must not contain {forbidden}"
+        );
+    }
+}
+
 #[tokio::test]
 async fn planned_shutdown_stops_and_suspends_live_sessions() {
     let (_temporary, app, backend, employee_id) = session_test_app();
@@ -4324,7 +5214,7 @@ fn employee_roster_acceptance_contract_is_backend_only() {
         "roster', 'refresh",
         "LZ-EMPLOYEE-STALE",
         "restartDurability",
-        "schemaVersion 15",
+        "schemaVersion 19",
         "providerSmokeAbsent",
     ] {
         assert!(
@@ -4362,7 +5252,7 @@ fn native_session_acceptance_contract_covers_containment_and_owner_loss() {
         "completeTreeTerminated",
         "nativeHostPid",
         "providerSmokeAbsent",
-        "schemaVersion 15",
+        "schemaVersion 19",
     ] {
         assert!(
             script.contains(required),
@@ -4392,7 +5282,7 @@ fn collaboration_bus_acceptance_contract_is_backend_only() {
         "deadLetterEvidence",
         "restartDurability",
         "auditOutboxEvidence",
-        "schemaVersion 15",
+        "schemaVersion 19",
         "providerSmokeAbsent",
         "desktopCapabilityExpansionAbsent",
     ] {
@@ -4528,7 +5418,7 @@ fn task_graph_acceptance_executes_backend_only_contract() {
     )
     .unwrap();
     assert_eq!(manifest["status"], "PASS");
-    assert_eq!(manifest["schemaVersion"], 15);
+    assert_eq!(manifest["schemaVersion"], 19);
     assert_eq!(manifest["mode"], "deterministic-fixture");
     for field in [
         "rootIdentity",
@@ -5141,15 +6031,16 @@ async fn pending_approvals_from_a_previous_boot_expire_with_owner_loss_on_restar
     warm_lead(&harness).await;
     let submission = submit_governed_turn(&harness, "ask");
     let pending = wait_for_pending_approval(&harness).await;
-    submission.abort();
-    let _ = submission.await;
-
+    // A process crash cannot run the observer's Drop guard. Reconcile while it is still
+    // pending, then drop the old future; a deliberate abort is tested separately as Cancelled.
     let restarted = App::new_with_provider_environment(
         harness.store.clone(),
         harness.app.data_root().clone(),
         DiscoveryEnvironment::empty(),
     )
     .unwrap();
+    submission.abort();
+    let _ = submission.await;
     let shown = restarted
         .handle(request(
             "show-restarted-approval",
@@ -5197,6 +6088,22 @@ fn tool_harness_idle(
     authority: AuthorityMode,
     activation: lazoo_protocol::ActivationPolicy,
     idle_timeout_seconds: u32,
+) -> (tempfile::TempDir, ToolHarness) {
+    tool_harness_environment(
+        authority,
+        activation,
+        idle_timeout_seconds,
+        DiscoveryEnvironment::empty(),
+    )
+}
+
+/// The tool harness over a chosen provider discovery environment, for scenarios that need an
+/// executable the daemon can launch in an owner terminal.
+fn tool_harness_environment(
+    authority: AuthorityMode,
+    activation: lazoo_protocol::ActivationPolicy,
+    idle_timeout_seconds: u32,
+    environment: DiscoveryEnvironment,
 ) -> (tempfile::TempDir, ToolHarness) {
     let temporary = tempdir().unwrap();
     let root = DataRoot::from_path(temporary.path().join("data"));
@@ -5252,13 +6159,9 @@ fn tool_harness_idle(
         .lock()
         .unwrap()
         .extend(completed_turn_events("completed"));
-    let app = App::new_with_session_backend(
-        store.clone(),
-        root,
-        DiscoveryEnvironment::empty(),
-        Arc::new(backend.clone()),
-    )
-    .unwrap();
+    let app =
+        App::new_with_session_backend(store.clone(), root, environment, Arc::new(backend.clone()))
+            .unwrap();
     (
         temporary,
         ToolHarness {
@@ -5369,6 +6272,7 @@ async fn lead_turn_lists_employees_delegates_and_waits_through_collaboration_too
     assert_eq!(
         declared[0],
         vec![
+            "memory_search",
             "employees_list",
             "task_delegate",
             "task_wait",
@@ -5707,7 +6611,7 @@ fn collaboration_tools_acceptance_contract_is_deterministic_and_backend_only() {
         "worker_turn_reports_failure_through_task_report_before_native_completion",
         "collaboration-tools-manifest.json",
         "deterministic-fake-transport",
-        "schemaVersion = 15",
+        "schemaVersion = 19",
     ] {
         assert!(
             script.contains(required),
@@ -6244,7 +7148,7 @@ async fn restart_owner_loss_and_emergency_spool_fold_into_startup_incidents_once
         .await
         .result
         .unwrap();
-    assert_eq!(status["schemaVersion"], 15);
+    assert_eq!(status["schemaVersion"], 19);
     assert_eq!(status["emergencyIncidentCount"], 1);
 }
 
@@ -6347,7 +7251,7 @@ fn minimum_incidents_acceptance_contract_is_deterministic_and_backend_only() {
         "incident_errors_use_exit_code_fifteen",
         "minimum-incidents-manifest.json",
         "deterministic-fake-transport",
-        "schemaVersion = 15",
+        "schemaVersion = 19",
     ] {
         assert!(
             script.contains(required),
@@ -6817,7 +7721,7 @@ fn result_delivery_acceptance_contract_is_deterministic_and_backend_only() {
         "externalModelUseAbsent",
         "uiChangesAbsent",
         "deterministic-fake-transport",
-        "schemaVersion = 15",
+        "schemaVersion = 19",
     ] {
         assert!(
             script.contains(required),
@@ -7324,7 +8228,7 @@ fn peer_messaging_acceptance_contract_is_deterministic_and_backend_only() {
         "externalModelUseAbsent",
         "uiChangesAbsent",
         "deterministic-fake-transport",
-        "schemaVersion = 15",
+        "schemaVersion = 19",
     ] {
         assert!(
             script.contains(required),
@@ -7447,7 +8351,7 @@ fn coalesced_notices_acceptance_contract_is_deterministic_and_backend_only() {
         "externalModelUseAbsent",
         "uiChangesAbsent",
         "deterministic-fake-transport",
-        "schemaVersion = 15",
+        "schemaVersion = 19",
     ] {
         assert!(
             script.contains(required),
@@ -7686,7 +8590,7 @@ fn activation_policy_acceptance_contract_is_deterministic_and_backend_only() {
         "externalModelUseAbsent",
         "uiChangesAbsent",
         "deterministic-fake-transport",
-        "schemaVersion = 15",
+        "schemaVersion = 19",
     ] {
         assert!(
             script.contains(required),
@@ -7723,7 +8627,8 @@ fn lead_sessions(
 }
 
 #[tokio::test]
-async fn an_idle_session_suspends_after_its_employee_timeout_and_the_next_user_turn_starts_fresh() {
+async fn an_idle_codex_session_suspends_after_its_employee_timeout_and_the_next_user_turn_starts_fresh_with_a_recorded_reason()
+ {
     use chrono::{TimeDelta, Utc};
     use lazoo_protocol::{ActivationPolicy, EmployeeAvailability, SessionLifecycleState};
 
@@ -7779,8 +8684,8 @@ async fn an_idle_session_suspends_after_its_employee_timeout_and_the_next_user_t
     assert_eq!(harness.backend.stops.load(Ordering::SeqCst), 1);
     assert_eq!(harness.backend.starts.load(Ordering::SeqCst), 1);
 
-    // The next user turn activates the lead exactly as for any dormant employee: a fresh
-    // session, never a resumed thread.
+    // The next user turn activates the lead as for any dormant employee: a fresh session,
+    // because Codex `thread/resume` cannot carry the Lazoo tools every Codex session declares.
     let resumed = harness
         .app
         .handle(request(
@@ -7805,6 +8710,557 @@ async fn an_idle_session_suspends_after_its_employee_timeout_and_the_next_user_t
     let fresh = lead_sessions(&harness, SessionLifecycleState::Idle);
     assert_eq!(fresh.len(), 1);
     assert_ne!(fresh[0].id, session.id);
+    assert!(
+        harness.backend.resume_ids.lock().unwrap().is_empty(),
+        "no resume was requested of the provider"
+    );
+    assert_eq!(
+        resume_events(&harness.store),
+        vec![(
+            "session.resume.skipped".to_owned(),
+            json!({
+                "sessionId": fresh[0].id,
+                "priorSessionId": session.id,
+                "reason": "codex-dynamic-tools"
+            })
+        )]
+    );
+}
+
+fn resume_events(store: &Store) -> Vec<(String, serde_json::Value)> {
+    store
+        .list_events(0, 4096)
+        .unwrap()
+        .into_iter()
+        .filter(|event| event.event_type.starts_with("session.resume"))
+        .map(|event| (event.event_type, event.payload))
+        .collect()
+}
+
+/// A Claude Code lead with a conversation, beside the harness's Codex employees. Claude Code
+/// takes governed turns only under full autonomy, so that is its authority.
+fn claude_lead(
+    harness: &ToolHarness,
+    idle_timeout_seconds: u32,
+) -> (lazoo_protocol::EmployeeRecord, uuid::Uuid) {
+    let lead = harness
+        .store
+        .create_employee(&CreateEmployeeInput {
+            request_id: "resume-cleo-request".to_owned(),
+            idempotency_key: "resume-cleo".to_owned(),
+            name: "Cleo".to_owned(),
+            provider: "claude-code".to_owned(),
+            role: "Lead".to_owned(),
+            instructions: String::new(),
+            model: None,
+            reasoning_effort: None,
+            native_settings: json!({}),
+            authority_mode: AuthorityMode::FullAutonomy,
+            checkout_policy: EmployeeCheckoutPolicy::Isolated,
+            activation_policy: lazoo_protocol::ActivationPolicy::Manual,
+            idle_timeout_seconds,
+            enabled: true,
+            provider_observation: Some(ProviderObservation {
+                provider: "claude-code".to_owned(),
+                verification: "configured".to_owned(),
+                version: Some("test".to_owned()),
+                protocol: Some("test".to_owned()),
+                capabilities: json!({"session": true}),
+                authentication: json!({"native": "ready", "external": "unknown"}),
+                degradation_reason: None,
+                checked_at: "2026-10-17T00:00:00Z".to_owned(),
+            }),
+        })
+        .unwrap()
+        .employee;
+    let conversation = harness
+        .store
+        .create_conversation(&CreateConversationInput {
+            request_id: "resume-cleo-conversation-request".to_owned(),
+            idempotency_key: "resume-cleo-conversation".to_owned(),
+            project_id: None,
+            lead_employee_id: lead.id,
+            title: None,
+        })
+        .unwrap()
+        .conversation;
+    (lead, conversation.id)
+}
+
+async fn submit_user_turn(
+    harness: &ToolHarness,
+    conversation_id: uuid::Uuid,
+    key: &str,
+) -> serde_json::Value {
+    timeout(
+        Duration::from_secs(20),
+        harness.app.handle(user_turn_request(conversation_id, key)),
+    )
+    .await
+    .expect("the turn completes")
+    .result
+    .unwrap()
+}
+
+fn sessions_of(
+    harness: &ToolHarness,
+    employee_id: uuid::Uuid,
+) -> Vec<lazoo_protocol::EmployeeSessionRecord> {
+    harness
+        .store
+        .list_sessions()
+        .unwrap()
+        .into_iter()
+        .filter(|session| session.employee_id == employee_id)
+        .collect()
+}
+
+#[tokio::test]
+#[allow(clippy::too_many_lines)] // One story: suspend, resume, suspend, resume again.
+async fn an_idle_claude_code_session_suspends_and_the_next_user_turn_resumes_its_native_session() {
+    use chrono::{TimeDelta, Utc};
+    use lazoo_protocol::{ActivationPolicy, SessionLifecycleState};
+
+    let (_temporary, harness) =
+        tool_harness_idle(AuthorityMode::FullAutonomy, ActivationPolicy::Manual, 900);
+    let (lead, conversation_id) = claude_lead(&harness, 900);
+
+    // The first activation has no predecessor: a fresh native session and no resume audit.
+    let first_turn = submit_user_turn(&harness, conversation_id, "resume-first").await;
+    assert_eq!(first_turn["turn"]["state"], "completed");
+    assert_eq!(harness.backend.starts.load(Ordering::SeqCst), 1);
+    assert!(harness.backend.resume_ids.lock().unwrap().is_empty());
+    assert!(resume_events(&harness.store).is_empty());
+    let first = sessions_of(&harness, lead.id).remove(0);
+    assert_eq!(first.native_session_id.as_deref(), Some("native-1"));
+
+    harness
+        .app
+        .suspend_idle_sessions_once(Utc::now() + TimeDelta::seconds(901))
+        .await
+        .unwrap();
+    assert_eq!(
+        harness.store.get_session(first.id).unwrap().state,
+        SessionLifecycleState::Suspended
+    );
+    assert_eq!(harness.backend.stops.load(Ordering::SeqCst), 1);
+
+    // The next user turn wakes the lead on the same native conversation, in the same directory.
+    let second_turn = submit_user_turn(&harness, conversation_id, "resume-second").await;
+    assert_eq!(second_turn["turn"]["state"], "completed");
+    assert_eq!(harness.backend.starts.load(Ordering::SeqCst), 2);
+    assert_eq!(
+        harness.backend.resume_ids.lock().unwrap().as_slice(),
+        ["native-1"]
+    );
+    let first_directory = harness.app.data_root().session_working_dir(first.id);
+    let sessions = sessions_of(&harness, lead.id);
+    assert_eq!(sessions.len(), 2);
+    let second = &sessions[1];
+    assert_ne!(second.id, first.id);
+    assert_eq!(second.state, SessionLifecycleState::Idle);
+    assert_eq!(second.native_session_id, first.native_session_id);
+    assert_eq!(
+        harness
+            .backend
+            .working_directories
+            .lock()
+            .unwrap()
+            .as_slice(),
+        [first_directory.clone(), first_directory.clone()],
+        "the resume runs in the suspended session's own working directory"
+    );
+    assert_eq!(
+        resume_events(&harness.store),
+        vec![(
+            "session.resumed".to_owned(),
+            json!({
+                "sessionId": second.id,
+                "priorSessionId": first.id,
+                "nativeSessionId": "native-1",
+                "workingDirectory": first_directory.to_string_lossy()
+            })
+        )]
+    );
+
+    // A resumed session suspends and resumes like any other, always the same native id.
+    harness
+        .app
+        .suspend_idle_sessions_once(Utc::now() + TimeDelta::seconds(1802))
+        .await
+        .unwrap();
+    submit_user_turn(&harness, conversation_id, "resume-third").await;
+    assert_eq!(harness.backend.starts.load(Ordering::SeqCst), 3);
+    assert_eq!(
+        harness.backend.resume_ids.lock().unwrap().as_slice(),
+        ["native-1", "native-1"]
+    );
+    let third = sessions_of(&harness, lead.id).remove(2);
+    let resumed = resume_events(&harness.store);
+    assert_eq!(resumed.len(), 2);
+    assert_eq!(
+        resumed[1],
+        (
+            "session.resumed".to_owned(),
+            json!({
+                "sessionId": third.id,
+                "priorSessionId": second.id,
+                "nativeSessionId": "native-1",
+                "workingDirectory": first_directory.to_string_lossy()
+            })
+        ),
+        "the third wake resumes the second session and still runs in the origin directory"
+    );
+    assert_eq!(
+        harness
+            .backend
+            .working_directories
+            .lock()
+            .unwrap()
+            .last()
+            .unwrap(),
+        &first_directory,
+        "a resume of a resumed session still runs where the conversation began"
+    );
+}
+
+#[tokio::test]
+async fn a_suspended_claude_code_session_that_never_completed_a_turn_is_not_resumed() {
+    use chrono::{TimeDelta, Utc};
+    use lazoo_protocol::ActivationPolicy;
+
+    let (_temporary, harness) =
+        tool_harness_idle(AuthorityMode::FullAutonomy, ActivationPolicy::Manual, 900);
+    let (lead, conversation_id) = claude_lead(&harness, 900);
+    harness
+        .app
+        .handle(request(
+            "warm-cleo",
+            "session.warm",
+            json!({
+                "employeeId": lead.id,
+                "expectedEmployeeRevision": lead.configuration_revision,
+                "idempotencyKey": "warm-cleo"
+            }),
+        ))
+        .await
+        .result
+        .unwrap();
+    harness
+        .app
+        .suspend_idle_sessions_once(Utc::now() + TimeDelta::seconds(901))
+        .await
+        .unwrap();
+    let warmed = sessions_of(&harness, lead.id).remove(0);
+
+    // Claude Code writes its transcript with the first message, so a session that took no turn
+    // has nothing to resume (and a resume the provider rejected leaves exactly such a session).
+    submit_user_turn(&harness, conversation_id, "resume-after-warm").await;
+    assert!(harness.backend.resume_ids.lock().unwrap().is_empty());
+    let fresh = sessions_of(&harness, lead.id).remove(1);
+    assert_eq!(
+        resume_events(&harness.store),
+        vec![(
+            "session.resume.skipped".to_owned(),
+            json!({
+                "sessionId": fresh.id,
+                "priorSessionId": warmed.id,
+                "reason": "no-completed-turn"
+            })
+        )]
+    );
+}
+
+fn user_turn_request(conversation_id: uuid::Uuid, key: &str) -> JsonRpcRequest {
+    request(
+        key,
+        "turn.submit",
+        json!({
+            "conversationId": conversation_id,
+            "author": {"kind": "user"},
+            "recipient": null,
+            "authorityMode": "full-autonomy",
+            "text": "Carry on with the parser fix",
+            "activateIfNeeded": true,
+            "maxAttempts": 3,
+            "idempotencyKey": key
+        }),
+    )
+}
+
+async fn suspend_idle_now(harness: &ToolHarness) {
+    use chrono::{TimeDelta, Utc};
+
+    harness
+        .app
+        .suspend_idle_sessions_once(Utc::now() + TimeDelta::seconds(901))
+        .await
+        .unwrap();
+}
+
+async fn warm_session(harness: &ToolHarness, employee: &lazoo_protocol::EmployeeRecord, key: &str) {
+    harness
+        .app
+        .handle(request(
+            key,
+            "session.warm",
+            json!({
+                "employeeId": employee.id,
+                "expectedEmployeeRevision": employee.configuration_revision,
+                "idempotencyKey": key
+            }),
+        ))
+        .await
+        .result
+        .unwrap();
+}
+
+/// A resumed session ran in its predecessor's directory and never made its own, so the owner's
+/// terminal takeover must open there, and the older session that shares its native transcript
+/// may not be taken over while the employee has a session in flight.
+#[tokio::test]
+#[allow(clippy::too_many_lines)] // One story: resume, refuse the older attach, attach the resumed one.
+async fn attach_on_a_resumed_session_uses_the_origin_directory_and_the_older_session_is_refused_while_the_resumed_one_is_active()
+ {
+    use lazoo_protocol::ActivationPolicy;
+
+    let (_temporary, harness) = tool_harness_environment(
+        AuthorityMode::FullAutonomy,
+        ActivationPolicy::Manual,
+        900,
+        DiscoveryEnvironment::empty().with_known_location(ProviderKind::ClaudeCode, CMD_EXE),
+    );
+    let (lead, conversation_id) = claude_lead(&harness, 900);
+    submit_user_turn(&harness, conversation_id, "attach-first").await;
+    suspend_idle_now(&harness).await;
+    submit_user_turn(&harness, conversation_id, "attach-second").await;
+    let sessions = sessions_of(&harness, lead.id);
+    let (older, resumed) = (sessions[0].clone(), sessions[1].clone());
+    let origin = harness.app.data_root().session_working_dir(older.id);
+    assert!(
+        !harness
+            .app
+            .data_root()
+            .session_working_dir(resumed.id)
+            .exists(),
+        "a resumed session never makes a directory of its own"
+    );
+    let attach = |session: &lazoo_protocol::EmployeeSessionRecord, key: &str| {
+        harness.app.handle(request(
+            key,
+            "session.terminal.attach",
+            attach_params(
+                &json!({"id": session.id, "revision": session.revision}),
+                key,
+            ),
+        ))
+    };
+
+    // The resumed session is idle: the older suspended one shares its transcript and is refused.
+    let refused = attach(&older, "attach-older-while-active")
+        .await
+        .error
+        .unwrap();
+    assert_eq!(refused.code, "LZ-SESSION-CONFLICT");
+    assert_eq!(resume_events(&harness.store).len(), 1);
+
+    suspend_idle_now(&harness).await;
+    let resumed = harness.store.get_session(resumed.id).unwrap();
+    let attached = attach(&resumed, "attach-resumed").await.result.unwrap();
+    assert_eq!(
+        attached["terminal"]["args"],
+        json!(["--resume", "native-1"])
+    );
+    assert_eq!(
+        attached["terminal"]["cwd"],
+        origin.to_string_lossy().into_owned(),
+        "the resumed session attaches in the directory its transcript lives in"
+    );
+    // The refused attach left no slot behind: the older session attaches once nothing is active.
+    let older_attached = attach(&older, "attach-older-idle").await.result.unwrap();
+    assert_eq!(
+        older_attached["terminal"]["cwd"],
+        origin.to_string_lossy().into_owned()
+    );
+    for terminal in [&attached["terminal"], &older_attached["terminal"]] {
+        harness
+            .app
+            .handle(request(
+                "terminal-stop",
+                "terminal.stop",
+                stop_terminal_params(terminal),
+            ))
+            .await
+            .result
+            .unwrap();
+    }
+}
+
+/// A warm (or a notice turn whose delivery failed) resumes a session that completes no turn;
+/// that session still carries the native id of the conversation it continued, so the wake after
+/// it resumes too instead of orphaning the transcript.
+#[tokio::test]
+async fn a_resumed_session_that_took_no_turn_still_carries_the_transcript_to_the_next_wake() {
+    use lazoo_protocol::ActivationPolicy;
+
+    let (_temporary, harness) =
+        tool_harness_idle(AuthorityMode::FullAutonomy, ActivationPolicy::Manual, 900);
+    let (lead, conversation_id) = claude_lead(&harness, 900);
+    submit_user_turn(&harness, conversation_id, "lineage-first").await;
+    suspend_idle_now(&harness).await;
+    warm_session(&harness, &lead, "lineage-warm").await;
+    suspend_idle_now(&harness).await;
+    submit_user_turn(&harness, conversation_id, "lineage-third").await;
+
+    let sessions = sessions_of(&harness, lead.id);
+    assert_eq!(sessions.len(), 3);
+    assert_eq!(
+        harness.backend.resume_ids.lock().unwrap().as_slice(),
+        ["native-1", "native-1"]
+    );
+    assert_eq!(sessions[2].native_session_id.as_deref(), Some("native-1"));
+    let origin = harness
+        .app
+        .data_root()
+        .session_working_dir(sessions[0].id)
+        .to_string_lossy()
+        .into_owned();
+    assert_eq!(
+        resume_events(&harness.store),
+        vec![
+            (
+                "session.resumed".to_owned(),
+                json!({
+                    "sessionId": sessions[1].id,
+                    "priorSessionId": sessions[0].id,
+                    "nativeSessionId": "native-1",
+                    "workingDirectory": origin
+                })
+            ),
+            (
+                "session.resumed".to_owned(),
+                json!({
+                    "sessionId": sessions[2].id,
+                    "priorSessionId": sessions[1].id,
+                    "nativeSessionId": "native-1",
+                    "workingDirectory": origin
+                })
+            ),
+        ]
+    );
+}
+
+/// A wake that fails before it touches the native session leaves a `failed` session that never
+/// started; it must not hide the suspended session behind it.
+#[tokio::test]
+async fn a_predecessor_that_failed_before_it_started_does_not_hide_the_suspended_session() {
+    use lazoo_protocol::{ActivationPolicy, SessionLifecycleState};
+
+    let (_temporary, harness) =
+        tool_harness_idle(AuthorityMode::FullAutonomy, ActivationPolicy::Manual, 900);
+    let (lead, conversation_id) = claude_lead(&harness, 900);
+    submit_user_turn(&harness, conversation_id, "start-first").await;
+    suspend_idle_now(&harness).await;
+
+    harness.backend.fail_starts.store(1, Ordering::SeqCst);
+    let failed = harness
+        .app
+        .handle(user_turn_request(conversation_id, "start-refused"))
+        .await;
+    assert!(failed.error.is_some());
+    let sessions = sessions_of(&harness, lead.id);
+    assert_eq!(sessions[1].state, SessionLifecycleState::Failed);
+    assert!(sessions[1].started_at.is_none());
+    assert!(resume_events(&harness.store).is_empty());
+
+    submit_user_turn(&harness, conversation_id, "start-again").await;
+    assert_eq!(
+        harness.backend.resume_ids.lock().unwrap().as_slice(),
+        ["native-1"]
+    );
+    let sessions = sessions_of(&harness, lead.id);
+    assert_eq!(
+        resume_events(&harness.store),
+        vec![(
+            "session.resumed".to_owned(),
+            json!({
+                "sessionId": sessions[2].id,
+                "priorSessionId": sessions[0].id,
+                "nativeSessionId": "native-1",
+                "workingDirectory": harness
+                    .app
+                    .data_root()
+                    .session_working_dir(sessions[0].id)
+                    .to_string_lossy()
+            })
+        )]
+    );
+}
+
+/// With an idle timeout of 0 nothing would ever end a session whose resume the provider
+/// rejected, so the first failed turn on a resumed session stops it; the wake after that starts
+/// fresh instead of resuming the same rejected id.
+#[tokio::test]
+async fn a_resumed_session_whose_first_turn_fails_is_stopped_and_the_next_wake_starts_fresh() {
+    use lazoo_protocol::{ActivationPolicy, SessionLifecycleState};
+
+    let (_temporary, harness) =
+        tool_harness_idle(AuthorityMode::FullAutonomy, ActivationPolicy::Manual, 0);
+    let (lead, conversation_id) = claude_lead(&harness, 0);
+    submit_user_turn(&harness, conversation_id, "reject-first").await;
+    let first = sessions_of(&harness, lead.id).remove(0);
+    harness
+        .app
+        .handle(request(
+            "reject-stop",
+            "session.stop",
+            json!({
+                "id": first.id,
+                "expectedRevision": first.revision,
+                "idempotencyKey": "reject-stop"
+            }),
+        ))
+        .await
+        .result
+        .unwrap();
+
+    *harness.backend.turn_failure.lock().unwrap() = Some("transcript not found".to_owned());
+    let rejected = harness
+        .app
+        .handle(user_turn_request(conversation_id, "reject-second"))
+        .await;
+    assert_eq!(rejected.error.unwrap().code, "LZ-TURN-PROVIDER");
+    assert_eq!(
+        harness.backend.resume_ids.lock().unwrap().as_slice(),
+        ["native-1"]
+    );
+    let sessions = sessions_of(&harness, lead.id);
+    assert_eq!(sessions[1].state, SessionLifecycleState::Suspended);
+    assert_eq!(harness.backend.stops.load(Ordering::SeqCst), 2);
+
+    *harness.backend.turn_failure.lock().unwrap() = None;
+    submit_user_turn(&harness, conversation_id, "reject-third").await;
+    assert_eq!(harness.backend.starts.load(Ordering::SeqCst), 3);
+    assert_eq!(
+        harness.backend.resume_ids.lock().unwrap().len(),
+        1,
+        "the rejected id is not asked for again"
+    );
+    let sessions = sessions_of(&harness, lead.id);
+    assert_eq!(sessions[2].native_session_id.as_deref(), Some("native-3"));
+    let events = resume_events(&harness.store);
+    assert_eq!(events.len(), 2);
+    assert_eq!(
+        events[1],
+        (
+            "session.resume.skipped".to_owned(),
+            json!({
+                "sessionId": sessions[2].id,
+                "priorSessionId": sessions[1].id,
+                "reason": "no-completed-turn"
+            })
+        )
+    );
 }
 
 #[tokio::test]
@@ -8041,7 +9497,13 @@ fn idle_suspension_acceptance_contract_is_deterministic_and_backend_only() {
         "idle_timeout_defaults_to_never_and_a_change_bumps_the_configuration_revision",
         "idle_sessions_are_due_only_after_their_employee_timeout_and_stop_once_under_their_own_key",
         "employee_cli_maps_mutations_and_roster_refresh",
-        "an_idle_session_suspends_after_its_employee_timeout_and_the_next_user_turn_starts_fresh",
+        "an_idle_codex_session_suspends_after_its_employee_timeout_and_the_next_user_turn_starts_fresh_with_a_recorded_reason",
+        "an_idle_claude_code_session_suspends_and_the_next_user_turn_resumes_its_native_session",
+        "a_suspended_claude_code_session_that_never_completed_a_turn_is_not_resumed",
+        "a_resumed_session_that_took_no_turn_still_carries_the_transcript_to_the_next_wake",
+        "a_predecessor_that_failed_before_it_started_does_not_hide_the_suspended_session",
+        "a_resumed_session_whose_first_turn_fails_is_stopped_and_the_next_wake_starts_fresh",
+        "attach_on_a_resumed_session_uses_the_origin_directory_and_the_older_session_is_refused_while_the_resumed_one_is_active",
         "idle_suspension_waits_for_an_unfinished_turn_and_never_touches_a_zero_timeout",
         "a_turn_recorded_on_a_since_stopped_session_is_delivered_on_the_current_session",
         "a_notice_turns_lead_suspended_for_idleness_is_woken_once_by_its_childs_result",
@@ -8049,11 +9511,17 @@ fn idle_suspension_acceptance_contract_is_deterministic_and_backend_only() {
         "zeroTimeoutNeverSuspends",
         "unfinishedTurnKeepsSession",
         "recordedTurnNotStranded",
+        "claudeCodeResumedOnWake",
+        "codexStartsFreshWithReason",
+        "resumedSessionAttachesInOriginDirectory",
+        "resumedLineageSurvivesATurnlessWake",
+        "neverStartedFailureDoesNotHidePredecessor",
+        "failedFirstTurnOnResumeEndsSuspendedAndNextWakeStartsFresh",
         "providerSmokeAbsent",
         "externalModelUseAbsent",
         "uiChangesAbsent",
         "deterministic-fake-transport",
-        "schemaVersion = 15",
+        "schemaVersion = 19",
     ] {
         assert!(
             script.contains(required),
@@ -8082,6 +9550,9 @@ fn promote_child_incident(
     use lazoo_protocol::{IncidentPriority, IncidentSource};
     use lazoo_store::RaiseIncidentInput;
 
+    // Incidents fold per code, employee, and project: a recurrence on a project task carries
+    // the task's project.
+    let project_id = harness.store.get_task(task).unwrap().task.project_id;
     let mut promoted = None;
     for attempt in 1..=3 {
         promoted = Some(
@@ -8094,7 +9565,7 @@ fn promote_child_incident(
                     source: IncidentSource::Daemon,
                     title: None,
                     explanation: None,
-                    project_id: None,
+                    project_id,
                     employee_id: Some(harness.worker.id),
                     provider: Some("codex".to_owned()),
                     task_id: Some(task),
@@ -8337,7 +9808,7 @@ fn lead_remediation_acceptance_contract_is_deterministic_and_backend_only() {
         "externalModelUseAbsent",
         "uiChangesAbsent",
         "deterministic-fake-transport",
-        "schemaVersion = 15",
+        "schemaVersion = 19",
     ] {
         assert!(
             script.contains(required),
@@ -8379,7 +9850,7 @@ fn incident_thresholds_acceptance_contract_is_deterministic_and_backend_only() {
         "externalModelUseAbsent",
         "uiChangesAbsent",
         "deterministic-fake-transport",
-        "schemaVersion = 15",
+        "schemaVersion = 19",
     ] {
         assert!(
             script.contains(required),
@@ -8588,7 +10059,7 @@ fn user_notifications_acceptance_contract_is_deterministic_and_backend_only() {
         "externalModelUseAbsent",
         "uiChangesAbsent",
         "deterministic-fake-transport",
-        "schemaVersion = 15",
+        "schemaVersion = 19",
     ] {
         assert!(
             script.contains(required),
@@ -8682,7 +10153,7 @@ fn message_arrival_acceptance_contract_is_deterministic_and_backend_only() {
         "externalModelUseAbsent",
         "uiChangesAbsent",
         "deterministic-fake-transport",
-        "schemaVersion = 15",
+        "schemaVersion = 19",
     ] {
         assert!(
             script.contains(required),
@@ -8904,7 +10375,7 @@ fn message_priority_acceptance_contract_is_deterministic_and_backend_only() {
         "externalModelUseAbsent",
         "uiChangesAbsent",
         "deterministic-fake-transport",
-        "schemaVersion = 15",
+        "schemaVersion = 19",
     ] {
         assert!(
             script.contains(required),
@@ -9093,7 +10564,7 @@ fn configurable_thresholds_acceptance_contract_is_deterministic_and_backend_only
         "externalModelUseAbsent",
         "uiChangesAbsent",
         "deterministic-fake-transport",
-        "schemaVersion = 15",
+        "schemaVersion = 19",
     ] {
         assert!(
             script.contains(required),
@@ -9622,7 +11093,7 @@ fn desktop_inbox_acceptance_contract_is_deterministic_and_backend_only() {
         "externalModelUseAbsent",
         "uiChangesAbsent",
         "deterministic-fake-transport",
-        "schemaVersion = 15",
+        "schemaVersion = 19",
     ] {
         assert!(
             script.contains(required),
@@ -9804,7 +11275,7 @@ fn resource_accounting_acceptance_contract_is_deterministic_and_backend_only() {
         "externalModelUseAbsent",
         "uiChangesAbsent",
         "deterministic-fake-transport",
-        "schemaVersion = 15",
+        "schemaVersion = 19",
     ] {
         assert!(
             script.contains(required),
@@ -9830,13 +11301,18 @@ fn resource_budget_acceptance_contract_measures_lazoo_itself_without_a_provider(
         "idleCpuUnderOnePercent",
         "idleMemoryUnder350MiB",
         "routingCpuUnderFivePercent",
+        "failureStormCpuUnderTwentyPercent",
+        "failureStormMemoryUnder750MiB",
+        "$stormCpuCeiling = 0.20",
+        "$activeMemoryCeilingBytes = 750MB",
+        "'message', 'fail'",
         "noProviderProcess",
         "plannedShutdown",
         "[Environment]::ProcessorCount",
         "$idleCpuCeiling = 0.01",
         "$routingCpuCeiling = 0.05",
         "$idleMemoryCeilingBytes = 350MB",
-        "schemaVersion = 15",
+        "schemaVersion = 19",
         "real-binaries-no-provider",
     ] {
         assert!(
@@ -10008,7 +11484,7 @@ fn conversation_rename_acceptance_contract_is_deterministic_and_backend_only() {
         "externalModelUseAbsent",
         "uiChangesAbsent",
         "deterministic-fake-transport",
-        "schemaVersion = 15",
+        "schemaVersion = 19",
     ] {
         assert!(
             script.contains(required),
@@ -10121,7 +11597,7 @@ fn provider_config_acceptance_contract_is_read_only_and_backend_only() {
         "externalModelUseAbsent",
         "uiChangesAbsent",
         "deterministic-fake-transport",
-        "schemaVersion = 15",
+        "schemaVersion = 19",
     ] {
         assert!(
             script.contains(required),
@@ -10137,20 +11613,70 @@ fn provider_config_acceptance_contract_is_read_only_and_backend_only() {
 }
 
 /// Brief section 21.2, the core end-to-end scenario, on the deterministic provider: steps 1 to
-/// 6, 8, 10, 11, and 14 in one daemon lifetime with a restart in the middle. Peer clarification
-/// (7), stall detection (9), memory records (12), worktree preservation (13), and the resource
-/// budget (15) are proven by their own acceptance scripts, which the core-scenario manifest
-/// names per step.
+/// 14 in one daemon lifetime with a restart in the middle, including the peer clarification
+/// (7), the stall (9), the dirty-work preservation (13), and the concise memory record (12)
+/// written by the memory worker from the completed task's dispatch turn on the restarted boot.
+/// The resource budget (15) is proven by its own acceptance script, which the core-scenario
+/// manifest names per step.
 #[tokio::test]
 #[allow(clippy::too_many_lines)] // The scenario is one story by definition.
 async fn the_core_scenario_runs_end_to_end_on_the_deterministic_provider() {
     use chrono::{TimeDelta, Utc};
     use lazoo_protocol::{
-        IncidentEscalation, IncidentPriority, SessionLifecycleState, TaskState, TaskWorkspaceKind,
+        IncidentEscalation, IncidentPriority, SessionLifecycleState, TaskEvidenceKind, TaskState,
+        TaskWorkspaceKind,
     };
     use lazoo_store::ListIncidentsInput;
 
-    let (temporary, harness) = tool_harness(AuthorityMode::Ask);
+    let (temporary, mut harness) = tool_harness(AuthorityMode::Ask);
+
+    // 3. The conversation lives in a registered project: a repository with a base commit, so
+    // every dispatched task gets its own retained worktree from it.
+    let repository = temporary.path().join("repository");
+    git_init(&repository);
+    git(
+        &repository,
+        &["config", "user.email", "lazoo@example.invalid"],
+    );
+    git(&repository, &["config", "user.name", "Lazoo Test"]);
+    git(&repository, &["config", "core.autocrlf", "false"]);
+    std::fs::write(repository.join("parser.txt"), "base\n").unwrap();
+    git(&repository, &["add", "parser.txt"]);
+    git(&repository, &["commit", "--quiet", "-m", "base"]);
+    let project_id: uuid::Uuid = harness
+        .app
+        .handle(request(
+            "register-project",
+            "project.register",
+            json!({"path": repository, "displayName": "Parser", "idempotencyKey": "scenario-project"}),
+        ))
+        .await
+        .result
+        .unwrap()["project"]["id"]
+        .as_str()
+        .unwrap()
+        .parse()
+        .unwrap();
+    harness.conversation_id = harness
+        .app
+        .handle(request(
+            "create-project-conversation",
+            "conversation.create",
+            json!({
+                "projectId": project_id,
+                "leadEmployeeId": harness.lead.id,
+                "title": "Parser fix",
+                "idempotencyKey": "scenario-project-conversation"
+            }),
+        ))
+        .await
+        .result
+        .unwrap()["conversation"]["id"]
+        .as_str()
+        .unwrap()
+        .parse()
+        .unwrap();
+    let harness = harness;
     let call = |id: &str, method: &str, params: serde_json::Value| {
         harness.app.handle(request(id, method, params))
     };
@@ -10181,7 +11707,14 @@ async fn the_core_scenario_runs_end_to_end_on_the_deterministic_provider() {
         }),
     };
 
-    // 1. Rhea leads; Mira on Codex and three peers on other providers; one peer is disabled.
+    // 1. Rhea leads; Mira and Nico on Codex and three peers on other providers; one peer is
+    // disabled.
+    let mut nico_input = peer("Nico", "codex");
+    nico_input.model = Some("test-model".to_owned());
+    if let Some(observation) = nico_input.provider_observation.as_mut() {
+        observation.capabilities = json!({"session": true, "permission": true, "mcp": true});
+    }
+    let nico = harness.store.create_employee(&nico_input).unwrap().employee;
     let oren = harness
         .store
         .create_employee(&peer("Oren", "opencode"))
@@ -10216,7 +11749,7 @@ async fn the_core_scenario_runs_end_to_end_on_the_deterministic_provider() {
         .result
         .unwrap();
     let entries = roster["entries"].as_array().unwrap().clone();
-    assert_eq!(entries.len(), 5);
+    assert_eq!(entries.len(), 6);
     let availability = |id: uuid::Uuid| {
         entries
             .iter()
@@ -10224,14 +11757,14 @@ async fn the_core_scenario_runs_end_to_end_on_the_deterministic_provider() {
             .unwrap()["availability"]
             .clone()
     };
-    for id in [harness.lead.id, harness.worker.id, oren.id, pia.id] {
+    for id in [harness.lead.id, harness.worker.id, nico.id, oren.id, pia.id] {
         assert_eq!(availability(id), "dormant");
     }
     assert_eq!(availability(quinn.id), "disabled");
     assert_eq!(harness.backend.starts.load(Ordering::SeqCst), 0);
 
-    // 3 and 4. The user starts a conversation with Rhea, who reads the live roster and proposes
-    // a two-part plan for Mira; 8. the disabled peer cannot be selected.
+    // 4. Rhea reads the live roster and proposes a two-part plan for Mira in the project
+    // conversation; 8. the disabled peer cannot be selected.
     warm_tool_lead(&harness).await;
     let roster_revision = harness.store.roster_snapshot().unwrap().revision;
     let delegate = |call_id: &str, employee: uuid::Uuid, objective: &str| {
@@ -10243,8 +11776,8 @@ async fn the_core_scenario_runs_end_to_end_on_the_deterministic_provider() {
     };
     harness.backend.tool_calls.lock().unwrap().extend([
         tool_call("call-1", "employees_list", json!({})),
-        delegate("call-2", harness.worker.id, "Implement the parser fix"),
-        delegate("call-3", harness.worker.id, "Write the parser tests"),
+        delegate("call-2", nico.id, "Write the parser tests"),
+        delegate("call-3", harness.worker.id, "Implement the parser fix"),
         delegate("call-4", quinn.id, "Review the plan"),
     ]);
     let submitted = submit_lead_turn(&harness, "ask").await;
@@ -10307,40 +11840,245 @@ async fn the_core_scenario_runs_end_to_end_on_the_deterministic_provider() {
         .unwrap();
     assert_eq!(counts["counts"]["unresolved"], 0);
 
-    // 6. The approved employee activates into independent native sessions and workspaces: each
-    // accepted task runs to completion on a fresh session for Mira, which stops with its turn,
-    // and the next queued task wakes as soon as she is free.
-    harness.app.dispatch_pending_tasks_once().await.unwrap();
+    // 13. The user has uncommitted work in the canonical checkout before any worker starts;
+    // nothing below may touch it.
+    std::fs::write(repository.join("parser.txt"), "dirty user edit\n").unwrap();
+
+    // 6 and 7. The approved employees activate into independent native sessions and
+    // workspaces, one fresh session per task that stops with its turn. Sessions are numbered
+    // in start order: Nico's task was delegated first, so his is the second and Mira's the
+    // third. Inside her turn Mira asks Nico, not Rhea, for the one fact she is missing and
+    // waits for his answer; Nico's turn is waiting on her task and finds the question in its
+    // `task_wait`, answers, and both turns finish. Mira then reports her completion through
+    // `task_report` with commit and verification evidence before her native turn ends (12).
+    let (nico_task, mira_task) = (children[0], children[1]);
+    harness.backend.tool_calls.lock().unwrap().extend([
+        session_tool_call(
+            "native-2",
+            "call-n1",
+            "task_wait",
+            json!({"taskIds": [mira_task], "timeoutSeconds": 10}),
+        ),
+        session_tool_call(
+            "native-2",
+            "call-n2",
+            "message_reply",
+            json!({"messageId": "$message-id", "text": "space-4"}),
+        ),
+        session_tool_call(
+            "native-3",
+            "call-m1",
+            "message_send",
+            json!({
+                "employeeId": nico.id,
+                "text": "Which spacing token should the parser emit?",
+                "waitForReplySeconds": 10
+            }),
+        ),
+        session_tool_call(
+            "native-3",
+            "call-m2",
+            "task_report",
+            json!({
+                "kind": "completed",
+                "evidence": {
+                    "commits": [{"sha": "0123abcd", "message": "Fix the parser"}],
+                    "verification": [{"command": "cargo test -p parser", "exitCode": 0}]
+                }
+            }),
+        ),
+    ]);
+    // The first dispatch pass takes Nico's task and stays inside his waiting turn; once his
+    // turn is in flight, a second pass sees only Mira's task (his already has a dispatch row)
+    // and runs hers to completion, which lets his finish too.
+    let first_pass_app = harness.app.clone();
+    let first_pass =
+        tokio::spawn(async move { first_pass_app.dispatch_pending_tasks_once().await });
+    timeout(Duration::from_secs(10), async {
+        loop {
+            let detail = harness.store.get_task(nico_task).unwrap();
+            if detail.task.state == TaskState::Running
+                && detail
+                    .dispatch
+                    .as_ref()
+                    .is_some_and(|dispatch| dispatch.turn_id.is_some())
+            {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("Nico's turn is in flight before Mira's starts");
+    timeout(
+        Duration::from_secs(20),
+        harness.app.dispatch_pending_tasks_once(),
+    )
+    .await
+    .expect("Mira's turn ends once Nico's reply arrives")
+    .unwrap();
+    let first_pass = timeout(Duration::from_secs(20), first_pass)
+        .await
+        .expect("Nico's turn ends once he has answered")
+        .unwrap();
+    assert!(
+        first_pass.is_ok()
+            || first_pass
+                .as_ref()
+                .is_err_and(|error| error.code.starts_with("LZ-TASK-")),
+        "the first pass finds Mira's task already dispatched: {first_pass:?}"
+    );
     assert_eq!(
         harness.backend.starts.load(Ordering::SeqCst),
         3,
         "Rhea's session and one per dispatched task"
     );
+    let mut worktrees = std::collections::BTreeSet::new();
     for child in &children {
         let detail = harness.store.get_task(*child).unwrap();
         assert_eq!(detail.task.state, TaskState::Completed);
         let dispatch = detail.dispatch.unwrap();
+        assert_eq!(dispatch.project_id, Some(project_id));
         assert_eq!(
             dispatch.workspace_kind,
-            Some(TaskWorkspaceKind::Projectless)
+            Some(TaskWorkspaceKind::GitWorktree)
         );
+        assert!(dispatch.branch_name.is_some() && dispatch.base_commit.is_some());
         let workspace = dispatch.workspace_path.unwrap();
-        assert!(Path::new(&workspace).is_dir(), "{workspace}");
+        let path = Path::new(&workspace);
+        assert!(
+            path.is_dir() && path.join("parser.txt").is_file(),
+            "{workspace}"
+        );
+        assert_ne!(path, repository.as_path(), "never the canonical checkout");
+        // 13. Each worktree starts from the committed base under the configured authority,
+        // and the user's dirty edit is never carried into it.
+        assert_eq!(
+            std::fs::read_to_string(path.join("parser.txt")).unwrap(),
+            "base\n"
+        );
+        assert_eq!(detail.task.effective_authority, AuthorityMode::Ask);
+        assert!(
+            worktrees.insert(workspace),
+            "each task has its own worktree"
+        );
     }
+    assert_eq!(
+        std::fs::read_to_string(repository.join("parser.txt")).unwrap(),
+        "dirty user edit\n",
+        "the canonical checkout keeps the user's uncommitted work"
+    );
+    assert!(
+        harness
+            .backend
+            .working_directories
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|directory| worktrees.contains(&directory.to_string_lossy().into_owned()))
+            .count()
+            == 2,
+        "each worker session started inside its task's worktree"
+    );
     assert!(
         harness
             .store
             .list_sessions()
             .unwrap()
             .iter()
-            .filter(|session| session.employee_id == harness.worker.id)
+            .filter(|session| [harness.worker.id, nico.id].contains(&session.employee_id))
             .all(|session| session.state == lazoo_protocol::SessionLifecycleState::Suspended),
         "a worker's dispatch session stops with its turn"
+    );
+
+    // 7. The clarification went from Mira's task to Nico's and back without Rhea: Nico's wait
+    // returned early with the question, his reply closed it, Mira's wait returned the answer,
+    // the ledger holds both messages between the two tasks, and no peer turn reached Rhea.
+    let results = harness.backend.tool_results.lock().unwrap().clone();
+    assert_eq!(results.len(), 8, "{results:?}");
+    assert!(results[4].success, "{:?}", results[4]);
+    assert_eq!(results[4].content["timedOut"], false);
+    let question = &results[4].content["messages"][0];
+    assert_eq!(question["fromEmployeeId"], harness.worker.id.to_string());
+    assert_eq!(
+        question["text"],
+        "Which spacing token should the parser emit?"
+    );
+    assert!(results[5].success, "{:?}", results[5]);
+    assert_eq!(
+        results[5].content["replyToMessageId"],
+        question["messageId"]
+    );
+    assert!(results[6].success, "{:?}", results[6]);
+    assert_eq!(results[6].content["timedOut"], false);
+    assert_eq!(results[6].content["reply"]["text"], "space-4");
+    assert_eq!(
+        results[6].content["reply"]["fromEmployeeId"],
+        nico.id.to_string()
+    );
+    let exchange: Vec<_> = employee_messages(&harness.store)
+        .into_iter()
+        .filter(|message| {
+            matches!(
+                message.kind,
+                lazoo_protocol::MessageKind::Peer | lazoo_protocol::MessageKind::Reply
+            )
+        })
+        .collect();
+    assert_eq!(exchange.len(), 2, "{exchange:?}");
+    assert_eq!(
+        exchange[0].task_id,
+        Some(nico_task),
+        "the question is Nico's task's"
+    );
+    assert_eq!(
+        exchange[1].task_id,
+        Some(mira_task),
+        "the reply is Mira's task's"
+    );
+    assert!(
+        prompts(&harness.backend)
+            .iter()
+            .all(|prompt| !prompt.starts_with("[Lazoo peer message]")),
+        "no peer turn reached Rhea"
     );
     assert_eq!(
         harness.store.pending_task_results(10).unwrap().len(),
         2,
         "both results wait to reach Rhea"
+    );
+
+    // 12. The reported commits and verification are the task's durable evidence, readable
+    // through `task.show`; the result notice below links the task; incidents and messages are
+    // ledgers of their own. The concise memory record is written from this dispatch turn on the
+    // restarted boot, after step 14, so the summary is the story's last provider turn.
+    let reported = harness.store.get_task(mira_task).unwrap();
+    let mira_turn_id = reported.dispatch.as_ref().unwrap().turn_id.unwrap();
+    let completed = reported
+        .evidence
+        .iter()
+        .find(|evidence| {
+            evidence.kind == TaskEvidenceKind::Completed && evidence.detail.get("commits").is_some()
+        })
+        .expect("the worker's completed report with its evidence");
+    assert_eq!(completed.detail["commits"][0]["sha"], "0123abcd");
+    assert_eq!(completed.detail["verification"][0]["exitCode"], 0);
+    assert_eq!(
+        completed.session_id,
+        reported.dispatch.as_ref().unwrap().session_id,
+        "the evidence names the worker's own session"
+    );
+    let shown = call("show-reported", "task.show", json!({"id": mira_task}))
+        .await
+        .result
+        .unwrap();
+    assert!(
+        shown["evidence"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|evidence| evidence["detail"]["commits"][0]["sha"] == "0123abcd"),
+        "{shown}"
     );
     harness.app.deliver_pending_notices_once().await.unwrap();
     let prompt = last_prompt(&harness.backend);
@@ -10391,9 +12129,9 @@ async fn the_core_scenario_runs_end_to_end_on_the_deterministic_provider() {
     .unwrap();
     assert_eq!(follow_up["turn"]["state"], "completed");
     let results = harness.backend.tool_results.lock().unwrap().clone();
-    assert_eq!(results.len(), 5, "{results:?}");
-    assert!(results[4].success, "{:?}", results[4]);
-    let third: uuid::Uuid = results[4].content["taskId"]
+    assert_eq!(results.len(), 9, "{results:?}");
+    assert!(results[8].success, "{:?}", results[8]);
+    let third: uuid::Uuid = results[8].content["taskId"]
         .as_str()
         .unwrap()
         .parse()
@@ -10660,6 +12398,156 @@ async fn the_core_scenario_runs_end_to_end_on_the_deterministic_provider() {
         .cloned()
         .unwrap();
     assert_eq!(mira_entry["availability"], "suspended");
+
+    // 12, concluded. Sage is a dedicated dormant Codex summary employee: never warmed, never
+    // dispatched. The user opts the project into the memory worker on her and archives Mira's
+    // completed dispatch turn; the worker's one admission summarizes it through a fresh
+    // read-only session into a typed record citing that turn, which `memory.search` finds by
+    // the task. The scripted JSON output stands in for a model: the pipeline is proven here,
+    // summary quality is not. This is the story's last provider turn, because the swapped
+    // output is shared by every later fake turn.
+    let mut sage_input = peer("Sage", "codex");
+    sage_input.model = Some("test-model".to_owned());
+    if let Some(observation) = sage_input.provider_observation.as_mut() {
+        observation.capabilities = json!({"session": true, "permission": true, "mcp": true});
+    }
+    let sage = harness.store.create_employee(&sage_input).unwrap().employee;
+    let configured = restarted
+        .handle(request(
+            "configure-memory-worker",
+            "memory.worker.configure",
+            json!({
+                "projectId": project_id,
+                "employeeId": sage.id,
+                "model": "test-model",
+                "requestsPerMinute": 1,
+                "enabled": true,
+                "expectedRevision": null
+            }),
+        ))
+        .await
+        .result
+        .unwrap();
+    assert_eq!(configured["settings"]["enabled"], true);
+    assert_eq!(configured["provider"], "codex");
+    assert_eq!(configured["model"], "test-model");
+    assert_eq!(
+        configured["projectPermission"]["state"],
+        "nativeEmployeeOnly"
+    );
+    let archived = restarted
+        .handle(request(
+            "archive-mira-turn",
+            "memory.archive",
+            json!({"sourceTurnId": mira_turn_id, "projectId": project_id}),
+        ))
+        .await
+        .result
+        .unwrap();
+    assert_eq!(archived["archive"]["sourceTurnId"], json!(mira_turn_id));
+    assert_eq!(archived["archive"]["projectId"], json!(project_id));
+    assert_eq!(archived["archive"]["truncated"], false);
+    assert_eq!(archived["job"]["sourceTurnId"], json!(mira_turn_id));
+    assert_eq!(archived["job"]["state"], "pending");
+    let archive_root = temporary.path().join("data").join("memory-archives");
+    assert!(
+        archive_root
+            .join(archived["archive"]["archiveName"].as_str().unwrap())
+            .is_file(),
+        "the compressed source archive is on disk: {archived}"
+    );
+    // The same read the worker makes: it refuses a file whose size, zstd payload, or SHA-256
+    // differs from the recorded row, so this is the archive's integrity check, not a citation.
+    let archived_source: serde_json::Value = serde_json::from_slice(
+        &harness
+            .store
+            .read_memory_source(&archive_root, mira_turn_id)
+            .expect("the archive verifies against its recorded hash and sizes"),
+    )
+    .unwrap();
+    assert_eq!(archived_source["id"], json!(mira_turn_id));
+    assert_eq!(archived_source["taskId"], json!(mira_task));
+    let summary_text = "Mira fixed the parser in 0123abcd; cargo test -p parser passed";
+    let mut summary_events = completed_turn_events("completed");
+    if let Some(ProviderEvent::TurnCompleted { output, .. }) = summary_events.last_mut() {
+        *output = Some(
+            json!({"records": [{"type": "achievement", "text": summary_text, "confidence": 0.9, "importance": 40}]})
+                .to_string(),
+        );
+    }
+    *harness.backend.turn_events.lock().unwrap() = summary_events;
+    assert_eq!(
+        restarted.summarize_next_memory_job_once().await,
+        Ok(true),
+        "the worker admits and completes the one pending job"
+    );
+    let summary_request = harness
+        .backend
+        .turn_requests
+        .lock()
+        .unwrap()
+        .last()
+        .cloned()
+        .unwrap();
+    assert!(summary_request.read_only, "the summary turn is read-only");
+    assert!(
+        summary_request
+            .prompt
+            .starts_with("[LAZOO_INTERNAL_MEMORY_SUMMARY]"),
+        "{}",
+        summary_request.prompt
+    );
+    let queue = restarted
+        .handle(request(
+            "memory-queue",
+            "memory.queue.status",
+            json!({"projectId": project_id, "limit": 20}),
+        ))
+        .await
+        .result
+        .unwrap();
+    assert_eq!(queue["jobs"][0]["state"], "completed", "{queue}");
+    assert_eq!(queue["archiveErrorCount"], 0);
+    let sessions = restarted
+        .handle(request("sessions-after-summary", "session.list", json!({})))
+        .await
+        .result
+        .unwrap();
+    let sage_sessions: Vec<&serde_json::Value> = sessions
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|session| session["employeeId"] == json!(sage.id))
+        .collect();
+    assert_eq!(
+        sage_sessions.len(),
+        1,
+        "the summary ran on one fresh session for Sage: {sessions}"
+    );
+    assert_eq!(
+        sage_sessions[0]["state"], "suspended",
+        "Sage's summary session is stopped after use, never left idle"
+    );
+    let found = restarted
+        .handle(request(
+            "memory-search",
+            "memory.search",
+            json!({"projectId": project_id, "query": "", "taskId": mira_task, "limit": 10}),
+        ))
+        .await
+        .result
+        .unwrap();
+    let record = found
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|record| record["sourceTurnId"] == json!(mira_turn_id))
+        .cloned()
+        .unwrap_or_else(|| panic!("a typed record cites Mira's dispatch turn: {found}"));
+    assert_eq!(record["sourceHash"], archived["archive"]["sourceHash"]);
+    assert_eq!(record["recordType"], "achievement");
+    assert_eq!(record["active"], true);
+    assert_eq!(record["text"], summary_text);
     assert_desktop_is_roster_neutral(&restarted).await;
 }
 
@@ -10689,12 +12577,12 @@ fn core_scenario_acceptance_contract_maps_every_step_to_evidence() {
         "step13",
         "step14",
         "step15",
-        "NOT_COVERED",
+        "PARTIAL",
         "providerSmokeAbsent",
         "externalModelUseAbsent",
         "uiChangesAbsent",
         "deterministic-fake-transport",
-        "schemaVersion = 15",
+        "schemaVersion = 19",
     ] {
         assert!(
             script.contains(required),
@@ -11046,7 +12934,7 @@ fn workspace_read_models_acceptance_contract_is_deterministic_and_backend_only()
         "externalModelUseAbsent",
         "uiChangesAbsent",
         "deterministic-fake-transport",
-        "schemaVersion = 15",
+        "schemaVersion = 19",
     ] {
         assert!(
             script.contains(required),
@@ -11347,8 +13235,10 @@ fn workspace_conversation_acceptance_contract_is_deterministic_and_backend_only(
         "worker_cards_take_the_first_state_that_holds_with_lazoo_words",
         "workspace_cli_maps_show",
         "the_user_opens_the_conversation_header_and_worker_dock_through_the_daemon",
+        "the_desktop_resumes_every_read_model_from_its_event_high_water_without_loss",
         "store_enables_wal_foreign_keys_and_schema_version",
         "lifecycleFollowsTheSession",
+        "marksResumeWithoutLoss",
         "workerCardsFollowTheRows",
         "attentionIsEmbedded",
         "workspaceStoresNothing",
@@ -11356,7 +13246,7 @@ fn workspace_conversation_acceptance_contract_is_deterministic_and_backend_only(
         "externalModelUseAbsent",
         "uiChangesAbsent",
         "deterministic-fake-transport",
-        "schemaVersion = 15",
+        "schemaVersion = 19",
     ] {
         assert!(
             script.contains(required),
@@ -11520,7 +13410,7 @@ fn workspace_actions_acceptance_contract_is_deterministic_and_backend_only() {
         "externalModelUseAbsent",
         "uiChangesAbsent",
         "deterministic-fake-transport",
-        "schemaVersion = 15",
+        "schemaVersion = 19",
     ] {
         assert!(
             script.contains(required),
@@ -11533,4 +13423,1921 @@ fn workspace_actions_acceptance_contract_is_deterministic_and_backend_only() {
             "acceptance script must not contain {forbidden}"
         );
     }
+}
+
+/// The migration preview through the daemon: over the same fixture profile the discovery
+/// reads, every candidate names what Lazoo would do and why, no secret value appears, the
+/// method takes no parameters, nothing is written, and the desktop snapshot is unchanged.
+#[tokio::test]
+async fn provider_config_preview_proposes_manage_merge_and_choose_without_writing() {
+    let temporary = tempdir().unwrap();
+    let root = DataRoot::from_path(temporary.path().join("data"));
+    root.ensure().unwrap();
+    let home = temporary.path().join("home");
+    std::fs::create_dir_all(home.join(".codex")).unwrap();
+    let codex = home.join(".codex").join("config.toml");
+    std::fs::write(
+        &codex,
+        "[mcp_servers.context7]\nurl = \"https://mcp.context7.com/mcp\"\n[mcp_servers.context7.http_headers]\nCONTEXT7_API_KEY = \"ctx7sk-SECRET\"\n[mcp_servers.paper]\nurl = \"http://127.0.0.1:29979/mcp\"\n",
+    )
+    .unwrap();
+    let claude = home.join(".claude.json");
+    std::fs::write(
+        &claude,
+        r#"{"mcpServers": {"context7": {"type": "http", "url": "https://mcp.context7.com/mcp"}, "paper": {"type": "http", "url": "http://127.0.0.1:31000/mcp"}, "obsidian": {"command": "npx", "args": ["obsidian-mcp"]}}}"#,
+    )
+    .unwrap();
+    let before = (
+        std::fs::read_to_string(&codex).unwrap(),
+        std::fs::read_to_string(&claude).unwrap(),
+    );
+    let store = Store::open_path(root.state_db()).unwrap();
+    let app = App::new_with_provider_environment(
+        store,
+        root,
+        DiscoveryEnvironment::empty().with_config_home(&home),
+    )
+    .unwrap();
+
+    let preview = app
+        .handle(request("preview", "provider.config.preview", json!({})))
+        .await
+        .result
+        .unwrap();
+    assert_eq!(preview["version"], 1);
+    assert_eq!(
+        preview["providers"],
+        json!(["codex", "opencode", "claude-code"])
+    );
+    let candidates = preview["candidates"].as_array().unwrap();
+    assert_eq!(
+        candidates
+            .iter()
+            .map(|candidate| (
+                candidate["name"].as_str().unwrap(),
+                candidate["proposal"].as_str().unwrap()
+            ))
+            .collect::<Vec<_>>(),
+        [
+            ("context7", "merge"),
+            ("obsidian", "manage"),
+            ("paper", "choose"),
+            ("paper", "choose")
+        ]
+    );
+    assert_eq!(candidates[0]["presentIn"], json!(["codex", "claude-code"]));
+    assert_eq!(candidates[0]["missingFrom"], json!(["opencode"]));
+    assert_eq!(candidates[0]["secretKeys"], json!(["CONTEXT7_API_KEY"]));
+    assert_eq!(candidates[0]["sources"].as_array().unwrap().len(), 2);
+    assert_eq!(candidates[1]["presentIn"], json!(["claude-code"]));
+    assert_eq!(candidates[2]["conflictsWith"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        preview["summary"],
+        json!({"manage": 1, "merge": 1, "choose": 2, "unsupported": 2})
+    );
+    assert!(!preview.to_string().contains("SECRET"));
+
+    let refused = app
+        .handle(request(
+            "preview-params",
+            "provider.config.preview",
+            json!({"provider": "codex"}),
+        ))
+        .await
+        .error
+        .unwrap();
+    assert_eq!(refused.code, "LZ-INVALID-PARAMS");
+
+    // Nothing was written or stored, and the snapshot is unchanged.
+    assert_eq!(std::fs::read_to_string(&codex).unwrap(), before.0);
+    assert_eq!(std::fs::read_to_string(&claude).unwrap(), before.1);
+    assert!(
+        app.handle(request("events", "events.list", json!({})))
+            .await
+            .result
+            .unwrap()
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+    let snapshot = app
+        .handle(request("desktop", "desktop.snapshot", json!({})))
+        .await
+        .result
+        .unwrap();
+    assert!(snapshot.get("preview").is_none());
+    assert!(snapshot.get("providerConfig").is_none());
+}
+
+#[test]
+fn provider_migration_preview_acceptance_contract_is_deterministic_and_backend_only() {
+    let repository = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let script_path = repository.join("scripts/acceptance/provider-migration-preview.ps1");
+    let script = std::fs::read_to_string(&script_path)
+        .expect("provider migration preview acceptance script");
+
+    for required in [
+        "the_preview_proposes_manage_merge_or_choose_per_identity_and_never_reads_a_secret",
+        "provider_cli_maps_preview",
+        "provider_config_preview_proposes_manage_merge_and_choose_without_writing",
+        "store_enables_wal_foreign_keys_and_schema_version",
+        "proposalsFollowIdentity",
+        "secretsNeverRead",
+        "nothingWritten",
+        "providerSmokeAbsent",
+        "externalModelUseAbsent",
+        "uiChangesAbsent",
+        "deterministic-fake-transport",
+        "schemaVersion = 19",
+    ] {
+        assert!(
+            script.contains(required),
+            "acceptance script must contain {required}"
+        );
+    }
+    for forbidden in ["provider', 'smoke", "LivePrompt"] {
+        assert!(
+            !script.contains(forbidden),
+            "acceptance script must not contain {forbidden}"
+        );
+    }
+}
+
+/// The desktop's live-update contract (workspace contract section 5, Inbox contract): every
+/// read model reports an `eventHighWater` such that `events.list { after }` from it is empty
+/// right after the read and carries every later change, so a subscriber resuming from the
+/// mark loses nothing; after each change the re-read model reflects it and its new mark
+/// covers the events seen.
+#[tokio::test]
+#[allow(clippy::too_many_lines)] // One subscriber resuming four models across five changes.
+async fn the_desktop_resumes_every_read_model_from_its_event_high_water_without_loss() {
+    let (_temporary, harness) = tool_harness(AuthorityMode::Ask);
+    let call = |id: &str, method: &str, params: serde_json::Value| {
+        harness.app.handle(request(id, method, params))
+    };
+    let conversation_id = harness.conversation_id;
+    let models: [(&str, &str, serde_json::Value); 4] = [
+        ("inbox", "inbox.counts", json!({})),
+        ("conversations", "workspace.conversations", json!({})),
+        ("launcher", "workspace.launcher", json!({})),
+        (
+            "conversation",
+            "workspace.conversation",
+            json!({"id": conversation_id}),
+        ),
+    ];
+    let models = &models;
+    let read_marks = |label: &'static str| async move {
+        let mut marks = Vec::new();
+        for (name, method, params) in models {
+            let view = call(&format!("{label}-{name}"), method, params.clone())
+                .await
+                .result
+                .unwrap();
+            let mark = view["eventHighWater"].as_u64().unwrap();
+            // Nothing is pending right after a read: the mark is never ahead of the ledger.
+            let pending = call(
+                &format!("{label}-{name}-pending"),
+                "events.list",
+                json!({"after": mark, "limit": 100}),
+            )
+            .await
+            .result
+            .unwrap();
+            assert_eq!(pending, json!([]), "{label}: {name} mark {mark} is ahead");
+            marks.push((*name, mark));
+        }
+        marks
+    };
+    let events_after = |label: &'static str, mark: u64| async move {
+        call(label, "events.list", json!({"after": mark, "limit": 200}))
+            .await
+            .result
+            .unwrap()
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|event| {
+                (
+                    event["sequence"].as_u64().unwrap(),
+                    event["eventType"].as_str().unwrap().to_owned(),
+                )
+            })
+            .collect::<Vec<_>>()
+    };
+
+    // Change 1: the lead warms (session and roster events reach the launcher and the header).
+    let marks = read_marks("before-warm").await;
+    warm_tool_lead(&harness).await;
+    for (name, mark) in &marks {
+        let seen = events_after("after-warm", *mark).await;
+        assert!(
+            seen.iter().any(|(_, kind)| kind.starts_with("session.")),
+            "{name}: {seen:?}"
+        );
+    }
+    let view = call(
+        "warmed",
+        "workspace.conversation",
+        json!({"id": conversation_id}),
+    )
+    .await
+    .result
+    .unwrap();
+    assert_eq!(view["lead"]["lifecycle"], "idle");
+    let launcher = call("warmed-launcher", "workspace.launcher", json!({}))
+        .await
+        .result
+        .unwrap();
+    assert_eq!(launcher["leads"][1]["availability"], "idle");
+
+    // Change 2: the lead's turn delegates under ask (turn and task events reach every model,
+    // and the proposal reaches the Inbox count).
+    let marks = read_marks("before-turn").await;
+    let roster_revision = harness.store.roster_snapshot().unwrap().revision;
+    harness
+        .backend
+        .tool_calls
+        .lock()
+        .unwrap()
+        .extend([tool_call(
+            "call-1",
+            "task_delegate",
+            json!({
+                "employeeId": harness.worker.id,
+                "objective": "Implement the parser fix",
+                "rosterRevision": roster_revision
+            }),
+        )]);
+    assert_eq!(
+        submit_lead_turn(&harness, "ask").await["turn"]["state"],
+        "completed"
+    );
+    let child_id: uuid::Uuid = harness.backend.tool_results.lock().unwrap()[0].content["taskId"]
+        .as_str()
+        .unwrap()
+        .parse()
+        .unwrap();
+    for (name, mark) in &marks {
+        let seen = events_after("after-turn", *mark).await;
+        assert!(
+            seen.iter().any(|(_, kind)| kind.starts_with("turn."))
+                && seen.iter().any(|(_, kind)| kind.starts_with("task.")),
+            "{name}: {seen:?}"
+        );
+    }
+    let counts = call("counts-proposed", "inbox.counts", json!({}))
+        .await
+        .result
+        .unwrap();
+    assert_eq!(counts["counts"]["unresolved"], 1);
+    let rows = call("rows-proposed", "workspace.conversations", json!({}))
+        .await
+        .result
+        .unwrap();
+    assert_eq!(rows["conversations"][0]["marker"], "needs-attention");
+
+    // Change 3: the user accepts (a task event); change 4: renames (a conversation event);
+    // change 5: disables Mira (employee and roster events). Each model's re-read reflects
+    // every change and its new mark covers everything seen.
+    let marks = read_marks("before-actions").await;
+    call(
+        "accept",
+        "task.accept",
+        json!({"id": child_id, "expectedRevision": 1, "idempotencyKey": "resume-accept"}),
+    )
+    .await
+    .result
+    .unwrap();
+    call(
+        "rename",
+        "conversation.rename",
+        json!({"id": conversation_id, "expectedRevision": 1, "title": "Resumed"}),
+    )
+    .await
+    .result
+    .unwrap();
+    let mira = harness.store.get_employee(harness.worker.id).unwrap();
+    call(
+        "disable",
+        "employee.disable",
+        json!({
+            "id": mira.id,
+            "expectedRevision": mira.configuration_revision,
+            "idempotencyKey": "resume-disable"
+        }),
+    )
+    .await
+    .result
+    .unwrap();
+    for (name, mark) in &marks {
+        let seen = events_after("after-actions", *mark).await;
+        let kinds: Vec<&str> = seen.iter().map(|(_, kind)| kind.as_str()).collect();
+        assert!(
+            kinds.iter().any(|kind| kind.starts_with("task."))
+                && kinds.iter().any(|kind| kind.starts_with("conversation."))
+                && kinds.iter().any(|kind| kind.starts_with("employee.")),
+            "{name}: {kinds:?}"
+        );
+        let newest = seen.iter().map(|(sequence, _)| *sequence).max().unwrap();
+        let (method, params) = match *name {
+            "inbox" => ("inbox.counts", json!({})),
+            "conversations" => ("workspace.conversations", json!({})),
+            "launcher" => ("workspace.launcher", json!({})),
+            _ => ("workspace.conversation", json!({"id": conversation_id})),
+        };
+        let view = call(&format!("reread-{name}"), method, params)
+            .await
+            .result
+            .unwrap();
+        assert!(
+            view["eventHighWater"].as_u64().unwrap() >= newest,
+            "{name}: mark {} covers {newest}",
+            view["eventHighWater"]
+        );
+        match *name {
+            "inbox" => assert_eq!(view["counts"]["unresolved"], 0),
+            "conversations" => {
+                assert_eq!(view["conversations"][0]["title"], "Resumed");
+                assert_eq!(view["conversations"][0]["marker"], "active");
+            }
+            "launcher" => assert_eq!(view["leads"][0]["blockingReason"], "Mira is disabled"),
+            _ => {
+                assert_eq!(view["title"], "Resumed");
+                assert_eq!(view["workers"][0]["state"], "blocked");
+                assert_eq!(
+                    view["workers"][0]["stateReason"],
+                    "Blocked: Mira is disabled"
+                );
+            }
+        }
+    }
+    read_marks("settled").await;
+}
+
+/// The committed gate runner is the full gate every slice must pass: the four cargo steps in
+/// order, every acceptance script except the live model turn and the separately owned
+/// desktop, the real-binary scripts with `-SkipBuild`, and a manifest of every step.
+#[test]
+fn gate_runner_runs_the_whole_gate_and_excludes_only_the_live_and_ui_scripts() {
+    let repository = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let script = std::fs::read_to_string(repository.join("scripts/gate.ps1")).expect("gate runner");
+    for required in [
+        "cargo fmt --all -- --check",
+        "cargo clippy --workspace --all-targets --locked -- -D warnings",
+        "cargo test --workspace --locked",
+        "cargo build --workspace --release --locked",
+        "$excluded = @('provider-adapters', 'provider-live-lifecycle', 'opencode-governed-live', 'desktop-shell', 'desktop-budget')",
+        r"scripts\acceptance\*.ps1",
+        "-SkipBuild",
+        "-Provider",
+        "gate-manifest.json",
+    ] {
+        assert!(
+            script.contains(required),
+            "gate runner must contain {required}"
+        );
+    }
+    assert!(
+        !script.contains("LivePrompt") && !script.contains("provider', 'smoke"),
+        "the gate runner never runs a live model turn"
+    );
+}
+
+/// Claude Code is the one other provider that enforces an authority ceiling natively, and only
+/// `full-autonomy` (its prompt-free `auto` mode). A Codex lead's delegation to a Claude worker
+/// under full autonomy is dispatched and completes on the worker's own session; the same
+/// delegation to a Claude worker whose authority is `ask` is proposed, accepted by the user,
+/// and then refused at dispatch with the task failed and an incident, as is an Antigravity
+/// worker under full autonomy (no prompt-free mode); a Claude lead takes a user turn under
+/// full autonomy and refuses one under `ask`. No support is claimed beyond this deterministic
+/// path: a live gate per provider still has to run.
+#[tokio::test]
+#[allow(clippy::too_many_lines)] // One story over every provider and authority pairing.
+async fn claude_code_runs_turns_and_tasks_only_under_full_autonomy() {
+    use lazoo_protocol::TaskState;
+    use lazoo_store::ListIncidentsInput;
+
+    let (_temporary, harness) = tool_harness(AuthorityMode::FullAutonomy);
+    let call = |id: &str, method: &str, params: serde_json::Value| {
+        harness.app.handle(request(id, method, params))
+    };
+    let employee = |name: &str, provider: &str, authority: AuthorityMode| CreateEmployeeInput {
+        request_id: format!("claude-{name}-request"),
+        idempotency_key: format!("claude-{name}"),
+        name: name.to_owned(),
+        provider: provider.to_owned(),
+        role: "Worker".to_owned(),
+        instructions: String::new(),
+        model: None,
+        reasoning_effort: None,
+        native_settings: json!({}),
+        authority_mode: authority,
+        checkout_policy: EmployeeCheckoutPolicy::Isolated,
+        activation_policy: lazoo_protocol::ActivationPolicy::Manual,
+        idle_timeout_seconds: 0,
+        enabled: true,
+        provider_observation: Some(ProviderObservation {
+            provider: provider.to_owned(),
+            verification: "configured".to_owned(),
+            version: Some("test".to_owned()),
+            protocol: Some("test".to_owned()),
+            capabilities: json!({"session": true}),
+            authentication: json!({"native": "ready", "external": "unknown"}),
+            degradation_reason: None,
+            checked_at: "2026-10-13T00:00:00Z".to_owned(),
+        }),
+    };
+    let cleo = harness
+        .store
+        .create_employee(&employee(
+            "Cleo",
+            "claude-code",
+            AuthorityMode::FullAutonomy,
+        ))
+        .unwrap()
+        .employee;
+    let ava = harness
+        .store
+        .create_employee(&employee("Ava", "claude-code", AuthorityMode::Ask))
+        .unwrap()
+        .employee;
+    let gus = harness
+        .store
+        .create_employee(&employee("Gus", "antigravity", AuthorityMode::FullAutonomy))
+        .unwrap()
+        .employee;
+
+    // Rhea (Codex, full autonomy) delegates to all three inside her turn.
+    warm_tool_lead(&harness).await;
+    let roster_revision = harness.store.roster_snapshot().unwrap().revision;
+    let delegate = |call_id: &str, employee: uuid::Uuid, objective: &str| {
+        tool_call(
+            call_id,
+            "task_delegate",
+            json!({"employeeId": employee, "objective": objective, "rosterRevision": roster_revision}),
+        )
+    };
+    harness.backend.tool_calls.lock().unwrap().extend([
+        delegate("call-1", cleo.id, "Port the parser to Claude"),
+        // Ava's ceiling is `ask`, so the lead asks for `ask`; a wider request is refused.
+        tool_call(
+            "call-2",
+            "task_delegate",
+            json!({
+                "employeeId": ava.id,
+                "objective": "Review the port",
+                "requestedAuthority": "ask",
+                "rosterRevision": roster_revision
+            }),
+        ),
+        delegate("call-3", gus.id, "Draft the release notes"),
+    ]);
+    assert_eq!(
+        submit_lead_turn(&harness, "full-autonomy").await["turn"]["state"],
+        "completed"
+    );
+    let results = harness.backend.tool_results.lock().unwrap().clone();
+    assert_eq!(results.len(), 3, "{results:?}");
+    assert!(results.iter().all(|result| result.success), "{results:?}");
+    let task_of = |index: usize| -> uuid::Uuid {
+        results[index].content["taskId"]
+            .as_str()
+            .unwrap()
+            .parse()
+            .unwrap()
+    };
+    let (cleo_task, ava_task, gus_task) = (task_of(0), task_of(1), task_of(2));
+    assert_eq!(results[0].content["effectiveAuthority"], "full-autonomy");
+    assert_eq!(results[0].content["state"], "accepted");
+    assert_eq!(results[1].content["effectiveAuthority"], "ask");
+    assert_eq!(results[1].content["state"], "proposed");
+    assert_eq!(results[2].content["effectiveAuthority"], "full-autonomy");
+    assert_eq!(results[2].content["state"], "accepted");
+
+    // Cleo's task runs on her own Claude Code session and completes; Gus's is refused at
+    // dispatch because Antigravity has no prompt-free mode: the task fails with the refusal
+    // and an incident names the incompatible configuration.
+    let outcome = harness.app.dispatch_pending_tasks_once().await;
+    assert_eq!(
+        outcome.unwrap_err().code,
+        "LZ-TASK-AUTHORITY-UNSUPPORTED",
+        "the pass reports Gus's refusal after running Cleo"
+    );
+    let cleo_detail = harness.store.get_task(cleo_task).unwrap();
+    assert_eq!(cleo_detail.task.state, TaskState::Completed);
+    let cleo_session = harness
+        .store
+        .get_session(cleo_detail.dispatch.unwrap().session_id.unwrap())
+        .unwrap();
+    assert_eq!(cleo_session.provider, "claude-code");
+    assert_eq!(cleo_session.employee_id, cleo.id);
+    assert!(
+        harness.backend.resume_ids.lock().unwrap().is_empty(),
+        "a task dispatch starts its session in the task workspace and never resumes"
+    );
+    let gus_detail = harness.store.get_task(gus_task).unwrap();
+    assert_eq!(gus_detail.task.state, TaskState::Failed);
+    assert_eq!(
+        gus_detail.task.failure_code.as_deref(),
+        Some("LZ-TASK-AUTHORITY-UNSUPPORTED")
+    );
+    assert!(
+        harness
+            .store
+            .list_incidents(&ListIncidentsInput {
+                code: Some("LZ-CONFIG-INCOMPATIBLE".to_owned()),
+                limit: 100,
+                ..ListIncidentsInput::default()
+            })
+            .unwrap()
+            .iter()
+            .any(|incident| incident.task_id == Some(gus_task)),
+        "the refused dispatch is an incident"
+    );
+    assert_eq!(
+        harness.backend.starts.load(Ordering::SeqCst),
+        2,
+        "Rhea's session and Cleo's; nothing started for Ava or Gus"
+    );
+
+    // Ava's proposal is accepted by the user, then refused at dispatch: under `ask` Claude
+    // Code's prompts stay inside its own stream, so Lazoo fails closed.
+    call(
+        "accept-ava",
+        "task.accept",
+        json!({"id": ava_task, "expectedRevision": 1, "idempotencyKey": "accept-ava"}),
+    )
+    .await
+    .result
+    .unwrap();
+    assert_eq!(
+        harness
+            .app
+            .dispatch_pending_tasks_once()
+            .await
+            .unwrap_err()
+            .code,
+        "LZ-TASK-AUTHORITY-UNSUPPORTED"
+    );
+    assert_eq!(
+        harness.store.get_task(ava_task).unwrap().task.state,
+        TaskState::Failed
+    );
+    assert_eq!(harness.backend.starts.load(Ordering::SeqCst), 2);
+
+    // A Claude Code lead: a user turn under `ask` is refused before any provider I/O; one
+    // under full autonomy activates her session and completes.
+    let conversation: uuid::Uuid = call(
+        "create-cleo-conversation",
+        "conversation.create",
+        json!({
+            "projectId": null,
+            "leadEmployeeId": cleo.id,
+            "title": "Claude leads",
+            "idempotencyKey": "cleo-conversation"
+        }),
+    )
+    .await
+    .result
+    .unwrap()["conversation"]["id"]
+        .as_str()
+        .unwrap()
+        .parse()
+        .unwrap();
+    let submit = |id: &'static str, authority: &'static str| {
+        call(
+            id,
+            "turn.submit",
+            json!({
+                "conversationId": conversation,
+                "author": {"kind": "user"},
+                "recipient": null,
+                "authorityMode": authority,
+                "text": "Summarize the parser",
+                "activateIfNeeded": true,
+                "maxAttempts": 1,
+                "idempotencyKey": id
+            }),
+        )
+    };
+    let refused = timeout(Duration::from_secs(20), submit("cleo-ask", "ask"))
+        .await
+        .unwrap()
+        .error
+        .unwrap();
+    assert_eq!(refused.code, "LZ-TASK-AUTHORITY-UNSUPPORTED");
+    assert_eq!(harness.backend.starts.load(Ordering::SeqCst), 2);
+    let completed = timeout(
+        Duration::from_secs(20),
+        submit("cleo-full", "full-autonomy"),
+    )
+    .await
+    .unwrap()
+    .result
+    .unwrap();
+    assert_eq!(completed["turn"]["state"], "completed");
+    assert_eq!(completed["task"]["effectiveAuthority"], "full-autonomy");
+    assert_eq!(harness.backend.starts.load(Ordering::SeqCst), 3);
+    let cleo_lead_session = harness
+        .store
+        .list_sessions()
+        .unwrap()
+        .into_iter()
+        .rfind(|session| session.employee_id == cleo.id)
+        .unwrap();
+    assert_eq!(cleo_lead_session.provider, "claude-code");
+    assert!(
+        harness.backend.resume_ids.lock().unwrap().is_empty(),
+        "a conversation never resumes the task-dispatch session that preceded it"
+    );
+    assert_eq!(
+        resume_events(&harness.store),
+        vec![(
+            "session.resume.skipped".to_owned(),
+            json!({
+                "sessionId": cleo_lead_session.id,
+                "priorSessionId": cleo_session.id,
+                "reason": "task-session"
+            })
+        )]
+    );
+    assert_eq!(
+        harness.backend.turns.load(Ordering::SeqCst),
+        3,
+        "Rhea's turn, Cleo's dispatch turn, Cleo's user turn"
+    );
+}
+
+#[test]
+fn claude_full_autonomy_acceptance_contract_is_deterministic_and_backend_only() {
+    let repository = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let script_path = repository.join("scripts/acceptance/claude-full-autonomy.ps1");
+    let script =
+        std::fs::read_to_string(&script_path).expect("claude full autonomy acceptance script");
+
+    for required in [
+        "claude_code_runs_turns_and_tasks_only_under_full_autonomy",
+        "task_turn_rejects_a_provider_without_authority_override_support_before_io",
+        "store_enables_wal_foreign_keys_and_schema_version",
+        "fullAutonomyDelivered",
+        "askAndSelfDecisionRefused",
+        "otherProvidersRefused",
+        "noSupportClaimed",
+        "providerSmokeAbsent",
+        "externalModelUseAbsent",
+        "uiChangesAbsent",
+        "deterministic-fake-transport",
+        "schemaVersion = 19",
+    ] {
+        assert!(
+            script.contains(required),
+            "acceptance script must contain {required}"
+        );
+    }
+    for forbidden in ["provider', 'smoke", "LivePrompt"] {
+        assert!(
+            !script.contains(forbidden),
+            "acceptance script must not contain {forbidden}"
+        );
+    }
+}
+
+/// `OpenCode` receives turns and tasks under every authority its launch enforces: the adapter
+/// launches `opencode acp` with an allow-all permission block when the session's permission
+/// mode is `auto` and with a governed block (every governed tool asks) when it is `ask` or
+/// `accept-edits`. A Codex lead's delegations to `OpenCode` workers of each authority are
+/// dispatched on the worker's own session, which the fake backend records as started with the
+/// matching permission mode (`auto`, `accept-edits`, `ask`; the `ask` task only after the user
+/// accepts its proposal). Grok Build and Antigravity workers are still refused even under full
+/// autonomy, each with the task failed before any session starts. An `OpenCode` lead takes a
+/// user turn under full autonomy, but a prompt-free session never serves a narrower `ask` or
+/// `self-decision` turn: that is refused before any provider I/O, because the launch block
+/// cannot be narrowed per turn. An `OpenCode` summary employee stays excluded from the memory
+/// worker. The governed approval path is proven by
+/// `opencode_ask_and_self_decision_turns_are_governed_through_the_approval_ledger`; no live
+/// support is claimed: the integrator runs the live delivery.
+#[tokio::test]
+#[allow(clippy::too_many_lines)] // One story over every authority pairing.
+async fn opencode_delivers_turns_and_tasks_under_every_authority_its_launch_enforces() {
+    use lazoo_protocol::TaskState;
+
+    let (_temporary, harness) = tool_harness(AuthorityMode::FullAutonomy);
+    let call = |id: &str, method: &str, params: serde_json::Value| {
+        harness.app.handle(request(id, method, params))
+    };
+    let employee = |name: &str, provider: &str, authority: AuthorityMode| CreateEmployeeInput {
+        request_id: format!("opencode-{name}-request"),
+        idempotency_key: format!("opencode-{name}"),
+        name: name.to_owned(),
+        provider: provider.to_owned(),
+        role: "Worker".to_owned(),
+        instructions: String::new(),
+        model: Some("test-model".to_owned()),
+        reasoning_effort: None,
+        native_settings: json!({}),
+        authority_mode: authority,
+        checkout_policy: EmployeeCheckoutPolicy::Isolated,
+        activation_policy: lazoo_protocol::ActivationPolicy::Manual,
+        idle_timeout_seconds: 0,
+        enabled: true,
+        provider_observation: Some(ProviderObservation {
+            provider: provider.to_owned(),
+            verification: "configured".to_owned(),
+            version: Some("test".to_owned()),
+            protocol: Some("acp/v1".to_owned()),
+            capabilities: json!({"session": true}),
+            authentication: json!({"native": "ready", "external": "unknown"}),
+            degradation_reason: None,
+            checked_at: "2026-10-17T00:00:00Z".to_owned(),
+        }),
+    };
+    let opal = harness
+        .store
+        .create_employee(&employee("Opal", "opencode", AuthorityMode::FullAutonomy))
+        .unwrap()
+        .employee;
+    let olga = harness
+        .store
+        .create_employee(&employee("Olga", "opencode", AuthorityMode::Ask))
+        .unwrap()
+        .employee;
+    let sven = harness
+        .store
+        .create_employee(&employee("Sven", "opencode", AuthorityMode::SelfDecision))
+        .unwrap()
+        .employee;
+    // The other ACP provider and Antigravity stay refused even under full autonomy.
+    let gro = harness
+        .store
+        .create_employee(&employee("Gro", "grok-build", AuthorityMode::FullAutonomy))
+        .unwrap()
+        .employee;
+    let gus = harness
+        .store
+        .create_employee(&employee("Gus", "antigravity", AuthorityMode::FullAutonomy))
+        .unwrap()
+        .employee;
+
+    // Rhea (Codex, full autonomy) delegates to all three inside her turn.
+    warm_tool_lead(&harness).await;
+    let roster_revision = harness.store.roster_snapshot().unwrap().revision;
+    let delegate = |call_id: &str, employee: uuid::Uuid, requested: Option<&str>| {
+        let mut arguments = json!({
+            "employeeId": employee,
+            "objective": "Port the parser to OpenCode",
+            "rosterRevision": roster_revision
+        });
+        if let Some(requested) = requested {
+            arguments["requestedAuthority"] = json!(requested);
+        }
+        tool_call(call_id, "task_delegate", arguments)
+    };
+    harness.backend.tool_calls.lock().unwrap().extend([
+        delegate("call-1", opal.id, None),
+        // Each worker's ceiling is its own authority, so the lead asks for exactly that.
+        delegate("call-2", olga.id, Some("ask")),
+        delegate("call-3", sven.id, Some("self-decision")),
+        delegate("call-4", gro.id, None),
+        delegate("call-5", gus.id, None),
+    ]);
+    assert_eq!(
+        submit_lead_turn(&harness, "full-autonomy").await["turn"]["state"],
+        "completed"
+    );
+    let results = harness.backend.tool_results.lock().unwrap().clone();
+    assert_eq!(results.len(), 5, "{results:?}");
+    assert!(results.iter().all(|result| result.success), "{results:?}");
+    let task_of = |index: usize| -> uuid::Uuid {
+        results[index].content["taskId"]
+            .as_str()
+            .unwrap()
+            .parse()
+            .unwrap()
+    };
+    let (opal_task, olga_task, sven_task) = (task_of(0), task_of(1), task_of(2));
+    let (gro_task, gus_task) = (task_of(3), task_of(4));
+    assert_eq!(results[0].content["effectiveAuthority"], "full-autonomy");
+    assert_eq!(results[0].content["state"], "accepted");
+    assert_eq!(results[1].content["effectiveAuthority"], "ask");
+    assert_eq!(results[1].content["state"], "proposed");
+    // Only `ask` is held for the user; a `self-decision` delegation is accepted outright.
+    assert_eq!(results[2].content["effectiveAuthority"], "self-decision");
+    assert_eq!(results[2].content["state"], "accepted");
+
+    // Opal's task runs on her own OpenCode session, started prompt-free, and Sven's
+    // (`self-decision`) on a governed one; both complete. The Grok Build and Antigravity tasks
+    // (even under full autonomy) are refused at dispatch: the pass reports the refusal after
+    // running the others.
+    assert_eq!(
+        harness
+            .app
+            .dispatch_pending_tasks_once()
+            .await
+            .unwrap_err()
+            .code,
+        "LZ-TASK-AUTHORITY-UNSUPPORTED"
+    );
+    for task in [gro_task, gus_task] {
+        let detail = harness.store.get_task(task).unwrap();
+        assert_eq!(detail.task.state, TaskState::Failed);
+        assert_eq!(
+            detail.task.failure_code.as_deref(),
+            Some("LZ-TASK-AUTHORITY-UNSUPPORTED")
+        );
+    }
+    let sven_detail = harness.store.get_task(sven_task).unwrap();
+    assert_eq!(sven_detail.task.state, TaskState::Completed);
+    let opal_detail = harness.store.get_task(opal_task).unwrap();
+    assert_eq!(opal_detail.task.state, TaskState::Completed);
+    let opal_session = harness
+        .store
+        .get_session(opal_detail.dispatch.unwrap().session_id.unwrap())
+        .unwrap();
+    assert_eq!(opal_session.provider, "opencode");
+    assert_eq!(opal_session.employee_id, opal.id);
+    let started_modes = || {
+        harness
+            .backend
+            .session_permission_modes
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|(provider, _)| *provider == ProviderKind::OpenCode)
+            .filter_map(|(_, mode)| mode.clone())
+            .collect::<Vec<_>>()
+    };
+    let mut modes = started_modes();
+    modes.sort();
+    assert_eq!(
+        modes,
+        ["accept-edits", "auto"],
+        "each OpenCode session starts in the permission mode of its worker's authority"
+    );
+    assert_eq!(
+        harness.backend.starts.load(Ordering::SeqCst),
+        3,
+        "Rhea's session, Opal's, and Sven's"
+    );
+
+    // Olga's `ask` proposal is accepted by the user, then dispatched on a governed session.
+    call(
+        "accept-olga",
+        "task.accept",
+        json!({"id": olga_task, "expectedRevision": 1, "idempotencyKey": "accept-olga"}),
+    )
+    .await
+    .result
+    .unwrap();
+    harness.app.dispatch_pending_tasks_once().await.unwrap();
+    assert_eq!(
+        harness.store.get_task(olga_task).unwrap().task.state,
+        TaskState::Completed
+    );
+    let mut modes = started_modes();
+    modes.sort();
+    assert_eq!(modes, ["accept-edits", "ask", "auto"]);
+    assert_eq!(harness.backend.starts.load(Ordering::SeqCst), 4);
+
+    // An OpenCode lead: a user turn under full autonomy activates her session and completes.
+    // Her session is launched prompt-free, so user turns under `ask` and `self-decision` are
+    // refused before any provider I/O rather than run without their approvals.
+    let conversation: uuid::Uuid = call(
+        "create-opal-conversation",
+        "conversation.create",
+        json!({
+            "projectId": null,
+            "leadEmployeeId": opal.id,
+            "title": "OpenCode leads",
+            "idempotencyKey": "opal-conversation"
+        }),
+    )
+    .await
+    .result
+    .unwrap()["conversation"]["id"]
+        .as_str()
+        .unwrap()
+        .parse()
+        .unwrap();
+    let submit = |id: &'static str, authority: &'static str| {
+        call(
+            id,
+            "turn.submit",
+            json!({
+                "conversationId": conversation,
+                "author": {"kind": "user"},
+                "recipient": null,
+                "authorityMode": authority,
+                "text": "Summarize the parser",
+                "activateIfNeeded": true,
+                "maxAttempts": 1,
+                "idempotencyKey": id
+            }),
+        )
+    };
+    for (id, authority) in [("opal-ask", "ask"), ("opal-self", "self-decision")] {
+        let refused = timeout(Duration::from_secs(20), submit(id, authority))
+            .await
+            .unwrap()
+            .error
+            .unwrap();
+        assert_eq!(refused.code, "LZ-TASK-AUTHORITY-UNSUPPORTED");
+    }
+    assert_eq!(harness.backend.starts.load(Ordering::SeqCst), 4);
+    assert_eq!(harness.backend.turns.load(Ordering::SeqCst), 4);
+    let completed = timeout(
+        Duration::from_secs(20),
+        submit("opal-full", "full-autonomy"),
+    )
+    .await
+    .unwrap()
+    .result
+    .unwrap();
+    assert_eq!(completed["turn"]["state"], "completed");
+    assert_eq!(completed["task"]["effectiveAuthority"], "full-autonomy");
+    assert_eq!(harness.backend.starts.load(Ordering::SeqCst), 5);
+    let opal_lead_session = harness
+        .store
+        .list_sessions()
+        .unwrap()
+        .into_iter()
+        .rfind(|session| session.employee_id == opal.id)
+        .unwrap();
+    assert_eq!(opal_lead_session.provider, "opencode");
+    assert_eq!(
+        harness
+            .backend
+            .session_permission_modes
+            .lock()
+            .unwrap()
+            .last(),
+        Some(&(ProviderKind::OpenCode, Some("auto".to_owned())))
+    );
+    assert!(
+        harness.backend.resume_ids.lock().unwrap().is_empty(),
+        "a conversation never resumes the task-dispatch session that preceded it"
+    );
+    assert_eq!(
+        harness.backend.turns.load(Ordering::SeqCst),
+        5,
+        "Rhea's turn, three dispatch turns, Opal's user turn"
+    );
+
+    // The memory worker stays closed to OpenCode: its summary turn must be read-only, which the
+    // ACP adapter cannot carry.
+    let configured = call(
+        "configure-opencode-memory-worker",
+        "memory.worker.configure",
+        json!({
+            "projectId": null,
+            "employeeId": opal.id,
+            "model": "test-model",
+            "requestsPerMinute": 1,
+            "enabled": true,
+            "expectedRevision": null
+        }),
+    )
+    .await
+    .error
+    .unwrap();
+    assert!(
+        configured
+            .message
+            .contains("cannot enforce the governed ask"),
+        "{configured:?}"
+    );
+}
+
+/// A session launched prompt-free (a `full-autonomy` employee) cannot be narrowed per turn, so a
+/// delegated task whose effective authority is `ask` is refused at dispatch with the task failed
+/// and no session started, even though `OpenCode` now serves `ask` on a governed session.
+#[tokio::test]
+async fn a_prompt_free_opencode_session_refuses_a_narrower_delegated_task_before_any_session_starts()
+ {
+    use lazoo_protocol::TaskState;
+
+    let (_temporary, harness) = tool_harness(AuthorityMode::FullAutonomy);
+    let opal = harness
+        .store
+        .create_employee(&CreateEmployeeInput {
+            request_id: "opencode-narrow-request".to_owned(),
+            idempotency_key: "opencode-narrow".to_owned(),
+            name: "Opal".to_owned(),
+            provider: "opencode".to_owned(),
+            role: "Worker".to_owned(),
+            instructions: String::new(),
+            model: Some("test-model".to_owned()),
+            reasoning_effort: None,
+            native_settings: json!({}),
+            authority_mode: AuthorityMode::FullAutonomy,
+            checkout_policy: EmployeeCheckoutPolicy::Isolated,
+            activation_policy: lazoo_protocol::ActivationPolicy::Manual,
+            idle_timeout_seconds: 0,
+            enabled: true,
+            provider_observation: Some(ProviderObservation {
+                provider: "opencode".to_owned(),
+                verification: "configured".to_owned(),
+                version: Some("test".to_owned()),
+                protocol: Some("acp/v1".to_owned()),
+                capabilities: json!({"session": true}),
+                authentication: json!({"native": "ready", "external": "unknown"}),
+                degradation_reason: None,
+                checked_at: "2026-10-17T00:00:00Z".to_owned(),
+            }),
+        })
+        .unwrap()
+        .employee;
+    warm_tool_lead(&harness).await;
+    let roster_revision = harness.store.roster_snapshot().unwrap().revision;
+    harness.backend.tool_calls.lock().unwrap().push(tool_call(
+        "call-1",
+        "task_delegate",
+        json!({
+            "employeeId": opal.id,
+            "objective": "Port the parser to OpenCode",
+            "rosterRevision": roster_revision,
+            "requestedAuthority": "ask"
+        }),
+    ));
+    assert_eq!(
+        submit_lead_turn(&harness, "full-autonomy").await["turn"]["state"],
+        "completed"
+    );
+    let results = harness.backend.tool_results.lock().unwrap().clone();
+    assert!(results.iter().all(|result| result.success), "{results:?}");
+    assert_eq!(results[0].content["effectiveAuthority"], "ask");
+    assert_eq!(results[0].content["state"], "proposed");
+    let task: uuid::Uuid = results[0].content["taskId"]
+        .as_str()
+        .unwrap()
+        .parse()
+        .unwrap();
+    harness
+        .app
+        .handle(request(
+            "accept-narrow",
+            "task.accept",
+            json!({"id": task, "expectedRevision": 1, "idempotencyKey": "accept-narrow"}),
+        ))
+        .await
+        .result
+        .unwrap();
+    let starts = harness.backend.starts.load(Ordering::SeqCst);
+    assert_eq!(starts, 1, "only Rhea's session so far");
+    assert_eq!(
+        harness
+            .app
+            .dispatch_pending_tasks_once()
+            .await
+            .unwrap_err()
+            .code,
+        "LZ-TASK-AUTHORITY-UNSUPPORTED"
+    );
+    let detail = harness.store.get_task(task).unwrap();
+    assert_eq!(detail.task.state, TaskState::Failed);
+    assert_eq!(
+        detail.task.failure_code.as_deref(),
+        Some("LZ-TASK-AUTHORITY-UNSUPPORTED")
+    );
+    assert_eq!(
+        harness.backend.starts.load(Ordering::SeqCst),
+        starts,
+        "no session starts for the refused task"
+    );
+}
+
+/// An `OpenCode` lead and its conversation over a chosen session backend, for the governed
+/// approval stories. The employee is `ready` for turns: the ledger, not the probe, is under test.
+struct OpenCodeLead {
+    _temporary: tempfile::TempDir,
+    store: Store,
+    app: App,
+    employee: lazoo_protocol::EmployeeRecord,
+    conversation_id: uuid::Uuid,
+}
+
+fn opencode_lead(authority: AuthorityMode, backend: Arc<dyn SessionBackend>) -> OpenCodeLead {
+    let temporary = tempdir().unwrap();
+    let root = DataRoot::from_path(temporary.path().join("data"));
+    root.ensure().unwrap();
+    let store = Store::open_path(root.state_db()).unwrap();
+    let employee = store
+        .create_employee(&CreateEmployeeInput {
+            request_id: "create-opencode-governed-request".to_owned(),
+            idempotency_key: "create-opencode-governed".to_owned(),
+            name: "Opal".to_owned(),
+            provider: "opencode".to_owned(),
+            role: "Lead".to_owned(),
+            instructions: String::new(),
+            model: Some("test-model".to_owned()),
+            reasoning_effort: None,
+            native_settings: json!({}),
+            authority_mode: authority,
+            checkout_policy: EmployeeCheckoutPolicy::Isolated,
+            activation_policy: lazoo_protocol::ActivationPolicy::Manual,
+            idle_timeout_seconds: 0,
+            enabled: true,
+            provider_observation: Some(ProviderObservation {
+                provider: "opencode".to_owned(),
+                verification: "configured".to_owned(),
+                version: Some("test".to_owned()),
+                protocol: Some("acp/v1".to_owned()),
+                capabilities: json!({"session": true, "permission": true}),
+                authentication: json!({"native": "ready", "external": "unknown"}),
+                degradation_reason: None,
+                checked_at: "2026-10-17T00:00:00Z".to_owned(),
+            }),
+        })
+        .unwrap()
+        .employee;
+    let conversation = store
+        .create_conversation(&CreateConversationInput {
+            request_id: "create-opencode-governed-conversation-request".to_owned(),
+            idempotency_key: "create-opencode-governed-conversation".to_owned(),
+            project_id: None,
+            lead_employee_id: employee.id,
+            title: None,
+        })
+        .unwrap()
+        .conversation;
+    let app =
+        App::new_with_session_backend(store.clone(), root, DiscoveryEnvironment::empty(), backend)
+            .unwrap()
+            .with_approval_timeout(Duration::from_secs(60));
+    OpenCodeLead {
+        _temporary: temporary,
+        store,
+        app,
+        employee,
+        conversation_id: conversation.id,
+    }
+}
+
+impl OpenCodeLead {
+    async fn warm(&self) {
+        self.app
+            .handle(request(
+                "warm-opencode-lead",
+                "session.warm",
+                json!({
+                    "employeeId": self.employee.id,
+                    "expectedEmployeeRevision": self.employee.configuration_revision,
+                    "idempotencyKey": "warm-opencode-lead"
+                }),
+            ))
+            .await
+            .result
+            .unwrap();
+    }
+
+    fn submit(
+        &self,
+        key: &str,
+        authority: &str,
+        text: &str,
+    ) -> tokio::task::JoinHandle<lazoo_protocol::JsonRpcResponse> {
+        let app = self.app.clone();
+        let (conversation_id, key, authority, text) = (
+            self.conversation_id,
+            key.to_owned(),
+            authority.to_owned(),
+            text.to_owned(),
+        );
+        tokio::spawn(async move {
+            app.handle(request(
+                &key,
+                "turn.submit",
+                json!({
+                    "conversationId": conversation_id,
+                    "author": {"kind": "user"},
+                    "recipient": null,
+                    "authorityMode": authority,
+                    "text": text,
+                    "activateIfNeeded": false,
+                    "maxAttempts": 1,
+                    "idempotencyKey": key
+                }),
+            ))
+            .await
+        })
+    }
+
+    async fn approvals(&self, state: Option<&str>) -> Vec<serde_json::Value> {
+        let params = state.map_or_else(|| json!({}), |state| json!({"state": state}));
+        self.app
+            .handle(request("list-opencode-approvals", "approval.list", params))
+            .await
+            .result
+            .unwrap()
+            .as_array()
+            .unwrap()
+            .clone()
+    }
+
+    async fn wait_for_pending(&self) -> serde_json::Value {
+        timeout(Duration::from_secs(30), async {
+            loop {
+                if let Some(first) = self.approvals(Some("pending")).await.first() {
+                    return first.clone();
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("a pending approval should be listed while the provider waits")
+    }
+
+    async fn decide(&self, pending: &serde_json::Value, decision: &str) -> serde_json::Value {
+        let key = format!("decide-{}-{decision}", pending["id"].as_str().unwrap());
+        self.app
+            .handle(request(
+                &key,
+                "approval.decide",
+                json!({
+                    "id": pending["id"],
+                    "expectedRevision": pending["revision"],
+                    "decision": decision,
+                    "idempotencyKey": key
+                }),
+            ))
+            .await
+            .result
+            .unwrap()
+    }
+}
+
+/// Runs the real `OpenCode` ACP adapter against the fake ACP fixture, so a daemon turn crosses the
+/// genuine `session/request_permission` bridge. The fixture emits one permission request per
+/// prompt whose tool kind the prompt text selects (`KIND_FETCH`, `KIND_DELETE`, ...), and it
+/// stores the response it receives beside the session's working directory.
+struct AcpFixtureBackend {
+    executable: PathBuf,
+    starts: AcpStarts,
+}
+
+/// The permission mode and working directory of every session the fixture backend started.
+type AcpStarts = Arc<Mutex<Vec<(Option<String>, PathBuf)>>>;
+
+struct AcpFixtureSession(lazoo_providers::OpenCodeSession);
+
+impl ManagedSession for AcpFixtureSession {
+    fn id(&self) -> String {
+        lazoo_providers::ProviderSession::id(&self.0)
+    }
+
+    fn native_host_pid(&self) -> Option<u32> {
+        lazoo_providers::ProviderSession::native_host_pid(&self.0)
+    }
+
+    fn turn_observed<'a>(
+        &'a self,
+        request: &'a TurnRequest,
+        observer: &'a dyn TurnEventObserver,
+    ) -> Pin<Box<dyn Future<Output = Result<Vec<ProviderEvent>, ProviderError>> + Send + 'a>> {
+        lazoo_providers::ProviderSession::turn_observed(&self.0, request, observer)
+    }
+
+    fn cancel(&self) -> Pin<Box<dyn Future<Output = Result<(), ProviderError>> + Send + '_>> {
+        lazoo_providers::ProviderSession::cancel(&self.0)
+    }
+
+    fn stop(&self) -> Pin<Box<dyn Future<Output = Result<(), ProviderError>> + Send + '_>> {
+        lazoo_providers::ProviderSession::stop(&self.0)
+    }
+}
+
+impl SessionBackend for AcpFixtureBackend {
+    fn start<'a>(
+        &'a self,
+        _provider: ProviderKind,
+        request: &'a SessionRequest,
+    ) -> SessionBackendFuture<'a> {
+        Box::pin(async move {
+            self.starts
+                .lock()
+                .unwrap()
+                .push((request.permission_mode.clone(), request.cwd.clone()));
+            let session = lazoo_providers::ProviderAdapter::start(
+                &lazoo_providers::OpenCodeAdapter::with_executable(self.executable.clone()),
+                request,
+            )
+            .await?;
+            Ok(Box::new(AcpFixtureSession(session)) as Box<dyn ManagedSession>)
+        })
+    }
+}
+
+fn acp_fixture_backend() -> (Arc<AcpFixtureBackend>, AcpStarts) {
+    ensure_session_host();
+    let starts = Arc::new(Mutex::new(Vec::new()));
+    let backend = Arc::new(AcpFixtureBackend {
+        executable: Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../crates/lazoo-providers/tests/fixtures/acp/fake-acp.cmd"),
+        starts: Arc::clone(&starts),
+    });
+    (backend, starts)
+}
+
+/// Removes the response file so the next assertion can only read what the next turn produced.
+fn clear_acp_outcome(cwd: &Path) {
+    let _ = std::fs::remove_file(cwd.join("fake-acp-response-1.json"));
+}
+
+/// What the fixture received for the last permission request of the session at `cwd`.
+fn acp_fixture_outcome(cwd: &Path) -> serde_json::Value {
+    let text = std::fs::read_to_string(cwd.join("fake-acp-response-1.json")).unwrap();
+    serde_json::from_str::<serde_json::Value>(text.trim_start_matches('\u{feff}').trim()).unwrap()
+        ["result"]["outcome"]
+        .clone()
+}
+
+/// Brief section 12: under `ask` a governed action waits for the user's one-action approval in
+/// the Inbox, and under `self-decision` the daemon's policy answers within scope while scope
+/// expansion still needs the user. `OpenCode` is held to that through the ACP bridge, which admits
+/// only command-execution and file-change requests (`execute`, `edit`, `delete`, `move`) and
+/// declines every other kind (`fetch`, `other`, ...) without an approval ever existing. The first
+/// half runs the ledger on the fake backend with scripted requests, mirroring the Codex story,
+/// and records the permission mode each session launches with. The second half runs the real
+/// adapter against the fake ACP fixture, so the bridge itself, its allow-once answer and its
+/// cancel answer are on the path.
+#[tokio::test]
+#[allow(clippy::too_many_lines)] // One story: ledger on the fake backend, then the real ACP bridge.
+async fn opencode_ask_and_self_decision_turns_are_governed_through_the_approval_ledger() {
+    let scripted = |kind: PermissionKind, action: &str, scope_expansion: bool| PermissionRequest {
+        provider: ProviderKind::OpenCode,
+        ..permission_request(kind, action, scope_expansion)
+    };
+    let opencode_modes = |backend: &FakeSessionBackend| {
+        backend
+            .session_permission_modes
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|(provider, _)| *provider == ProviderKind::OpenCode)
+            .filter_map(|(_, mode)| mode.clone())
+            .collect::<Vec<_>>()
+    };
+
+    // Under `ask`, a command-execution request is a pending Inbox approval and the turn waits.
+    let backend = FakeSessionBackend::default();
+    backend
+        .turn_events
+        .lock()
+        .unwrap()
+        .extend(completed_turn_events("completed"));
+    backend.permission_requests.lock().unwrap().push(scripted(
+        PermissionKind::CommandExecution,
+        "cargo test",
+        false,
+    ));
+    let ask = opencode_lead(AuthorityMode::Ask, Arc::new(backend.clone()));
+    ask.warm().await;
+    let submission = ask.submit("ask-approve", "ask", "Run the governed command");
+    let pending = ask.wait_for_pending().await;
+    assert_eq!(pending["kind"], "command-execution");
+    assert_eq!(pending["action"], "cargo test");
+    assert_eq!(pending["authority"], "ask");
+    assert!(!submission.is_finished());
+    assert!(backend.permission_decisions.lock().unwrap().is_empty());
+    let decided = ask.decide(&pending, "approve").await;
+    assert_eq!(decided["approval"]["state"], "approved");
+    assert_eq!(decided["approval"]["decider"], "user");
+    let submitted = timeout(Duration::from_secs(10), submission)
+        .await
+        .unwrap()
+        .unwrap()
+        .result
+        .unwrap();
+    assert_eq!(submitted["turn"]["state"], "completed");
+    assert_eq!(
+        *backend.permission_decisions.lock().unwrap(),
+        vec![PermissionDecision::Approve]
+    );
+    assert_eq!(opencode_modes(&backend), ["ask"]);
+    assert_eq!(
+        approval_event_types(&ask.store),
+        vec!["approval.requested", "approval.decided"]
+    );
+
+    // Declined, the provider receives the decline and the ledger records it.
+    let backend = FakeSessionBackend::default();
+    backend
+        .turn_events
+        .lock()
+        .unwrap()
+        .extend(completed_turn_events("completed"));
+    backend.permission_requests.lock().unwrap().push(scripted(
+        PermissionKind::FileChange,
+        "apply file changes in the workspace",
+        false,
+    ));
+    let declined = opencode_lead(AuthorityMode::Ask, Arc::new(backend.clone()));
+    declined.warm().await;
+    let submission = declined.submit("ask-decline", "ask", "Change a file");
+    let pending = declined.wait_for_pending().await;
+    assert_eq!(pending["kind"], "file-change");
+    let decided = declined.decide(&pending, "decline").await;
+    assert_eq!(decided["approval"]["state"], "declined");
+    assert_eq!(decided["approval"]["decider"], "user");
+    timeout(Duration::from_secs(10), submission)
+        .await
+        .unwrap()
+        .unwrap()
+        .result
+        .unwrap();
+    assert_eq!(
+        *backend.permission_decisions.lock().unwrap(),
+        vec![PermissionDecision::Decline]
+    );
+
+    // Under `self-decision` the policy answers an in-scope request with no pending approval; a
+    // scope expansion still waits for the user.
+    let backend = FakeSessionBackend::default();
+    backend
+        .turn_events
+        .lock()
+        .unwrap()
+        .extend(completed_turn_events("completed"));
+    backend.permission_requests.lock().unwrap().extend([
+        scripted(
+            PermissionKind::FileChange,
+            "apply file changes in the workspace",
+            false,
+        ),
+        scripted(
+            PermissionKind::CommandExecution,
+            "apply file changes under C:\\",
+            true,
+        ),
+    ]);
+    let policy = opencode_lead(AuthorityMode::SelfDecision, Arc::new(backend.clone()));
+    policy.warm().await;
+    let submission = policy.submit("self-decision", "self-decision", "Change a file");
+    let pending = policy.wait_for_pending().await;
+    assert_eq!(pending["scopeExpansion"], true);
+    assert_eq!(pending["authority"], "self-decision");
+    assert_eq!(
+        *backend.permission_decisions.lock().unwrap(),
+        vec![PermissionDecision::Approve],
+        "the in-scope request was answered by policy while the expansion waits"
+    );
+    policy.decide(&pending, "decline").await;
+    timeout(Duration::from_secs(10), submission)
+        .await
+        .unwrap()
+        .unwrap()
+        .result
+        .unwrap();
+    let approvals = policy.approvals(None).await;
+    assert_eq!(approvals.len(), 2);
+    assert_eq!(approvals[0]["state"], "approved");
+    assert_eq!(approvals[0]["decider"], "policy");
+    assert_eq!(approvals[1]["state"], "declined");
+    assert_eq!(approvals[1]["decider"], "user");
+    assert_eq!(opencode_modes(&backend), ["accept-edits"]);
+
+    // The real ACP bridge, under `ask`. A command request is held for the user and, once
+    // approved, answered with the offered one-shot option.
+    let (acp, starts) = acp_fixture_backend();
+    let lead = opencode_lead(AuthorityMode::Ask, acp);
+    lead.warm().await;
+    let cwd = starts.lock().unwrap()[0].1.clone();
+    assert_eq!(starts.lock().unwrap()[0].0.as_deref(), Some("ask"));
+    clear_acp_outcome(&cwd);
+    let submission = lead.submit("acp-execute", "ask", "KIND_EXECUTE run the command");
+    let pending = lead.wait_for_pending().await;
+    assert_eq!(pending["kind"], "command-execution");
+    assert_eq!(pending["action"], "execute an ACP command");
+    assert_eq!(pending["authority"], "ask");
+    assert_eq!(pending["scopeExpansion"], true);
+    assert!(!submission.is_finished());
+    lead.decide(&pending, "approve").await;
+    let submitted = timeout(Duration::from_secs(30), submission)
+        .await
+        .unwrap()
+        .unwrap()
+        .result
+        .unwrap();
+    assert_eq!(submitted["turn"]["state"], "completed");
+    let outcome = acp_fixture_outcome(&cwd);
+    assert_eq!(outcome["outcome"], "selected");
+    assert_eq!(outcome["optionId"], "allow-one");
+
+    // A declined delete is a file-change approval whose action names the kind; the provider is
+    // answered with a cancel and the turn ends with the decision recorded.
+    clear_acp_outcome(&cwd);
+    let submission = lead.submit("acp-delete", "ask", "KIND_DELETE remove the file");
+    let pending = lead.wait_for_pending().await;
+    assert_eq!(pending["kind"], "file-change");
+    assert_eq!(pending["action"], "delete ACP files");
+    let decided = lead.decide(&pending, "decline").await;
+    assert_eq!(decided["approval"]["state"], "declined");
+    let submitted = timeout(Duration::from_secs(30), submission)
+        .await
+        .unwrap()
+        .unwrap()
+        .result
+        .unwrap();
+    assert_eq!(submitted["turn"]["state"], "completed");
+    assert_eq!(acp_fixture_outcome(&cwd)["outcome"], "cancelled");
+    let recorded = lead.approvals(None).await.len();
+    assert_eq!(recorded, 2);
+
+    // A fetch or other-kind request never becomes an approval: the adapter declines it itself, the
+    // turn ends, and the refusal reason is recorded in the stored event payload.
+    for (key, text) in [
+        ("acp-fetch", "KIND_FETCH get the page"),
+        ("acp-other", "KIND_OTHER use the tool"),
+    ] {
+        clear_acp_outcome(&cwd);
+        let submitted = timeout(Duration::from_secs(30), lead.submit(key, "ask", text))
+            .await
+            .unwrap()
+            .unwrap()
+            .result
+            .unwrap();
+        assert_eq!(submitted["turn"]["state"], "completed", "{key}");
+        assert_eq!(acp_fixture_outcome(&cwd)["outcome"], "cancelled", "{key}");
+        assert_eq!(lead.approvals(None).await.len(), recorded, "{key}");
+        // The refusal and its reason stay in the turn transcript (the adapter's raw payload goes to
+        // the raw-frame capture).
+        let refused = submitted["turn"]["events"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|event| {
+                let payload = event["payload"].to_string();
+                payload.contains("ACP permission request refused")
+                    && payload.contains("unsupported tool kind")
+            });
+        assert!(
+            refused,
+            "{key}: the refusal reason is kept in the turn events"
+        );
+    }
+
+    // Under `self-decision` the bridge marks every ACP request as a scope expansion (no portable
+    // confinement proof), so the policy never answers one: it waits for the user, and an
+    // unsupported kind is still declined with no approval.
+    let (acp, starts) = acp_fixture_backend();
+    let lead = opencode_lead(AuthorityMode::SelfDecision, acp);
+    lead.warm().await;
+    let cwd = starts.lock().unwrap()[0].1.clone();
+    assert_eq!(starts.lock().unwrap()[0].0.as_deref(), Some("accept-edits"));
+    clear_acp_outcome(&cwd);
+    let submission = lead.submit(
+        "self-execute",
+        "self-decision",
+        "KIND_EXECUTE run the command",
+    );
+    let pending = lead.wait_for_pending().await;
+    assert_eq!(pending["authority"], "self-decision");
+    assert_eq!(pending["scopeExpansion"], true);
+    lead.decide(&pending, "approve").await;
+    let submitted = timeout(Duration::from_secs(30), submission)
+        .await
+        .unwrap()
+        .unwrap()
+        .result
+        .unwrap();
+    assert_eq!(submitted["turn"]["state"], "completed");
+    assert_eq!(acp_fixture_outcome(&cwd)["outcome"], "selected");
+    clear_acp_outcome(&cwd);
+    let submitted = timeout(
+        Duration::from_secs(30),
+        lead.submit("self-fetch", "self-decision", "KIND_FETCH get the page"),
+    )
+    .await
+    .unwrap()
+    .unwrap()
+    .result
+    .unwrap();
+    assert_eq!(submitted["turn"]["state"], "completed");
+    assert_eq!(acp_fixture_outcome(&cwd)["outcome"], "cancelled");
+    let approvals = lead.approvals(None).await;
+    assert_eq!(approvals.len(), 1);
+    assert_eq!(approvals[0]["state"], "approved");
+    assert_eq!(approvals[0]["decider"], "user");
+}
+
+#[test]
+fn opencode_governed_delivery_acceptance_contract_is_deterministic_and_backend_only() {
+    let repository = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let script = std::fs::read_to_string(
+        repository.join("scripts/acceptance/opencode-governed-delivery.ps1"),
+    )
+    .expect("opencode governed delivery acceptance script");
+
+    for required in [
+        "opencode_ask_and_self_decision_turns_are_governed_through_the_approval_ledger",
+        "opencode_delivers_turns_and_tasks_under_every_authority_its_launch_enforces",
+        "a_prompt_free_opencode_session_refuses_a_narrower_delegated_task_before_any_session_starts",
+        "governed_sessions_refuse_a_project_configuration_that_can_override_the_block",
+        "observed_acp_records_a_reused_jsonrpc_id_and_refusals_are_not_progress",
+        "opencode::tests::governed_sessions_refuse_configuration_that_can_override_the_block",
+        "governedConfigurationConflictRefused",
+        "refusalsAreRecordedAndNotProgress",
+        "opencode_launch_makes_every_governed_tool_ask_under_ask_and_self_decision",
+        "opencode_launch_is_prompt_free_only_under_full_autonomy",
+        "observed_acp_admits_command_edit_delete_and_move_as_governed_requests",
+        "observed_acp_refuses_every_other_kind_with_a_cancel_and_a_recorded_reason",
+        "acp_delete_and_move_map_to_file_changes_and_every_other_kind_stays_refused",
+        "task_turn_rejects_a_provider_without_authority_override_support_before_io",
+        "store_enables_wal_foreign_keys_and_schema_version",
+        "governedModesAskForEveryGovernedTool",
+        "approvalLedgerGovernsAskAndSelfDecision",
+        "unsupportedKindsDeclinedWithoutApproval",
+        "promptFreeSessionNeverServesNarrowerAuthority",
+        "memoryWorkerStillExcludesOpenCode",
+        "noSupportClaimed",
+        "providerSmokeAbsent",
+        "externalModelUseAbsent",
+        "uiChangesAbsent",
+        "deterministic-fake-transport",
+        "schemaVersion = 19",
+    ] {
+        assert!(
+            script.contains(required),
+            "acceptance script must contain {required}"
+        );
+    }
+    for forbidden in [
+        "provider', 'smoke",
+        "LivePrompt",
+        "lazooctl",
+        "opencode.exe",
+    ] {
+        assert!(
+            !script.contains(forbidden),
+            "acceptance script must not contain {forbidden}"
+        );
+    }
+}
+
+#[test]
+fn opencode_governed_live_script_is_bounded_and_excluded_from_deterministic_proof() {
+    let repository = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let script =
+        std::fs::read_to_string(repository.join("scripts/acceptance/opencode-governed-live.ps1"))
+            .expect("opencode governed live script");
+    for required in [
+        "$maxLiveTurns = 4",
+        "'provider', 'smoke'",
+        "LAZOO_ASK_OK",
+        "action-required",
+        "'approval', 'approve'",
+        "'approval', 'decline'",
+        "self-decision",
+        "NOT_RUN",
+    ] {
+        assert!(
+            script.contains(required),
+            "live script must contain {required}"
+        );
+    }
+}
+
+#[test]
+fn opencode_full_autonomy_acceptance_contract_is_deterministic_and_backend_only() {
+    let repository = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let script_path = repository.join("scripts/acceptance/opencode-full-autonomy.ps1");
+    let script =
+        std::fs::read_to_string(&script_path).expect("opencode full autonomy acceptance script");
+
+    for required in [
+        "opencode_delivers_turns_and_tasks_under_every_authority_its_launch_enforces",
+        "task_turn_rejects_a_provider_without_authority_override_support_before_io",
+        "opencode_launch_is_prompt_free_only_under_full_autonomy",
+        "store_enables_wal_foreign_keys_and_schema_version",
+        "fullAutonomyDelivered",
+        "promptFreeSessionNeverServesNarrowerAuthority",
+        "launchPromptFreeOnlyUnderFullAutonomy",
+        "otherProvidersRefused",
+        "noSupportClaimed",
+        "providerSmokeAbsent",
+        "externalModelUseAbsent",
+        "uiChangesAbsent",
+        "deterministic-fake-transport",
+        "schemaVersion = 19",
+    ] {
+        assert!(
+            script.contains(required),
+            "acceptance script must contain {required}"
+        );
+    }
+    for forbidden in ["provider', 'smoke", "LivePrompt"] {
+        assert!(
+            !script.contains(forbidden),
+            "acceptance script must not contain {forbidden}"
+        );
+    }
+}
+
+/// The ACP probe launches its child through `lazoo-session-host.exe`, which must sit beside the
+/// test executable; build it once, as the provider crate's own fixtures do.
+fn ensure_session_host() {
+    static READY: std::sync::OnceLock<()> = std::sync::OnceLock::new();
+    READY.get_or_init(|| {
+        let workspace = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let status = Command::new(env!("CARGO"))
+            .current_dir(workspace)
+            .args(["build", "-p", "lazoo-session-host", "--locked"])
+            .status()
+            .unwrap();
+        assert!(status.success(), "lazoo-session-host fixture build failed");
+    });
+}
+
+fn opencode_events(status: &str) -> Vec<ProviderEvent> {
+    vec![
+        ProviderEvent::TurnStarted {
+            provider: ProviderKind::OpenCode,
+            session_id: "native-1".to_owned(),
+            turn_id: None,
+            raw: None,
+        },
+        ProviderEvent::TurnCompleted {
+            provider: ProviderKind::OpenCode,
+            session_id: "native-1".to_owned(),
+            turn_id: None,
+            status: status.to_owned(),
+            output: Some("LAZOO_OPENCODE_OK".to_owned()),
+            raw: None,
+        },
+    ]
+}
+
+/// Brief section 16: the `OpenCode` probe can only report `unverified` (an ACP handshake cannot see
+/// a login and the free model needs none), so a completed model turn is the only thing that can
+/// make an `OpenCode` employee dormant. The probe runs the real adapter against a stand-in
+/// executable that answers `--version` and `initialize`; the session is the fake backend.
+#[tokio::test]
+#[allow(clippy::too_many_lines)] // One story: unverified, failed smoke, successful smoke, refresh, conversation.
+async fn a_successful_smoke_verifies_an_opencode_employee_and_survives_a_refresh() {
+    ensure_session_host();
+    let temporary = tempdir().unwrap();
+    let root = DataRoot::from_path(temporary.path().join("data"));
+    root.ensure().unwrap();
+    let store = Store::open_path(root.state_db()).unwrap();
+    let backend = FakeSessionBackend::default();
+    let executable =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/opencode-probe.cmd");
+    let app = App::new_with_session_backend(
+        store.clone(),
+        root,
+        DiscoveryEnvironment::empty().with_known_location(ProviderKind::OpenCode, executable),
+        Arc::new(backend.clone()),
+    )
+    .unwrap();
+    let call =
+        |id: &str, method: &str, params: serde_json::Value| app.handle(request(id, method, params));
+    let roster = || async {
+        call("roster", "roster.get", json!({}))
+            .await
+            .result
+            .unwrap()
+    };
+    let roster_events = || {
+        store
+            .list_events(0, 1000)
+            .unwrap()
+            .into_iter()
+            .filter(|event| event.event_type == "roster.refreshed")
+            .count()
+    };
+
+    let created = call(
+        "create",
+        "employee.create",
+        json!({
+            "name": "Opal",
+            "provider": "opencode",
+            "role": "Lead",
+            "idempotencyKey": "create-opal"
+        }),
+    )
+    .await
+    .result
+    .unwrap();
+    let employee_id = created["employee"]["id"].as_str().unwrap().to_owned();
+    let conversation = |key: &str| {
+        call(
+            key,
+            "conversation.create",
+            json!({
+                "projectId": null,
+                "leadEmployeeId": employee_id,
+                "title": null,
+                "idempotencyKey": key
+            }),
+        )
+    };
+
+    // A refresh sees an executable and a handshake but cannot see model readiness.
+    let refreshed = call(
+        "refresh-1",
+        "roster.refresh",
+        json!({"idempotencyKey": "refresh-1"}),
+    )
+    .await
+    .result
+    .unwrap();
+    let entry = &refreshed["roster"]["entries"][0];
+    assert_eq!(entry["availability"], "unverified");
+    assert_eq!(entry["providerObservation"]["verification"], "unverified");
+    assert_eq!(
+        entry["availabilityReason"],
+        "provider model readiness has not been verified"
+    );
+    let before = conversation("conversation-too-early").await.error.unwrap();
+    assert_eq!(before.code, "LZ-CONVERSATION-LEAD-NOT-READY");
+    let unverified_revision = roster().await["revision"].as_u64().unwrap();
+    let unverified_events = roster_events();
+
+    // A smoke that errors, or that ends without a completion, records nothing.
+    *backend.turn_failure.lock().unwrap() = Some("scripted turn failure".to_owned());
+    let failed = call(
+        "smoke-failed",
+        "provider.smoke",
+        json!({"provider": "opencode", "prompt": "Reply with LAZOO_OPENCODE_OK"}),
+    )
+    .await;
+    assert!(failed.error.is_some(), "a failed turn fails the smoke");
+    *backend.turn_failure.lock().unwrap() = None;
+    *backend.turn_events.lock().unwrap() = opencode_events("end_turn")[..1].to_vec();
+    let unfinished = call(
+        "smoke-unfinished",
+        "provider.smoke",
+        json!({"provider": "opencode", "prompt": "Reply with LAZOO_OPENCODE_OK"}),
+    )
+    .await;
+    assert!(unfinished.error.is_none());
+    *backend.turn_events.lock().unwrap() = opencode_events("failed");
+    let declined = call(
+        "smoke-declined",
+        "provider.smoke",
+        json!({"provider": "opencode", "prompt": "Reply with LAZOO_OPENCODE_OK"}),
+    )
+    .await;
+    assert!(declined.error.is_none());
+    let after_failures = roster().await;
+    assert_eq!(after_failures["entries"][0]["availability"], "unverified");
+    assert_eq!(
+        after_failures["revision"].as_u64().unwrap(),
+        unverified_revision
+    );
+    assert_eq!(roster_events(), unverified_events);
+
+    // A completed turn (ACP reports its stop reason as the status) verifies the provider.
+    *backend.turn_events.lock().unwrap() = opencode_events("end_turn");
+    let smoke = call(
+        "smoke-ok",
+        "provider.smoke",
+        json!({"provider": "opencode", "prompt": "Reply with LAZOO_OPENCODE_OK"}),
+    )
+    .await
+    .result
+    .unwrap();
+    assert_eq!(smoke["events"][1]["output"], "LAZOO_OPENCODE_OK");
+    let verified = roster().await;
+    let entry = &verified["entries"][0];
+    assert_eq!(entry["availability"], "dormant");
+    assert!(entry["availabilityReason"].is_null());
+    assert_eq!(entry["providerObservation"]["verification"], "verified");
+    assert_eq!(
+        entry["providerObservation"]["authentication"]["native"],
+        "ready"
+    );
+    assert_eq!(
+        entry["providerObservation"]["authentication"]["external"],
+        "unknown"
+    );
+    assert_eq!(entry["providerObservation"]["version"], "0.0.0-smoke-test");
+    assert_eq!(
+        verified["revision"].as_u64().unwrap(),
+        unverified_revision + 1
+    );
+    assert_eq!(roster_events(), unverified_events + 1);
+
+    // A later refresh sees the same unverified probe and keeps the verification.
+    let again = call(
+        "refresh-2",
+        "roster.refresh",
+        json!({"idempotencyKey": "refresh-2"}),
+    )
+    .await
+    .result
+    .unwrap();
+    assert!(again["eventSequence"].is_null());
+    assert_eq!(again["roster"]["revision"], verified["revision"]);
+    assert_eq!(again["roster"]["entries"][0]["availability"], "dormant");
+    assert_eq!(
+        again["roster"]["entries"][0]["providerObservation"]["verification"],
+        "verified"
+    );
+
+    // The employee can lead a conversation now.
+    let created = conversation("conversation-after-smoke").await;
+    assert!(created.error.is_none(), "{:?}", created.error);
+    assert_desktop_is_roster_neutral(&app).await;
 }

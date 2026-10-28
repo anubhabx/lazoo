@@ -37,6 +37,13 @@ $evidence = [ordered]@{
     unfinishedTurnKeepsSession = $false
     zeroTimeoutNeverSuspends = $false
     nextUserTurnStartsFreshSession = $false
+    codexStartsFreshWithReason = $false
+    claudeCodeResumedOnWake = $false
+    unresumableSuspensionSkippedWithReason = $false
+    resumedSessionAttachesInOriginDirectory = $false
+    resumedLineageSurvivesATurnlessWake = $false
+    neverStartedFailureDoesNotHidePredecessor = $false
+    failedFirstTurnOnResumeEndsSuspendedAndNextWakeStartsFresh = $false
     recordedTurnNotStranded = $false
     suspendedNoticeTurnsLeadWokenOnce = $false
     schemaEleven = $false
@@ -82,9 +89,28 @@ try {
     Invoke-Test 'lazooctl' 'cli' 'employee_cli_maps_mutations_and_roster_refresh'
     $evidence.cliMapsIdleTimeout = $true
 
-    Invoke-Test 'lazood' 'daemon' 'an_idle_session_suspends_after_its_employee_timeout_and_the_next_user_turn_starts_fresh'
+    Invoke-Test 'lazood' 'daemon' 'an_idle_codex_session_suspends_after_its_employee_timeout_and_the_next_user_turn_starts_fresh_with_a_recorded_reason'
     $evidence.quietSessionSuspended = $true
     $evidence.nextUserTurnStartsFreshSession = $true
+    $evidence.codexStartsFreshWithReason = $true
+
+    Invoke-Test 'lazood' 'daemon' 'an_idle_claude_code_session_suspends_and_the_next_user_turn_resumes_its_native_session'
+    $evidence.claudeCodeResumedOnWake = $true
+
+    Invoke-Test 'lazood' 'daemon' 'a_suspended_claude_code_session_that_never_completed_a_turn_is_not_resumed'
+    $evidence.unresumableSuspensionSkippedWithReason = $true
+
+    Invoke-Test 'lazood' 'daemon' 'a_resumed_session_that_took_no_turn_still_carries_the_transcript_to_the_next_wake'
+    $evidence.resumedLineageSurvivesATurnlessWake = $true
+
+    Invoke-Test 'lazood' 'daemon' 'a_predecessor_that_failed_before_it_started_does_not_hide_the_suspended_session'
+    $evidence.neverStartedFailureDoesNotHidePredecessor = $true
+
+    Invoke-Test 'lazood' 'daemon' 'a_resumed_session_whose_first_turn_fails_is_stopped_and_the_next_wake_starts_fresh'
+    $evidence.failedFirstTurnOnResumeEndsSuspendedAndNextWakeStartsFresh = $true
+
+    Invoke-Test 'lazood' 'daemon' 'attach_on_a_resumed_session_uses_the_origin_directory_and_the_older_session_is_refused_while_the_resumed_one_is_active'
+    $evidence.resumedSessionAttachesInOriginDirectory = $true
 
     Invoke-Test 'lazood' 'daemon' 'idle_suspension_waits_for_an_unfinished_turn_and_never_touches_a_zero_timeout'
     $evidence.unfinishedTurnKeepsSession = $true
@@ -119,7 +145,7 @@ try {
     $stopwatch.Stop()
     $manifest = [ordered]@{
         status = $manifestStatus
-        schemaVersion = 15
+        schemaVersion = 19
         mode = 'deterministic-fake-transport'
         startedAt = $startedAt.ToString('o')
         durationMs = [long]$stopwatch.ElapsedMilliseconds
@@ -135,7 +161,10 @@ try {
             suspendedSessions = 'IDLE_OWNED_BY_THIS_BOOT_WITH_NO_UNFINISHED_TURN'
             stopsPerSession = 'ONE'
             failedStopRetry = 'NEVER'
-            nativeThreadAfterSuspension = 'ENDED'
+            nativeThreadAfterSuspension = 'RESUMED_WHERE_THE_PROVIDER_CAN_CARRY_IT'
+            resumeProviders = 'CLAUDE_CODE_FULL_AUTONOMY_ONLY'
+            resumeLiveProof = 'NOT_RUN'
+            resumeSkippedReasons = 'task-session,memory-reserved,unsupported-provider,codex-dynamic-tools,no-completed-turn,owner-terminal-attached,working-directory-missing'
             toolCatalog = 'UNCHANGED'
         }
     }

@@ -28,6 +28,27 @@ pub struct MarkSessionReadyInput {
     pub native_host_pid: u32,
 }
 
+/// Whether turns delivered to a session completed, and whether any ended failed or uncertain.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SessionTurnEvidence {
+    pub completed: bool,
+    pub failed: bool,
+}
+
+/// What the daemon decided about continuing a suspended predecessor's native conversation.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SessionResumeOutcome<'a> {
+    /// `working_directory` is where the native conversation was begun: Claude Code files its
+    /// transcript under the directory it ran in, so every later resume must run there too.
+    Resumed {
+        native_session_id: &'a str,
+        working_directory: &'a str,
+    },
+    Skipped {
+        reason: &'a str,
+    },
+}
+
 #[derive(Clone, Debug)]
 pub struct BeginSessionStopInput {
     pub request_id: String,
@@ -399,12 +420,152 @@ impl Store {
         let connection = self.lock()?;
         required_session(&connection, session_id)
     }
+
+    /// Audits the owner's terminal takeover of a suspended session. The session row itself is
+    /// unchanged: the native harness now runs under the owner, outside Lazoo's turn ledger.
+    pub fn record_session_terminal_attached(
+        &self,
+        session_id: Uuid,
+        terminal_id: Uuid,
+    ) -> Result<u64, StoreError> {
+        let mut connection = self.lock()?;
+        let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let now = Utc::now().to_rfc3339();
+        let sequence = employee::insert_event(
+            &transaction,
+            "session.terminal.attached",
+            &json!({"sessionId": session_id, "terminalId": terminal_id}),
+            &now,
+        )?;
+        transaction.commit()?;
+        Ok(sequence)
+    }
+
+    /// The employee's newest session at this configuration revision other than
+    /// `excluding_session_id` (the one being started), so the daemon can decide whether the new
+    /// session continues it. A configuration change never resumes: an older revision is not seen.
+    /// A `failed` session that never started (its native session was never touched) is not seen
+    /// either, so a transient start failure does not hide the suspended session behind it.
+    pub fn previous_session_for_employee(
+        &self,
+        employee_id: Uuid,
+        employee_configuration_revision: u64,
+        excluding_session_id: Uuid,
+    ) -> Result<Option<EmployeeSessionRecord>, StoreError> {
+        let connection = self.lock()?;
+        latest_session_for_employee(
+            &connection,
+            employee_id,
+            employee_configuration_revision,
+            Some(excluding_session_id),
+        )
+    }
+
+    /// What the conversation turns delivered to `session_id` say about its native transcript:
+    /// a completed turn proves one exists, a failed or uncertain one that it may be unusable.
+    pub fn session_turn_evidence(
+        &self,
+        session_id: Uuid,
+    ) -> Result<SessionTurnEvidence, StoreError> {
+        let connection = self.lock()?;
+        connection
+            .query_row(
+                "SELECT
+                    EXISTS (SELECT 1 FROM conversation_turns
+                            WHERE recipient_session_id = ?1 AND state = 'completed'),
+                    EXISTS (SELECT 1 FROM conversation_turns
+                            WHERE recipient_session_id = ?1
+                              AND state IN ('retryable-failed', 'terminal-failed', 'uncertain'))",
+                [session_id.to_string()],
+                |row| {
+                    Ok(SessionTurnEvidence {
+                        completed: row.get(0)?,
+                        failed: row.get(1)?,
+                    })
+                },
+            )
+            .map_err(StoreError::from)
+    }
+
+    /// The employee's session that is `starting`, `idle` or `stopping`, if any.
+    pub fn active_session_for_employee(
+        &self,
+        employee_id: Uuid,
+    ) -> Result<Option<EmployeeSessionRecord>, StoreError> {
+        let connection = self.lock()?;
+        active_session_for_employee(&connection, employee_id)
+    }
+
+    /// The directory a resumed session ran in, from its `session.resumed` event, or `None` for a
+    /// session that began its own conversation (which ran in its own session directory).
+    ///
+    /// ponytail: this scans every `session.resumed` event with `json_extract`, once per wake,
+    /// attach and header render. That is fine while those events number in the hundreds; past
+    /// a few thousand, store the origin directory in an indexed `employee_sessions` column in a
+    /// later migration and read it from the row instead.
+    pub fn resumed_working_directory(
+        &self,
+        session_id: Uuid,
+    ) -> Result<Option<String>, StoreError> {
+        let connection = self.lock()?;
+        connection
+            .query_row(
+                "SELECT json_extract(payload_json, '$.workingDirectory') FROM audit_events
+                 WHERE event_type = 'session.resumed'
+                   AND json_extract(payload_json, '$.sessionId') = ?1
+                 ORDER BY sequence DESC LIMIT 1",
+                [session_id.to_string()],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(StoreError::from)
+    }
+
+    /// Audits whether `session_id` continued `prior_session_id`'s native conversation
+    /// (`session.resumed`) or started fresh although a suspended predecessor existed
+    /// (`session.resume.skipped`). Neither row changes: the native id is already on the session.
+    pub fn record_session_resume_outcome(
+        &self,
+        session_id: Uuid,
+        prior_session_id: Uuid,
+        outcome: SessionResumeOutcome<'_>,
+    ) -> Result<u64, StoreError> {
+        let mut connection = self.lock()?;
+        let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let now = Utc::now().to_rfc3339();
+        let (event_type, payload) = match outcome {
+            SessionResumeOutcome::Resumed {
+                native_session_id,
+                working_directory,
+            } => (
+                "session.resumed",
+                json!({
+                    "sessionId": session_id,
+                    "priorSessionId": prior_session_id,
+                    "nativeSessionId": native_session_id,
+                    "workingDirectory": working_directory,
+                }),
+            ),
+            SessionResumeOutcome::Skipped { reason } => (
+                "session.resume.skipped",
+                json!({
+                    "sessionId": session_id,
+                    "priorSessionId": prior_session_id,
+                    "reason": reason,
+                }),
+            ),
+        };
+        let sequence = employee::insert_event(&transaction, event_type, &payload, &now)?;
+        transaction.commit()?;
+        Ok(sequence)
+    }
 }
 
 pub(crate) fn latest_session_for_employee(
     connection: &Connection,
     employee_id: Uuid,
     employee_configuration_revision: u64,
+    excluding_session_id: Option<Uuid>,
 ) -> Result<Option<EmployeeSessionRecord>, StoreError> {
     let revision =
         i64::try_from(employee_configuration_revision).map_err(|_| StoreError::NegativeSequence)?;
@@ -415,8 +576,13 @@ pub(crate) fn latest_session_for_employee(
                     failure_message, created_at, updated_at, started_at, stopped_at
              FROM employee_sessions
              WHERE employee_id = ?1 AND employee_configuration_revision = ?2
+               AND (?3 IS NULL OR (id <> ?3 AND NOT (state = 'failed' AND started_at IS NULL)))
              ORDER BY rowid DESC LIMIT 1",
-            params![employee_id.to_string(), revision],
+            params![
+                employee_id.to_string(),
+                revision,
+                excluding_session_id.map(|id| id.to_string())
+            ],
             raw_session,
         )
         .optional()?

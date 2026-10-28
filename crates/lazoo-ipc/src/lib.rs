@@ -4,8 +4,8 @@ mod frame;
 mod security;
 
 pub use auth::{ProofFields, compute_proof, verify_proof};
-pub use connection::{AuthenticatedConnection, PipeClient, PipeServer};
-pub use frame::{read_frame, write_frame};
+pub use connection::{AuthenticatedConnection, PendingConnection, PipeClient, PipeServer};
+pub use frame::{read_frame, read_frame_bounded, write_frame};
 
 use std::io;
 

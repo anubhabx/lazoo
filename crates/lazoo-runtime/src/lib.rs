@@ -1,14 +1,21 @@
 mod atomic_file;
 mod data_root;
+mod governor;
 mod installation;
 mod notification;
 mod process_job;
 mod security;
 mod single_instance;
 mod task_worktree;
+mod terminal;
 
 pub use atomic_file::atomic_write;
 pub use data_root::DataRoot;
+pub use governor::{
+    BackgroundQueue, BackgroundRefusal, BudgetAssessment, BudgetSample, CpuCapStatus,
+    GovernorError, InfrastructureGovernor, InfrastructureSample, RollingBudget, RollingBudgetError,
+    WindowState,
+};
 pub use installation::Installation;
 pub use notification::NativeNotifier;
 pub use process_job::{
@@ -18,6 +25,9 @@ pub use process_job::{
 pub use security::OwnerSecurity;
 pub use single_instance::SingleInstance;
 pub use task_worktree::{PreparedGitTaskWorktree, prepare_git_task_worktree};
+pub use terminal::{
+    TerminalCommand, TerminalError, TerminalExitStatus, TerminalOutput, TerminalSession,
+};
 
 use std::{io, path::PathBuf};
 
