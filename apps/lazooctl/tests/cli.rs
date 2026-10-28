@@ -1483,7 +1483,7 @@ fn workspace_cli_maps_show() {
         request(&[CONVERSATION_ID]),
         (
             "workspace.conversation",
-            json!({"id": CONVERSATION_ID, "turnLimit": 50}),
+            json!({"id": CONVERSATION_ID, "turnLimit": 50, "beforeTurnSequence": null}),
             false
         )
     );
@@ -1491,7 +1491,15 @@ fn workspace_cli_maps_show() {
         request(&[CONVERSATION_ID, "--turn-limit", "5"]),
         (
             "workspace.conversation",
-            json!({"id": CONVERSATION_ID, "turnLimit": 5}),
+            json!({"id": CONVERSATION_ID, "turnLimit": 5, "beforeTurnSequence": null}),
+            false
+        )
+    );
+    assert_eq!(
+        request(&[CONVERSATION_ID, "--before-turn-sequence", "42"]),
+        (
+            "workspace.conversation",
+            json!({"id": CONVERSATION_ID, "turnLimit": 50, "beforeTurnSequence": 42}),
             false
         )
     );
