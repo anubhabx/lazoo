@@ -245,7 +245,8 @@ pub struct App {
 const DEFAULT_APPROVAL_TIMEOUT: Duration = Duration::from_mins(15);
 
 pub struct EventSubscription {
-    pub catch_up: Vec<EventSummary>,
+    /// The durable replay is drained in pages through `subscription_page` before live events.
+    pub replay_high_water: u64,
     pub live: broadcast::Receiver<EventSummary>,
 }
 
@@ -464,19 +465,36 @@ impl App {
         }
     }
 
-    pub fn subscribe(
-        &self,
-        after: u64,
-    ) -> Result<(Vec<EventSummary>, broadcast::Receiver<EventSummary>), lazoo_store::StoreError>
-    {
-        let live = self.events.subscribe();
-        let catch_up = self.store.list_events(after, 1024)?;
-        Ok((catch_up, live))
+    /// Retain a live receiver before fixing the durable replay interval. Callers drain with
+    /// `subscription_page`; this deliberately avoids materializing an unbounded backlog.
+    pub fn subscribe(&self, after: u64) -> Result<EventSubscription, lazoo_store::StoreError> {
+        self.subscription(after)
     }
 
     pub fn subscription(&self, after: u64) -> Result<EventSubscription, lazoo_store::StoreError> {
-        let (catch_up, live) = self.subscribe(after)?;
-        Ok(EventSubscription { catch_up, live })
+        let _ = i64::try_from(after).map_err(|_| lazoo_store::StoreError::NegativeSequence)?;
+        // Subscribe first so every event after this durable watermark remains in `live` even if
+        // replay writes take time. The server deduplicates the overlap by sequence.
+        let live = self.events.subscribe();
+        let replay_high_water = self.store.status()?.event_high_water;
+        Ok(EventSubscription {
+            replay_high_water,
+            live,
+        })
+    }
+
+    /// One bounded durable page from a subscription's fixed replay interval.
+    pub fn subscription_page(
+        &self,
+        after: u64,
+        replay_high_water: u64,
+    ) -> Result<Vec<EventSummary>, lazoo_store::StoreError> {
+        Ok(self
+            .store
+            .list_events(after, 1024)?
+            .into_iter()
+            .take_while(|event| event.sequence <= replay_high_water)
+            .collect())
     }
 
     #[must_use]

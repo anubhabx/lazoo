@@ -99,6 +99,11 @@ events and then streams. The mark is a lower bound across the response's reads,
 so events after it may already exist when the read returns. Reprocessing an event
 and refreshing is safe; advancing past an unseen event is not.
 
+Replay uses bounded pages until the captured durable high-water is reached. Live
+notifications, including broadcast lag, wake another durable drain; they are not
+sent directly past unseen audit rows. Clients retain the last safely consumed
+cursor if a slow connection is closed by the existing write deadline.
+
 Debounce relevant-event refreshes to at most one read per 250 ms. See the
 [contract index](superpowers/specs/2026-10-13-desktop-backend-contract-index.md)
 for the event families per surface. On disconnect retain last-known information,
@@ -132,8 +137,9 @@ for authenticated framing, byte offsets, output gaps, boot/revision fencing, and
 input acknowledgement uncertainty. An actual native TUI is available through
 attachment to a suspended Codex or Claude session. A live protocol-driven session
 cannot currently be mirrored into that TUI. The existing product brief requires
-native terminals; the owner must choose how this restriction applies to the first
-UI before its main work surface can be finalized.
+native terminals. On 2026-10-28 the owner explicitly required the actual native
+TUI to remain visible during orchestrated work. Concurrent native integration is
+therefore a readiness blocker; suspend-then-attach does not satisfy the first UI.
 
 Given `lead.session.id` or a worker card's session ID, call
 `session.terminal.status { id }` (CLI: `session terminal-status <id>`). Its fields

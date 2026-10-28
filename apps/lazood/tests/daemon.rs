@@ -4215,9 +4215,13 @@ async fn subscription_has_catch_up_then_live_event_without_duplication() {
     ))
     .await;
 
-    let (catch_up, mut live) = app.subscribe(0).unwrap();
+    let subscription = app.subscribe(0).unwrap();
+    let catch_up = app
+        .subscription_page(0, subscription.replay_high_water)
+        .unwrap();
     assert_eq!(catch_up.len(), 1);
     assert_eq!(catch_up[0].sequence, 1);
+    let mut live = subscription.live;
 
     app.handle(request(
         "register-2",
@@ -4231,6 +4235,67 @@ async fn subscription_has_catch_up_then_live_event_without_duplication() {
         .unwrap();
 
     assert_eq!(event.sequence, 2);
+}
+
+#[tokio::test]
+async fn subscription_drains_more_than_one_durable_page_before_live_handoff() {
+    let (_temporary, app) = test_app();
+    for index in 0..1025 {
+        let response = app
+            .handle(request(
+                &format!("employee-{index}"),
+                "employee.create",
+                json!({
+                    "name": format!("Replay {index}"),
+                    "provider": "codex",
+                    "idempotencyKey": format!("replay-{index}")
+                }),
+            ))
+            .await;
+        assert!(response.error.is_none(), "{response:?}");
+    }
+    let mut subscription = app.subscribe(0).unwrap();
+    let first = app
+        .subscription_page(0, subscription.replay_high_water)
+        .unwrap();
+    assert_eq!(first.len(), 1024);
+    let second = app
+        .subscription_page(
+            first.last().unwrap().sequence,
+            subscription.replay_high_water,
+        )
+        .unwrap();
+    assert_eq!(second.len(), 1);
+    assert!(first.last().unwrap().sequence < second[0].sequence);
+
+    let response = app
+        .handle(request(
+            "employee-live",
+            "employee.create",
+            json!({"name": "Replay live", "provider": "codex", "idempotencyKey": "replay-live"}),
+        ))
+        .await;
+    assert!(response.error.is_none(), "{response:?}");
+    let wake = timeout(Duration::from_secs(2), subscription.live.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    let live = app.subscription_page(second[0].sequence, u64::MAX).unwrap();
+    assert_eq!(live.len(), 1);
+    assert_eq!(live[0].sequence, wake.sequence);
+}
+
+#[test]
+fn subscription_rejects_an_after_cursor_outside_the_durable_sequence_range() {
+    let (_temporary, app) = test_app();
+    assert!(matches!(
+        app.subscribe(u64::MAX),
+        Err(lazoo_store::StoreError::NegativeSequence)
+    ));
+    assert!(matches!(
+        app.subscription(u64::MAX),
+        Err(lazoo_store::StoreError::NegativeSequence)
+    ));
 }
 
 #[tokio::test]
@@ -11436,7 +11501,10 @@ async fn the_user_reads_resource_use_for_the_daemon_and_a_live_session() {
     assert_eq!(daemon_after["liveSessions"], 0);
 
     // Nothing was stored: no event names a resource sample, and the snapshot is unchanged.
-    let events = app.subscribe(0).unwrap().0;
+    let subscription = app.subscribe(0).unwrap();
+    let events = app
+        .subscription_page(0, subscription.replay_high_water)
+        .unwrap();
     assert!(
         events
             .iter()

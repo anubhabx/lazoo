@@ -30,10 +30,9 @@ In progress: backward history paging, terminal attachment status/discovery, fina
 contract documentation, and a settled-tree full gate. Do not treat the branch as
 finished until the readiness verification record contains the fresh full results.
 
-The owner has been asked whether the first UI may use live activity with native
-terminal access after stopping, or must show the actual native TUI during
-orchestrated work. No answer has been received. Preserve the existing native-TUI
-requirement meanwhile. Installed Codex exposes a possible remote-TUI route, but
+The owner confirmed that the first UI must show the actual native TUI during
+orchestrated work. This is required backend work, not a pending scope choice.
+Installed Codex exposes a possible remote-TUI route, but
 sole approval/tool ownership over a multi-client transport is unproven; see
 [the read-only research](verification/2026-10-28-native-terminal-research.md).
 No live model calls or user configuration edits have been made by this work.

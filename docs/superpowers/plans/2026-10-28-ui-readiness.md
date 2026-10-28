@@ -26,6 +26,8 @@ because the host has little free memory.
   channel and preserve exclusive ownership of native sessions.
 - [x] Replace stale desktop contract guidance with current request/response,
   event refresh, error/retry, capability and terminal integration instructions.
+- [x] Repair event subscriptions so reconnects replay more than 1,024 durable
+  events in bounded pages and live notification lag cannot skip durable events.
 - [ ] Independently review specification compliance and implementation quality,
   fix findings, then run the settled-tree deterministic gate and a bounded CLI
   stress check. Record exact results and remaining product limitations.
@@ -38,12 +40,11 @@ exist even though it does. The work above addresses these integration gaps.
 
 ## Native terminal decision
 
-The current implementation supports a stopped native session being resumed in an
-owner terminal. It does not provide a simultaneously visible native TUI for a
-protocol-driven session. The owner has been asked which first-UI experience is
-required. Until answered, preserve the existing requirement and implement only
-the independent backend preparation; do not silently replace it with a generic
-chat UI or claim simultaneous native-TUI support.
+The owner confirmed on 2026-10-28: **the actual native TUI must stay visible during
+orchestrated work**. Suspend-then-attach does not satisfy this requirement. The
+current implementation supports only the latter; concurrent native integration
+is now required work before this readiness goal can be called complete. Preserve
+Lazoo's sole ownership of canonical turns, authority and collaboration responses.
 
 ## Verification boundaries
 
