@@ -445,9 +445,12 @@ fn supported_compatibility(
 }
 
 fn reviewed_codex_mcp_version(version: &str) -> bool {
-    version
-        .split_whitespace()
-        .any(|token| matches!(token, "0.155.1" | "0.162.0-alpha.17.2"))
+    version.split_whitespace().any(|token| {
+        matches!(
+            token,
+            "0.155.1" | "0.162.0-alpha.17.2" | "0.165.0-alpha.1.2"
+        )
+    })
 }
 
 fn observed(metadata: &ConfigurationPreviewMetadata) -> Value {
@@ -517,6 +520,20 @@ mod tests {
 
     #[test]
     fn only_exact_reviewed_detected_versions_are_eligible() {
+        assert_eq!(
+            supported_compatibility(
+                &probe(ProviderKind::Codex, "codex-cli 0.165.0-alpha.1.2", true),
+                "codex-cli 0.165.0-alpha.1.2"
+            ),
+            Some(ConfigurationCompatibility::Native)
+        );
+        assert_eq!(
+            supported_compatibility(
+                &probe(ProviderKind::Codex, "codex-cli 0.165.0-alpha.1.3", true),
+                "codex-cli 0.165.0-alpha.1.3"
+            ),
+            None
+        );
         assert_eq!(
             supported_compatibility(
                 &probe(ProviderKind::Codex, "codex-cli 0.155.1", true),

@@ -30,6 +30,11 @@ The exact supported method names are dispatched in `apps/lazood/src/app.rs`;
 avoid deriving additional methods from this table. The CLI provides executable
 examples through `--help` and `--json`.
 
+Selected Codex MCP configuration apply remains gated to exact reviewed versions:
+`0.155.1`, `0.162.0-alpha.17.2`, and `0.165.0-alpha.1.2`. An installed provider is
+not automatically eligible for configuration writes. Use preview results and
+their refusal reasons; see the [current compatibility evidence](verification/2026-10-29-codex-mcp-configuration.md).
+
 ## Launch and capability handling
 
 The top-level launcher `authorityModes` lists the vocabulary. The selected lead's

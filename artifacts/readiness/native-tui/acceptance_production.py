@@ -6,10 +6,13 @@ Run: python artifacts/readiness/native-tui/acceptance_production.py [debug|relea
 Every run retains its disposable state and evidence together below this folder.
 """
 import asyncio
+from datetime import datetime, timezone
+import hashlib
 import json
 import os
 from pathlib import Path
 import re
+import subprocess
 import sys
 import threading
 import time
@@ -23,6 +26,7 @@ assert PROFILE in {"debug", "release"}
 
 
 async def main():
+    started_at = datetime.now(timezone.utc).isoformat()
     run = BASE / ("production-" + uuid.uuid4().hex)
     home = run / "codex-home"
     home.mkdir(parents=True)
@@ -261,7 +265,26 @@ async def main():
         (run / "screen-final.txt").write_text(re.sub(r"\x1b\[[0-?]*[ -/]*[@-~]", "", output.decode(errors="replace")), encoding="utf-8")
         for name, value in [("fixture-requests", requests), ("commands", commands), ("rpc-results", outputs)]:
             (run / (name + ".json")).write_text(json.dumps(value, indent=2), encoding="utf-8")
+        def sha256(path):
+            digest = hashlib.sha256()
+            with Path(path).open("rb") as source:
+                for block in iter(lambda: source.read(1024 * 1024), b""):
+                    digest.update(block)
+            return digest.hexdigest()
+
+        plain_screen = re.sub(r"\x1b\[[0-?]*[ -/]*[@-~]", "", output.decode(errors="replace"))
+        native_version = re.search(r"OpenAI Codex \(v([^\)]+)\)", plain_screen)
+        source_revision = subprocess.run(
+            ["git", "rev-parse", "HEAD"], cwd=REPO, capture_output=True, text=True, check=True).stdout.strip()
+        binaries = {name: sha256(REPO / f"target/{PROFILE}/{name}.exe")
+                    for name in ("lazood", "lazooctl", "lazoo-session-host")}
+        if terminal:
+            binaries["nativeCodex"] = sha256(terminal["executable"])
         result = {"status": "PASS" if not errors else "FAIL", "run": str(run), "profile": PROFILE,
+                  "startedAt": started_at, "completedAt": datetime.now(timezone.utc).isoformat(),
+                  "sourceRevision": source_revision, "driverSha256": sha256(__file__),
+                  "binarySha256": binaries, "nativeExecutable": terminal["executable"] if terminal else None,
+                  "nativeVersion": native_version.group(1) if native_version else None,
                   "errors": errors, "evidence": evidence, "externalModelCalls": 0,
                   "localFixtureRequests": len(requests)}
         (run / "result.json").write_text(json.dumps(result, indent=2), encoding="utf-8")
