@@ -68,11 +68,9 @@ impl FromStr for ProviderKind {
 
 /// The argv that reopens `native_session_id` in the provider's own interactive TUI, for the
 /// owner's terminal takeover of a suspended session. The shapes come from the installed CLIs'
-/// help (Claude Code 2.1.302 `--resume <id>`, codex-cli 0.153.4 `resume <id>`) and are not
-/// proven against a live resume. `None` means Lazoo has no proven resume command: `OpenCode` and
-/// Grok Build never receive governed turns, Antigravity's session record keeps the
-/// `pending:<uuid>` placeholder instead of the real conversation id, and an empty id cannot be
-/// resumed anywhere.
+/// help: Claude `--resume`, Codex `resume`, `OpenCode` `--session`, Antigravity `--conversation`.
+/// Takeover resumes stored native history; it does not submit a model turn. `None` means no supported
+/// takeover command, or the native identity has not yet been bound by its authenticated session.
 #[must_use]
 pub fn attach_args(provider: ProviderKind, native_session_id: &str) -> Option<Vec<String>> {
     if native_session_id.is_empty() || native_session_id.starts_with("pending:") {
@@ -82,7 +80,9 @@ pub fn attach_args(provider: ProviderKind, native_session_id: &str) -> Option<Ve
     match provider {
         ProviderKind::ClaudeCode => Some(vec!["--resume".to_owned(), id]),
         ProviderKind::Codex => Some(vec!["resume".to_owned(), id]),
-        ProviderKind::OpenCode | ProviderKind::GrokBuild | ProviderKind::Antigravity => None,
+        ProviderKind::OpenCode => Some(vec!["--session".to_owned(), id]),
+        ProviderKind::Antigravity => Some(vec!["--conversation".to_owned(), id]),
+        ProviderKind::GrokBuild => None,
     }
 }
 
@@ -198,12 +198,31 @@ impl ProviderProbe {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Eq, PartialEq)]
 pub struct CommandSpec {
     pub executable: PathBuf,
     pub args: Vec<OsString>,
     pub cwd: PathBuf,
     pub env: BTreeMap<OsString, OsString>,
+}
+
+impl fmt::Debug for CommandSpec {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("CommandSpec")
+            .field("executable", &self.executable)
+            .field("args", &self.args)
+            .field("cwd", &self.cwd)
+            .field(
+                "env",
+                &self
+                    .env
+                    .keys()
+                    .map(|name| (name, "<redacted>"))
+                    .collect::<Vec<_>>(),
+            )
+            .finish()
+    }
 }
 
 impl CommandSpec {
@@ -248,6 +267,14 @@ pub struct SessionRequest {
     pub turn_timeout_millis: u64,
     #[serde(default)]
     pub tools: Vec<ToolSpec>,
+    /// The caller owns this isolated workspace and permits temporary native hook configuration.
+    /// This is never inferred from a file supplied by the provider or repository.
+    #[serde(default)]
+    pub managed_workspace: bool,
+    /// A separate, explicit workspace-trust grant issued by the caller's consent ledger.
+    /// Workspace ownership or tool autonomy alone never grants native workspace trust.
+    #[serde(default)]
+    pub native_workspace_trust_approved: bool,
 }
 
 impl SessionRequest {
@@ -264,12 +291,26 @@ impl SessionRequest {
             progress_timeout_millis: 30_000,
             turn_timeout_millis: 300_000,
             tools: Vec::new(),
+            managed_workspace: false,
+            native_workspace_trust_approved: false,
         }
     }
 
     #[must_use]
     pub fn with_tools(mut self, tools: Vec<ToolSpec>) -> Self {
         self.tools = tools;
+        self
+    }
+
+    #[must_use]
+    pub const fn with_managed_workspace(mut self) -> Self {
+        self.managed_workspace = true;
+        self
+    }
+
+    #[must_use]
+    pub const fn with_native_workspace_trust_approved(mut self) -> Self {
+        self.native_workspace_trust_approved = true;
         self
     }
 
@@ -544,6 +585,13 @@ pub trait TurnEventObserver: Send + Sync {
 pub trait ProviderSession: Send + Sync {
     fn id(&self) -> String;
     fn native_host_pid(&self) -> Option<u32>;
+    /// A native read-only view of this exact running session, without another controller.
+    fn native_view_available(&self) -> bool {
+        false
+    }
+    fn open_native_view(&self) -> AdapterFuture<'_, Option<crate::NativeViewLease>> {
+        Box::pin(async { Ok(None) })
+    }
     /// Job Object accounting for the session's native process tree; `None` when the session
     /// owns no job.
     fn resources(&self) -> Option<JobAccounting> {

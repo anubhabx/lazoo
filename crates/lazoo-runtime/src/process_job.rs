@@ -87,41 +87,45 @@ impl JobObject {
     /// The job's accounting so far: processes, CPU time, and peak memory, kept by Windows for
     /// the whole tree and surviving its termination until the job handle closes.
     pub fn accounting(&self) -> Result<JobAccounting, RuntimeError> {
-        let mut accounting = JOBOBJECT_BASIC_ACCOUNTING_INFORMATION::default();
-        unsafe {
-            QueryInformationJobObject(
-                Some(self.handle),
-                JobObjectBasicAccountingInformation,
-                (&raw mut accounting).cast::<c_void>(),
-                u32::try_from(size_of_val(&accounting))
-                    .expect("job accounting structure exceeds u32"),
-                None,
-            )
-        }?;
-        let mut limits = JOBOBJECT_EXTENDED_LIMIT_INFORMATION::default();
-        unsafe {
-            QueryInformationJobObject(
-                Some(self.handle),
-                JobObjectExtendedLimitInformation,
-                (&raw mut limits).cast::<c_void>(),
-                u32::try_from(size_of_val(&limits)).expect("job limit structure exceeds u32"),
-                None,
-            )
-        }?;
-        Ok(JobAccounting {
-            active_processes: accounting.ActiveProcesses,
-            total_processes: accounting.TotalProcesses,
-            user_cpu_millis: hundred_nanos_to_millis(accounting.TotalUserTime),
-            kernel_cpu_millis: hundred_nanos_to_millis(accounting.TotalKernelTime),
-            peak_process_memory_bytes: bytes(limits.PeakProcessMemoryUsed),
-            peak_job_memory_bytes: bytes(limits.PeakJobMemoryUsed),
-        })
+        job_accounting(self.handle)
     }
 
     pub fn terminate(&self, exit_code: u32) -> Result<(), RuntimeError> {
         unsafe { TerminateJobObject(self.handle, exit_code) }?;
         Ok(())
     }
+}
+
+/// Reads accounting for a live Job Object handle without transferring ownership of the handle.
+pub(crate) fn job_accounting(handle: HANDLE) -> Result<JobAccounting, RuntimeError> {
+    let mut accounting = JOBOBJECT_BASIC_ACCOUNTING_INFORMATION::default();
+    unsafe {
+        QueryInformationJobObject(
+            Some(handle),
+            JobObjectBasicAccountingInformation,
+            (&raw mut accounting).cast::<c_void>(),
+            u32::try_from(size_of_val(&accounting)).expect("job accounting structure exceeds u32"),
+            None,
+        )
+    }?;
+    let mut limits = JOBOBJECT_EXTENDED_LIMIT_INFORMATION::default();
+    unsafe {
+        QueryInformationJobObject(
+            Some(handle),
+            JobObjectExtendedLimitInformation,
+            (&raw mut limits).cast::<c_void>(),
+            u32::try_from(size_of_val(&limits)).expect("job limit structure exceeds u32"),
+            None,
+        )
+    }?;
+    Ok(JobAccounting {
+        active_processes: accounting.ActiveProcesses,
+        total_processes: accounting.TotalProcesses,
+        user_cpu_millis: hundred_nanos_to_millis(accounting.TotalUserTime),
+        kernel_cpu_millis: hundred_nanos_to_millis(accounting.TotalKernelTime),
+        peak_process_memory_bytes: bytes(limits.PeakProcessMemoryUsed),
+        peak_job_memory_bytes: bytes(limits.PeakJobMemoryUsed),
+    })
 }
 
 unsafe impl Send for JobObject {}

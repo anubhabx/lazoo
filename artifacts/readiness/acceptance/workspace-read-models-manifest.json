@@ -1,0 +1,71 @@
+{
+  "status": "PASS",
+  "schemaVersion": 19,
+  "mode": "deterministic-fake-transport",
+  "startedAt": "2026-10-28T21:05:50.5817645Z",
+  "durationMs": 2754,
+  "commands": [
+    {
+      "command": "cargo test -p lazoo-domain --test workspace the_marker_prefers_attention_then_activity_then_failure_then_completion --locked -- --exact",
+      "exitCode": 0,
+      "durationMs": 283
+    },
+    {
+      "command": "cargo test -p lazoo-domain --test workspace titles_come_from_the_store_then_the_first_request_then_a_default --locked -- --exact",
+      "exitCode": 0,
+      "durationMs": 278
+    },
+    {
+      "command": "cargo test -p lazoo-domain --test workspace startability_follows_roster_availability_with_lazoo_words_for_each_block --locked -- --exact",
+      "exitCode": 0,
+      "durationMs": 349
+    },
+    {
+      "command": "cargo test -p lazooctl --test cli workspace_cli_maps_conversations_and_launcher --locked -- --exact",
+      "exitCode": 0,
+      "durationMs": 336
+    },
+    {
+      "command": "cargo test -p lazood --test daemon the_user_browses_a_space_and_its_launcher_through_the_daemon --locked -- --exact",
+      "exitCode": 0,
+      "durationMs": 932
+    },
+    {
+      "command": "cargo test -p lazoo-store --test store store_enables_wal_foreign_keys_and_schema_version --locked -- --exact",
+      "exitCode": 0,
+      "durationMs": 485
+    },
+    {
+      "command": "git diff --quiet and git diff --cached --quiet -- apps/lazoo-desktop",
+      "exitCode": 0,
+      "durationMs": null
+    }
+  ],
+  "evidence": {
+    "markersFollowTheRows": true,
+    "titlesDeriveFromTheFirstRequest": true,
+    "startabilityFollowsAvailability": true,
+    "cliMapsWorkspaceCommands": true,
+    "daemonServesSpaces": true,
+    "rememberedLeadIsTheNewest": true,
+    "launcherExplainsBlocks": true,
+    "pagesWithCursor": true,
+    "workspaceStoresNothing": true,
+    "snapshotUnchanged": true,
+    "schemaFifteen": true,
+    "providerSmokeAbsent": true,
+    "externalModelUseAbsent": true,
+    "uiChangesAbsent": true
+  },
+  "boundaries": {
+    "providerSmoke": "NOT_RUN",
+    "externalModelUse": "NOT_RUN",
+    "desktopUi": "UNCHANGED",
+    "schemaMigration": "NONE",
+    "storage": "DERIVED_NEVER_STORED",
+    "mutations": "NONE",
+    "phase": "ONE_SIDEBAR_AND_LAUNCHER",
+    "deferred": "WORKSPACE_CONVERSATION_HEADER_AND_WORKER_DOCK",
+    "toolAccess": "NONE"
+  }
+}

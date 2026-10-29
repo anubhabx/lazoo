@@ -50,6 +50,9 @@ impl AntigravityAdapter {
             .arg(format!("{}ms", request.turn_timeout_millis))
             .arg("--add-dir")
             .arg(request.cwd.as_os_str());
+        command
+            .env
+            .insert("AGY_CLI_DISABLE_AUTO_UPDATE".into(), "true".into());
         for root in &request.workspace_roots {
             command = command.arg("--add-dir").arg(root.as_os_str());
         }
@@ -628,7 +631,11 @@ fn validate_request(request: &SessionRequest) -> Result<(), ProviderError> {
 async fn read_version(path: &Path) -> Result<String, ProviderError> {
     let output = timeout(
         VERSION_TIMEOUT,
-        Command::new(path).arg("--version").output(),
+        Command::new(path)
+            .env("AGY_CLI_DISABLE_AUTO_UPDATE", "true")
+            .kill_on_drop(true)
+            .arg("--version")
+            .output(),
     )
     .await
     .map_err(|_| ProviderError::Timeout {
@@ -641,6 +648,8 @@ async fn read_usage(path: &Path, cwd: &Path) -> Result<Value, ProviderError> {
     let output = timeout(
         PROBE_TIMEOUT,
         Command::new(path)
+            .env("AGY_CLI_DISABLE_AUTO_UPDATE", "true")
+            .kill_on_drop(true)
             .arg("--print")
             .arg("/usage")
             .arg("--output-format")

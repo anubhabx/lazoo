@@ -79,11 +79,11 @@ function Wait-Exit([System.Diagnostics.Process]$Process, [int]$TimeoutSeconds, [
     return $exitCode
 }
 
-function Find-DaemonProcess([int]$ExcludePid = 0) {
+function Find-DaemonProcess([int]$KeeperPid, [int]$ExcludePid = 0) {
     $deadline = [DateTime]::UtcNow.AddSeconds(10)
     while ([DateTime]::UtcNow -lt $deadline) {
         $candidate = Get-CimInstance Win32_Process -Filter "Name = 'lazood.exe'" |
-            Where-Object { $_.ProcessId -ne $ExcludePid -and $_.ExecutablePath -eq $script:daemonExe } |
+            Where-Object { $_.ProcessId -ne $ExcludePid -and $_.ParentProcessId -eq $KeeperPid -and $_.ExecutablePath -eq $script:daemonExe } |
             Select-Object -First 1
         if ($null -ne $candidate) { return $candidate }
         Start-Sleep -Milliseconds 100
@@ -136,7 +136,7 @@ try {
     $keeper = Start-Keeper $dataRoot (Join-Path $runRoot 'keeper-real-1')
     $statusBefore = Wait-Status
     Assert-Equal $statusBefore.protocolVersion 1 'protocol version'
-    Assert-Equal $statusBefore.schemaVersion 19 'schema version'
+    Assert-Equal $statusBefore.schemaVersion 20 'schema version'
     Assert-Equal $statusBefore.journalMode 'wal' 'SQLite journal mode'
     $gates.controlPlaneReady = 'PASS'
 
@@ -151,13 +151,13 @@ try {
     Assert-Equal $events.Count 1 'idempotent logical event count'
     $gates.projectMutation = 'PASS'
 
-    $oldDaemon = Find-DaemonProcess
+    $oldDaemon = Find-DaemonProcess $keeper.Id
     Assert-Equal $oldDaemon.ExecutablePath $script:daemonExe 'forced-stop target executable'
     $oldDaemonId = $oldDaemon.ProcessId
     Stop-Process -Id $oldDaemonId -Force
     Wait-Process -Id $oldDaemonId -Timeout 5 -ErrorAction SilentlyContinue
     $statusAfter = Wait-Status $statusBefore.bootId 20
-    $newDaemon = Find-DaemonProcess $oldDaemonId
+    $newDaemon = Find-DaemonProcess $keeper.Id $oldDaemonId
     Assert-True ($newDaemon.ProcessId -ne $oldDaemonId) 'keeper restarted daemon with a new PID'
     $projectsAfter = @(Invoke-Json @('project', 'list'))
     $eventsAfter = @(Invoke-Json @('events', 'list', '--after', '0', '--limit', '100'))
@@ -206,13 +206,13 @@ try {
     $stopwatch.Stop()
     if ($null -ne $keeper -and -not $keeper.HasExited) {
         $ownedDaemon = Get-CimInstance Win32_Process -Filter "Name = 'lazood.exe'" |
-            Where-Object { $_.ExecutablePath -eq $script:daemonExe }
+            Where-Object { $_.ParentProcessId -eq $keeper.Id -and $_.ExecutablePath -eq $script:daemonExe }
         foreach ($process in $ownedDaemon) { Stop-Process -Id $process.ProcessId -Force }
         Stop-Process -Id $keeper.Id -Force
     }
     $manifest = [ordered]@{
         schemaVersion = 1
-        databaseSchemaVersion = 11
+        databaseSchemaVersion = 20
         status = $manifestStatus
         startedAt = $startedAt.ToString('o')
         completedAt = [DateTime]::UtcNow.ToString('o')

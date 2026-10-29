@@ -175,7 +175,7 @@ $script:commands = [Collections.Generic.List[object]]::new()
 $daemon = $null
 $manifestStatus = 'FAIL'
 $evidence = [ordered]@{
-    schemaEighteen = $false
+    schemaTwenty = $false
     idleAttachRefused = $false
     resumeArgumentsFromRecords = $false
     cwdFromRecords = $false
@@ -215,8 +215,8 @@ try {
 
     $daemon = Start-Daemon
     $status = Wait-Status
-    Assert-Equal ([int]$status.schemaVersion) 19 'schema 19'
-    $evidence.schemaEighteen = $true
+    Assert-Equal ([int]$status.schemaVersion) 20 'schema 20'
+    $evidence.schemaTwenty = $true
 
     $employee = Invoke-Json @(
         'employee', 'create', 'Rhea', '--provider', 'codex', '--role', 'Lead',
@@ -351,7 +351,7 @@ try {
     }
     $manifest = [ordered]@{
         status = $manifestStatus
-        schemaVersion = 19
+        schemaVersion = 20
         mode = 'real-binaries-disposable-data-root-no-provider'
         startedAt = $startedAt.ToString('o')
         durationMs = [long]$stopwatch.ElapsedMilliseconds
@@ -364,7 +364,7 @@ try {
             externalModelUse = 'NOT_RUN'
             liveNativeResume = 'NOT_PROVEN_OWNER_GATE'
             attachableStates = 'SUSPENDED_ONLY'
-            attachableProviders = 'CLAUDE_CODE_AND_CODEX'
+            attachableProviders = 'CODEX_CLAUDE_CODE_OPENCODE_ANTIGRAVITY'
             terminalAuthority = 'OWNER_NATIVE_CONFIGURATION'
             employeeActivationWhileAttached = 'ALLOWED'
             desktopUi = 'UNCHANGED'

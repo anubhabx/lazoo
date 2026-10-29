@@ -98,6 +98,18 @@ pub struct LeadCandidate {
     pub checkout_policy: EmployeeCheckoutPolicy,
     pub availability: EmployeeAvailability,
     pub availability_reason: Option<String>,
+    /// Authority modes that a new session for this lead can actually serve. This is specific to
+    /// the provider and the employee's configured authority, not the launcher's global
+    /// vocabulary.
+    pub authority_modes: Vec<AuthorityMode>,
+    /// Why no authority mode is available, when `authority_modes` is empty.
+    pub authority_reason: Option<String>,
+    /// Whether the session receives Lazoo's collaboration tools. A conversational session can
+    /// be startable without being able to orchestrate workers.
+    pub collaboration_tools_available: bool,
+    /// Whether this provider has Lazoo's native live-view bridge. This is a provider capability,
+    /// not current session eligibility; inspect `session.terminal.status` for that truth.
+    pub native_view_supported: bool,
     pub startable: bool,
     pub blocking_reason: Option<String>,
     pub configuration_revision: u64,
@@ -271,6 +283,9 @@ pub struct WorkspaceConversationParams {
     /// How many of the newest turns to return (1 to 500).
     #[serde(default = "default_turn_limit")]
     pub turn_limit: u32,
+    /// Exclusive sequence cursor for older history; absent starts at the newest turn.
+    #[serde(default)]
+    pub before_turn_sequence: Option<u64>,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
@@ -287,6 +302,8 @@ pub struct WorkspaceConversationResult {
     /// The newest `turnLimit` turns, oldest first.
     pub turns: Vec<ConversationTurnSummary>,
     pub turns_truncated: bool,
+    /// Exclusive cursor for the next older history page, or null at the beginning.
+    pub next_before_turn_sequence: Option<u64>,
     /// One card per task below a root, oldest first.
     pub workers: Vec<WorkerCard>,
     /// The conversation's own unresolved Inbox items, in Inbox order.

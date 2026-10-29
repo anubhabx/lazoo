@@ -78,6 +78,52 @@ pub struct SessionTerminalAttachResult {
     pub terminal: TerminalRecord,
 }
 
+/// `session.terminal.view`: open the genuine native TUI for an eligible active session without
+/// granting it a second controller path.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct SessionTerminalViewParams {
+    pub id: Uuid,
+    pub expected_revision: u64,
+    pub columns: u16,
+    pub rows: u16,
+    pub idempotency_key: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct SessionTerminalViewResult {
+    pub session_id: Uuid,
+    pub terminal: TerminalRecord,
+}
+
+/// Read-only recovery state for a session's owner terminal. `blocking_*` are stable UI data;
+/// a missing value means attachment is currently eligible.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct SessionTerminalStatusParams {
+    pub id: Uuid,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+#[allow(clippy::struct_excessive_bools)] // Independent attach/view eligibility and in-flight state.
+pub struct SessionTerminalStatusResult {
+    pub boot_id: Uuid,
+    pub session_id: Uuid,
+    pub session_revision: u64,
+    pub opening: bool,
+    pub terminal: Option<TerminalRecord>,
+    pub attachable: bool,
+    pub blocking_code: Option<String>,
+    pub blocking_reason: Option<String>,
+    pub viewable: bool,
+    pub view_blocking_code: Option<String>,
+    pub view_blocking_reason: Option<String>,
+    pub view_opening: bool,
+    pub view_terminal: Option<TerminalRecord>,
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct TerminalInput {

@@ -28,6 +28,17 @@ pub struct MarkSessionReadyInput {
     pub native_host_pid: u32,
 }
 
+/// Replaces a provider's temporary `pending:<uuid>` native id with its first authoritative id.
+/// This is only valid for the live idle session owned by the current daemon boot.
+#[derive(Clone, Debug)]
+pub struct BindPendingNativeSessionInput {
+    pub session_id: Uuid,
+    pub expected_revision: u64,
+    pub owner_boot_id: Uuid,
+    pub expected_pending_native_session_id: String,
+    pub native_session_id: String,
+}
+
 /// Whether turns delivered to a session completed, and whether any ended failed or uncertain.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct SessionTurnEvidence {
@@ -204,6 +215,51 @@ impl Store {
                 Ok(result)
             },
         )
+    }
+
+    pub fn bind_pending_native_session(
+        &self,
+        input: &BindPendingNativeSessionInput,
+    ) -> Result<SessionMutationResult, StoreError> {
+        if !input
+            .expected_pending_native_session_id
+            .starts_with("pending:")
+            || input.native_session_id.is_empty()
+            || input.native_session_id.starts_with("pending:")
+            || input.native_session_id == input.expected_pending_native_session_id
+        {
+            return Err(StoreError::SessionState {
+                session_id: input.session_id,
+                state: "invalid native session binding".to_owned(),
+                expected: "pending native session id",
+            });
+        }
+        let mut connection = self.lock()?;
+        let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let current = required_session(&transaction, input.session_id)?;
+        require_session_revision(&current, input.expected_revision)?;
+        require_state(&current, SessionLifecycleState::Idle, "idle")?;
+        if current.owner_boot_id != Some(input.owner_boot_id) {
+            return Err(StoreError::SessionOwnership {
+                session_id: current.id,
+            });
+        }
+        if current.native_session_id.as_deref() != Some(&input.expected_pending_native_session_id) {
+            return Err(StoreError::SessionStale {
+                session_id: current.id,
+                current_revision: current.revision,
+            });
+        }
+        let now = Utc::now().to_rfc3339();
+        transaction.execute(
+            "UPDATE employee_sessions SET native_session_id = ?2, revision = revision + 1, updated_at = ?3 WHERE id = ?1",
+            params![current.id.to_string(), input.native_session_id, now],
+        )?;
+        transition_with_roster_event(&transaction, current.id, "session.native-bound", &now)
+            .and_then(|result| {
+                transaction.commit()?;
+                Ok(result)
+            })
     }
 
     pub fn begin_session_stop(

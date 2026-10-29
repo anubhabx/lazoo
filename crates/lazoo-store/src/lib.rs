@@ -10,6 +10,7 @@ mod memory;
 mod memory_worker;
 mod message;
 mod migration;
+mod native_trust;
 mod session;
 mod task;
 mod workspace;
@@ -36,9 +37,9 @@ pub use configuration::{
     ConfigurationOperationState, CreateConfigurationPreviewInput, RecordConfigurationReceiptInput,
 };
 pub use conversation::{
-    BeginTurnSubmissionInput, CreateConversationInput, FailTurnInput, FinishTurnCancelInput,
-    MarkTurnUncertainInput, ObserveTurnInput, RecordTurnInput, RenameConversationInput,
-    RequestTurnCancelInput, RetryTurnInput,
+    BeginTurnSubmissionInput, CreateConversationInput, FailRecordedRootTurnBeforeProviderInput,
+    FailTurnInput, FinishTurnCancelInput, MarkTurnUncertainInput, ObserveTurnInput,
+    RecordTurnInput, RenameConversationInput, RequestTurnCancelInput, RetryTurnInput,
 };
 pub use delivery::{
     ConsumePeerMessageInput, ConsumeTaskResultInput, QueueIncidentNoticeInput,
@@ -64,9 +65,14 @@ pub use message::{
     AcknowledgeMessageInput, CancelMessageInput, ClaimMessageInput, FailMessageInput,
     RetryMessageInput, SendMessageInput,
 };
+pub use native_trust::{
+    CancelNativeTrustInput, ClaimNativeTrustNotificationInput, RequestNativeTrustInput,
+    ResolveNativeTrustInput,
+};
 pub use session::{
-    BeginIdleSessionStopInput, BeginSessionInput, BeginSessionStopInput, FailSessionInput,
-    FinishSessionStopInput, MarkSessionReadyInput, SessionResumeOutcome, SessionTurnEvidence,
+    BeginIdleSessionStopInput, BeginSessionInput, BeginSessionStopInput,
+    BindPendingNativeSessionInput, FailSessionInput, FinishSessionStopInput, MarkSessionReadyInput,
+    SessionResumeOutcome, SessionTurnEvidence,
 };
 pub use task::{
     AcceptTaskInput, CancelTaskInput, ClaimTaskDispatchInput, DeferTaskDispatchInput,
@@ -221,6 +227,8 @@ pub enum StoreError {
     MessageValidation(#[from] lazoo_domain::MessageValidationError),
     #[error(transparent)]
     ConversationValidation(#[from] lazoo_domain::ConversationValidationError),
+    #[error(transparent)]
+    WorkspaceValidation(#[from] lazoo_domain::WorkspaceValidationError),
     #[error("conversation {conversation_id} was not found")]
     ConversationNotFound { conversation_id: Uuid },
     #[error("conversation {conversation_id} changed; current revision is {current_revision}")]
@@ -334,6 +342,31 @@ pub enum StoreError {
     ApprovalTurnState { turn_id: Uuid, state: String },
     #[error("approval idempotency key was already used with different input")]
     ApprovalIdempotencyConflict,
+    #[error("native trust request {trust_id} was not found")]
+    NativeTrustNotFound { trust_id: Uuid },
+    #[error("native trust request {trust_id} changed; current revision is {current_revision}")]
+    NativeTrustStale {
+        trust_id: Uuid,
+        current_revision: u64,
+    },
+    #[error("native trust policy for {provider} changed; current revision is {current_revision}")]
+    NativeTrustPolicyStale {
+        provider: String,
+        current_revision: u64,
+    },
+    #[error("native trust request {trust_id} is {state}, expected {expected}")]
+    NativeTrustState {
+        trust_id: Uuid,
+        state: String,
+        expected: &'static str,
+    },
+    #[error("native trust idempotency key was already used with different input")]
+    NativeTrustIdempotencyConflict,
+    #[error("native trust input {field} is invalid: {message}")]
+    NativeTrustValidation {
+        field: &'static str,
+        message: String,
+    },
     #[error(transparent)]
     ApprovalValidation(#[from] lazoo_domain::ApprovalValidationError),
     #[error("incident {incident_id} was not found")]

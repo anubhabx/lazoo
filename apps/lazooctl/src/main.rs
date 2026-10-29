@@ -1,7 +1,12 @@
 use clap::Parser;
 
+mod native_hook;
+
 #[tokio::main]
 async fn main() {
+    if let Some(code) = native_hook::run_if_requested().await {
+        std::process::exit(code);
+    }
     let cli = lazooctl::Cli::parse();
     let _governor = lazoo_runtime::DataRoot::resolve()
         .and_then(|root| lazoo_runtime::Installation::load_or_create(&root))

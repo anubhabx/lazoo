@@ -76,6 +76,7 @@ $previousCodexHome = $env:CODEX_HOME
 $status = 'FAIL'
 $failure = $null
 $manifest = $null
+$desktopCodex = $null
 
 New-Item -ItemType Directory -Force -Path $artifactDir, $dataRoot, $codexHome | Out-Null
 
@@ -91,15 +92,6 @@ try {
 
     $env:LAZOO_DATA_ROOT = $dataRoot
     $env:CODEX_HOME = $codexHome
-    $desktopCodex = Get-ChildItem -LiteralPath (Join-Path $env:LOCALAPPDATA 'OpenAI\Codex\bin') -Filter codex.exe -Recurse -File |
-        ForEach-Object {
-            $version = (& $_.FullName --version 2>$null | Where-Object { $_ -match '^codex-cli ' } | Select-Object -First 1).ToString().Trim()
-            [pscustomobject]@{ Path = $_.FullName; Version = $version }
-        } |
-        Where-Object { $_.Version -eq 'codex-cli 0.162.0-alpha.17.2' } |
-        Select-Object -First 1
-    if ($null -eq $desktopCodex) { throw 'exact installed Codex 0.162.0-alpha.17.2 was not found' }
-
     @'
 model = "fixture-model"
 
@@ -111,12 +103,19 @@ enabled = false
     $originalBytes = [IO.File]::ReadAllBytes($configPath)
     $originalHash = Get-Sha256 $configPath
 
-    # Both the daemon and the read-only installed-Codex version probe inherit this fixture only.
-    $observedVersion = (& $desktopCodex.Path --version 2>$null | Where-Object { $_ -match '^codex-cli ' } | Select-Object -First 1).ToString().Trim()
-    Assert-Equal $observedVersion 'codex-cli 0.162.0-alpha.17.2' 'unexpected installed Codex version'
-
     $daemon = Start-Process -FilePath $script:daemonExe -WorkingDirectory $repoRoot -WindowStyle Hidden -PassThru -RedirectStandardOutput $stdoutLog -RedirectStandardError $stderrLog
     $null = Wait-Daemon
+
+    # Test the executable Lazoo actually discovers. The backend's exact reviewed-version
+    # allowlist still refuses unreviewed versions; this script never bypasses that boundary.
+    $probe = Invoke-CtlJson @('provider', 'probe', 'codex')
+    $desktopCodex = [pscustomobject]@{ Path = [string]$probe.executable; Version = [string]$probe.version }
+    if ([string]::IsNullOrWhiteSpace($desktopCodex.Path) -or -not (Test-Path -LiteralPath $desktopCodex.Path -PathType Leaf)) {
+        throw 'daemon did not discover an installed Codex executable'
+    }
+    $versionLines = @(& $desktopCodex.Path --version 2>$null | Where-Object { $_ -match '^codex-cli ' })
+    if ($LASTEXITCODE -ne 0 -or $versionLines.Count -ne 1) { throw 'native Codex version probe failed' }
+    Assert-Equal ([string]$versionLines[0]).Trim() $desktopCodex.Version 'Codex executable changed after daemon discovery'
 
     $selection = [ordered]@{
         provider = 'codex'
@@ -184,7 +183,12 @@ enabled = false
             daemon = if (Test-Path -LiteralPath $script:daemonExe -PathType Leaf) { Get-Sha256 $script:daemonExe } else { $null }
             cli = if (Test-Path -LiteralPath $script:ctlExe -PathType Leaf) { Get-Sha256 $script:ctlExe } else { $null }
         }
-        codex = [ordered]@{ version = 'codex-cli 0.162.0-alpha.17.2'; probe = 'version and daemon app-server handshake; no model' }
+        codex = [ordered]@{
+            version = if ($null -ne $desktopCodex) { $desktopCodex.Version } else { $null }
+            executable = if ($null -ne $desktopCodex) { $desktopCodex.Path } else { $null }
+            sha256 = if ($null -ne $desktopCodex -and (Test-Path -LiteralPath $desktopCodex.Path -PathType Leaf)) { Get-Sha256 $desktopCodex.Path } else { $null }
+            probe = 'version and daemon app-server handshake; no model'
+        }
         lifecycle = [ordered]@{ preview = $status -eq 'PASS'; apply = $status -eq 'PASS'; lostReplyReplay = $status -eq 'PASS'; show = $status -eq 'PASS'; rollback = $status -eq 'PASS' }
         boundaries = [ordered]@{ codexHome = 'disposable'; dataRoot = 'disposable'; realProviderProfile = 'NOT_READ_OR_WRITTEN'; externalMcpConnection = 'NOT_STARTED'; modelRequest = 'NOT_RUN'; nativeAuth = 'NOT_REQUIRED' }
         commands = @($script:commands)

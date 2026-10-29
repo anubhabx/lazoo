@@ -30,12 +30,12 @@ $evidence = [ordered]@{
     approvalLedgerGovernsAskAndSelfDecision = $false
     governedKindsMapped = $false
     unsupportedKindsDeclinedWithoutApproval = $false
-    promptFreeSessionNeverServesNarrowerAuthority = $false
-    otherProvidersRefused = $false
-    memoryWorkerStillExcludesOpenCode = $false
+    narrowerAuthorityDelivered = $false
+    grokExcluded = $false
+    memoryWorkerSupportsOpenCode = $false
     refusalsFailClosedBeforeIo = $false
     noSupportClaimed = $true
-    schemaNineteen = $false
+    schemaTwenty = $false
     providerSmokeAbsent = $true
     externalModelUseAbsent = $true
     uiChangesAbsent = $false
@@ -81,15 +81,13 @@ try {
     $evidence.approvalLedgerGovernsAskAndSelfDecision = $true
     $evidence.unsupportedKindsDeclinedWithoutApproval = $true
 
-    # Delivery by authority: a session launched prompt-free never serves a narrower turn; Grok
-    # Build and Antigravity stay refused; the memory worker stays closed to OpenCode.
-    Invoke-Test 'lazood' 'daemon' 'opencode_delivers_turns_and_tasks_under_every_authority_its_launch_enforces'
-    $evidence.otherProvidersRefused = $true
-    $evidence.memoryWorkerStillExcludesOpenCode = $true
-    # The task path: an `ask` delegation to a full-autonomy OpenCode employee fails at dispatch
-    # before any session starts. The evidence flag is set only from this test.
-    Invoke-Test 'lazood' 'daemon' 'a_prompt_free_opencode_session_refuses_a_narrower_delegated_task_before_any_session_starts'
-    $evidence.promptFreeSessionNeverServesNarrowerAuthority = $true
+    # Delivery by authority: OpenCode serves a narrower turn through its governed observer;
+    # Grok Build remains excluded, and OpenCode may serve the read-only memory worker.
+    Invoke-Test 'lazood' 'daemon' 'opencode_delivers_turns_and_tasks_under_governed_authority'
+    $evidence.grokExcluded = $true
+    $evidence.memoryWorkerSupportsOpenCode = $true
+    Invoke-Test 'lazood' 'daemon' 'a_full_autonomy_opencode_employee_serves_a_narrower_delegated_task'
+    $evidence.narrowerAuthorityDelivered = $true
 
     # Every governed launch gets the block; a project configuration that can override it is
     # refused; refusals are recorded and are not provider progress.
@@ -103,7 +101,7 @@ try {
     $evidence.refusalsFailClosedBeforeIo = $true
 
     Invoke-Test 'lazoo-store' 'store' 'store_enables_wal_foreign_keys_and_schema_version'
-    $evidence.schemaNineteen = $true
+    $evidence.schemaTwenty = $true
 
     & $gitExe diff --quiet -- apps/lazoo-desktop
     $unstagedExit = $LASTEXITCODE
@@ -115,7 +113,7 @@ try {
         durationMs = $null
     })
     if (($unstagedExit -ne 0) -or ($stagedExit -ne 0)) {
-        throw 'desktop UI changes are outside the OpenCode governed-delivery slice'
+        throw 'desktop UI changes are outside the current provider-parity contract'
     }
     $evidence.uiChangesAbsent = $true
     $manifestStatus = 'PASS'
@@ -124,7 +122,7 @@ try {
     $stopwatch.Stop()
     $manifest = [ordered]@{
         status = $manifestStatus
-        schemaVersion = 19
+        schemaVersion = 20
         mode = 'deterministic-fake-transport'
         startedAt = $startedAt.ToString('o')
         durationMs = [long]$stopwatch.ElapsedMilliseconds
@@ -134,12 +132,12 @@ try {
             providerSmoke = 'NOT_RUN'
             externalModelUse = 'NOT_RUN'
             desktopUi = 'UNCHANGED'
-            schemaMigration = 'NONE'
+            schemaMigration = 'CURRENT_20_NATIVE_WORKSPACE_TRUST'
             unlocked = 'OPENCODE_ASK_AND_SELF_DECISION_THROUGH_THE_APPROVAL_LEDGER'
-            stillRefused = 'ACP_KINDS_OTHER_THAN_EXECUTE_EDIT_DELETE_MOVE_ANTIGRAVITY_GROK_BUILD_OPENCODE_MEMORY_WORKER'
+            stillRefused = 'ACP_KINDS_OTHER_THAN_EXECUTE_EDIT_DELETE_MOVE_AND_GROK_BUILD'
             liveGate = 'NOT_RUN_NO_SUPPORT_CLAIMED'
             liveScript = 'scripts/acceptance/opencode-governed-live.ps1 (integrator; excluded from the gate)'
-            toolAccess = 'CODEX_SESSIONS_ONLY'
+            toolAccess = 'GOVERNED_FOUR_PROVIDERS'
         }
     }
     $manifest | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $manifestPath -Encoding utf8

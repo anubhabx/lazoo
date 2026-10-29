@@ -72,8 +72,32 @@ fn resize_and_bounds_are_validated() {
 #[test]
 fn stop_ends_the_contained_console_process() {
     let session = TerminalSession::spawn(command(&["/Q", "/K"])).unwrap();
+    let before_stop = session.resources().unwrap();
+    assert!(before_stop.active_processes >= 1);
+    assert!(before_stop.total_processes >= 1);
     session.stop().unwrap();
     assert!(!session.exit_status().unwrap().live);
+    assert_eq!(session.resources().unwrap().active_processes, 0);
+}
+
+#[test]
+fn read_only_view_does_not_keep_a_canonical_terminal_alive() {
+    let session = TerminalSession::spawn(command(&["/Q", "/K"])).unwrap();
+    let view = session.view();
+    let pid = view.pid();
+    drop(session);
+    assert!(matches!(view.exit_status(), Err(TerminalError::Stopped)));
+    for _ in 0..40 {
+        let process = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid) };
+        if process.is_err() {
+            return;
+        }
+        unsafe {
+            let _ = CloseHandle(process.unwrap());
+        }
+        thread::sleep(Duration::from_millis(25));
+    }
+    panic!("canonical terminal {pid} survived after its last owner dropped");
 }
 
 #[test]
@@ -140,4 +164,66 @@ fn failed_spawn_returns_without_a_session() {
         25,
     ));
     assert!(matches!(failed, Err(TerminalError::Windows(_))));
+}
+
+#[test]
+fn command_environment_overlay_is_visible_only_to_its_child() {
+    const KEY: &str = "LAZOO_TERMINAL_OVERLAY_TEST";
+    const VALUE: &str = "private=child=value";
+    assert!(
+        std::env::var_os(KEY).is_none(),
+        "test key already exists in parent"
+    );
+
+    let session = TerminalSession::spawn(
+        command(&["/Q", "/C", "echo %LAZOO_TERMINAL_OVERLAY_TEST%"])
+            .env("lazoo_terminal_overlay_test", VALUE),
+    )
+    .unwrap();
+    let output = wait_for(&session, VALUE.as_bytes());
+    assert!(
+        output
+            .windows(VALUE.len())
+            .any(|bytes| bytes == VALUE.as_bytes())
+    );
+    session.stop().unwrap();
+
+    assert!(
+        std::env::var_os(KEY).is_none(),
+        "child overlay changed parent"
+    );
+    let sibling = TerminalSession::spawn(command(&[
+        "/Q",
+        "/C",
+        "if defined LAZOO_TERMINAL_OVERLAY_TEST (echo inherited) else (echo clean)",
+    ]))
+    .unwrap();
+    assert!(
+        wait_for(&sibling, b"clean")
+            .windows(5)
+            .any(|bytes| bytes == b"clean")
+    );
+    sibling.stop().unwrap();
+}
+
+#[test]
+fn command_environment_overlay_rejects_invalid_names_and_values() {
+    for command in [
+        command(&["/Q", "/C", "echo no"]).env("BAD=NAME", "value"),
+        command(&["/Q", "/C", "echo no"]).env("BAD\0NAME", "value"),
+        command(&["/Q", "/C", "echo no"]).env("VALID_NAME", "bad\0value"),
+    ] {
+        assert!(matches!(
+            TerminalSession::spawn(command),
+            Err(TerminalError::InvalidEnvironment)
+        ));
+    }
+}
+
+#[test]
+fn command_debug_redacts_environment_overlay_values() {
+    let command = command(&["/Q", "/C", "echo no"]).env("BEARER_TOKEN", "very-secret-value");
+    let debug = format!("{command:?}");
+    assert!(!debug.contains("very-secret-value"));
+    assert!(debug.contains("BEARER_TOKEN"));
 }

@@ -12,12 +12,13 @@ use std::{
 
 use lazoo_protocol::{
     AuthorityMode, CheckoutMode, DesktopSnapshot, EmployeeCheckoutPolicy, JsonRpcRequest,
-    MessageDeliveryState, ProviderObservation, TurnState,
+    MessageDeliveryState, MessageSender, ProviderObservation, TaskEvidenceKind, TaskState,
+    TurnState,
 };
 use lazoo_providers::{
-    DiscoveryEnvironment, PermissionDecision, PermissionKind, PermissionRequest, ProviderError,
-    ProviderEvent, ProviderKind, SessionRequest, ToolCall, ToolResult, TurnEventObserver,
-    TurnRequest,
+    CodexAdapter, DiscoveryEnvironment, PermissionDecision, PermissionKind, PermissionRequest,
+    ProviderAdapter, ProviderError, ProviderEvent, ProviderKind, SessionRequest, ToolCall,
+    ToolResult, TurnEventObserver, TurnRequest,
 };
 use lazoo_runtime::DataRoot;
 use lazoo_store::{CreateConversationInput, CreateEmployeeInput, Store};
@@ -460,6 +461,69 @@ fn configured_employee_named(
         })
         .unwrap()
         .employee
+}
+
+#[tokio::test]
+async fn workspace_launcher_blocks_available_leads_without_a_usable_authority_mode() {
+    let temporary = tempdir().unwrap();
+    let root = DataRoot::from_path(temporary.path().join("data"));
+    root.ensure().unwrap();
+    let store = Store::open_path(root.state_db()).unwrap();
+    let employee = store
+        .create_employee(&CreateEmployeeInput {
+            request_id: "create-grok-request".to_owned(),
+            idempotency_key: "create-grok".to_owned(),
+            name: "Ari".to_owned(),
+            provider: "grok-build".to_owned(),
+            role: "Lead".to_owned(),
+            instructions: String::new(),
+            model: None,
+            reasoning_effort: None,
+            native_settings: json!({}),
+            authority_mode: AuthorityMode::Ask,
+            checkout_policy: EmployeeCheckoutPolicy::Isolated,
+            activation_policy: lazoo_protocol::ActivationPolicy::Manual,
+            idle_timeout_seconds: 0,
+            enabled: true,
+            provider_observation: Some(ProviderObservation {
+                provider: "grok-build".to_owned(),
+                verification: "configured".to_owned(),
+                version: Some("test".to_owned()),
+                protocol: Some("app-server/v2".to_owned()),
+                capabilities: json!({"session": true}),
+                authentication: json!({"native": "ready", "external": "unknown"}),
+                degradation_reason: None,
+                checked_at: "2026-08-31T00:00:00Z".to_owned(),
+            }),
+        })
+        .unwrap()
+        .employee;
+    let app =
+        App::new_with_provider_environment(store, root, DiscoveryEnvironment::empty()).unwrap();
+
+    let launcher = app
+        .handle(request("launcher", "workspace.launcher", json!({})))
+        .await
+        .result
+        .unwrap();
+    let lead = launcher["leads"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|lead| lead["employeeId"] == json!(employee.id))
+        .unwrap();
+    assert_eq!(lead["availability"], "dormant");
+    assert_eq!(lead["authorityModes"], json!([]));
+    assert_eq!(
+        lead["authorityReason"],
+        "the selected provider cannot enforce any authority mode"
+    );
+    assert_eq!(lead["startable"], false);
+    assert_eq!(
+        lead["blockingReason"],
+        "the selected provider cannot enforce any authority mode"
+    );
+    assert_eq!(lead["collaborationToolsAvailable"], false);
 }
 
 fn message_test_app() -> (
@@ -2080,7 +2144,7 @@ fn raw_frame_archive_acceptance_contract_is_deterministic_and_backend_only() {
         "externalModelUseAbsent",
         "uiChangesAbsent",
         "deterministic-fake-transport",
-        "schemaVersion = 19",
+        "schemaVersion = 20",
         "wireFramesWithoutEvents = 'NOT_COVERED'",
         "nonCompletedTurns = 'NOT_COVERED'",
     ] {
@@ -2663,6 +2727,7 @@ async fn turn_submit_without_observed_evidence_never_acknowledges_message() {
 }
 
 #[tokio::test]
+#[allow(clippy::too_many_lines)] // One refusal and its atomic turn/message/task evidence plus replay.
 async fn task_turn_rejects_a_provider_without_authority_override_support_before_io() {
     let temporary = tempdir().unwrap();
     let root = DataRoot::from_path(temporary.path().join("data"));
@@ -2670,10 +2735,10 @@ async fn task_turn_rejects_a_provider_without_authority_override_support_before_
     let store = Store::open_path(root.state_db()).unwrap();
     let employee = store
         .create_employee(&CreateEmployeeInput {
-            request_id: "create-claude-request".to_owned(),
-            idempotency_key: "create-claude".to_owned(),
-            name: "Claude lead".to_owned(),
-            provider: "claude".to_owned(),
+            request_id: "create-grok-request".to_owned(),
+            idempotency_key: "create-grok".to_owned(),
+            name: "Grok lead".to_owned(),
+            provider: "grok-build".to_owned(),
             role: "Lead".to_owned(),
             instructions: String::new(),
             model: None,
@@ -2685,7 +2750,7 @@ async fn task_turn_rejects_a_provider_without_authority_override_support_before_
             idle_timeout_seconds: 0,
             enabled: true,
             provider_observation: Some(ProviderObservation {
-                provider: "claude".to_owned(),
+                provider: "grok-build".to_owned(),
                 verification: "configured".to_owned(),
                 version: Some("test".to_owned()),
                 protocol: Some("acp".to_owned()),
@@ -2716,12 +2781,12 @@ async fn task_turn_rejects_a_provider_without_authority_override_support_before_
     )
     .unwrap();
     app.handle(request(
-        "warm-claude",
+        "warm-grok",
         "session.warm",
         json!({
             "employeeId": employee.id,
             "expectedEmployeeRevision": 1,
-            "idempotencyKey": "warm-claude"
+            "idempotencyKey": "warm-grok"
         }),
     ))
     .await
@@ -2737,7 +2802,7 @@ async fn task_turn_rejects_a_provider_without_authority_override_support_before_
                 "author": {"kind": "user"},
                 "recipient": null,
                 "text": "Unsupported provider fixture",
-                "idempotencyKey": "submit-claude"
+                "idempotencyKey": "submit-grok"
             }),
         ))
         .await
@@ -2748,10 +2813,52 @@ async fn task_turn_rejects_a_provider_without_authority_override_support_before_
     let turn = store
         .get_turn(store.list_turns(conversation.id, 0, 100).unwrap()[0].id)
         .unwrap();
-    assert_eq!(turn.state, TurnState::Recorded);
+    assert_eq!(turn.state, TurnState::TerminalFailed);
+    assert!(turn.submitted_at.is_none());
+    assert!(turn.accepted_at.is_none());
+    assert!(turn.native_turn_id.is_none());
+    assert!(turn.events.is_empty());
     assert_eq!(
         store.get_message(turn.message_id).unwrap().delivery.state,
-        MessageDeliveryState::Queued
+        MessageDeliveryState::TerminalFailed
+    );
+    let root = store.get_task(turn.id).unwrap().task;
+    assert_eq!(root.state, TaskState::Failed);
+    assert!(root.active_turn_id.is_none());
+    let failed_evidence = store
+        .get_task(turn.id)
+        .unwrap()
+        .evidence
+        .into_iter()
+        .find(|evidence| evidence.kind == TaskEvidenceKind::Failed)
+        .unwrap();
+    assert!(matches!(failed_evidence.actor, MessageSender::User(_)));
+    assert_eq!(failed_evidence.session_id, None);
+    assert_eq!(
+        failed_evidence.detail["source"],
+        "daemon-pre-provider-rejection"
+    );
+
+    let replay = app
+        .handle(request(
+            "turn-submit-replay",
+            "turn.submit",
+            json!({
+                "conversationId": conversation.id,
+                "author": {"kind": "user"},
+                "recipient": null,
+                "text": "Unsupported provider fixture",
+                "idempotencyKey": "submit-grok"
+            }),
+        ))
+        .await
+        .result
+        .unwrap();
+    assert_eq!(replay["turn"]["state"], "terminal-failed");
+    assert_eq!(backend.turns.load(Ordering::SeqCst), 0);
+    assert_eq!(
+        store.get_message(turn.message_id).unwrap().attempts.len(),
+        1
     );
 }
 
@@ -4006,7 +4113,7 @@ async fn status_reports_protocol_store_and_boot_identity() {
     let result = response.result.unwrap();
 
     assert_eq!(result["protocolVersion"], 1);
-    assert_eq!(result["schemaVersion"], 19);
+    assert_eq!(result["schemaVersion"], 20);
     assert_eq!(result["journalMode"], "wal");
     assert!(
         result["bootId"]
@@ -4108,9 +4215,13 @@ async fn subscription_has_catch_up_then_live_event_without_duplication() {
     ))
     .await;
 
-    let (catch_up, mut live) = app.subscribe(0).unwrap();
+    let subscription = app.subscribe(0).unwrap();
+    let catch_up = app
+        .subscription_page(0, subscription.replay_high_water)
+        .unwrap();
     assert_eq!(catch_up.len(), 1);
     assert_eq!(catch_up[0].sequence, 1);
+    let mut live = subscription.live;
 
     app.handle(request(
         "register-2",
@@ -4124,6 +4235,67 @@ async fn subscription_has_catch_up_then_live_event_without_duplication() {
         .unwrap();
 
     assert_eq!(event.sequence, 2);
+}
+
+#[tokio::test]
+async fn subscription_drains_more_than_one_durable_page_before_live_handoff() {
+    let (_temporary, app) = test_app();
+    for index in 0..1025 {
+        let response = app
+            .handle(request(
+                &format!("employee-{index}"),
+                "employee.create",
+                json!({
+                    "name": format!("Replay {index}"),
+                    "provider": "codex",
+                    "idempotencyKey": format!("replay-{index}")
+                }),
+            ))
+            .await;
+        assert!(response.error.is_none(), "{response:?}");
+    }
+    let mut subscription = app.subscribe(0).unwrap();
+    let first = app
+        .subscription_page(0, subscription.replay_high_water)
+        .unwrap();
+    assert_eq!(first.len(), 1024);
+    let second = app
+        .subscription_page(
+            first.last().unwrap().sequence,
+            subscription.replay_high_water,
+        )
+        .unwrap();
+    assert_eq!(second.len(), 1);
+    assert!(first.last().unwrap().sequence < second[0].sequence);
+
+    let response = app
+        .handle(request(
+            "employee-live",
+            "employee.create",
+            json!({"name": "Replay live", "provider": "codex", "idempotencyKey": "replay-live"}),
+        ))
+        .await;
+    assert!(response.error.is_none(), "{response:?}");
+    let wake = timeout(Duration::from_secs(2), subscription.live.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    let live = app.subscription_page(second[0].sequence, u64::MAX).unwrap();
+    assert_eq!(live.len(), 1);
+    assert_eq!(live[0].sequence, wake.sequence);
+}
+
+#[test]
+fn subscription_rejects_an_after_cursor_outside_the_durable_sequence_range() {
+    let (_temporary, app) = test_app();
+    assert!(matches!(
+        app.subscribe(u64::MAX),
+        Err(lazoo_store::StoreError::NegativeSequence)
+    ));
+    assert!(matches!(
+        app.subscription(u64::MAX),
+        Err(lazoo_store::StoreError::NegativeSequence)
+    ));
 }
 
 #[tokio::test]
@@ -4564,12 +4736,290 @@ fn attach_params(session: &serde_json::Value, key: &str) -> serde_json::Value {
     })
 }
 
+fn view_params(session: &serde_json::Value, key: &str) -> serde_json::Value {
+    json!({"id": session["id"], "expectedRevision": session["revision"], "columns": 80, "rows": 25, "idempotencyKey": key})
+}
+
+#[derive(Clone)]
+struct NativeViewBackend {
+    adapter: CodexAdapter,
+}
+struct NativeViewSession(lazoo_providers::CodexSession);
+
+impl ManagedSession for NativeViewSession {
+    fn id(&self) -> String {
+        lazoo_providers::ProviderSession::id(&self.0)
+    }
+
+    fn native_host_pid(&self) -> Option<u32> {
+        lazoo_providers::ProviderSession::native_host_pid(&self.0)
+    }
+
+    fn native_view_available(&self) -> bool {
+        lazoo_providers::ProviderSession::native_view_available(&self.0)
+    }
+
+    fn open_native_view(
+        &self,
+    ) -> lazoo_providers::AdapterFuture<'_, Option<lazoo_providers::NativeViewLease>> {
+        lazoo_providers::ProviderSession::open_native_view(&self.0)
+    }
+
+    fn turn_observed<'a>(
+        &'a self,
+        request: &'a TurnRequest,
+        observer: &'a dyn TurnEventObserver,
+    ) -> Pin<Box<dyn Future<Output = Result<Vec<ProviderEvent>, ProviderError>> + Send + 'a>> {
+        lazoo_providers::ProviderSession::turn_observed(&self.0, request, observer)
+    }
+
+    fn cancel(&self) -> Pin<Box<dyn Future<Output = Result<(), ProviderError>> + Send + '_>> {
+        lazoo_providers::ProviderSession::cancel(&self.0)
+    }
+
+    fn stop(&self) -> Pin<Box<dyn Future<Output = Result<(), ProviderError>> + Send + '_>> {
+        lazoo_providers::ProviderSession::stop(&self.0)
+    }
+}
+
+impl SessionBackend for NativeViewBackend {
+    fn start<'a>(
+        &'a self,
+        _provider: ProviderKind,
+        request: &'a SessionRequest,
+    ) -> SessionBackendFuture<'a> {
+        Box::pin(async move {
+            self.adapter
+                .start(request)
+                .await
+                .map(|session| Box::new(NativeViewSession(session)) as Box<dyn ManagedSession>)
+        })
+    }
+}
+
+fn native_view_fixture() -> (tempfile::TempDir, Store, App, uuid::Uuid) {
+    let temporary = tempdir().unwrap();
+    let root = DataRoot::from_path(temporary.path().join("data"));
+    root.ensure().unwrap();
+    let store = Store::open_path(root.state_db()).unwrap();
+    let employee = configured_employee(&store);
+    let repository = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .to_path_buf();
+    let executable = repository.join("target/debug/lazoo-turn-transport-fixture.exe");
+    assert!(
+        executable.is_file(),
+        "turn transport fixture must be built before this test"
+    );
+    let app = App::new_with_session_backend(
+        store.clone(),
+        root,
+        DiscoveryEnvironment::empty().with_known_location(ProviderKind::Codex, executable.clone()),
+        Arc::new(NativeViewBackend {
+            adapter: CodexAdapter::with_executable(executable),
+        }),
+    )
+    .unwrap();
+    (temporary, store, app, employee.id)
+}
+
+#[tokio::test]
+async fn session_terminal_view_uses_one_real_codex_lease_and_leaves_the_session_idle() {
+    let (_temporary, store, app, employee_id) = native_view_fixture();
+    let warmed = app.handle(request("native-view-warm", "session.warm", json!({"employeeId": employee_id, "expectedEmployeeRevision": 1, "idempotencyKey": "native-view-warm"}))).await.result.unwrap()["session"].clone();
+    let opened = app
+        .handle(request(
+            "native-view-open",
+            "session.terminal.view",
+            view_params(&warmed, "native-view"),
+        ))
+        .await
+        .result
+        .unwrap();
+    let replay = app
+        .handle(request(
+            "native-view-replay",
+            "session.terminal.view",
+            view_params(&warmed, "native-view"),
+        ))
+        .await
+        .result
+        .unwrap();
+    assert_eq!(opened, replay);
+    let changed = app.handle(request("native-view-conflict", "session.terminal.view", json!({"id": warmed["id"], "expectedRevision": warmed["revision"], "columns": 81, "rows": 25, "idempotencyKey": "native-view"}))).await.error.unwrap();
+    assert_eq!(changed.code, "LZ-SESSION-VIEW-CONFLICT");
+    let terminal = opened["terminal"].clone();
+    app.handle(request(
+        "native-view-close",
+        "terminal.stop",
+        stop_terminal_params(&terminal),
+    ))
+    .await
+    .result
+    .unwrap();
+    let dead_replay = app
+        .handle(request(
+            "native-view-dead-replay",
+            "session.terminal.view",
+            view_params(&warmed, "native-view"),
+        ))
+        .await
+        .result
+        .unwrap();
+    assert_eq!(dead_replay["terminal"]["id"], terminal["id"]);
+    assert_eq!(dead_replay["terminal"]["live"], false);
+    let changed_after_close = app
+        .handle(request(
+            "native-view-dead-conflict",
+            "session.terminal.view",
+            json!({"id": warmed["id"], "expectedRevision": warmed["revision"], "columns": 82, "rows": 25, "idempotencyKey": "native-view"}),
+        ))
+        .await
+        .error
+        .unwrap();
+    assert_eq!(changed_after_close.code, "LZ-SESSION-VIEW-CONFLICT");
+    let session_id: uuid::Uuid = warmed["id"].as_str().unwrap().parse().unwrap();
+    assert_eq!(
+        store.get_session(session_id).unwrap().state,
+        lazoo_protocol::SessionLifecycleState::Idle
+    );
+    let reopened = app
+        .handle(request(
+            "native-view-reopen",
+            "session.terminal.view",
+            view_params(&warmed, "native-view-fresh"),
+        ))
+        .await
+        .result
+        .unwrap();
+    assert_ne!(reopened["terminal"]["id"], terminal["id"]);
+    app.handle(request("native-view-stop-session", "session.stop", json!({"id": warmed["id"], "expectedRevision": warmed["revision"], "idempotencyKey": "native-view-stop"}))).await.result.unwrap();
+    let status = app
+        .handle(request(
+            "native-view-stopped-status",
+            "session.terminal.status",
+            json!({"id": warmed["id"]}),
+        ))
+        .await
+        .result
+        .unwrap();
+    assert_eq!(status["viewable"], false);
+    let stopped_terminal = app
+        .handle(request(
+            "native-view-stopped-terminal",
+            "terminal.show",
+            json!({"id": reopened["terminal"]["id"]}),
+        ))
+        .await
+        .result
+        .unwrap();
+    assert_eq!(stopped_terminal["live"], false);
+}
+
+#[tokio::test]
+async fn session_terminal_view_refuses_stale_and_unsupported_sessions_without_opening_a_terminal() {
+    let (_temporary, app, backend, employee_id) = session_test_app();
+    let warmed = app.handle(request("view-refusal-warm", "session.warm", json!({"employeeId": employee_id, "expectedEmployeeRevision": 1, "idempotencyKey": "view-refusal-warm"}))).await.result.unwrap()["session"].clone();
+    let stale = app
+        .handle(request(
+            "view-refusal-stale",
+            "session.terminal.view",
+            json!({"id": warmed["id"], "expectedRevision": 1, "columns": 80, "rows": 25, "idempotencyKey": "view-refusal-stale"}),
+        ))
+        .await
+        .error
+        .unwrap();
+    assert_eq!(stale.code, "LZ-SESSION-STALE");
+    let unsupported = app
+        .handle(request(
+            "view-refusal-unsupported",
+            "session.terminal.view",
+            view_params(&warmed, "view-refusal-unsupported"),
+        ))
+        .await
+        .error
+        .unwrap();
+    assert_eq!(unsupported.code, "LZ-SESSION-VIEW-UNSUPPORTED");
+    assert_eq!(backend.starts.load(Ordering::SeqCst), 1);
+}
+
 fn stop_terminal_params(terminal: &serde_json::Value) -> serde_json::Value {
     json!({
         "id": terminal["id"],
         "expectedRevision": terminal["revision"],
         "expectedBootId": terminal["bootId"]
     })
+}
+
+#[tokio::test]
+async fn session_terminal_status_recovers_attachment_without_mutating_the_daemon() {
+    let (_temporary, store, app, backend, employee_id) = attach_test_app();
+    let session = suspended_session(&app, employee_id, "status").await;
+    let before = store.list_events(0, 1024).unwrap().len();
+    let status = |id: &str| {
+        app.handle(request(
+            id,
+            "session.terminal.status",
+            json!({"id": session["id"]}),
+        ))
+    };
+
+    let eligible = status("eligible").await.result.unwrap();
+    assert_eq!(eligible["attachable"], true);
+    assert_eq!(eligible["terminal"], serde_json::Value::Null);
+    assert_eq!(backend.starts.load(Ordering::SeqCst), 1);
+    assert_eq!(store.list_events(0, 1024).unwrap().len(), before);
+
+    let attached = app
+        .handle(request(
+            "attach",
+            "session.terminal.attach",
+            attach_params(&session, "status-attach"),
+        ))
+        .await
+        .result
+        .unwrap();
+    let terminal = attached["terminal"].clone();
+    let live = status("live").await.result.unwrap();
+    assert_eq!(live["attachable"], false);
+    assert_eq!(live["blockingCode"], "LZ-SESSION-ATTACHED");
+    assert_eq!(live["terminal"]["id"], terminal["id"]);
+
+    app.handle(request(
+        "stop-terminal",
+        "terminal.stop",
+        stop_terminal_params(&terminal),
+    ))
+    .await
+    .result
+    .unwrap();
+    let exited = status("exited").await.result.unwrap();
+    assert_eq!(exited["attachable"], true);
+    assert_eq!(exited["terminal"]["id"], terminal["id"]);
+    assert_eq!(exited["terminal"]["live"], false);
+}
+
+#[tokio::test]
+async fn session_terminal_status_refuses_a_missing_attach_working_directory() {
+    let (_temporary, _store, app, _backend, employee_id) = attach_test_app();
+    let session = suspended_session(&app, employee_id, "missing-cwd").await;
+    let session_id: uuid::Uuid = session["id"].as_str().unwrap().parse().unwrap();
+    std::fs::remove_dir_all(app.data_root().session_working_dir(session_id)).unwrap();
+    let status = app
+        .handle(request(
+            "missing-cwd-status",
+            "session.terminal.status",
+            json!({"id": session_id}),
+        ))
+        .await
+        .result
+        .unwrap();
+    assert_eq!(status["attachable"], false);
+    assert_eq!(status["blockingCode"], "LZ-SESSION-ATTACH-FAILED");
+    assert_eq!(status["blockingReason"], "terminal cwd must be a directory");
 }
 
 /// The owner takes over a finished Codex session: the terminal runs the discovered executable
@@ -4707,6 +5157,17 @@ async fn session_terminal_attach_refuses_idle_sessions_stale_revisions_and_unkno
     let attach = |id: &str, params: serde_json::Value| {
         app.handle(request(id, "session.terminal.attach", params))
     };
+    let active_status = app
+        .handle(request(
+            "active-status",
+            "session.terminal.status",
+            json!({"id": warmed["id"]}),
+        ))
+        .await
+        .result
+        .unwrap();
+    assert_eq!(active_status["attachable"], false);
+    assert_eq!(active_status["blockingCode"], "LZ-SESSION-STATE");
 
     let idle = attach("idle", attach_params(&warmed, "idle"))
         .await
@@ -4800,7 +5261,7 @@ async fn session_terminal_attach_fails_closed_without_an_executable_or_a_resume_
     assert_eq!(undetected.code, "LZ-PROVIDER-NOT-DETECTED");
 
     let (_temporary, store, app, _backend, _codex) = attach_test_app();
-    for (name, provider) in [("Noor", "opencode"), ("Ivo", "antigravity")] {
+    for (name, provider) in [("Ivo", "grok-build")] {
         let employee = store
             .create_employee(&CreateEmployeeInput {
                 request_id: format!("{name}-request"),
@@ -4831,6 +5292,17 @@ async fn session_terminal_attach_fails_closed_without_an_executable_or_a_resume_
             .unwrap()
             .employee;
         let session = suspended_session(&app, employee.id, provider).await;
+        let status = app
+            .handle(request(
+                "unsupported-status",
+                "session.terminal.status",
+                json!({"id": session["id"]}),
+            ))
+            .await
+            .result
+            .unwrap();
+        assert_eq!(status["attachable"], false);
+        assert_eq!(status["blockingCode"], "LZ-SESSION-ATTACH-UNSUPPORTED");
         let unsupported = app
             .handle(request(
                 provider,
@@ -4945,7 +5417,8 @@ fn session_terminal_attach_acceptance_contract_is_real_binary_and_backend_only()
         "externalModelUseAbsent",
         "uiChangesAbsent",
         "real-binaries-disposable-data-root-no-provider",
-        "schemaVersion = 19",
+        "schemaTwenty",
+        "schemaVersion = 20",
         "session-terminal-attach-manifest.json",
     ] {
         assert!(
@@ -5214,7 +5687,7 @@ fn employee_roster_acceptance_contract_is_backend_only() {
         "roster', 'refresh",
         "LZ-EMPLOYEE-STALE",
         "restartDurability",
-        "schemaVersion 19",
+        "schemaVersion 20",
         "providerSmokeAbsent",
     ] {
         assert!(
@@ -5252,7 +5725,7 @@ fn native_session_acceptance_contract_covers_containment_and_owner_loss() {
         "completeTreeTerminated",
         "nativeHostPid",
         "providerSmokeAbsent",
-        "schemaVersion 19",
+        "schemaVersion 20",
     ] {
         assert!(
             script.contains(required),
@@ -5282,7 +5755,7 @@ fn collaboration_bus_acceptance_contract_is_backend_only() {
         "deadLetterEvidence",
         "restartDurability",
         "auditOutboxEvidence",
-        "schemaVersion 19",
+        "schemaVersion 20",
         "providerSmokeAbsent",
         "desktopCapabilityExpansionAbsent",
     ] {
@@ -5418,7 +5891,7 @@ fn task_graph_acceptance_executes_backend_only_contract() {
     )
     .unwrap();
     assert_eq!(manifest["status"], "PASS");
-    assert_eq!(manifest["schemaVersion"], 19);
+    assert_eq!(manifest["schemaVersion"], 20);
     assert_eq!(manifest["mode"], "deterministic-fixture");
     for field in [
         "rootIdentity",
@@ -6611,7 +7084,7 @@ fn collaboration_tools_acceptance_contract_is_deterministic_and_backend_only() {
         "worker_turn_reports_failure_through_task_report_before_native_completion",
         "collaboration-tools-manifest.json",
         "deterministic-fake-transport",
-        "schemaVersion = 19",
+        "schemaVersion = 20",
     ] {
         assert!(
             script.contains(required),
@@ -7148,7 +7621,7 @@ async fn restart_owner_loss_and_emergency_spool_fold_into_startup_incidents_once
         .await
         .result
         .unwrap();
-    assert_eq!(status["schemaVersion"], 19);
+    assert_eq!(status["schemaVersion"], 20);
     assert_eq!(status["emergencyIncidentCount"], 1);
 }
 
@@ -7251,7 +7724,7 @@ fn minimum_incidents_acceptance_contract_is_deterministic_and_backend_only() {
         "incident_errors_use_exit_code_fifteen",
         "minimum-incidents-manifest.json",
         "deterministic-fake-transport",
-        "schemaVersion = 19",
+        "schemaVersion = 20",
     ] {
         assert!(
             script.contains(required),
@@ -7721,7 +8194,7 @@ fn result_delivery_acceptance_contract_is_deterministic_and_backend_only() {
         "externalModelUseAbsent",
         "uiChangesAbsent",
         "deterministic-fake-transport",
-        "schemaVersion = 19",
+        "schemaVersion = 20",
     ] {
         assert!(
             script.contains(required),
@@ -8228,7 +8701,7 @@ fn peer_messaging_acceptance_contract_is_deterministic_and_backend_only() {
         "externalModelUseAbsent",
         "uiChangesAbsent",
         "deterministic-fake-transport",
-        "schemaVersion = 19",
+        "schemaVersion = 20",
     ] {
         assert!(
             script.contains(required),
@@ -8351,7 +8824,7 @@ fn coalesced_notices_acceptance_contract_is_deterministic_and_backend_only() {
         "externalModelUseAbsent",
         "uiChangesAbsent",
         "deterministic-fake-transport",
-        "schemaVersion = 19",
+        "schemaVersion = 20",
     ] {
         assert!(
             script.contains(required),
@@ -8590,7 +9063,7 @@ fn activation_policy_acceptance_contract_is_deterministic_and_backend_only() {
         "externalModelUseAbsent",
         "uiChangesAbsent",
         "deterministic-fake-transport",
-        "schemaVersion = 19",
+        "schemaVersion = 20",
     ] {
         assert!(
             script.contains(required),
@@ -8737,12 +9210,15 @@ fn resume_events(store: &Store) -> Vec<(String, serde_json::Value)> {
         .collect()
 }
 
-/// A Claude Code lead with a conversation, beside the harness's Codex employees. Claude Code
-/// takes governed turns only under full autonomy, so that is its authority.
+/// A Claude Code lead with a conversation and an explicit managed-workspace trust policy.
 fn claude_lead(
     harness: &ToolHarness,
     idle_timeout_seconds: u32,
 ) -> (lazoo_protocol::EmployeeRecord, uuid::Uuid) {
+    harness
+        .store
+        .set_native_trust_policy("claude-code", 0, true)
+        .unwrap();
     let lead = harness
         .store
         .create_employee(&CreateEmployeeInput {
@@ -9521,7 +9997,7 @@ fn idle_suspension_acceptance_contract_is_deterministic_and_backend_only() {
         "externalModelUseAbsent",
         "uiChangesAbsent",
         "deterministic-fake-transport",
-        "schemaVersion = 19",
+        "schemaVersion = 20",
     ] {
         assert!(
             script.contains(required),
@@ -9808,7 +10284,7 @@ fn lead_remediation_acceptance_contract_is_deterministic_and_backend_only() {
         "externalModelUseAbsent",
         "uiChangesAbsent",
         "deterministic-fake-transport",
-        "schemaVersion = 19",
+        "schemaVersion = 20",
     ] {
         assert!(
             script.contains(required),
@@ -9850,7 +10326,7 @@ fn incident_thresholds_acceptance_contract_is_deterministic_and_backend_only() {
         "externalModelUseAbsent",
         "uiChangesAbsent",
         "deterministic-fake-transport",
-        "schemaVersion = 19",
+        "schemaVersion = 20",
     ] {
         assert!(
             script.contains(required),
@@ -10059,7 +10535,7 @@ fn user_notifications_acceptance_contract_is_deterministic_and_backend_only() {
         "externalModelUseAbsent",
         "uiChangesAbsent",
         "deterministic-fake-transport",
-        "schemaVersion = 19",
+        "schemaVersion = 20",
     ] {
         assert!(
             script.contains(required),
@@ -10153,7 +10629,7 @@ fn message_arrival_acceptance_contract_is_deterministic_and_backend_only() {
         "externalModelUseAbsent",
         "uiChangesAbsent",
         "deterministic-fake-transport",
-        "schemaVersion = 19",
+        "schemaVersion = 20",
     ] {
         assert!(
             script.contains(required),
@@ -10375,7 +10851,7 @@ fn message_priority_acceptance_contract_is_deterministic_and_backend_only() {
         "externalModelUseAbsent",
         "uiChangesAbsent",
         "deterministic-fake-transport",
-        "schemaVersion = 19",
+        "schemaVersion = 20",
     ] {
         assert!(
             script.contains(required),
@@ -10564,7 +11040,7 @@ fn configurable_thresholds_acceptance_contract_is_deterministic_and_backend_only
         "externalModelUseAbsent",
         "uiChangesAbsent",
         "deterministic-fake-transport",
-        "schemaVersion = 19",
+        "schemaVersion = 20",
     ] {
         assert!(
             script.contains(required),
@@ -11093,7 +11569,7 @@ fn desktop_inbox_acceptance_contract_is_deterministic_and_backend_only() {
         "externalModelUseAbsent",
         "uiChangesAbsent",
         "deterministic-fake-transport",
-        "schemaVersion = 19",
+        "schemaVersion = 20",
     ] {
         assert!(
             script.contains(required),
@@ -11239,7 +11715,10 @@ async fn the_user_reads_resource_use_for_the_daemon_and_a_live_session() {
     assert_eq!(daemon_after["liveSessions"], 0);
 
     // Nothing was stored: no event names a resource sample, and the snapshot is unchanged.
-    let events = app.subscribe(0).unwrap().0;
+    let subscription = app.subscribe(0).unwrap();
+    let events = app
+        .subscription_page(0, subscription.replay_high_water)
+        .unwrap();
     assert!(
         events
             .iter()
@@ -11275,7 +11754,7 @@ fn resource_accounting_acceptance_contract_is_deterministic_and_backend_only() {
         "externalModelUseAbsent",
         "uiChangesAbsent",
         "deterministic-fake-transport",
-        "schemaVersion = 19",
+        "schemaVersion = 20",
     ] {
         assert!(
             script.contains(required),
@@ -11312,7 +11791,7 @@ fn resource_budget_acceptance_contract_measures_lazoo_itself_without_a_provider(
         "$idleCpuCeiling = 0.01",
         "$routingCpuCeiling = 0.05",
         "$idleMemoryCeilingBytes = 350MB",
-        "schemaVersion = 19",
+        "schemaVersion = 20",
         "real-binaries-no-provider",
     ] {
         assert!(
@@ -11484,7 +11963,7 @@ fn conversation_rename_acceptance_contract_is_deterministic_and_backend_only() {
         "externalModelUseAbsent",
         "uiChangesAbsent",
         "deterministic-fake-transport",
-        "schemaVersion = 19",
+        "schemaVersion = 20",
     ] {
         assert!(
             script.contains(required),
@@ -11597,7 +12076,7 @@ fn provider_config_acceptance_contract_is_read_only_and_backend_only() {
         "externalModelUseAbsent",
         "uiChangesAbsent",
         "deterministic-fake-transport",
-        "schemaVersion = 19",
+        "schemaVersion = 20",
     ] {
         assert!(
             script.contains(required),
@@ -12582,7 +13061,7 @@ fn core_scenario_acceptance_contract_maps_every_step_to_evidence() {
         "externalModelUseAbsent",
         "uiChangesAbsent",
         "deterministic-fake-transport",
-        "schemaVersion = 19",
+        "schemaVersion = 20",
     ] {
         assert!(
             script.contains(required),
@@ -12847,6 +13326,14 @@ async fn the_user_browses_a_space_and_its_launcher_through_the_daemon() {
         leads.iter().all(|lead| lead["startable"] == true),
         "{leads:?}"
     );
+    assert!(
+        leads.iter().all(|lead| {
+            lead["authorityModes"] == json!(["ask"])
+                && lead["authorityReason"].is_null()
+                && lead["collaborationToolsAvailable"] == true
+        }),
+        "{leads:?}"
+    );
     assert_eq!(leads[1]["availability"], "idle");
     assert_eq!(launcher["start"][0]["method"], "conversation.create");
     assert_eq!(launcher["start"][1]["method"], "turn.submit");
@@ -12884,6 +13371,9 @@ async fn the_user_browses_a_space_and_its_launcher_through_the_daemon() {
         .unwrap();
     assert_eq!(mira_lead["startable"], false);
     assert_eq!(mira_lead["blockingReason"], "Mira is disabled");
+    assert_eq!(mira_lead["authorityModes"], json!(["ask"]));
+    assert_eq!(mira_lead["authorityReason"], serde_json::Value::Null);
+    assert_eq!(mira_lead["collaborationToolsAvailable"], true);
     let refused = call(
         "launcher-bad",
         "workspace.launcher",
@@ -12934,7 +13424,7 @@ fn workspace_read_models_acceptance_contract_is_deterministic_and_backend_only()
         "externalModelUseAbsent",
         "uiChangesAbsent",
         "deterministic-fake-transport",
-        "schemaVersion = 19",
+        "schemaVersion = 20",
     ] {
         assert!(
             script.contains(required),
@@ -13001,6 +13491,16 @@ async fn the_user_opens_the_conversation_header_and_worker_dock_through_the_daem
         (
             "bad-limit",
             json!({"id": harness.conversation_id, "turnLimit": 0}),
+            "LZ-WORKSPACE-INVALID",
+        ),
+        (
+            "bad-before-zero",
+            json!({"id": harness.conversation_id, "beforeTurnSequence": 0}),
+            "LZ-WORKSPACE-INVALID",
+        ),
+        (
+            "bad-before-overflow",
+            json!({"id": harness.conversation_id, "beforeTurnSequence": 9_223_372_036_854_775_808_u64}),
             "LZ-WORKSPACE-INVALID",
         ),
         (
@@ -13246,7 +13746,7 @@ fn workspace_conversation_acceptance_contract_is_deterministic_and_backend_only(
         "externalModelUseAbsent",
         "uiChangesAbsent",
         "deterministic-fake-transport",
-        "schemaVersion = 19",
+        "schemaVersion = 20",
     ] {
         assert!(
             script.contains(required),
@@ -13410,7 +13910,7 @@ fn workspace_actions_acceptance_contract_is_deterministic_and_backend_only() {
         "externalModelUseAbsent",
         "uiChangesAbsent",
         "deterministic-fake-transport",
-        "schemaVersion = 19",
+        "schemaVersion = 20",
     ] {
         assert!(
             script.contains(required),
@@ -13548,7 +14048,7 @@ fn provider_migration_preview_acceptance_contract_is_deterministic_and_backend_o
         "externalModelUseAbsent",
         "uiChangesAbsent",
         "deterministic-fake-transport",
-        "schemaVersion = 19",
+        "schemaVersion = 20",
     ] {
         assert!(
             script.contains(required),
@@ -13804,19 +14304,13 @@ fn gate_runner_runs_the_whole_gate_and_excludes_only_the_live_and_ui_scripts() {
     );
 }
 
-/// Claude Code is the one other provider that enforces an authority ceiling natively, and only
-/// `full-autonomy` (its prompt-free `auto` mode). A Codex lead's delegation to a Claude worker
-/// under full autonomy is dispatched and completes on the worker's own session; the same
-/// delegation to a Claude worker whose authority is `ask` is proposed, accepted by the user,
-/// and then refused at dispatch with the task failed and an incident, as is an Antigravity
-/// worker under full autonomy (no prompt-free mode); a Claude lead takes a user turn under
-/// full autonomy and refuses one under `ask`. No support is claimed beyond this deterministic
-/// path: a live gate per provider still has to run.
+/// Claude Code and Antigravity use the governed observer for every authority. This deterministic
+/// fake-backend story preserves the user acceptance required for an `ask` task and does not
+/// replace the separately required native acceptance gate.
 #[tokio::test]
 #[allow(clippy::too_many_lines)] // One story over every provider and authority pairing.
-async fn claude_code_runs_turns_and_tasks_only_under_full_autonomy() {
+async fn claude_and_antigravity_deliver_governed_turns_and_tasks() {
     use lazoo_protocol::TaskState;
-    use lazoo_store::ListIncidentsInput;
 
     let (_temporary, harness) = tool_harness(AuthorityMode::FullAutonomy);
     let call = |id: &str, method: &str, params: serde_json::Value| {
@@ -13867,6 +14361,14 @@ async fn claude_code_runs_turns_and_tasks_only_under_full_autonomy() {
         .create_employee(&employee("Gus", "antigravity", AuthorityMode::FullAutonomy))
         .unwrap()
         .employee;
+    harness
+        .store
+        .set_native_trust_policy("claude-code", 0, true)
+        .unwrap();
+    harness
+        .store
+        .set_native_trust_policy("antigravity", 0, true)
+        .unwrap();
 
     // Rhea (Codex, full autonomy) delegates to all three inside her turn.
     warm_tool_lead(&harness).await;
@@ -13918,12 +14420,7 @@ async fn claude_code_runs_turns_and_tasks_only_under_full_autonomy() {
     // Cleo's task runs on her own Claude Code session and completes; Gus's is refused at
     // dispatch because Antigravity has no prompt-free mode: the task fails with the refusal
     // and an incident names the incompatible configuration.
-    let outcome = harness.app.dispatch_pending_tasks_once().await;
-    assert_eq!(
-        outcome.unwrap_err().code,
-        "LZ-TASK-AUTHORITY-UNSUPPORTED",
-        "the pass reports Gus's refusal after running Cleo"
-    );
+    harness.app.dispatch_pending_tasks_once().await.unwrap();
     let cleo_detail = harness.store.get_task(cleo_task).unwrap();
     assert_eq!(cleo_detail.task.state, TaskState::Completed);
     let cleo_session = harness
@@ -13937,28 +14434,11 @@ async fn claude_code_runs_turns_and_tasks_only_under_full_autonomy() {
         "a task dispatch starts its session in the task workspace and never resumes"
     );
     let gus_detail = harness.store.get_task(gus_task).unwrap();
-    assert_eq!(gus_detail.task.state, TaskState::Failed);
-    assert_eq!(
-        gus_detail.task.failure_code.as_deref(),
-        Some("LZ-TASK-AUTHORITY-UNSUPPORTED")
-    );
-    assert!(
-        harness
-            .store
-            .list_incidents(&ListIncidentsInput {
-                code: Some("LZ-CONFIG-INCOMPATIBLE".to_owned()),
-                limit: 100,
-                ..ListIncidentsInput::default()
-            })
-            .unwrap()
-            .iter()
-            .any(|incident| incident.task_id == Some(gus_task)),
-        "the refused dispatch is an incident"
-    );
+    assert_eq!(gus_detail.task.state, TaskState::Completed);
     assert_eq!(
         harness.backend.starts.load(Ordering::SeqCst),
-        2,
-        "Rhea's session and Cleo's; nothing started for Ava or Gus"
+        3,
+        "Rhea, Cleo, and Gus start; Ava remains user-gated"
     );
 
     // Ava's proposal is accepted by the user, then refused at dispatch: under `ask` Claude
@@ -13971,20 +14451,12 @@ async fn claude_code_runs_turns_and_tasks_only_under_full_autonomy() {
     .await
     .result
     .unwrap();
-    assert_eq!(
-        harness
-            .app
-            .dispatch_pending_tasks_once()
-            .await
-            .unwrap_err()
-            .code,
-        "LZ-TASK-AUTHORITY-UNSUPPORTED"
-    );
+    harness.app.dispatch_pending_tasks_once().await.unwrap();
     assert_eq!(
         harness.store.get_task(ava_task).unwrap().task.state,
-        TaskState::Failed
+        TaskState::Completed
     );
-    assert_eq!(harness.backend.starts.load(Ordering::SeqCst), 2);
+    assert_eq!(harness.backend.starts.load(Ordering::SeqCst), 4);
 
     // A Claude Code lead: a user turn under `ask` is refused before any provider I/O; one
     // under full autonomy activates her session and completes.
@@ -14021,24 +14493,14 @@ async fn claude_code_runs_turns_and_tasks_only_under_full_autonomy() {
             }),
         )
     };
-    let refused = timeout(Duration::from_secs(20), submit("cleo-ask", "ask"))
+    let completed = timeout(Duration::from_secs(20), submit("cleo-ask", "ask"))
         .await
         .unwrap()
-        .error
+        .result
         .unwrap();
-    assert_eq!(refused.code, "LZ-TASK-AUTHORITY-UNSUPPORTED");
-    assert_eq!(harness.backend.starts.load(Ordering::SeqCst), 2);
-    let completed = timeout(
-        Duration::from_secs(20),
-        submit("cleo-full", "full-autonomy"),
-    )
-    .await
-    .unwrap()
-    .result
-    .unwrap();
     assert_eq!(completed["turn"]["state"], "completed");
-    assert_eq!(completed["task"]["effectiveAuthority"], "full-autonomy");
-    assert_eq!(harness.backend.starts.load(Ordering::SeqCst), 3);
+    assert_eq!(completed["task"]["effectiveAuthority"], "ask");
+    assert_eq!(harness.backend.starts.load(Ordering::SeqCst), 5);
     let cleo_lead_session = harness
         .store
         .list_sessions()
@@ -14064,31 +14526,31 @@ async fn claude_code_runs_turns_and_tasks_only_under_full_autonomy() {
     );
     assert_eq!(
         harness.backend.turns.load(Ordering::SeqCst),
-        3,
+        5,
         "Rhea's turn, Cleo's dispatch turn, Cleo's user turn"
     );
 }
 
 #[test]
-fn claude_full_autonomy_acceptance_contract_is_deterministic_and_backend_only() {
+fn claude_governed_parity_acceptance_contract_is_deterministic_and_backend_only() {
     let repository = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     let script_path = repository.join("scripts/acceptance/claude-full-autonomy.ps1");
     let script =
         std::fs::read_to_string(&script_path).expect("claude full autonomy acceptance script");
 
     for required in [
-        "claude_code_runs_turns_and_tasks_only_under_full_autonomy",
+        "claude_and_antigravity_deliver_governed_turns_and_tasks",
         "task_turn_rejects_a_provider_without_authority_override_support_before_io",
         "store_enables_wal_foreign_keys_and_schema_version",
-        "fullAutonomyDelivered",
-        "askAndSelfDecisionRefused",
-        "otherProvidersRefused",
+        "governedParityDelivered",
+        "askAuthorityDelivered",
+        "antigravityDelivered",
         "noSupportClaimed",
         "providerSmokeAbsent",
         "externalModelUseAbsent",
         "uiChangesAbsent",
         "deterministic-fake-transport",
-        "schemaVersion = 19",
+        "schemaVersion = 20",
     ] {
         assert!(
             script.contains(required),
@@ -14103,23 +14565,16 @@ fn claude_full_autonomy_acceptance_contract_is_deterministic_and_backend_only() 
     }
 }
 
-/// `OpenCode` receives turns and tasks under every authority its launch enforces: the adapter
-/// launches `opencode acp` with an allow-all permission block when the session's permission
-/// mode is `auto` and with a governed block (every governed tool asks) when it is `ask` or
-/// `accept-edits`. A Codex lead's delegations to `OpenCode` workers of each authority are
-/// dispatched on the worker's own session, which the fake backend records as started with the
-/// matching permission mode (`auto`, `accept-edits`, `ask`; the `ask` task only after the user
-/// accepts its proposal). Grok Build and Antigravity workers are still refused even under full
-/// autonomy, each with the task failed before any session starts. An `OpenCode` lead takes a
-/// user turn under full autonomy, but a prompt-free session never serves a narrower `ask` or
-/// `self-decision` turn: that is refused before any provider I/O, because the launch block
-/// cannot be narrowed per turn. An `OpenCode` summary employee stays excluded from the memory
-/// worker. The governed approval path is proven by
+/// `OpenCode` receives turns and tasks under each governed authority. A Codex lead's
+/// delegations to `OpenCode` workers of each authority are dispatched on the worker's own
+/// session, and a full-autonomy `OpenCode` employee may receive a narrower turn because the
+/// native observer receives that turn's authority. Grok Build remains excluded and is refused
+/// before provider I/O. The governed approval path is proven by
 /// `opencode_ask_and_self_decision_turns_are_governed_through_the_approval_ledger`; no live
 /// support is claimed: the integrator runs the live delivery.
 #[tokio::test]
 #[allow(clippy::too_many_lines)] // One story over every authority pairing.
-async fn opencode_delivers_turns_and_tasks_under_every_authority_its_launch_enforces() {
+async fn opencode_delivers_turns_and_tasks_under_governed_authority() {
     use lazoo_protocol::TaskState;
 
     let (_temporary, harness) = tool_harness(AuthorityMode::FullAutonomy);
@@ -14167,18 +14622,12 @@ async fn opencode_delivers_turns_and_tasks_under_every_authority_its_launch_enfo
         .create_employee(&employee("Sven", "opencode", AuthorityMode::SelfDecision))
         .unwrap()
         .employee;
-    // The other ACP provider and Antigravity stay refused even under full autonomy.
+    // Grok Build remains excluded even under full autonomy.
     let gro = harness
         .store
         .create_employee(&employee("Gro", "grok-build", AuthorityMode::FullAutonomy))
         .unwrap()
         .employee;
-    let gus = harness
-        .store
-        .create_employee(&employee("Gus", "antigravity", AuthorityMode::FullAutonomy))
-        .unwrap()
-        .employee;
-
     // Rhea (Codex, full autonomy) delegates to all three inside her turn.
     warm_tool_lead(&harness).await;
     let roster_revision = harness.store.roster_snapshot().unwrap().revision;
@@ -14199,14 +14648,13 @@ async fn opencode_delivers_turns_and_tasks_under_every_authority_its_launch_enfo
         delegate("call-2", olga.id, Some("ask")),
         delegate("call-3", sven.id, Some("self-decision")),
         delegate("call-4", gro.id, None),
-        delegate("call-5", gus.id, None),
     ]);
     assert_eq!(
         submit_lead_turn(&harness, "full-autonomy").await["turn"]["state"],
         "completed"
     );
     let results = harness.backend.tool_results.lock().unwrap().clone();
-    assert_eq!(results.len(), 5, "{results:?}");
+    assert_eq!(results.len(), 4, "{results:?}");
     assert!(results.iter().all(|result| result.success), "{results:?}");
     let task_of = |index: usize| -> uuid::Uuid {
         results[index].content["taskId"]
@@ -14216,7 +14664,7 @@ async fn opencode_delivers_turns_and_tasks_under_every_authority_its_launch_enfo
             .unwrap()
     };
     let (opal_task, olga_task, sven_task) = (task_of(0), task_of(1), task_of(2));
-    let (gro_task, gus_task) = (task_of(3), task_of(4));
+    let gro_task = task_of(3);
     assert_eq!(results[0].content["effectiveAuthority"], "full-autonomy");
     assert_eq!(results[0].content["state"], "accepted");
     assert_eq!(results[1].content["effectiveAuthority"], "ask");
@@ -14225,10 +14673,8 @@ async fn opencode_delivers_turns_and_tasks_under_every_authority_its_launch_enfo
     assert_eq!(results[2].content["effectiveAuthority"], "self-decision");
     assert_eq!(results[2].content["state"], "accepted");
 
-    // Opal's task runs on her own OpenCode session, started prompt-free, and Sven's
-    // (`self-decision`) on a governed one; both complete. The Grok Build and Antigravity tasks
-    // (even under full autonomy) are refused at dispatch: the pass reports the refusal after
-    // running the others.
+    // Opal's task runs on her own OpenCode session, and Sven's (`self-decision`) on a governed
+    // one; both complete. Grok Build is refused at dispatch after the supported tasks run.
     assert_eq!(
         harness
             .app
@@ -14238,14 +14684,12 @@ async fn opencode_delivers_turns_and_tasks_under_every_authority_its_launch_enfo
             .code,
         "LZ-TASK-AUTHORITY-UNSUPPORTED"
     );
-    for task in [gro_task, gus_task] {
-        let detail = harness.store.get_task(task).unwrap();
-        assert_eq!(detail.task.state, TaskState::Failed);
-        assert_eq!(
-            detail.task.failure_code.as_deref(),
-            Some("LZ-TASK-AUTHORITY-UNSUPPORTED")
-        );
-    }
+    let gro_detail = harness.store.get_task(gro_task).unwrap();
+    assert_eq!(gro_detail.task.state, TaskState::Failed);
+    assert_eq!(
+        gro_detail.task.failure_code.as_deref(),
+        Some("LZ-TASK-AUTHORITY-UNSUPPORTED")
+    );
     let sven_detail = harness.store.get_task(sven_task).unwrap();
     assert_eq!(sven_detail.task.state, TaskState::Completed);
     let opal_detail = harness.store.get_task(opal_task).unwrap();
@@ -14299,9 +14743,8 @@ async fn opencode_delivers_turns_and_tasks_under_every_authority_its_launch_enfo
     assert_eq!(modes, ["accept-edits", "ask", "auto"]);
     assert_eq!(harness.backend.starts.load(Ordering::SeqCst), 4);
 
-    // An OpenCode lead: a user turn under full autonomy activates her session and completes.
-    // Her session is launched prompt-free, so user turns under `ask` and `self-decision` are
-    // refused before any provider I/O rather than run without their approvals.
+    // An OpenCode lead receives narrower user turns through the governed turn observer even
+    // when the employee ceiling is full autonomy.
     let conversation: uuid::Uuid = call(
         "create-opal-conversation",
         "conversation.create",
@@ -14335,16 +14778,15 @@ async fn opencode_delivers_turns_and_tasks_under_every_authority_its_launch_enfo
             }),
         )
     };
-    for (id, authority) in [("opal-ask", "ask"), ("opal-self", "self-decision")] {
-        let refused = timeout(Duration::from_secs(20), submit(id, authority))
-            .await
-            .unwrap()
-            .error
-            .unwrap();
-        assert_eq!(refused.code, "LZ-TASK-AUTHORITY-UNSUPPORTED");
-    }
-    assert_eq!(harness.backend.starts.load(Ordering::SeqCst), 4);
-    assert_eq!(harness.backend.turns.load(Ordering::SeqCst), 4);
+    let narrower = timeout(Duration::from_secs(20), submit("opal-ask", "ask"))
+        .await
+        .unwrap()
+        .result
+        .unwrap();
+    assert_eq!(narrower["turn"]["state"], "completed");
+    assert_eq!(narrower["task"]["effectiveAuthority"], "ask");
+    assert_eq!(harness.backend.starts.load(Ordering::SeqCst), 5);
+    assert_eq!(harness.backend.turns.load(Ordering::SeqCst), 5);
     let completed = timeout(
         Duration::from_secs(20),
         submit("opal-full", "full-autonomy"),
@@ -14379,12 +14821,12 @@ async fn opencode_delivers_turns_and_tasks_under_every_authority_its_launch_enfo
     );
     assert_eq!(
         harness.backend.turns.load(Ordering::SeqCst),
-        5,
-        "Rhea's turn, three dispatch turns, Opal's user turn"
+        6,
+        "Rhea's turn, three dispatch turns, and two governed Opal user turns"
     );
 
-    // The memory worker stays closed to OpenCode: its summary turn must be read-only, which the
-    // ACP adapter cannot carry.
+    // OpenCode may be configured as the read-only memory worker; the native observer now carries
+    // Lazoo's read-only guard for every governed provider.
     let configured = call(
         "configure-opencode-memory-worker",
         "memory.worker.configure",
@@ -14398,22 +14840,16 @@ async fn opencode_delivers_turns_and_tasks_under_every_authority_its_launch_enfo
         }),
     )
     .await
-    .error
+    .result
     .unwrap();
-    assert!(
-        configured
-            .message
-            .contains("cannot enforce the governed ask"),
-        "{configured:?}"
-    );
+    assert_eq!(configured["settings"]["employeeId"], json!(opal.id));
+    assert_eq!(configured["settings"]["enabled"], true);
 }
 
-/// A session launched prompt-free (a `full-autonomy` employee) cannot be narrowed per turn, so a
-/// delegated task whose effective authority is `ask` is refused at dispatch with the task failed
-/// and no session started, even though `OpenCode` now serves `ask` on a governed session.
+/// A full-autonomy `OpenCode` employee serves a narrower delegated task through the governed turn
+/// observer, preserving the user's explicit `ask` decision before the provider runs.
 #[tokio::test]
-async fn a_prompt_free_opencode_session_refuses_a_narrower_delegated_task_before_any_session_starts()
- {
+async fn a_full_autonomy_opencode_employee_serves_a_narrower_delegated_task() {
     use lazoo_protocol::TaskState;
 
     let (_temporary, harness) = tool_harness(AuthorityMode::FullAutonomy);
@@ -14484,25 +14920,13 @@ async fn a_prompt_free_opencode_session_refuses_a_narrower_delegated_task_before
         .unwrap();
     let starts = harness.backend.starts.load(Ordering::SeqCst);
     assert_eq!(starts, 1, "only Rhea's session so far");
-    assert_eq!(
-        harness
-            .app
-            .dispatch_pending_tasks_once()
-            .await
-            .unwrap_err()
-            .code,
-        "LZ-TASK-AUTHORITY-UNSUPPORTED"
-    );
+    harness.app.dispatch_pending_tasks_once().await.unwrap();
     let detail = harness.store.get_task(task).unwrap();
-    assert_eq!(detail.task.state, TaskState::Failed);
-    assert_eq!(
-        detail.task.failure_code.as_deref(),
-        Some("LZ-TASK-AUTHORITY-UNSUPPORTED")
-    );
+    assert_eq!(detail.task.state, TaskState::Completed);
     assert_eq!(
         harness.backend.starts.load(Ordering::SeqCst),
-        starts,
-        "no session starts for the refused task"
+        starts + 1,
+        "the narrower task starts an OpenCode worker session"
     );
 }
 
@@ -15030,8 +15454,8 @@ fn opencode_governed_delivery_acceptance_contract_is_deterministic_and_backend_o
 
     for required in [
         "opencode_ask_and_self_decision_turns_are_governed_through_the_approval_ledger",
-        "opencode_delivers_turns_and_tasks_under_every_authority_its_launch_enforces",
-        "a_prompt_free_opencode_session_refuses_a_narrower_delegated_task_before_any_session_starts",
+        "opencode_delivers_turns_and_tasks_under_governed_authority",
+        "a_full_autonomy_opencode_employee_serves_a_narrower_delegated_task",
         "governed_sessions_refuse_a_project_configuration_that_can_override_the_block",
         "observed_acp_records_a_reused_jsonrpc_id_and_refusals_are_not_progress",
         "opencode::tests::governed_sessions_refuse_configuration_that_can_override_the_block",
@@ -15047,14 +15471,18 @@ fn opencode_governed_delivery_acceptance_contract_is_deterministic_and_backend_o
         "governedModesAskForEveryGovernedTool",
         "approvalLedgerGovernsAskAndSelfDecision",
         "unsupportedKindsDeclinedWithoutApproval",
-        "promptFreeSessionNeverServesNarrowerAuthority",
-        "memoryWorkerStillExcludesOpenCode",
+        "narrowerAuthorityDelivered",
+        "memoryWorkerSupportsOpenCode",
         "noSupportClaimed",
         "providerSmokeAbsent",
         "externalModelUseAbsent",
         "uiChangesAbsent",
         "deterministic-fake-transport",
-        "schemaVersion = 19",
+        "schemaTwenty",
+        "schemaVersion = 20",
+        "CURRENT_20_NATIVE_WORKSPACE_TRUST",
+        "GOVERNED_FOUR_PROVIDERS",
+        "current provider-parity contract",
     ] {
         assert!(
             script.contains(required),
@@ -15105,20 +15533,24 @@ fn opencode_full_autonomy_acceptance_contract_is_deterministic_and_backend_only(
         std::fs::read_to_string(&script_path).expect("opencode full autonomy acceptance script");
 
     for required in [
-        "opencode_delivers_turns_and_tasks_under_every_authority_its_launch_enforces",
+        "opencode_delivers_turns_and_tasks_under_governed_authority",
         "task_turn_rejects_a_provider_without_authority_override_support_before_io",
         "opencode_launch_is_prompt_free_only_under_full_autonomy",
         "store_enables_wal_foreign_keys_and_schema_version",
         "fullAutonomyDelivered",
-        "promptFreeSessionNeverServesNarrowerAuthority",
-        "launchPromptFreeOnlyUnderFullAutonomy",
-        "otherProvidersRefused",
+        "narrowerAuthorityDelivered",
+        "launchDefaultMatchesEmployeeCeiling",
+        "grokExcluded",
         "noSupportClaimed",
         "providerSmokeAbsent",
         "externalModelUseAbsent",
         "uiChangesAbsent",
         "deterministic-fake-transport",
-        "schemaVersion = 19",
+        "schemaTwenty",
+        "schemaVersion = 20",
+        "CURRENT_20_NATIVE_WORKSPACE_TRUST",
+        "GOVERNED_FOUR_PROVIDERS",
+        "current provider-parity contract",
     ] {
         assert!(
             script.contains(required),

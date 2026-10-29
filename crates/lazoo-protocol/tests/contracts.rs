@@ -7,7 +7,7 @@ use lazoo_protocol::{
     MessageKind, MessageSender, PROTOCOL_V1, ProviderProbeParams, ProviderSmokeParams,
     ProviderSmokeResult, RetryTurnParams, SendMessageParams, SessionLifecycleState,
     SubmitTurnParams, SystemStatus, TurnListParams, TurnState, UpdateEmployeeParams,
-    UserMessageEndpoint, UserMessageKind, WarmSessionParams,
+    UserMessageEndpoint, UserMessageKind, WarmSessionParams, WorkspaceConversationParams,
 };
 use serde_json::json;
 use uuid::Uuid;
@@ -215,6 +215,20 @@ fn conversation_contracts_are_strict_and_use_bounded_list_defaults() {
         }))
         .is_err()
     );
+}
+
+#[test]
+fn workspace_conversation_accepts_an_optional_backward_turn_cursor() {
+    let id = Uuid::new_v4();
+    let params: WorkspaceConversationParams = serde_json::from_value(json!({
+        "id": id,
+        "turnLimit": 3,
+        "beforeTurnSequence": 42
+    }))
+    .unwrap();
+    assert_eq!(params.id, id);
+    assert_eq!(params.turn_limit, 3);
+    assert_eq!(params.before_turn_sequence, Some(42));
 }
 
 #[test]

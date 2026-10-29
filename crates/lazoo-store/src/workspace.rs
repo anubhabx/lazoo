@@ -3,7 +3,7 @@
 //! worker rows, each under one lock with the event high-water mark they reflect. Nothing is
 //! stored.
 
-use lazoo_domain::active_descendant_ids;
+use lazoo_domain::{active_descendant_ids, validate_workspace_limit};
 use lazoo_protocol::{
     ConversationRecord, ConversationTurnSummary, SessionLifecycleState, TaskDispatchRecord,
     TaskRecord, TaskState, TaskSummary, TurnState, WorkerCounts,
@@ -175,6 +175,7 @@ pub struct ConversationWorkspace {
     /// The newest `turn_limit` turns, oldest first.
     pub turns: Vec<ConversationTurnSummary>,
     pub turns_truncated: bool,
+    pub next_before_turn_sequence: Option<u64>,
     /// The lead's newest turn (id, state, revision).
     pub latest_lead_turn: Option<(Uuid, TurnState, u64)>,
     /// Every task below a root, oldest first.
@@ -190,6 +191,20 @@ impl Store {
         id: Uuid,
         turn_limit: u32,
     ) -> Result<ConversationWorkspace, StoreError> {
+        self.conversation_workspace_page(id, turn_limit, None)
+    }
+
+    /// As `conversation_workspace`, but page backward from an exclusive turn sequence.
+    pub fn conversation_workspace_page(
+        &self,
+        id: Uuid,
+        turn_limit: u32,
+        before_turn_sequence: Option<u64>,
+    ) -> Result<ConversationWorkspace, StoreError> {
+        validate_workspace_limit(turn_limit)?;
+        if before_turn_sequence.is_some_and(|value| value == 0 || value > i64::MAX as u64) {
+            return Err(StoreError::NegativeSequence);
+        }
         let connection = self.lock()?;
         let conversation = required_conversation(&connection, id)?;
         let key = id.to_string();
@@ -207,16 +222,25 @@ impl Store {
                         author_session_id, recipient_employee_id, recipient_session_id, state,
                         revision, native_turn_id, created_at, updated_at
                  FROM conversation_turns
-                 WHERE conversation_id = ?1 ORDER BY sequence DESC LIMIT ?2",
+                 WHERE conversation_id = ?1 AND (?2 IS NULL OR sequence < ?2)
+                 ORDER BY sequence DESC LIMIT ?3",
             )?;
-            let rows =
-                statement.query_map(params![key, i64::from(turn_limit) + 1], raw_turn_summary)?;
+            let before = before_turn_sequence
+                .map(|value| i64::try_from(value).map_err(|_| StoreError::NegativeSequence))
+                .transpose()?;
+            let rows = statement.query_map(
+                params![key, before, i64::from(turn_limit) + 1],
+                raw_turn_summary,
+            )?;
             rows.map(|row| turn_summary_from_raw(row?))
                 .collect::<Result<Vec<_>, _>>()?
         };
         let turns_truncated = turns.len() > turn_limit as usize;
         turns.truncate(turn_limit as usize);
         turns.reverse();
+        let next_before_turn_sequence = turns_truncated
+            .then(|| turns.first().map(|turn| turn.sequence))
+            .flatten();
         let latest_lead_turn = connection
             .query_row(
                 "SELECT id, state, revision FROM conversation_turns
@@ -256,6 +280,7 @@ impl Store {
             root_task,
             turns,
             turns_truncated,
+            next_before_turn_sequence,
             latest_lead_turn,
             workers,
             event_high_water,

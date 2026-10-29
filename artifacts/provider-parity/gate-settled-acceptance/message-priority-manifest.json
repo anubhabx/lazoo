@@ -1,0 +1,86 @@
+{
+  "status": "PASS",
+  "schemaVersion": 20,
+  "mode": "deterministic-fake-transport",
+  "startedAt": "2026-10-29T14:16:33.4409455Z",
+  "durationMs": 5256,
+  "commands": [
+    {
+      "command": "cargo test -p lazoo-protocol --test contracts message_priority_is_kebab_case_and_defaults_to_normal_for_older_records --locked -- --exact",
+      "exitCode": 0,
+      "durationMs": 292
+    },
+    {
+      "command": "cargo test -p lazoo-domain --test incident section_fourteen_two_thresholds_promote_stalls_crashes_and_deaths_at_once --locked -- --exact",
+      "exitCode": 0,
+      "durationMs": 298
+    },
+    {
+      "command": "cargo test -p lazoo-store --test incident one_dead_lettered_priority_message_is_a_priority_incident_raised_once --locked -- --exact",
+      "exitCode": 0,
+      "durationMs": 697
+    },
+    {
+      "command": "cargo test -p lazoo-store --test store version_thirteen_incident_notices_upgrade_as_priority_messages --locked -- --exact",
+      "exitCode": 0,
+      "durationMs": 1507
+    },
+    {
+      "command": "cargo test -p lazooctl --test cli message_cli_maps_send_envelope --locked -- --exact",
+      "exitCode": 0,
+      "durationMs": 373
+    },
+    {
+      "command": "cargo test -p lazood --test daemon message_fail_promotes_a_priority_dead_letter_at_once_and_only_once --locked -- --exact",
+      "exitCode": 0,
+      "durationMs": 687
+    },
+    {
+      "command": "cargo test -p lazood --test daemon a_dead_lettered_incident_notice_reaches_the_user_in_one_sweep --locked -- --exact",
+      "exitCode": 0,
+      "durationMs": 756
+    },
+    {
+      "command": "Select-String MessagePriority apps/lazood/src/app/tools.rs",
+      "exitCode": 0,
+      "durationMs": null
+    },
+    {
+      "command": "cargo test -p lazoo-store --test store store_enables_wal_foreign_keys_and_schema_version --locked -- --exact",
+      "exitCode": 0,
+      "durationMs": 535
+    },
+    {
+      "command": "git diff --quiet and git diff --cached --quiet -- apps/lazoo-desktop",
+      "exitCode": 0,
+      "durationMs": null
+    }
+  ],
+  "evidence": {
+    "priorityFieldRoundTrips": true,
+    "olderRecordsDefaultToNormal": true,
+    "priorityDeadLetterPromotedAtOnce": true,
+    "normalDeadLetterKeepsDefaultThreshold": true,
+    "priorityReadFromTheDeadLetter": true,
+    "oneIncidentPerDeadLetter": true,
+    "incidentNoticesArePriority": true,
+    "lostNoticeReachesTheUserInOneSweep": true,
+    "userCanSendPriority": true,
+    "toolsCannotSetPriority": true,
+    "upgradeMarksIncidentNoticesPriority": true,
+    "schemaFourteen": true,
+    "providerSmokeAbsent": true,
+    "externalModelUseAbsent": true,
+    "uiChangesAbsent": true
+  },
+  "boundaries": {
+    "providerSmoke": "NOT_RUN",
+    "externalModelUse": "NOT_RUN",
+    "desktopUi": "UNCHANGED",
+    "schemaMigration": "0014_message_priority",
+    "priorityDeadLetterThreshold": "ONE",
+    "prioritySources": "INCIDENT_NOTICES_AND_USER_MESSAGE_SEND",
+    "toolSetPriority": "NONE",
+    "deliveryOrder": "UNCHANGED"
+  }
+}

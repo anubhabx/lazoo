@@ -1,0 +1,33 @@
+{
+  "status": "FAIL",
+  "startedAt": "2026-10-28T20:21:38.0440389Z",
+  "durationMs": 10009,
+  "acceptanceOnly": false,
+  "skipBuild": true,
+  "provider": "codex",
+  "excluded": [
+    "provider-adapters",
+    "provider-live-lifecycle",
+    "opencode-governed-live",
+    "desktop-shell",
+    "desktop-budget"
+  ],
+  "stoppedAtCargoStep": true,
+  "steps": [
+    {
+      "step": "format",
+      "command": "cargo fmt --all -- --check",
+      "exitCode": 0,
+      "durationMs": 1174
+    },
+    {
+      "step": "clippy",
+      "command": "cargo clippy --workspace --all-targets --locked -- -D warnings",
+      "exitCode": 101,
+      "durationMs": 8806
+    }
+  ],
+  "failed": [
+    "clippy"
+  ]
+}

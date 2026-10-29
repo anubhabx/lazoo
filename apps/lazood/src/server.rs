@@ -41,7 +41,7 @@ pub async fn run() -> Result<(), DaemonError> {
     let dispatcher_app = app.clone();
     let dispatcher = tokio::spawn(async move { dispatcher_app.run_task_dispatcher().await });
     let notices_app = app.clone();
-    let notices = tokio::spawn(async move { notices_app.run_notice_delivery().await });
+    let notices = tokio::spawn(async move { Box::pin(notices_app.run_notice_delivery()).await });
     let idle_app = app.clone();
     let idle = tokio::spawn(async move { idle_app.run_timed_sweeps().await });
     let terminal_app = app.clone();
@@ -67,7 +67,7 @@ pub async fn run() -> Result<(), DaemonError> {
                 let client_app = app.clone();
                 clients.spawn(async move {
                     if let Ok(connection) = pending.authenticate().await {
-                        let _ = serve_connection(client_app, connection).await;
+                        let _ = Box::pin(serve_connection(client_app, connection)).await;
                     }
                 });
             }
@@ -155,26 +155,44 @@ async fn serve_connection(
     )
     .await?;
     let mut watermark = params.after;
-    for event in subscription.catch_up {
-        watermark = watermark.max(event.sequence);
-        send_response(
-            &mut connection,
-            &json!({"jsonrpc":"2.0", "method":"events.event", "params":event}),
-        )
-        .await?;
-    }
-    loop {
-        let event =
-            subscription.live.recv().await.map_err(|error| {
-                lazoo_ipc::IpcError::Io(std::io::Error::other(error.to_string()))
-            })?;
-        if event.sequence > watermark {
-            watermark = event.sequence;
+    while watermark < subscription.replay_high_water {
+        let page = app.subscription_page(watermark, subscription.replay_high_water)?;
+        let Some(last) = page.last() else {
+            return Err(DaemonError::Ipc(lazoo_ipc::IpcError::Io(
+                std::io::Error::other("subscription replay ended before its durable high-water"),
+            )));
+        };
+        let last_sequence = last.sequence;
+        for event in page {
+            watermark = watermark.max(event.sequence);
             send_response(
                 &mut connection,
                 &json!({"jsonrpc":"2.0", "method":"events.event", "params":event}),
             )
             .await?;
+        }
+        debug_assert!(watermark >= last_sequence);
+    }
+    loop {
+        match subscription.live.recv().await {
+            Ok(_) | Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}
+            Err(tokio::sync::broadcast::error::RecvError::Closed) => return Ok(()),
+        }
+        // Broadcast is only a wake-up. The audit log is the ordered source of truth, so a
+        // lagged, duplicated, or ahead notification cannot create a sequence hole.
+        loop {
+            let page = app.subscription_page(watermark, u64::MAX)?;
+            let Some(last) = page.last() else { break };
+            let last_sequence = last.sequence;
+            for event in page {
+                watermark = event.sequence;
+                send_response(
+                    &mut connection,
+                    &json!({"jsonrpc":"2.0", "method":"events.event", "params":event}),
+                )
+                .await?;
+            }
+            debug_assert!(watermark >= last_sequence);
         }
     }
 }
@@ -198,6 +216,11 @@ async fn send_response<T: serde::Serialize>(
 mod tests {
     use super::*;
     use lazoo_ipc::PipeClient;
+    use lazoo_protocol::{
+        ActivationPolicy, AuthorityMode, EmployeeCheckoutPolicy, JsonRpcRequest,
+        ProviderObservation,
+    };
+    use lazoo_store::CreateEmployeeInput;
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn response_to_a_nonreading_client_has_a_deadline() {
@@ -228,5 +251,89 @@ mod tests {
             error.to_string().contains("client response timed out"),
             "{error}"
         );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn subscription_replays_all_durable_pages_then_the_first_live_event() {
+        let temporary = tempfile::tempdir().unwrap();
+        let root = DataRoot::from_path(temporary.path().join("data"));
+        root.ensure().unwrap();
+        let store = Store::open_path(root.state_db()).unwrap();
+        let app = App::new(store.clone(), root.clone()).unwrap();
+        for index in 0..1025 {
+            store
+                .create_employee(&CreateEmployeeInput {
+                    request_id: format!("employee-{index}"),
+                    idempotency_key: format!("replay-{index}"),
+                    name: format!("Replay {index}"),
+                    provider: "codex".to_owned(),
+                    role: String::new(),
+                    instructions: String::new(),
+                    model: None,
+                    reasoning_effort: None,
+                    native_settings: json!({}),
+                    authority_mode: AuthorityMode::Ask,
+                    checkout_policy: EmployeeCheckoutPolicy::Isolated,
+                    activation_policy: ActivationPolicy::Manual,
+                    idle_timeout_seconds: 0,
+                    enabled: true,
+                    provider_observation: Some(ProviderObservation {
+                        provider: "codex".to_owned(),
+                        verification: "configured".to_owned(),
+                        version: None,
+                        protocol: None,
+                        capabilities: json!({}),
+                        authentication: json!({}),
+                        degradation_reason: None,
+                        checked_at: "2026-10-28T00:00:00Z".to_owned(),
+                    }),
+                })
+                .unwrap();
+        }
+        let installation = Installation::load_or_create(&root).unwrap();
+        let mut server =
+            PipeServer::bind(&installation, &OwnerSecurity::current().unwrap()).unwrap();
+        let (server_side, client_side) = tokio::join!(
+            server.accept(),
+            PipeClient::connect(&installation, "subscription-test", "0.1.0")
+        );
+        let service = tokio::spawn(serve_connection(app.clone(), server_side.unwrap()));
+        let mut client = client_side.unwrap();
+        client
+            .send_json(&JsonRpcRequest {
+                jsonrpc: "2.0".to_owned(),
+                id: "subscribe".to_owned(),
+                method: "events.subscribe".to_owned(),
+                params: json!({"after": 0, "limit": 1024}),
+            })
+            .await
+            .unwrap();
+        let acknowledgement: serde_json::Value = client.receive_json().await.unwrap();
+        assert_eq!(acknowledgement["result"]["subscribed"], true);
+        let mut sequences = Vec::new();
+        for _ in 0..1025 {
+            let event: serde_json::Value = timeout(Duration::from_secs(5), client.receive_json())
+                .await
+                .unwrap()
+                .unwrap();
+            sequences.push(event["params"]["sequence"].as_u64().unwrap());
+        }
+        assert_eq!(sequences, (1..=1025).collect::<Vec<_>>());
+        let response = app
+            .handle(JsonRpcRequest {
+                jsonrpc: "2.0".to_owned(),
+                id: "live".to_owned(),
+                method: "employee.create".to_owned(),
+                params: json!({"name": "Live", "provider": "codex", "idempotencyKey": "live"}),
+            })
+            .await;
+        assert!(response.error.is_none(), "{response:?}");
+        let live: serde_json::Value = timeout(Duration::from_secs(5), client.receive_json())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(live["params"]["sequence"], 1026);
+        drop(client);
+        service.abort();
     }
 }

@@ -154,7 +154,7 @@ try {
 
     $keeper = Start-Keeper $dataRoot (Join-Path $runRoot 'keeper')
     $status = Wait-Status
-    Assert-Equal $status.schemaVersion 19 'schema version'
+    Assert-Equal $status.schemaVersion 20 'schema version'
     $gates.schemaVersion = 'PASS'
 
     # Let startup settle before the idle window, so the measurement is steady state.
@@ -314,7 +314,7 @@ try {
     $stopwatch.Stop()
     $manifest = [ordered]@{
         status = $manifestStatus
-        schemaVersion = 19
+        schemaVersion = 20
         mode = 'real-binaries-no-provider'
         startedAt = $startedAt.ToString('o')
         durationMs = [long]$stopwatch.ElapsedMilliseconds

@@ -1,0 +1,192 @@
+{
+  "sequence": 1,
+  "version": 1,
+  "id": "f00703f4-7b23-4206-819e-33c3cd88cf54",
+  "conversationId": "1581f826-f7a8-4778-b711-f4507721a086",
+  "taskId": "f00703f4-7b23-4206-819e-33c3cd88cf54",
+  "author": {
+    "kind": "user"
+  },
+  "recipient": {
+    "employeeId": "3e782937-453e-4931-8c27-786f930d5349",
+    "sessionId": "2491bcfa-9c7d-42d1-ac89-6a4b088b67a6"
+  },
+  "recipientEmployeeConfigurationRevision": 1,
+  "text": "Use employees_list for the local test.",
+  "messageId": "6ec0863e-00e2-4e96-8c3b-11cce520e163",
+  "messageAttemptId": "00450046-20cd-4dd8-b94d-2464b64884e5",
+  "correlationId": "6ec0863e-00e2-4e96-8c3b-11cce520e163",
+  "state": "completed",
+  "revision": 12,
+  "ownerBootId": null,
+  "provider": "codex",
+  "nativeSessionId": "01a18456-0a69-7e82-92f2-9e782913c0d3",
+  "nativeTurnId": "01a18456-0d71-7da2-8d58-d3b674c556ef",
+  "failureCode": null,
+  "failureMessage": null,
+  "transcriptTruncated": false,
+  "createdAt": "2026-10-28T21:06:34.466660100+00:00",
+  "updatedAt": "2026-10-28T21:06:36.903210700+00:00",
+  "submittedAt": "2026-10-28T21:06:34.474257200+00:00",
+  "acceptedAt": "2026-10-28T21:06:34.493964900+00:00",
+  "completedAt": "2026-10-28T21:06:36.903210700+00:00",
+  "cancelRequestedAt": null,
+  "terminalAt": "2026-10-28T21:06:36.903210700+00:00",
+  "events": [
+    {
+      "sequence": 1,
+      "kind": "turnStarted",
+      "provider": "codex",
+      "nativeSessionId": "01a18456-0a69-7e82-92f2-9e782913c0d3",
+      "nativeTurnId": "01a18456-0d71-7da2-8d58-d3b674c556ef",
+      "payload": {
+        "type": "turnStarted",
+        "provider": "codex",
+        "sessionId": "01a18456-0a69-7e82-92f2-9e782913c0d3",
+        "turnId": "01a18456-0d71-7da2-8d58-d3b674c556ef"
+      },
+      "createdAt": "2026-10-28T21:06:34.493964900+00:00"
+    },
+    {
+      "sequence": 2,
+      "kind": "sessionStarted",
+      "provider": "codex",
+      "nativeSessionId": "01a18456-0a69-7e82-92f2-9e782913c0d3",
+      "nativeTurnId": null,
+      "payload": {
+        "type": "sessionStarted",
+        "provider": "codex",
+        "sessionId": "01a18456-0a69-7e82-92f2-9e782913c0d3",
+        "resumed": false
+      },
+      "createdAt": "2026-10-28T21:06:34.500249400+00:00"
+    },
+    {
+      "sequence": 3,
+      "kind": "progress",
+      "provider": "codex",
+      "nativeSessionId": "01a18456-0a69-7e82-92f2-9e782913c0d3",
+      "nativeTurnId": null,
+      "payload": {
+        "type": "progress",
+        "provider": "codex",
+        "sessionId": "01a18456-0a69-7e82-92f2-9e782913c0d3",
+        "message": "Model metadata for `probe-model` not found. Defaulting to fallback metadata; this can degrade performance and cause issues."
+      },
+      "createdAt": "2026-10-28T21:06:34.506358800+00:00"
+    },
+    {
+      "sequence": 4,
+      "kind": "toolUpdate",
+      "provider": "codex",
+      "nativeSessionId": "01a18456-0a69-7e82-92f2-9e782913c0d3",
+      "nativeTurnId": "01a18456-0d71-7da2-8d58-d3b674c556ef",
+      "payload": {
+        "type": "toolUpdate",
+        "provider": "codex",
+        "sessionId": "01a18456-0a69-7e82-92f2-9e782913c0d3",
+        "turnId": "01a18456-0d71-7da2-8d58-d3b674c556ef",
+        "toolName": "dynamicToolCall",
+        "status": "inProgress"
+      },
+      "createdAt": "2026-10-28T21:06:35.082647500+00:00"
+    },
+    {
+      "sequence": 5,
+      "kind": "toolUpdate",
+      "provider": "codex",
+      "nativeSessionId": "01a18456-0a69-7e82-92f2-9e782913c0d3",
+      "nativeTurnId": "01a18456-0d71-7da2-8d58-d3b674c556ef",
+      "payload": {
+        "type": "toolUpdate",
+        "provider": "codex",
+        "sessionId": "01a18456-0a69-7e82-92f2-9e782913c0d3",
+        "turnId": "01a18456-0d71-7da2-8d58-d3b674c556ef",
+        "toolName": "lazoo:employees_list",
+        "status": "completed"
+      },
+      "createdAt": "2026-10-28T21:06:35.089503+00:00"
+    },
+    {
+      "sequence": 6,
+      "kind": "toolUpdate",
+      "provider": "codex",
+      "nativeSessionId": "01a18456-0a69-7e82-92f2-9e782913c0d3",
+      "nativeTurnId": "01a18456-0d71-7da2-8d58-d3b674c556ef",
+      "payload": {
+        "type": "toolUpdate",
+        "provider": "codex",
+        "sessionId": "01a18456-0a69-7e82-92f2-9e782913c0d3",
+        "turnId": "01a18456-0d71-7da2-8d58-d3b674c556ef",
+        "toolName": "dynamicToolCall",
+        "status": "completed"
+      },
+      "createdAt": "2026-10-28T21:06:35.099593900+00:00"
+    },
+    {
+      "sequence": 7,
+      "kind": "usage",
+      "provider": "codex",
+      "nativeSessionId": "01a18456-0a69-7e82-92f2-9e782913c0d3",
+      "nativeTurnId": null,
+      "payload": {
+        "type": "usage",
+        "provider": "codex",
+        "sessionId": "01a18456-0a69-7e82-92f2-9e782913c0d3",
+        "inputTokens": 0,
+        "outputTokens": 0,
+        "totalTokens": 0,
+        "costUsd": null
+      },
+      "createdAt": "2026-10-28T21:06:35.452070200+00:00"
+    },
+    {
+      "sequence": 8,
+      "kind": "textDelta",
+      "provider": "codex",
+      "nativeSessionId": "01a18456-0a69-7e82-92f2-9e782913c0d3",
+      "nativeTurnId": "01a18456-0d71-7da2-8d58-d3b674c556ef",
+      "payload": {
+        "type": "textDelta",
+        "provider": "codex",
+        "sessionId": "01a18456-0a69-7e82-92f2-9e782913c0d3",
+        "turnId": "01a18456-0d71-7da2-8d58-d3b674c556ef",
+        "text": "NATIVE_VIEW_CONTROLLER_STREAM_OK"
+      },
+      "createdAt": "2026-10-28T21:06:36.158873300+00:00"
+    },
+    {
+      "sequence": 9,
+      "kind": "usage",
+      "provider": "codex",
+      "nativeSessionId": "01a18456-0a69-7e82-92f2-9e782913c0d3",
+      "nativeTurnId": null,
+      "payload": {
+        "type": "usage",
+        "provider": "codex",
+        "sessionId": "01a18456-0a69-7e82-92f2-9e782913c0d3",
+        "inputTokens": 0,
+        "outputTokens": 0,
+        "totalTokens": 0,
+        "costUsd": null
+      },
+      "createdAt": "2026-10-28T21:06:36.881733800+00:00"
+    },
+    {
+      "sequence": 10,
+      "kind": "turnCompleted",
+      "provider": "codex",
+      "nativeSessionId": "01a18456-0a69-7e82-92f2-9e782913c0d3",
+      "nativeTurnId": "01a18456-0d71-7da2-8d58-d3b674c556ef",
+      "payload": {
+        "type": "turnCompleted",
+        "provider": "codex",
+        "sessionId": "01a18456-0a69-7e82-92f2-9e782913c0d3",
+        "turnId": "01a18456-0d71-7da2-8d58-d3b674c556ef",
+        "status": "completed",
+        "output": "NATIVE_VIEW_CONTROLLER_STREAM_OK"
+      },
+      "createdAt": "2026-10-28T21:06:36.903210700+00:00"
+    }
+  ]
+}

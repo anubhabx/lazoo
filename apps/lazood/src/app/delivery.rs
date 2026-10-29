@@ -42,7 +42,7 @@ impl App {
             if *shutdown.borrow() {
                 return;
             }
-            if let Err(error) = self.deliver_pending_notices_once().await {
+            if let Err(error) = Box::pin(self.deliver_pending_notices_once()).await {
                 tracing::warn!(code = %error.code, message = %error.message, "lead notice delivery failed");
             }
             tokio::select! {
@@ -110,7 +110,9 @@ impl App {
             .pending_lead_notices(PASS_LIMIT)
             .map_err(task_store_error)?
         {
-            if let Err(error) = self.deliver_lead_notice(&notice, &mut handled_turns).await {
+            if let Err(error) =
+                Box::pin(self.deliver_lead_notice(&notice, &mut handled_turns)).await
+            {
                 tracing::warn!(
                     message_id = %notice.envelope.id,
                     code = %error.code,

@@ -1945,19 +1945,29 @@ pub(crate) fn project_turn_tx(
             now,
         ],
     )?;
-    let detail = json!({
+    let pre_provider_rejection = cause == "turn-failed-before-provider";
+    let mut detail = json!({
         "turnEventKind": cause,
         "turnState": serialized_name(turn.state)?,
     });
+    if pre_provider_rejection {
+        detail["source"] = Value::String("daemon-pre-provider-rejection".to_owned());
+    }
     insert_task_evidence_tx(
         transaction,
         current.id,
         current.revision + 1,
         evidence_kind,
-        MessageSender::Employee(turn.recipient),
+        if pre_provider_rejection {
+            turn.author
+        } else {
+            MessageSender::Employee(turn.recipient)
+        },
         Some(turn.message_id),
         Some(turn.id),
-        turn.recipient.session_id,
+        (!pre_provider_rejection)
+            .then_some(turn.recipient.session_id)
+            .flatten(),
         &detail,
         now,
     )?;

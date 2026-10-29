@@ -7,17 +7,23 @@ use std::{
 
 use lazoo_protocol::{
     EmployeeSessionRecord, RpcError, SessionLifecycleState, SessionTerminalAttachParams,
-    SessionTerminalAttachResult, TerminalInput, TerminalListResult, TerminalOpenParams,
+    SessionTerminalAttachResult, SessionTerminalStatusParams, SessionTerminalStatusResult,
+    SessionTerminalViewParams, TerminalInput, TerminalListResult, TerminalOpenParams,
     TerminalOutput, TerminalOutputRequest, TerminalRecord, TerminalResizeParams,
     TerminalShowParams, TerminalStopParams,
 };
-use lazoo_providers::{ProviderError, ProviderKind, attach_args};
-use lazoo_runtime::{TerminalCommand, TerminalError, TerminalSession};
+use lazoo_providers::{NativeViewLease, ProviderError, ProviderKind, attach_args};
+use lazoo_runtime::{
+    TerminalCommand, TerminalError, TerminalExitStatus, TerminalSession, TerminalView,
+};
 use serde_json::{Value, json, to_value};
 use tokio::{sync::watch, time::timeout};
 use uuid::Uuid;
 
 use super::App;
+
+#[path = "terminal/native_view.rs"]
+mod native_view;
 
 const MAX_TERMINALS: usize = 8;
 const MAX_COMMAND_KEYS: usize = 1024;
@@ -30,12 +36,101 @@ pub(super) struct TerminalState {
     /// Employee session to the owner terminal attached to it; `None` while that attach is still
     /// opening. The binding is in memory only and dies with the daemon, like every terminal.
     attachments: BTreeMap<Uuid, Option<Uuid>>,
+    /// Live native views are deliberately separate from suspended-session attachments: a view is
+    /// read-only and may coexist with the daemon-owned idle session.
+    views: BTreeMap<Uuid, ViewBinding>,
+    view_reservations: BTreeMap<Uuid, ViewReservation>,
+    /// Bounded completed view idempotency outcomes. A closed view still rejects a changed replay
+    /// payload, but a fresh logical key can create a fresh lease.
+    view_keys: BTreeMap<(Uuid, String), ViewKey>,
 }
 struct LiveTerminal {
     command: TerminalOpenParams,
-    session: TerminalSession,
+    terminal: TerminalHandle,
     revision: u64,
     stopping: bool,
+    ownership: TerminalOwnership,
+    view_lease: Option<std::sync::Arc<NativeViewLease>>,
+}
+enum TerminalHandle {
+    Owned(TerminalSession),
+    Borrowed(TerminalView),
+}
+impl LiveTerminal {
+    fn pid(&self) -> u32 {
+        match &self.terminal {
+            TerminalHandle::Owned(terminal) => terminal.pid(),
+            TerminalHandle::Borrowed(terminal) => terminal.pid(),
+        }
+    }
+    fn exit_status(&self) -> Result<TerminalExitStatus, TerminalError> {
+        // A borrowed view has its own lifetime. Its canonical process can remain alive
+        // after the logical view closes, including when we cache the stopped record.
+        if self.ownership == TerminalOwnership::Borrowed
+            && (self.stopping
+                || self
+                    .view_lease
+                    .as_ref()
+                    .is_some_and(|lease| lease.is_closed()))
+        {
+            return Ok(TerminalExitStatus {
+                live: false,
+                exit_code: None,
+            });
+        }
+        match &self.terminal {
+            TerminalHandle::Owned(terminal) => terminal.exit_status(),
+            TerminalHandle::Borrowed(terminal) => match terminal.exit_status() {
+                Ok(status) => Ok(status),
+                Err(TerminalError::Stopped) => Ok(TerminalExitStatus {
+                    live: false,
+                    exit_code: None,
+                }),
+                Err(error) => Err(error),
+            },
+        }
+    }
+    fn resize(&self, columns: u16, rows: u16) -> Result<(), TerminalError> {
+        match &self.terminal {
+            TerminalHandle::Owned(terminal) => terminal.resize(columns, rows),
+            TerminalHandle::Borrowed(terminal) => terminal.resize(columns, rows),
+        }
+    }
+    fn read_output(
+        &self,
+        after: u64,
+        limit: usize,
+    ) -> Result<lazoo_runtime::TerminalOutput, TerminalError> {
+        match &self.terminal {
+            TerminalHandle::Owned(terminal) => terminal.read_output(after, limit),
+            TerminalHandle::Borrowed(terminal) => terminal.read_output(after, limit),
+        }
+    }
+    fn owned_session(&self) -> Option<TerminalSession> {
+        match &self.terminal {
+            TerminalHandle::Owned(terminal) => Some(terminal.clone()),
+            TerminalHandle::Borrowed(_) => None,
+        }
+    }
+}
+#[derive(Clone, Copy, Eq, PartialEq)]
+enum TerminalOwnership {
+    /// This record launched and therefore may stop the `ConPTY` process tree.
+    Owned,
+    /// This record is a read-only logical view of a provider-owned canonical terminal.
+    Borrowed,
+}
+struct ViewBinding {
+    body: SessionTerminalViewParams,
+    terminal: Uuid,
+}
+struct ViewReservation {
+    body: SessionTerminalViewParams,
+    outcome: watch::Sender<Option<Result<TerminalRecord, String>>>,
+}
+struct ViewKey {
+    body: SessionTerminalViewParams,
+    last: TerminalRecord,
 }
 struct CommandKey {
     body: TerminalOpenParams,
@@ -48,6 +143,149 @@ struct Reservation {
 }
 
 impl App {
+    /// `session.terminal.status` is observational: it reap-checks terminal exit state like other
+    /// reads but never reserves a slot, starts a process, or publishes an event.
+    #[allow(clippy::too_many_lines)] // Reports both independent attach and live-view eligibility paths.
+    pub(super) async fn session_terminal_status(&self, params: Value) -> Result<Value, RpcError> {
+        let params: SessionTerminalStatusParams = serde_json::from_value(params)
+            .map_err(|error| super::invalid_params(error.to_string()))?;
+        let session = self
+            .store
+            .get_session(params.id)
+            .map_err(super::session_store_error)?;
+        let (opening, terminal, attached, view_opening, view_terminal) = {
+            let mut state = self.terminals.lock().await;
+            release_exited(&mut state, self.boot_id)
+                .map_err(|error| attach_failed(&error, session.id))?;
+            let binding = state.attachments.get(&session.id).copied();
+            let terminal = binding.flatten().and_then(|id| {
+                state
+                    .sessions
+                    .get(&id)
+                    .and_then(|live| record(self.boot_id, id, live).ok())
+                    .or_else(|| {
+                        state
+                            .command_keys
+                            .values()
+                            .find(|key| key.id == id)
+                            .map(|key| key.last.clone())
+                    })
+            });
+            let attached = binding.is_some_and(|bound| {
+                bound.is_none_or(|terminal_id| state.sessions.contains_key(&terminal_id))
+            });
+            let view = state.views.get(&session.id).and_then(|binding| {
+                state
+                    .sessions
+                    .get(&binding.terminal)
+                    .and_then(|live| record(self.boot_id, binding.terminal, live).ok())
+            });
+            (
+                binding == Some(None),
+                terminal,
+                attached,
+                state.view_reservations.contains_key(&session.id),
+                view,
+            )
+        };
+        let blocked: Option<(String, String)> = if attached {
+            Some((
+                "LZ-SESSION-ATTACHED".to_owned(),
+                "an owner terminal is already attached to this session".to_owned(),
+            ))
+        } else if session.state != SessionLifecycleState::Suspended {
+            Some((
+                "LZ-SESSION-STATE".to_owned(),
+                "only suspended sessions can be attached".to_owned(),
+            ))
+        } else if self
+            .store
+            .is_memory_summary_session(session.id)
+            .map_err(super::session_store_error)?
+        {
+            Some((
+                "LZ-MEMORY-SESSION-RESERVED".to_owned(),
+                "memory summary sessions are reserved and cannot be taken over".to_owned(),
+            ))
+        } else if self
+            .store
+            .active_session_for_employee(session.employee_id)
+            .map_err(super::session_store_error)?
+            .is_some()
+        {
+            Some((
+                "LZ-SESSION-CONFLICT".to_owned(),
+                "an active session already owns this employee".to_owned(),
+            ))
+        } else {
+            let probe = SessionTerminalAttachParams {
+                id: session.id,
+                expected_revision: session.revision,
+                columns: 80,
+                rows: 25,
+                idempotency_key: "status-probe".to_owned(),
+            };
+            match self.attach_command(&session, &probe) {
+                Err(error) => Some((error.code, error.message)),
+                Ok(open) => validate_open(&open)
+                    .err()
+                    .map(|reason| ("LZ-SESSION-ATTACH-FAILED".to_owned(), reason)),
+            }
+        };
+        let (blocking_code, blocking_reason) =
+            blocked.map_or((None, None), |(code, reason)| (Some(code), Some(reason)));
+        let view_blocked: Option<(String, String)> = if self
+            .store
+            .is_memory_summary_session(session.id)
+            .map_err(super::session_store_error)?
+        {
+            Some((
+                "LZ-MEMORY-SESSION-RESERVED".to_owned(),
+                "memory summary sessions are reserved and cannot be viewed".to_owned(),
+            ))
+        } else if session.state != SessionLifecycleState::Idle {
+            Some((
+                "LZ-SESSION-STATE".to_owned(),
+                "only daemon-owned idle sessions can be viewed".to_owned(),
+            ))
+        } else if session.owner_boot_id != Some(self.boot_id) {
+            Some((
+                "LZ-SESSION-NOT-OWNED".to_owned(),
+                "this daemon does not own the active session".to_owned(),
+            ))
+        } else {
+            let live = self.live_sessions.lock().await.get(&session.id).cloned();
+            match live {
+                None => Some((
+                    "LZ-SESSION-HANDLE-MISSING".to_owned(),
+                    "the daemon does not own the active session handle".to_owned(),
+                )),
+                Some(live) if !live.native_view_available() => Some((
+                    "LZ-SESSION-VIEW-UNSUPPORTED".to_owned(),
+                    "the provider does not support a native read-only view".to_owned(),
+                )),
+                Some(_) => None,
+            }
+        };
+        let (view_blocking_code, view_blocking_reason) =
+            view_blocked.map_or((None, None), |(code, reason)| (Some(code), Some(reason)));
+        Ok(super::to_value(SessionTerminalStatusResult {
+            boot_id: self.boot_id,
+            session_id: session.id,
+            session_revision: session.revision,
+            opening,
+            terminal,
+            attachable: blocking_code.is_none(),
+            blocking_code,
+            blocking_reason,
+            viewable: view_blocking_code.is_none(),
+            view_blocking_code,
+            view_blocking_reason,
+            view_opening,
+            view_terminal,
+        }))
+    }
+
     pub(super) async fn terminal_control(
         &self,
         method: &str,
@@ -113,16 +351,150 @@ impl App {
             state
                 .sessions
                 .values()
-                .map(|terminal| terminal.session.clone())
+                .map(|terminal| {
+                    if let Some(lease) = &terminal.view_lease {
+                        lease.close();
+                    }
+                    (terminal.owned_session(), terminal.ownership)
+                })
                 .collect::<Vec<_>>()
         };
-        for session in sessions {
-            let _ = tokio::task::spawn_blocking(move || session.stop()).await;
+        for (session, ownership) in sessions {
+            if ownership == TerminalOwnership::Owned
+                && let Some(session) = session
+            {
+                let _ = tokio::task::spawn_blocking(move || session.stop()).await;
+            }
+        }
+    }
+
+    /// Closes a read-only view when its canonical provider session is stopping or replaced. This
+    /// never calls the provider session and therefore cannot cancel a canonical turn.
+    pub(super) async fn close_native_view_for_session(&self, session_id: Uuid) {
+        let terminal = {
+            let mut state = self.terminals.lock().await;
+            let terminal = state.views.remove(&session_id).and_then(|binding| {
+                state.sessions.get(&binding.terminal).map(|live| {
+                    if let Some(lease) = &live.view_lease {
+                        lease.close();
+                    }
+                    (
+                        binding.terminal,
+                        live.owned_session(),
+                        live.ownership,
+                        record(self.boot_id, binding.terminal, live).ok(),
+                    )
+                })
+            });
+            state.view_reservations.remove(&session_id);
+            terminal
+        };
+        if let Some((id, terminal, ownership, view)) = terminal {
+            if ownership == TerminalOwnership::Borrowed {
+                if let Some(view) = view {
+                    let _ = self
+                        .terminal_stop(TerminalStopParams {
+                            id,
+                            expected_boot_id: view.boot_id,
+                            expected_revision: view.revision,
+                        })
+                        .await;
+                }
+            } else if let Some(terminal) = terminal {
+                let _ = tokio::task::spawn_blocking(move || terminal.stop()).await;
+            }
         }
     }
     pub(crate) async fn terminal_open(
         &self,
         params: TerminalOpenParams,
+    ) -> Result<TerminalRecord, String> {
+        validate_open(&params)?;
+        let command =
+            TerminalCommand::new(&params.executable, &params.cwd, params.columns, params.rows)
+                .args(params.args.clone());
+        self.terminal_open_with_command(params, command, None).await
+    }
+
+    /// Registers a distinct, read-only logical terminal over a provider-owned canonical `ConPTY`.
+    /// The daemon never owns the process through this record: stopping or dropping the view only
+    /// releases its terminal identity and retained-output access.
+    pub(crate) async fn terminal_open_borrowed(
+        &self,
+        params: TerminalOpenParams,
+        session: TerminalView,
+        view_lease: Option<std::sync::Arc<NativeViewLease>>,
+    ) -> Result<TerminalRecord, String> {
+        if params.idempotency_key.is_empty() || params.idempotency_key.len() > 256 {
+            return Err("terminal request is invalid".into());
+        }
+        if !session
+            .exit_status()
+            .map_err(|error| terminal_error(&error))?
+            .live
+        {
+            return Err("native terminal exited before view opened".into());
+        }
+        let mut state = self.terminals.lock().await;
+        release_exited(&mut state, self.boot_id)?;
+        if let Some(existing) = state.command_keys.get(&params.idempotency_key) {
+            if existing.body != params {
+                return Err(
+                    "terminal idempotency key was already used with a different request".into(),
+                );
+            }
+            return Ok(existing.last.clone());
+        }
+        let active = state
+            .sessions
+            .values()
+            .map(|terminal| {
+                terminal
+                    .exit_status()
+                    .map_err(|error| terminal_error(&error))
+            })
+            .collect::<Result<Vec<_>, _>>()?
+            .into_iter()
+            .filter(|status| status.live)
+            .count();
+        if active + state.reservations.len() >= MAX_TERMINALS {
+            return Err("terminal limit reached".into());
+        }
+        if state.command_keys.len() + state.reservations.len() >= MAX_COMMAND_KEYS {
+            evict_one_dead(&mut state)?;
+        }
+        let id = Uuid::new_v4();
+        let terminal = LiveTerminal {
+            command: params.clone(),
+            terminal: TerminalHandle::Borrowed(session),
+            revision: 1,
+            stopping: false,
+            ownership: TerminalOwnership::Borrowed,
+            view_lease,
+        };
+        let record = record(self.boot_id, id, &terminal)?;
+        if !record.live {
+            return Err("native terminal exited before view opened".into());
+        }
+        state.command_keys.insert(
+            params.idempotency_key.clone(),
+            CommandKey {
+                body: params,
+                id,
+                last: record.clone(),
+            },
+        );
+        state.sessions.insert(id, terminal);
+        Ok(record)
+    }
+
+    /// Internal launch path for provider-owned views. The public terminal RPC cannot supply an
+    /// environment overlay; this keeps bearer capabilities out of protocol metadata.
+    async fn terminal_open_with_command(
+        &self,
+        params: TerminalOpenParams,
+        command: TerminalCommand,
+        view_lease: Option<std::sync::Arc<NativeViewLease>>,
     ) -> Result<TerminalRecord, String> {
         validate_open(&params)?;
         let (mut receiver, owner) = {
@@ -150,7 +522,6 @@ impl App {
                     .values()
                     .map(|terminal| {
                         terminal
-                            .session
                             .exit_status()
                             .map_err(|error| terminal_error(&error))
                     })
@@ -176,15 +547,13 @@ impl App {
         if owner {
             let app = self.clone();
             let request = params.clone();
-            let command =
-                TerminalCommand::new(&params.executable, &params.cwd, params.columns, params.rows)
-                    .args(params.args.clone());
             tokio::spawn(async move {
                 let spawned = tokio::task::spawn_blocking(move || TerminalSession::spawn(command))
                     .await
                     .map_err(|error| error.to_string())
                     .and_then(|result| result.map_err(|error| error.to_string()));
-                app.complete_terminal_open(request, spawned).await;
+                app.complete_terminal_open(request, spawned, view_lease)
+                    .await;
             });
         }
         loop {
@@ -202,6 +571,7 @@ impl App {
         &self,
         params: TerminalOpenParams,
         spawned: Result<TerminalSession, String>,
+        view_lease: Option<std::sync::Arc<NativeViewLease>>,
     ) {
         let mut state = self.terminals.lock().await;
         let reservation = state.reservations.remove(&params.idempotency_key);
@@ -212,9 +582,11 @@ impl App {
                 let id = session.id();
                 let terminal = LiveTerminal {
                     command: params.clone(),
-                    session,
+                    terminal: TerminalHandle::Owned(session),
                     revision: 1,
                     stopping: false,
+                    ownership: TerminalOwnership::Owned,
+                    view_lease,
                 };
                 match record(self.boot_id, id, &terminal) {
                     Ok(record) => {
@@ -301,7 +673,6 @@ impl App {
             return Err("terminal revision conflict".into());
         }
         terminal
-            .session
             .resize(params.columns, params.rows)
             .map_err(|error| error.to_string())?;
         terminal.command.columns = params.columns;
@@ -334,7 +705,7 @@ impl App {
         F: FnOnce(TerminalSession) -> Result<(), TerminalError> + Send + 'static,
     {
         require_boot_id(self.boot_id, params.expected_boot_id)?;
-        let session = {
+        let (session, ownership) = {
             let mut state = self.terminals.lock().await;
             let terminal = state
                 .sessions
@@ -348,12 +719,21 @@ impl App {
             }
             terminal.revision += 1;
             terminal.stopping = true;
-            terminal.session.clone()
+            if let Some(lease) = &terminal.view_lease {
+                lease.close();
+            }
+            (terminal.owned_session(), terminal.ownership)
         };
-        let stopped = tokio::task::spawn_blocking(move || stop(session))
+        let stopped = if ownership == TerminalOwnership::Borrowed {
+            Ok(())
+        } else {
+            tokio::task::spawn_blocking(move || {
+                stop(session.expect("owned terminal has a session"))
+            })
             .await
             .map_err(|error| error.to_string())
-            .and_then(|result| result.map_err(|error| error.to_string()));
+            .and_then(|result| result.map_err(|error| error.to_string()))
+        };
         if let Err(error) = stopped {
             let mut state = self.terminals.lock().await;
             clear_failed_stop(
@@ -374,6 +754,16 @@ impl App {
         }
         let record = record(self.boot_id, params.id, terminal)?;
         state.sessions.remove(&params.id);
+        state
+            .views
+            .retain(|_, binding| binding.terminal != params.id);
+        for key in state
+            .view_keys
+            .values_mut()
+            .filter(|key| key.last.id == params.id)
+        {
+            key.last = record.clone();
+        }
         if let Some(key) = state
             .command_keys
             .values_mut()
@@ -393,8 +783,12 @@ impl App {
         if terminal.stopping {
             return Err("terminal is stopping".into());
         }
+        if terminal.ownership == TerminalOwnership::Borrowed {
+            return Err("terminal is a read-only native view".into());
+        }
         terminal
-            .session
+            .owned_session()
+            .expect("owned terminal has a session")
             .write_input(input.bytes)
             .map_err(|error| terminal_error(&error))
     }
@@ -412,11 +806,9 @@ impl App {
             return Err("terminal is stopping".into());
         }
         let output = terminal
-            .session
             .read_output(request.after, request.limit)
             .map_err(|error| terminal_error(&error))?;
         let status = terminal
-            .session
             .exit_status()
             .map_err(|error| terminal_error(&error))?;
         Ok(TerminalOutput {
@@ -664,13 +1056,12 @@ fn validate_open(params: &TerminalOpenParams) -> Result<(), String> {
 }
 fn record(boot_id: Uuid, id: Uuid, terminal: &LiveTerminal) -> Result<TerminalRecord, String> {
     let status = terminal
-        .session
         .exit_status()
         .map_err(|error| terminal_error(&error))?;
     Ok(TerminalRecord {
         id,
         boot_id,
-        pid: terminal.session.pid(),
+        pid: terminal.pid(),
         executable: terminal.command.executable.clone(),
         args: terminal.command.args.clone(),
         cwd: terminal.command.cwd.clone(),
@@ -715,7 +1106,6 @@ fn release_exited(state: &mut TerminalState, boot_id: Uuid) -> Result<(), String
                 return Ok(None);
             }
             let status = terminal
-                .session
                 .exit_status()
                 .map_err(|error| terminal_error(&error))?;
             if status.live {
@@ -730,6 +1120,16 @@ fn release_exited(state: &mut TerminalState, boot_id: Uuid) -> Result<(), String
         .collect::<Vec<_>>();
     for record in exited {
         state.sessions.remove(&record.id);
+        state
+            .views
+            .retain(|_, binding| binding.terminal != record.id);
+        for key in state
+            .view_keys
+            .values_mut()
+            .filter(|key| key.last.id == record.id)
+        {
+            key.last = record.clone();
+        }
         if let Some(key) = state
             .command_keys
             .values_mut()
@@ -830,5 +1230,179 @@ mod tests {
             .unwrap();
         assert!(!stopped.live);
         assert_eq!(app.terminal_list().await.unwrap().terminals, vec![stopped]);
+    }
+
+    #[tokio::test]
+    async fn borrowed_view_is_read_only_reopens_history_and_never_stops_canonical_conpty() {
+        let (_temporary, app) = test_app();
+        let canonical = TerminalSession::spawn(
+            TerminalCommand::new(
+                r"C:\Windows\System32\cmd.exe",
+                std::env::current_dir().unwrap(),
+                80,
+                25,
+            )
+            .args(["/Q", "/K"]),
+        )
+        .unwrap();
+        canonical
+            .write_input(b"echo retained-native-output\r\n")
+            .unwrap();
+        for _ in 0..20 {
+            if !canonical.read_output(0, 4096).unwrap().bytes.is_empty() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        let first = app
+            .terminal_open_borrowed(command("borrowed-view-first"), canonical.view(), None)
+            .await
+            .unwrap();
+        assert_ne!(first.id, canonical.id());
+        assert!(
+            app.terminal_input(TerminalInput {
+                id: first.id,
+                expected_boot_id: first.boot_id,
+                bytes: b"must-not-write".to_vec(),
+            })
+            .await
+            .unwrap_err()
+            .contains("read-only")
+        );
+        let output = app
+            .terminal_output(TerminalOutputRequest {
+                id: first.id,
+                expected_boot_id: first.boot_id,
+                after: 0,
+                limit: 4096,
+            })
+            .await
+            .unwrap();
+        assert!(
+            output
+                .bytes
+                .windows(b"retained-native-output".len())
+                .any(|bytes| bytes == b"retained-native-output")
+        );
+        let stopped = app
+            .terminal_stop(TerminalStopParams {
+                id: first.id,
+                expected_boot_id: first.boot_id,
+                expected_revision: first.revision,
+            })
+            .await
+            .unwrap();
+        assert!(!stopped.live);
+        assert_eq!(
+            app.terminal_show(TerminalShowParams { id: first.id })
+                .await
+                .unwrap(),
+            stopped
+        );
+        assert_eq!(app.terminal_list().await.unwrap().terminals, vec![stopped]);
+        assert!(canonical.exit_status().unwrap().live);
+        let reopened = app
+            .terminal_open_borrowed(command("borrowed-view-reopened"), canonical.view(), None)
+            .await
+            .unwrap();
+        assert_ne!(reopened.id, first.id);
+        assert!(
+            !app.terminal_output(TerminalOutputRequest {
+                id: reopened.id,
+                expected_boot_id: reopened.boot_id,
+                after: 0,
+                limit: 4096,
+            })
+            .await
+            .unwrap()
+            .bytes
+            .is_empty()
+        );
+        canonical.stop().unwrap();
+        assert!(
+            app.terminal_list()
+                .await
+                .unwrap()
+                .terminals
+                .iter()
+                .any(|record| record.id == reopened.id && !record.live)
+        );
+    }
+
+    #[tokio::test]
+    async fn borrowed_open_counts_pending_owned_open_against_the_shared_terminal_limit() {
+        let (_temporary, app) = test_app();
+        let mut canonical = Vec::new();
+        for index in 0..(MAX_TERMINALS - 1) {
+            let session = TerminalSession::spawn(
+                TerminalCommand::new(
+                    r"C:\Windows\System32\cmd.exe",
+                    std::env::current_dir().unwrap(),
+                    80,
+                    25,
+                )
+                .args(["/Q", "/K"]),
+            )
+            .unwrap();
+            app.terminal_open_borrowed(
+                command(&format!("borrowed-capacity-{index}")),
+                session.view(),
+                None,
+            )
+            .await
+            .unwrap();
+            canonical.push(session);
+        }
+        {
+            let mut state = app.terminals.lock().await;
+            let (outcome, _receiver) = watch::channel(None);
+            state.reservations.insert(
+                "pending-owned-open".to_owned(),
+                Reservation {
+                    body: command("pending-owned-open"),
+                    outcome,
+                },
+            );
+        }
+        let rejected = app
+            .terminal_open_borrowed(
+                command("borrowed-capacity-rejected"),
+                canonical[0].view(),
+                None,
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(rejected, "terminal limit reached");
+        for session in canonical {
+            session.stop().unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn borrowed_open_rejects_an_already_exited_canonical_terminal() {
+        let (_temporary, app) = test_app();
+        let canonical = TerminalSession::spawn(
+            TerminalCommand::new(
+                r"C:\Windows\System32\cmd.exe",
+                std::env::current_dir().unwrap(),
+                80,
+                25,
+            )
+            .args(["/Q", "/C", "exit 0"]),
+        )
+        .unwrap();
+        for _ in 0..20 {
+            if !canonical.exit_status().unwrap().live {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+        assert!(!canonical.exit_status().unwrap().live);
+        assert_eq!(
+            app.terminal_open_borrowed(command("borrowed-exited"), canonical.view(), None)
+                .await
+                .unwrap_err(),
+            "native terminal exited before view opened"
+        );
     }
 }

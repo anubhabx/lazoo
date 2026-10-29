@@ -9,7 +9,7 @@ use agent_client_protocol::schema::{
     ProtocolVersion,
     v1::{
         CancelNotification, CloseSessionRequest, ContentBlock, Implementation, InitializeRequest,
-        InitializeResponse, LoadSessionRequest, NewSessionRequest, NewSessionResponse,
+        InitializeResponse, LoadSessionRequest, McpServer, NewSessionRequest, NewSessionResponse,
         PromptRequest, RequestPermissionOutcome, RequestPermissionResponse,
         SelectedPermissionOutcome, TextContent,
     },
@@ -119,6 +119,17 @@ pub(crate) async fn start_acp_session(
     command: CommandSpec,
     request: &SessionRequest,
 ) -> Result<(AcpSession, AcpHandshake), ProviderError> {
+    start_acp_session_with_mcp(provider, command, request, Vec::new()).await
+}
+
+/// Starts an ACP session with an explicitly scoped MCP list.  The default entrypoint above
+/// preserves the existing empty list for every adapter except the `OpenCode` collaboration bridge.
+pub(crate) async fn start_acp_session_with_mcp(
+    provider: ProviderKind,
+    command: CommandSpec,
+    request: &SessionRequest,
+    mcp_servers: Vec<McpServer>,
+) -> Result<(AcpSession, AcpHandshake), ProviderError> {
     validate_workspace(request)?;
     let mut process = JsonRpcProcess::spawn_standard(&command)?;
     let handshake = initialize_acp(
@@ -138,7 +149,8 @@ pub(crate) async fn start_acp_session(
             });
         }
         let load = LoadSessionRequest::new(session_id.clone(), request.cwd.clone())
-            .additional_directories(request.workspace_roots.clone());
+            .additional_directories(request.workspace_roots.clone())
+            .mcp_servers(mcp_servers);
         process
             .request(
                 "session/load",
@@ -154,7 +166,8 @@ pub(crate) async fn start_acp_session(
         session_id.clone()
     } else {
         let create = NewSessionRequest::new(request.cwd.clone())
-            .additional_directories(request.workspace_roots.clone());
+            .additional_directories(request.workspace_roots.clone())
+            .mcp_servers(mcp_servers);
         let response = process
             .request(
                 "session/new",

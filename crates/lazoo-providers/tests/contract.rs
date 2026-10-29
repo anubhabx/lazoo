@@ -1,9 +1,9 @@
-use std::sync::Mutex;
+use std::{ffi::OsString, sync::Mutex};
 
 use lazoo_providers::{
-    DiscoverySource, ExecutableCandidate, ProviderCapabilities, ProviderError, ProviderEvent,
-    ProviderKind, ProviderSession, ProviderVerification, ToolCall, ToolResult, TurnEventObserver,
-    TurnRequest, attach_args, rank_candidates, redact_json,
+    CommandSpec, DiscoverySource, ExecutableCandidate, ProviderCapabilities, ProviderError,
+    ProviderEvent, ProviderKind, ProviderSession, ProviderVerification, ToolCall, ToolResult,
+    TurnEventObserver, TurnRequest, attach_args, rank_candidates, redact_json,
 };
 use serde_json::json;
 
@@ -24,13 +24,15 @@ fn attach_args_name_only_the_documented_resume_shapes_and_refuse_placeholders() 
         attach_args(ProviderKind::Codex, "thread-7"),
         Some(vec!["resume".to_owned(), "thread-7".to_owned()])
     );
-    for provider in [
-        ProviderKind::OpenCode,
-        ProviderKind::GrokBuild,
-        ProviderKind::Antigravity,
-    ] {
-        assert_eq!(attach_args(provider, "session-1"), None, "{provider}");
-    }
+    assert_eq!(
+        attach_args(ProviderKind::OpenCode, "ses_1"),
+        Some(vec!["--session".to_owned(), "ses_1".to_owned()])
+    );
+    assert_eq!(
+        attach_args(ProviderKind::Antigravity, "native-1"),
+        Some(vec!["--conversation".to_owned(), "native-1".to_owned()])
+    );
+    assert_eq!(attach_args(ProviderKind::GrokBuild, "session-1"), None);
     for provider in ProviderKind::ALL {
         assert_eq!(attach_args(provider, ""), None, "{provider} empty id");
         assert_eq!(
@@ -131,6 +133,20 @@ fn redaction_removes_nested_secret_like_values() {
             "array": [{"password": "[REDACTED]"}]
         }),
     );
+}
+
+#[test]
+fn command_spec_debug_keeps_environment_keys_but_redacts_values() {
+    let mut command = CommandSpec::new(r"C:\Tools\codex.exe", r"C:\workspace");
+    command.env.insert(
+        OsString::from("CODEX_NATIVE_VIEW_TOKEN"),
+        OsString::from("super-secret-bearer"),
+    );
+
+    let debug = format!("{command:?}");
+    assert!(debug.contains("CODEX_NATIVE_VIEW_TOKEN"));
+    assert!(!debug.contains("super-secret-bearer"));
+    assert!(debug.contains("<redacted>"));
 }
 
 #[test]

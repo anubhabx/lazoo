@@ -11,6 +11,7 @@ mod memory_worker_cleanup;
 mod memory_worker_execution;
 #[cfg(test)]
 mod memory_worker_tests;
+mod native_trust;
 mod resources;
 mod resume;
 mod task;
@@ -75,6 +76,14 @@ pub type SessionBackendFuture<'a> =
 pub trait ManagedSession: Send + Sync {
     fn id(&self) -> String;
     fn native_host_pid(&self) -> Option<u32>;
+    fn native_view_available(&self) -> bool {
+        false
+    }
+    fn open_native_view(
+        &self,
+    ) -> lazoo_providers::AdapterFuture<'_, Option<lazoo_providers::NativeViewLease>> {
+        Box::pin(async { Ok(None) })
+    }
     /// Job Object accounting for the native process tree; `None` when there is no job.
     fn resources(&self) -> Option<JobAccounting> {
         None
@@ -170,6 +179,16 @@ struct ProviderSessionBackend {
 }
 
 impl ManagedSession for ProviderSessionHandle {
+    fn native_view_available(&self) -> bool {
+        ProviderSession::native_view_available(self)
+    }
+
+    fn open_native_view(
+        &self,
+    ) -> lazoo_providers::AdapterFuture<'_, Option<lazoo_providers::NativeViewLease>> {
+        ProviderSession::open_native_view(self)
+    }
+
     fn id(&self) -> String {
         ProviderSession::id(self)
     }
@@ -229,6 +248,7 @@ pub struct App {
     live_turns: Arc<Mutex<BTreeMap<Uuid, Arc<LiveTurn>>>>,
     task_dispatch_notify: Arc<Notify>,
     approval_notify: Arc<Notify>,
+    native_trust_notify: Arc<Notify>,
     /// Woken by `publish_events`, which follows every store write, so a tool wait re-reads the
     /// store when something changed instead of polling it.
     store_changed: Arc<Notify>,
@@ -245,7 +265,8 @@ pub struct App {
 const DEFAULT_APPROVAL_TIMEOUT: Duration = Duration::from_mins(15);
 
 pub struct EventSubscription {
-    pub catch_up: Vec<EventSummary>,
+    /// The durable replay is drained in pages through `subscription_page` before live events.
+    pub replay_high_water: u64,
     pub live: broadcast::Receiver<EventSummary>,
 }
 
@@ -303,6 +324,7 @@ impl App {
         let messages = store.reconcile_messages()?;
         let turns = store.reconcile_turns(boot_id)?;
         store.reconcile_approvals(boot_id)?;
+        store.reconcile_native_trust(boot_id)?;
         let mut tasks = store.reconcile_tasks()?.tasks;
         tasks.extend(store.reconcile_task_dispatches(boot_id)?.tasks);
         for event in store.publish_pending_outbox()? {
@@ -322,6 +344,7 @@ impl App {
             live_turns: Arc::new(Mutex::new(BTreeMap::new())),
             task_dispatch_notify: Arc::new(Notify::new()),
             approval_notify: Arc::new(Notify::new()),
+            native_trust_notify: Arc::new(Notify::new()),
             store_changed: Arc::new(Notify::new()),
             approval_timeout: DEFAULT_APPROVAL_TIMEOUT,
             user_notifier: Arc::new(lazoo_runtime::NativeNotifier),
@@ -406,6 +429,8 @@ impl App {
             "session.stop" => self.stop_session(&request).await,
             "session.resources" => self.session_resources(&request.params).await,
             "session.terminal.attach" => self.session_terminal_attach(request.params).await,
+            "session.terminal.view" => self.session_terminal_view(request.params).await,
+            "session.terminal.status" => self.session_terminal_status(request.params).await,
             "conversation.create" => self.create_conversation(&request),
             "conversation.list" => self.conversation_list(request.params),
             "conversation.show" => self.conversation_show(request.params),
@@ -426,6 +451,12 @@ impl App {
             "approval.decide" => self.decide_approval(&request),
             "approval.list" => self.approval_list(&request.params),
             "approval.show" => self.approval_show(&request.params),
+            "native.trust.list" => self.native_trust_list(&request.params),
+            "native.trust.show" => self.native_trust_show(&request.params),
+            "native.trust.resolve" => self.resolve_native_trust(&request),
+            "native.trust.policy.show" => self.native_trust_policy_show(&request.params),
+            "native.trust.policy.set" => self.native_trust_policy_set(&request.params),
+            "native.trust.policy.reset" => self.native_trust_policy_reset(&request.params),
             "inbox.list" => self.inbox_list(&request.params),
             "inbox.counts" => self.inbox_counts(&request.params),
             "workspace.conversations" => self.workspace_conversations(&request.params),
@@ -463,19 +494,36 @@ impl App {
         }
     }
 
-    pub fn subscribe(
-        &self,
-        after: u64,
-    ) -> Result<(Vec<EventSummary>, broadcast::Receiver<EventSummary>), lazoo_store::StoreError>
-    {
-        let live = self.events.subscribe();
-        let catch_up = self.store.list_events(after, 1024)?;
-        Ok((catch_up, live))
+    /// Retain a live receiver before fixing the durable replay interval. Callers drain with
+    /// `subscription_page`; this deliberately avoids materializing an unbounded backlog.
+    pub fn subscribe(&self, after: u64) -> Result<EventSubscription, lazoo_store::StoreError> {
+        self.subscription(after)
     }
 
     pub fn subscription(&self, after: u64) -> Result<EventSubscription, lazoo_store::StoreError> {
-        let (catch_up, live) = self.subscribe(after)?;
-        Ok(EventSubscription { catch_up, live })
+        let _ = i64::try_from(after).map_err(|_| lazoo_store::StoreError::NegativeSequence)?;
+        // Subscribe first so every event after this durable watermark remains in `live` even if
+        // replay writes take time. The server deduplicates the overlap by sequence.
+        let live = self.events.subscribe();
+        let replay_high_water = self.store.status()?.event_high_water;
+        Ok(EventSubscription {
+            replay_high_water,
+            live,
+        })
+    }
+
+    /// One bounded durable page from a subscription's fixed replay interval.
+    pub fn subscription_page(
+        &self,
+        after: u64,
+        replay_high_water: u64,
+    ) -> Result<Vec<EventSummary>, lazoo_store::StoreError> {
+        Ok(self
+            .store
+            .list_events(after, 1024)?
+            .into_iter()
+            .take_while(|event| event.sequence <= replay_high_water)
+            .collect())
     }
 
     #[must_use]
@@ -948,6 +996,7 @@ impl App {
             .map(to_value)
     }
 
+    #[allow(clippy::too_many_lines)] // One startup transaction coordinates workspace, trust and native ownership.
     async fn start_new_session(
         &self,
         employee: lazoo_protocol::EmployeeRecord,
@@ -980,15 +1029,70 @@ impl App {
                 session_id,
             ));
         };
+        let native_workspace_provider = matches!(
+            provider,
+            ProviderKind::ClaudeCode | ProviderKind::Antigravity
+        );
+        let Ok(canonical_workspace) = std::fs::canonicalize(&working_directory) else {
+            self.record_session_failure(
+                session_id,
+                starting.session.revision,
+                "LZ-SESSION-START-FAILED",
+                "session working directory could not be canonicalized",
+            )?;
+            return Err(session_failure(
+                "LZ-SESSION-START-FAILED",
+                "session working directory could not be canonicalized",
+                session_id,
+            ));
+        };
+        let managed_workspace = [
+            self.root.sessions_dir(),
+            self.root.projectless_task_workspaces_dir(),
+            self.root.git_task_workspaces_dir(),
+        ]
+        .into_iter()
+        .filter_map(|path| std::fs::canonicalize(path).ok())
+        .any(|root| canonical_workspace.starts_with(root));
+        if native_workspace_provider
+            && let Err(error) = Box::pin(self.await_native_workspace_trust(
+                &employee.provider,
+                canonical_workspace.to_string_lossy().into_owned(),
+                managed_workspace,
+                session_id,
+                employee.id,
+            ))
+            .await
+        {
+            self.record_session_failure(
+                session_id,
+                starting.session.revision,
+                &error.code,
+                &error.message,
+            )?;
+            return Err(error);
+        }
         let mut session_request = SessionRequest::new(working_directory)
             .with_permission_mode(authority_permission_mode(employee.authority_mode));
+        if native_workspace_provider {
+            session_request = session_request.with_native_workspace_trust_approved();
+        }
+        if managed_workspace {
+            session_request = session_request.with_managed_workspace();
+        }
         if let Some(model) = employee.model {
             session_request = session_request.with_model(model);
         }
         if let Some(effort) = employee.reasoning_effort {
             session_request = session_request.with_effort(effort);
         }
-        if provider == ProviderKind::Codex {
+        if matches!(
+            provider,
+            ProviderKind::Codex
+                | ProviderKind::OpenCode
+                | ProviderKind::ClaudeCode
+                | ProviderKind::Antigravity
+        ) {
             session_request = session_request.with_tools(tools::collaboration_tools());
         }
         if let Some(native_session_id) = resume.native_session_id() {
@@ -1121,6 +1225,7 @@ impl App {
         }
 
         let session_id = stopping.session.id;
+        self.close_native_view_for_session(session_id).await;
         let session = self.live_sessions.lock().await.remove(&session_id);
         let Some(session) = session else {
             self.record_session_failure(
@@ -1424,53 +1529,36 @@ fn require_session_idempotency_key(value: &str) -> Result<(), RpcError> {
     }
 }
 
-/// Whether a provider enforces a task authority ceiling, so Lazoo may deliver turns and
-/// dispatch tasks to it. Codex: its approval requests are bridged into the schema-8 ledger under
-/// every authority. `OpenCode`: under every authority too, because the adapter launches
-/// `opencode acp` with an inline `OPENCODE_PERMISSION` block chosen by the permission mode
-/// (allow-all for `auto`; for `ask` and `accept-edits` every governed tool asks and only the
-/// read-only tools are allowed by name) and the ACP bridge admits only command and file-change
-/// requests into the ledger, declining every other kind. Claude Code: only `full-autonomy`,
-/// which maps to its `auto` permission mode, the one mode in which no prompt can occur; under
-/// `ask` and `self-decision` its prompts stay where Lazoo cannot answer them. Antigravity has no
-/// prompt-free mode, and Grok Build (ACP) is not launched with a governed permission block, so
-/// both stay refused.
+/// Whether a provider's native turn observer enforces a task authority ceiling. Codex,
+/// `OpenCode`, Claude Code, and Antigravity route every authority mode through Lazoo's governed
+/// observer. Grok Build remains excluded.
 pub(crate) const fn provider_enforces_authority(
     provider: ProviderKind,
-    authority: AuthorityMode,
+    _authority: AuthorityMode,
 ) -> bool {
-    match provider {
-        ProviderKind::Codex | ProviderKind::OpenCode => true,
-        ProviderKind::ClaudeCode => matches!(authority, AuthorityMode::FullAutonomy),
-        ProviderKind::GrokBuild | ProviderKind::Antigravity => false,
-    }
+    matches!(
+        provider,
+        ProviderKind::Codex
+            | ProviderKind::OpenCode
+            | ProviderKind::ClaudeCode
+            | ProviderKind::Antigravity
+    )
 }
 
-/// Whether the session the employee's authority launches can serve a turn or task at
-/// `authority`. `OpenCode` takes its permission block at launch and ACP cannot narrow it per
-/// turn, so a session launched prompt-free (a `full-autonomy` employee) never serves a narrower
-/// `ask` or `self-decision` turn: that would run it without the approvals the turn requires. A
-/// governed session (`ask`, `self-decision`) serves any authority up to its own, and the
-/// approval observer applies the turn's authority to each request.
+/// Every admitted native provider receives each turn's authority in its governed observer; the
+/// employee ceiling is still enforced by the caller before this provider capability check.
 pub(crate) const fn session_serves_authority(
     provider: ProviderKind,
     authority: AuthorityMode,
-    employee_authority: AuthorityMode,
+    _employee_authority: AuthorityMode,
 ) -> bool {
     provider_enforces_authority(provider, authority)
-        && !(matches!(provider, ProviderKind::OpenCode)
-            && matches!(employee_authority, AuthorityMode::FullAutonomy)
-            && !matches!(authority, AuthorityMode::FullAutonomy))
 }
 
-/// Whether a provider may run the memory worker's summary turns. Besides the governed `ask`
-/// ceiling the summary turn must be read-only. The daemon declines every permission request on a
-/// summary turn, but `OpenCode`'s ACP adapter rejects a `read_only` turn request
-/// ("read-only turns" unsupported), so a summary could neither be proven read-only nor run there;
-/// it stays excluded.
+/// Whether a provider may run the memory worker's read-only summary turns. Each admitted native
+/// observer applies the daemon's read-only guard; Grok Build remains excluded.
 pub(crate) const fn provider_runs_memory_summaries(provider: ProviderKind) -> bool {
     provider_enforces_authority(provider, AuthorityMode::Ask)
-        && !matches!(provider, ProviderKind::OpenCode)
 }
 
 const fn authority_permission_mode(authority: AuthorityMode) -> &'static str {
@@ -1967,10 +2055,37 @@ fn failure(id: &str, code: &str, message: &str, data: Option<Value>) -> JsonRpcR
 
 #[cfg(test)]
 mod tests {
+    use lazoo_protocol::AuthorityMode;
     use lazoo_providers::{ProviderEvent, ProviderKind};
     use serde_json::json;
 
-    use super::concise_events;
+    use super::{
+        concise_events, provider_enforces_authority, provider_runs_memory_summaries,
+        session_serves_authority,
+    };
+
+    #[test]
+    fn governed_native_providers_allow_narrower_turns_under_full_autonomy_ceiling() {
+        for provider in [
+            ProviderKind::Codex,
+            ProviderKind::OpenCode,
+            ProviderKind::ClaudeCode,
+            ProviderKind::Antigravity,
+        ] {
+            assert!(provider_enforces_authority(provider, AuthorityMode::Ask));
+            assert!(session_serves_authority(
+                provider,
+                AuthorityMode::Ask,
+                AuthorityMode::FullAutonomy
+            ));
+            assert!(provider_runs_memory_summaries(provider));
+        }
+        assert!(!provider_enforces_authority(
+            ProviderKind::GrokBuild,
+            AuthorityMode::Ask
+        ));
+        assert!(!provider_runs_memory_summaries(ProviderKind::GrokBuild));
+    }
 
     #[test]
     fn concise_provider_transcripts_remove_raw_payloads_and_bound_strings() {

@@ -1,0 +1,67 @@
+{
+  "status": "PASS",
+  "schemaVersion": 19,
+  "mode": "deterministic-fake-transport",
+  "startedAt": "2026-10-28T21:03:20.4978708Z",
+  "durationMs": 2437,
+  "commands": [
+    {
+      "command": "cargo test -p lazoo-providers --test config provider_configuration_is_parsed_from_known_formats_redacted_hashed_and_compared --locked -- --exact",
+      "exitCode": 0,
+      "durationMs": 442
+    },
+    {
+      "command": "cargo test -p lazoo-providers --test config missing_and_malformed_configuration_is_reported_without_quoting_it_or_failing --locked -- --exact",
+      "exitCode": 0,
+      "durationMs": 468
+    },
+    {
+      "command": "cargo test -p lazooctl --test cli provider_cli_maps_config --locked -- --exact",
+      "exitCode": 0,
+      "durationMs": 352
+    },
+    {
+      "command": "cargo test -p lazood --test daemon provider_config_reports_redacted_integrations_without_changing_the_desktop_snapshot --locked -- --exact",
+      "exitCode": 0,
+      "durationMs": 581
+    },
+    {
+      "command": "cargo test -p lazoo-store --test store store_enables_wal_foreign_keys_and_schema_version --locked -- --exact",
+      "exitCode": 0,
+      "durationMs": 495
+    },
+    {
+      "command": "git diff --quiet and git diff --cached --quiet -- apps/lazoo-desktop",
+      "exitCode": 0,
+      "durationMs": null
+    }
+  ],
+  "evidence": {
+    "knownFormatsParsed": true,
+    "secretsRedacted": true,
+    "integrationsHashed": true,
+    "duplicatesAndConflictsNamed": true,
+    "unsupportedNamed": true,
+    "malformedFilesReportedNotQuoted": true,
+    "codexHomeHonoured": true,
+    "cliMapsConfig": true,
+    "daemonServesConfig": true,
+    "nothingWritten": true,
+    "snapshotUnchanged": true,
+    "schemaFifteen": true,
+    "providerSmokeAbsent": true,
+    "externalModelUseAbsent": true,
+    "uiChangesAbsent": true
+  },
+  "boundaries": {
+    "providerSmoke": "NOT_RUN",
+    "externalModelUse": "NOT_RUN",
+    "desktopUi": "UNCHANGED",
+    "schemaMigration": "NONE",
+    "writes": "NONE",
+    "formats": "CODEX_TOML_CLAUDE_JSON_OPENCODE_JSON",
+    "secrets": "KEY_NAMES_ONLY_URL_QUERY_STRIPPED",
+    "federationSteps": "IMPORT_1_TO_5_ONLY",
+    "toolAccess": "NONE"
+  }
+}

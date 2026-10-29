@@ -6,7 +6,11 @@ license.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+bytes.workspace = true
 clap.workspace = true
+http-body-util.workspace = true
+hyper.workspace = true
+hyper-util.workspace = true
 lazoo-ipc = { path = "../../crates/lazoo-ipc" }
 lazoo-protocol = { path = "../../crates/lazoo-protocol" }
 lazoo-runtime = { path = "../../crates/lazoo-runtime" }
