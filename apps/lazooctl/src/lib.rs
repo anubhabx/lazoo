@@ -14,7 +14,8 @@ use lazoo_protocol::{
     ActivationPolicy, ApprovalDecision, ApprovalState, AuthorityMode, CheckoutMode,
     EmployeeCheckoutPolicy, InboxFilter, IncidentEscalation, IncidentPriority, IncidentState,
     JsonRpcRequest, JsonRpcResponse, MessageEndpoint, MessageKind, MessagePriority, MessageSender,
-    RpcError, TaskReportKind, TaskResolution, TaskState, UserMessageEndpoint, UserMessageKind,
+    NativeTrustDecision, NativeTrustState, RpcError, TaskReportKind, TaskResolution, TaskState,
+    UserMessageEndpoint, UserMessageKind,
 };
 use lazoo_runtime::{DataRoot, Installation, RuntimeError};
 use serde_json::{Value, json};
@@ -67,6 +68,8 @@ pub enum Command {
     Task(TaskCommand),
     #[command(subcommand)]
     Approval(ApprovalCommand),
+    #[command(name = "native-trust", subcommand)]
+    NativeTrust(NativeTrustCommand),
     #[command(subcommand)]
     Incident(IncidentCommand),
     #[command(subcommand)]
@@ -223,6 +226,60 @@ pub enum ApprovalCommand {
         expected_revision: u64,
         #[arg(long)]
         idempotency_key: Option<String>,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+pub enum NativeTrustCommand {
+    List {
+        #[arg(long, default_value_t = 0)]
+        after_sequence: u64,
+        #[arg(long, default_value_t = 100)]
+        limit: u32,
+        #[arg(long, value_parser = parse_native_trust_state)]
+        state: Option<NativeTrustState>,
+    },
+    Show {
+        id: Uuid,
+    },
+    /// Approve one exact provider/workspace request. This does not grant other paths.
+    Approve {
+        id: Uuid,
+        #[arg(long)]
+        expected_revision: u64,
+        /// Automatically accept future Lazoo-owned managed workspaces for this provider.
+        #[arg(long)]
+        auto_accept_next_time: bool,
+        #[arg(long)]
+        idempotency_key: Option<String>,
+    },
+    Decline {
+        id: Uuid,
+        #[arg(long)]
+        expected_revision: u64,
+        #[arg(long)]
+        idempotency_key: Option<String>,
+    },
+    #[command(subcommand)]
+    Policy(NativeTrustPolicyCommand),
+}
+
+#[derive(Debug, Subcommand)]
+pub enum NativeTrustPolicyCommand {
+    Show {
+        provider: String,
+    },
+    Set {
+        provider: String,
+        #[arg(long)]
+        expected_revision: u64,
+        #[arg(long, action = clap::ArgAction::Set)]
+        auto_accept_managed_next_time: bool,
+    },
+    Reset {
+        provider: String,
+        #[arg(long)]
+        expected_revision: u64,
     },
 }
 
@@ -919,6 +976,7 @@ pub fn command_request(command: &Command) -> (&'static str, Value, bool) {
         Command::Turn(command) => turn_request(command),
         Command::Task(command) => task_request(command),
         Command::Approval(command) => approval_request(command),
+        Command::NativeTrust(command) => native_trust_request(command),
         Command::Incident(command) => incident_request(command),
         Command::Inbox(command) => inbox_request(command),
         Command::Workspace(command) => workspace_request(command),
@@ -1106,6 +1164,80 @@ fn approval_decision_request(
             "decision": decision,
             "idempotencyKey": generated_key(idempotency_key),
         }),
+        false,
+    )
+}
+
+fn native_trust_request(command: &NativeTrustCommand) -> (&'static str, Value, bool) {
+    match command {
+        NativeTrustCommand::List {
+            after_sequence,
+            limit,
+            state,
+        } => (
+            "native.trust.list",
+            json!({"afterSequence": after_sequence, "limit": limit, "state": state}),
+            false,
+        ),
+        NativeTrustCommand::Show { id } => ("native.trust.show", json!({"id": id}), false),
+        NativeTrustCommand::Approve {
+            id,
+            expected_revision,
+            auto_accept_next_time,
+            idempotency_key,
+        } => native_trust_decision_request(
+            *id,
+            *expected_revision,
+            NativeTrustDecision::Approve,
+            *auto_accept_next_time,
+            idempotency_key.as_deref(),
+        ),
+        NativeTrustCommand::Decline {
+            id,
+            expected_revision,
+            idempotency_key,
+        } => native_trust_decision_request(
+            *id,
+            *expected_revision,
+            NativeTrustDecision::Decline,
+            false,
+            idempotency_key.as_deref(),
+        ),
+        NativeTrustCommand::Policy(NativeTrustPolicyCommand::Show { provider }) => (
+            "native.trust.policy.show",
+            json!({"provider": provider}),
+            false,
+        ),
+        NativeTrustCommand::Policy(NativeTrustPolicyCommand::Set {
+            provider,
+            expected_revision,
+            auto_accept_managed_next_time,
+        }) => (
+            "native.trust.policy.set",
+            json!({"provider": provider, "expectedRevision": expected_revision, "autoAcceptManagedNextTime": auto_accept_managed_next_time}),
+            false,
+        ),
+        NativeTrustCommand::Policy(NativeTrustPolicyCommand::Reset {
+            provider,
+            expected_revision,
+        }) => (
+            "native.trust.policy.reset",
+            json!({"provider": provider, "expectedRevision": expected_revision}),
+            false,
+        ),
+    }
+}
+
+fn native_trust_decision_request(
+    id: Uuid,
+    expected_revision: u64,
+    decision: NativeTrustDecision,
+    auto_accept_managed_next_time: bool,
+    idempotency_key: Option<&str>,
+) -> (&'static str, Value, bool) {
+    (
+        "native.trust.resolve",
+        json!({"id": id, "expectedRevision": expected_revision, "decision": decision, "autoAcceptManagedNextTime": auto_accept_managed_next_time, "idempotencyKey": generated_key(idempotency_key)}),
         false,
     )
 }
@@ -1822,6 +1954,16 @@ fn parse_approval_state(value: &str) -> Result<ApprovalState, String> {
     }
 }
 
+fn parse_native_trust_state(value: &str) -> Result<NativeTrustState, String> {
+    match value {
+        "pending" => Ok(NativeTrustState::Pending),
+        "approved" => Ok(NativeTrustState::Approved),
+        "declined" => Ok(NativeTrustState::Declined),
+        "cancelled" => Ok(NativeTrustState::Cancelled),
+        _ => Err("expected pending, approved, declined, or cancelled".to_owned()),
+    }
+}
+
 fn response_result(response: JsonRpcResponse) -> Result<Value, CliError> {
     match (response.result, response.error) {
         (Some(result), None) => Ok(result),
@@ -2032,5 +2174,23 @@ mod tests {
         let (method, params, _) = session_request(&SessionCommand::TerminalStatus { id });
         assert_eq!(method, "session.terminal.status");
         assert_eq!(params, json!({"id": id}));
+
+        let (method, params, _) = native_trust_request(&NativeTrustCommand::Approve {
+            id,
+            expected_revision: 3,
+            auto_accept_next_time: true,
+            idempotency_key: Some("trust-approve".to_owned()),
+        });
+        assert_eq!(method, "native.trust.resolve");
+        assert_eq!(
+            params,
+            json!({
+                "id": id,
+                "expectedRevision": 3,
+                "decision": "approve",
+                "autoAcceptManagedNextTime": true,
+                "idempotencyKey": "trust-approve",
+            })
+        );
     }
 }

@@ -1,6 +1,29 @@
-# Backend handoff: ready to start the Codex UI, updated 2026-10-29
+# Backend handoff: four-provider UI starting point, 2026-10-29
 
-## Current owner request and verified checkpoint
+## Current checkpoint
+
+The requested Codex-level parity is implemented for OpenCode, Claude Code and
+Antigravity, including their genuine native TUIs during orchestration. All four
+providers passed release-daemon acceptance. Start the UI from this worktree and
+branch, `codex/backend-ui-readiness`; the original checkout remains separate.
+
+Read [the provider parity handoff](UI-PROVIDER-PARITY-HANDOFF.md) and
+[the UI integration guide](UI-BACKEND-HANDOFF.md). The current evidence index is
+`artifacts/provider-parity/provider-parity-final-manifest.json`. It records the
+full test/acceptance coverage, targeted corrections, native release results and
+CLI stress without hiding failed intermediate attempts.
+
+Workspace trust requires confirmation and notification by default. The optional
+"Automatically accept next time" policy applies only to future Lazoo-managed
+workspaces for the selected provider. Grok was not live-tested and stays excluded.
+The owner explicitly capped scope at Codex parity: connectors, vector search,
+voice, wider configuration federation and full-product performance remain later
+work. No frontend implementation is included.
+
+## Historical Codex-only checkpoint (superseded by the current section)
+
+The following dated reference explains the original baseline. Its restrictions
+on other providers are superseded by the parity handoff above.
 
 The owner asked for a backend foundation on which UI development can comfortably
 begin and explicitly required the actual native TUI to remain visible during

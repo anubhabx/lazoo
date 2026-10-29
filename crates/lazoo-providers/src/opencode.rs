@@ -1,27 +1,33 @@
 use std::{
     ffi::OsString,
+    net::TcpListener,
     path::{Path, PathBuf},
     time::Duration,
 };
 
+use agent_client_protocol::schema::v1::{HttpHeader, McpServer, McpServerHttp};
 use tokio::{process::Command, time::timeout};
+use uuid::Uuid;
 
 use crate::{
     ADAPTER_CONTRACT_V1, AdapterFuture, AuthenticationEvidence, AuthenticationState, CommandSpec,
     DiscoveryEnvironment, ExecutableCandidate, ProviderAdapter, ProviderCapabilities,
     ProviderError, ProviderEvent, ProviderKind, ProviderProbe, ProviderSession,
     ProviderVerification, SessionRequest, TurnRequest,
-    acp::{AcpHandshake, AcpSession, initialize_acp, start_acp_session},
+    acp::{AcpHandshake, AcpSession, initialize_acp, start_acp_session_with_mcp},
     json_rpc::JsonRpcProcess,
+    mcp_bridge::SessionMcpBridge,
 };
 
 const OPENCODE_PROTOCOL: &str = "acp/v1";
 /// The session permission mode the daemon derives from full autonomy.
-const FULL_AUTONOMY_PERMISSION_MODE: &str = "auto";
+pub(crate) const FULL_AUTONOMY_PERMISSION_MODE: &str = "auto";
 /// `OpenCode`'s inline permissions config variable ("Inlined json permissions config").
-const PERMISSION_ENV: &str = "OPENCODE_PERMISSION";
+pub(crate) const PERMISSION_ENV: &str = "OPENCODE_PERMISSION";
+pub(crate) const SERVER_PASSWORD_ENV: &str = "OPENCODE_SERVER_PASSWORD";
+pub(crate) const CONFIG_CONTENT_ENV: &str = "OPENCODE_CONFIG_CONTENT";
 /// A top-level `"*"` rule covers built-in and MCP tools alike.
-const ALLOW_ALL_PERMISSION: &str = r#"{"*":"allow"}"#;
+pub(crate) const ALLOW_ALL_PERMISSION: &str = r#"{"*":"allow"}"#;
 /// Every tool asks, so each governed action raises `session/request_permission` for the
 /// daemon's approval observer; only the read-only, non-governed tools (`read`, `glob`, `grep`,
 /// `list`) are allowed by name. The catch-all comes first because the last matching rule wins,
@@ -29,7 +35,7 @@ const ALLOW_ALL_PERMISSION: &str = r#"{"*":"allow"}"#;
 /// tools, `external_directory`, `todowrite`) stays under `"*": "ask"` and never auto-runs.
 /// `read` uses the object form with `OpenCode`'s documented default env-file patterns, so a
 /// shorthand `"read": "allow"` does not widen it to `.env` files (`.env.example` stays readable).
-const GOVERNED_PERMISSION: &str = r#"{"*":"ask","read":{"*":"allow","*.env":"deny","*.env.*":"deny","*.env.example":"allow"},"glob":"allow","grep":"allow","list":"allow"}"#;
+pub(crate) const GOVERNED_PERMISSION: &str = r#"{"*":"ask","read":{"*":"allow","*.env":"deny","*.env.*":"deny","*.env.example":"allow"},"glob":"allow","grep":"allow","list":"allow"}"#;
 /// Environment variables that can replace or add to the `OpenCode` configuration and, per the live
 /// precedence probe, could carry permission rules the inline block does not outrank.
 const CONFIG_ENVIRONMENT: [&str; 3] = [
@@ -54,6 +60,27 @@ pub struct OpenCodeAdapter {
     executable: Option<PathBuf>,
 }
 
+#[derive(Clone, Debug)]
+struct OpenCodeServer {
+    port: u16,
+    password: String,
+}
+
+impl OpenCodeServer {
+    fn reserve() -> Result<Self, ProviderError> {
+        // OpenCode's ACP server does not report an ephemeral port over its stdio protocol. Reserve
+        // a loopback port immediately before spawn; failure to bind is still surfaced by ACP
+        // startup, rather than widening the listener or falling back to a global server.
+        let listener = TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))?;
+        let port = listener.local_addr()?.port();
+        drop(listener);
+        Ok(Self {
+            port,
+            password: format!("{}{}", Uuid::new_v4().simple(), Uuid::new_v4().simple()),
+        })
+    }
+}
+
 impl OpenCodeAdapter {
     #[must_use]
     pub fn with_executable(executable: impl Into<PathBuf>) -> Self {
@@ -74,6 +101,31 @@ impl OpenCodeAdapter {
             GOVERNED_PERMISSION
         };
         Self::launch(executable, request, Some(block))
+    }
+
+    fn command_with_server(
+        executable: &Path,
+        request: &SessionRequest,
+        server: &OpenCodeServer,
+    ) -> CommandSpec {
+        let block = if request.permission_mode.as_deref() == Some(FULL_AUTONOMY_PERMISSION_MODE) {
+            ALLOW_ALL_PERMISSION
+        } else {
+            GOVERNED_PERMISSION
+        };
+        let mut command = Self::launch(executable, request, Some(block))
+            .arg("--pure")
+            .arg("--hostname")
+            .arg("127.0.0.1")
+            .arg("--port")
+            .arg(server.port.to_string())
+            .arg("--cwd")
+            .arg(request.cwd.as_os_str());
+        command.env.insert(
+            OsString::from(SERVER_PASSWORD_ENV),
+            OsString::from(&server.password),
+        );
+        command
     }
 
     // The inline block is the only permission source Lazoo sets; no config file is written.
@@ -183,13 +235,25 @@ impl OpenCodeAdapter {
                 detail: Some(detail),
             });
         }
-        let (session, _) = start_acp_session(
+        let server = OpenCodeServer::reserve()?;
+        let bridge = SessionMcpBridge::open(ProviderKind::OpenCode, request.tools.clone()).await?;
+        let mcp = McpServer::Http(McpServerHttp::new("lazoo", bridge.endpoint()).headers(vec![
+            HttpHeader::new("Authorization", bridge.authorization()),
+        ]));
+        let started = start_acp_session_with_mcp(
             ProviderKind::OpenCode,
-            Self::command(&candidate.path, request),
+            Self::command_with_server(&candidate.path, request, &server),
             request,
+            vec![mcp],
         )
-        .await?;
-        Ok(OpenCodeSession(session))
+        .await;
+        match started {
+            Ok((session, _)) => Ok(OpenCodeSession { session, bridge }),
+            Err(error) => {
+                bridge.close();
+                Err(error)
+            }
+        }
     }
 }
 
@@ -222,23 +286,26 @@ impl ProviderAdapter for OpenCodeAdapter {
 }
 
 #[derive(Debug)]
-pub struct OpenCodeSession(AcpSession);
+pub struct OpenCodeSession {
+    session: AcpSession,
+    bridge: SessionMcpBridge,
+}
 
 impl ProviderSession for OpenCodeSession {
     fn id(&self) -> String {
-        self.0.id()
+        self.session.id()
     }
 
     fn native_host_pid(&self) -> Option<u32> {
-        self.0.native_host_pid()
+        self.session.native_host_pid()
     }
 
     fn resources(&self) -> Option<lazoo_runtime::JobAccounting> {
-        self.0.resources()
+        self.session.resources()
     }
 
     fn turn<'a>(&'a self, request: &'a TurnRequest) -> AdapterFuture<'a, Vec<ProviderEvent>> {
-        self.0.turn(request)
+        self.session.turn(request)
     }
 
     fn turn_observed<'a>(
@@ -246,15 +313,29 @@ impl ProviderSession for OpenCodeSession {
         request: &'a TurnRequest,
         observer: &'a dyn crate::TurnEventObserver,
     ) -> AdapterFuture<'a, Vec<ProviderEvent>> {
-        self.0.turn_observed(request, observer)
+        Box::pin(async move {
+            let session_id = self.session.id();
+            let turn_id = request.correlation_id.to_string();
+            self.bridge
+                .during_turn(
+                    &session_id,
+                    Some(&turn_id),
+                    observer,
+                    self.session.turn_observed(request, observer),
+                )
+                .await
+        })
     }
 
     fn cancel(&self) -> AdapterFuture<'_, ()> {
-        self.0.cancel()
+        self.session.cancel()
     }
 
     fn stop(&self) -> AdapterFuture<'_, ()> {
-        self.0.stop()
+        Box::pin(async move {
+            self.bridge.close();
+            self.session.stop().await
+        })
     }
 }
 
@@ -373,7 +454,7 @@ fn degraded_probe(
     }
 }
 
-fn home_directory() -> Option<PathBuf> {
+pub(crate) fn home_directory() -> Option<PathBuf> {
     ["USERPROFILE", "HOME"]
         .iter()
         .find_map(|name| std::env::var_os(name).filter(|value| !value.is_empty()))
@@ -382,7 +463,7 @@ fn home_directory() -> Option<PathBuf> {
 
 /// The owner's XDG configuration root as `OpenCode` reads it (`XDG_CONFIG_HOME || ~/.config`): the
 /// variable when it is set and non-empty, else none.
-fn config_home() -> Option<PathBuf> {
+pub(crate) fn config_home() -> Option<PathBuf> {
     std::env::var_os("XDG_CONFIG_HOME")
         .filter(|value| !value.is_empty())
         .map(PathBuf::from)
@@ -407,7 +488,7 @@ fn config_home() -> Option<PathBuf> {
 /// directory there cannot be read. The live probe (2026-10-17) showed agent-scoped permissions
 /// beating the inline block wherever they live, while a global top-level `permission` key does
 /// NOT: the block wins there, so a global `permission` (or legacy `tools`) alone never refuses.
-fn governed_config_conflict(
+pub(crate) fn governed_config_conflict(
     cwd: &Path,
     environment_has: &dyn Fn(&str) -> bool,
     home: Option<&Path>,

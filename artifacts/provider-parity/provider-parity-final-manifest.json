@@ -1,0 +1,104 @@
+{
+  "status": "PASS",
+  "completedAt": "2026-10-29T14:44:40.659323+00:00",
+  "scope": "Codex-level backend provider parity before UI; no expansion of deferred product scope",
+  "baselineRevision": "e965fa3dc17d5c3a38eaef1c8471511ad62a9ab7",
+  "sourceHashes": {
+    "file": "production-source-sha256.json",
+    "sha256": "743636bbb87008353a01496b8490e04074cd680e2d3a1cb9dfb156717c026c3a",
+    "fileCount": 318
+  },
+  "binarySha256": {
+    "lazood": "2927d3326fe7770fe75168063802ebd89974cec537431e8ae86d316aa552152f",
+    "lazooctl": "b5502d7d36baf7f4158b4d915e23e8cab652dae95114380a9c6771bc146c530b",
+    "lazoo-session-host": "f04e0d4a1cd6b79dd43fe1015c3f1749ca90af771453f57009c141c3406177af"
+  },
+  "nativeVersions": {
+    "codex": "0.165.0-alpha.1.2",
+    "claude": "2.1.312 (Claude Code)",
+    "antigravity": "1.4.10",
+    "opencode": "1.19.0"
+  },
+  "gateCoverage": {
+    "file": "gate-coverage-final.json",
+    "stepsPassed": 44,
+    "singleUninterruptedRun": false,
+    "note": "Full settled Rust gate passed 43/44. The legacy restart harness selected an unrelated same-binary daemon. Scoped both selection and cleanup to the keeper child; targeted gate rerun and a live sibling-daemon isolation regression passed. Production Rust was unchanged between runs."
+  },
+  "postGateProductionChangeVerification": "final-followup-checks.json",
+  "nativeReleaseAcceptance": {
+    "codex": {
+      "file": "codex-production-result.json",
+      "checksPassed": 13,
+      "status": "PASS",
+      "localFixtureRequests": 4,
+      "externalModelUse": false
+    },
+    "claude": {
+      "file": "claude-production-result.json",
+      "checksPassed": 13,
+      "status": "PASS",
+      "localFixtureRequests": 0,
+      "externalModelUse": true
+    },
+    "antigravity": {
+      "file": "antigravity-production-result.json",
+      "checksPassed": 13,
+      "status": "PASS",
+      "localFixtureRequests": 0,
+      "externalModelUse": true
+    },
+    "opencode": {
+      "file": "opencode-production-result.json",
+      "checksPassed": 10,
+      "status": "PASS",
+      "localFixtureRequests": 3,
+      "externalModelUse": false
+    }
+  },
+  "cliStress": {
+    "file": "cli-stress-final.json",
+    "successful": 2048,
+    "concurrency": 16,
+    "stderrOnSuccess": 0,
+    "daemonStderrEmpty": true
+  },
+  "resourceBudget": {
+    "file": "gate-settled-acceptance/resource-budget-manifest.json",
+    "status": "PASS",
+    "note": "Measured without concurrent native probes before the final Antigravity updater environment/probe-drop adjustment."
+  },
+  "nativeTrust": {
+    "confirmationByDefault": true,
+    "notification": true,
+    "autoAcceptManagedNextTimeOptional": true,
+    "unmanagedAutoAccept": false
+  },
+  "baselineAcceptanceFilesRestored": 67,
+  "productionAttemptsIncludingDevelopmentFailures": {
+    "antigravity": {
+      "runs": 5,
+      "canonicalPromptSubmissions": 3,
+      "runsWithExternalModelUse": 3
+    },
+    "claude-code": {
+      "runs": 3,
+      "canonicalPromptSubmissions": 3,
+      "runsWithExternalModelUse": 3
+    },
+    "opencode": {
+      "runs": 6,
+      "canonicalPromptSubmissions": 5,
+      "runsWithExternalModelUse": 0
+    }
+  },
+  "grokLiveCalls": 0,
+  "outsideScope": [
+    "frontend implementation",
+    "connectors",
+    "vector search",
+    "voice",
+    "wider configuration federation",
+    "remaining full-product performance windows"
+  ]
+}

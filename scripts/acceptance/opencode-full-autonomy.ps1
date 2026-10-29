@@ -24,12 +24,12 @@ $commands = [Collections.Generic.List[object]]::new()
 $manifestStatus = 'FAIL'
 $evidence = [ordered]@{
     fullAutonomyDelivered = $false
-    promptFreeSessionNeverServesNarrowerAuthority = $false
-    launchPromptFreeOnlyUnderFullAutonomy = $false
-    otherProvidersRefused = $false
+    narrowerAuthorityDelivered = $false
+    launchDefaultMatchesEmployeeCeiling = $false
+    grokExcluded = $false
     refusalsFailClosedBeforeIo = $false
     noSupportClaimed = $true
-    schemaFifteen = $false
+    schemaTwenty = $false
     providerSmokeAbsent = $true
     externalModelUseAbsent = $true
     uiChangesAbsent = $false
@@ -53,21 +53,21 @@ function Invoke-Test([string]$Package, [string]$Target, [string]$Name) {
 
 try {
     Push-Location $repoRoot
-    Invoke-Test 'lazood' 'daemon' 'opencode_delivers_turns_and_tasks_under_every_authority_its_launch_enforces'
+    Invoke-Test 'lazood' 'daemon' 'opencode_delivers_turns_and_tasks_under_governed_authority'
     $evidence.fullAutonomyDelivered = $true
-    $evidence.otherProvidersRefused = $true
+    $evidence.grokExcluded = $true
 
-    Invoke-Test 'lazood' 'daemon' 'a_prompt_free_opencode_session_refuses_a_narrower_delegated_task_before_any_session_starts'
-    $evidence.promptFreeSessionNeverServesNarrowerAuthority = $true
+    Invoke-Test 'lazood' 'daemon' 'a_full_autonomy_opencode_employee_serves_a_narrower_delegated_task'
+    $evidence.narrowerAuthorityDelivered = $true
 
     Invoke-Test 'lazoo-providers' 'opencode' 'opencode_launch_is_prompt_free_only_under_full_autonomy'
-    $evidence.launchPromptFreeOnlyUnderFullAutonomy = $true
+    $evidence.launchDefaultMatchesEmployeeCeiling = $true
 
     Invoke-Test 'lazood' 'daemon' 'task_turn_rejects_a_provider_without_authority_override_support_before_io'
     $evidence.refusalsFailClosedBeforeIo = $true
 
     Invoke-Test 'lazoo-store' 'store' 'store_enables_wal_foreign_keys_and_schema_version'
-    $evidence.schemaFifteen = $true
+    $evidence.schemaTwenty = $true
 
     & $gitExe diff --quiet -- apps/lazoo-desktop
     $unstagedExit = $LASTEXITCODE
@@ -79,7 +79,7 @@ try {
         durationMs = $null
     })
     if (($unstagedExit -ne 0) -or ($stagedExit -ne 0)) {
-        throw 'desktop UI changes are outside the OpenCode full-autonomy slice'
+        throw 'desktop UI changes are outside the current provider-parity contract'
     }
     $evidence.uiChangesAbsent = $true
     $manifestStatus = 'PASS'
@@ -88,7 +88,7 @@ try {
     $stopwatch.Stop()
     $manifest = [ordered]@{
         status = $manifestStatus
-        schemaVersion = 19
+        schemaVersion = 20
         mode = 'deterministic-fake-transport'
         startedAt = $startedAt.ToString('o')
         durationMs = [long]$stopwatch.ElapsedMilliseconds
@@ -98,11 +98,11 @@ try {
             providerSmoke = 'NOT_RUN'
             externalModelUse = 'NOT_RUN'
             desktopUi = 'UNCHANGED'
-            schemaMigration = 'NONE'
-            unlocked = 'OPENCODE_FULL_AUTONOMY_SUPERSEDED_BY_GOVERNED_DELIVERY'
-            stillRefused = 'ANTIGRAVITY_GROK_BUILD_AND_NARROWER_TURNS_ON_A_PROMPT_FREE_OPENCODE_SESSION'
+            schemaMigration = 'CURRENT_20_NATIVE_WORKSPACE_TRUST'
+            unlocked = 'OPENCODE_GOVERNED_PER_TURN_AUTHORITY'
+            stillRefused = 'GROK_BUILD_EXCLUDED'
             liveGate = 'NOT_RUN_NO_SUPPORT_CLAIMED'
-            toolAccess = 'CODEX_SESSIONS_ONLY'
+            toolAccess = 'GOVERNED_FOUR_PROVIDERS'
         }
     }
     $manifest | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $manifestPath -Encoding utf8

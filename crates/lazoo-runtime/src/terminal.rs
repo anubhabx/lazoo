@@ -9,7 +9,7 @@ use std::{
     os::windows::ffi::OsStrExt,
     path::PathBuf,
     sync::{
-        Arc, Mutex,
+        Arc, Mutex, Weak,
         mpsc::{self, SyncSender, TrySendError},
     },
     thread::{self, JoinHandle},
@@ -45,6 +45,8 @@ use windows::{
     },
     core::{PCWSTR, PWSTR},
 };
+
+use crate::{JobAccounting, RuntimeError, process_job::job_accounting};
 
 const MAX_DIMENSION: u16 = 1000;
 const MAX_INPUT: usize = 16 * 1024;
@@ -166,6 +168,14 @@ pub struct TerminalExitStatus {
 pub struct TerminalSession {
     inner: Arc<Inner>,
 }
+/// Capability-restricted view of a terminal. It intentionally cannot write input or stop the
+/// process tree, so callers may safely expose it for read-only native views.
+#[derive(Debug)]
+pub struct TerminalView {
+    inner: Weak<Inner>,
+    id: Uuid,
+    pid: u32,
+}
 #[derive(Debug)]
 struct Inner {
     id: Uuid,
@@ -181,6 +191,49 @@ struct Inner {
 // Windows handles can be used from multiple threads. Mutable pseudo-console state is locked.
 unsafe impl Send for Inner {}
 unsafe impl Sync for Inner {}
+
+impl Inner {
+    fn shutdown(&self) -> Result<(), TerminalError> {
+        self.input
+            .lock()
+            .expect("terminal input mutex poisoned")
+            .take();
+        unsafe {
+            let _ = TerminateJobObject(self.job, 1);
+            let _ = CancelSynchronousIo(self.writer_thread.0);
+        }
+        let wait = unsafe { WaitForSingleObject(self.process, SHUTDOWN_WAIT_MS) };
+        if wait == WAIT_TIMEOUT {
+            return Err(TerminalError::ShutdownTimeout);
+        }
+        if wait != WAIT_OBJECT_0 {
+            return Err(TerminalError::Windows(windows::core::Error::from_thread()));
+        }
+        // Closing ConPTY after termination closes its pipe ends; the reader keeps draining until EOF.
+        if let Some(pty) = self.pty.lock().expect("terminal pty mutex poisoned").take() {
+            drop(pty);
+        }
+        for worker in self
+            .workers
+            .lock()
+            .expect("terminal workers mutex poisoned")
+            .drain(..)
+        {
+            let _ = worker.join();
+        }
+        Ok(())
+    }
+}
+
+impl Drop for Inner {
+    fn drop(&mut self) {
+        let _ = self.shutdown();
+        unsafe {
+            let _ = CloseHandle(self.process);
+            let _ = CloseHandle(self.job);
+        }
+    }
+}
 
 impl TerminalSession {
     pub fn spawn(command: TerminalCommand) -> Result<Self, TerminalError> {
@@ -288,6 +341,14 @@ impl TerminalSession {
     pub fn pid(&self) -> u32 {
         self.inner.pid
     }
+    #[must_use]
+    pub fn view(&self) -> TerminalView {
+        TerminalView {
+            inner: Arc::downgrade(&self.inner),
+            id: self.inner.id,
+            pid: self.inner.pid,
+        }
+    }
     pub fn resize(&self, cols: u16, rows: u16) -> Result<(), TerminalError> {
         validate_dimensions(cols, rows)?;
         let guard = self.inner.pty.lock().expect("terminal pty mutex poisoned");
@@ -347,46 +408,16 @@ impl TerminalSession {
             exit_code: (code != active).then_some(code),
         })
     }
+    /// Accounting for this terminal's contained native process tree. This borrows the Job Object
+    /// handle and never alters terminal/process ownership or lifecycle.
+    pub fn resources(&self) -> Result<JobAccounting, RuntimeError> {
+        job_accounting(self.inner.job)
+    }
     pub fn stop(&self) -> Result<(), TerminalError> {
         self.shutdown()
     }
     fn shutdown(&self) -> Result<(), TerminalError> {
-        self.inner
-            .input
-            .lock()
-            .expect("terminal input mutex poisoned")
-            .take();
-        unsafe {
-            let _ = TerminateJobObject(self.inner.job, 1);
-            let _ = CancelSynchronousIo(self.inner.writer_thread.0);
-        }
-        let wait = unsafe { WaitForSingleObject(self.inner.process, SHUTDOWN_WAIT_MS) };
-        if wait == WAIT_TIMEOUT {
-            return Err(TerminalError::ShutdownTimeout);
-        }
-        if wait != WAIT_OBJECT_0 {
-            return Err(TerminalError::Windows(windows::core::Error::from_thread()));
-        }
-        // Closing ConPTY after termination closes its pipe ends; the reader keeps draining until EOF.
-        if let Some(pty) = self
-            .inner
-            .pty
-            .lock()
-            .expect("terminal pty mutex poisoned")
-            .take()
-        {
-            drop(pty);
-        }
-        for worker in self
-            .inner
-            .workers
-            .lock()
-            .expect("terminal workers mutex poisoned")
-            .drain(..)
-        {
-            let _ = worker.join();
-        }
-        Ok(())
+        self.inner.shutdown()
     }
 }
 impl Clone for TerminalSession {
@@ -396,18 +427,47 @@ impl Clone for TerminalSession {
         }
     }
 }
-impl Drop for TerminalSession {
-    fn drop(&mut self) {
-        if Arc::strong_count(&self.inner) == 1 {
-            let _ = self.shutdown();
-            unsafe {
-                let _ = CloseHandle(self.inner.process);
-                let _ = CloseHandle(self.inner.job);
-            }
+impl TerminalView {
+    #[must_use]
+    pub fn id(&self) -> Uuid {
+        self.id
+    }
+    #[must_use]
+    pub fn pid(&self) -> u32 {
+        self.pid
+    }
+    pub fn resize(&self, cols: u16, rows: u16) -> Result<(), TerminalError> {
+        TerminalSession {
+            inner: self.inner.upgrade().ok_or(TerminalError::Stopped)?,
+        }
+        .resize(cols, rows)
+    }
+    pub fn read_output(
+        &self,
+        after: u64,
+        max_bytes: usize,
+    ) -> Result<TerminalOutput, TerminalError> {
+        TerminalSession {
+            inner: self.inner.upgrade().ok_or(TerminalError::Stopped)?,
+        }
+        .read_output(after, max_bytes)
+    }
+    pub fn exit_status(&self) -> Result<TerminalExitStatus, TerminalError> {
+        TerminalSession {
+            inner: self.inner.upgrade().ok_or(TerminalError::Stopped)?,
+        }
+        .exit_status()
+    }
+}
+impl Clone for TerminalView {
+    fn clone(&self) -> Self {
+        Self {
+            inner: Weak::clone(&self.inner),
+            id: self.id,
+            pid: self.pid,
         }
     }
 }
-
 fn validate_dimensions(cols: u16, rows: u16) -> Result<(), TerminalError> {
     if cols == 0 || rows == 0 || cols > MAX_DIMENSION || rows > MAX_DIMENSION {
         Err(TerminalError::InvalidDimensions)

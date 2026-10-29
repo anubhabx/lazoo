@@ -1,0 +1,9 @@
+{
+  "status": "PASS",
+  "run": "C:\\Users\\anubhab\\.codex\\worktrees\\backend-ui-readiness\\Orchestrator\\artifacts\\provider-parity\\run-restart-isolation-ee9349ec86154fe7bf1de653fc932a49",
+  "evidence": {
+    "firstSlicePassed": true,
+    "unrelatedDaemonSurvived": true,
+    "unrelatedBootUnchanged": true
+  }
+}

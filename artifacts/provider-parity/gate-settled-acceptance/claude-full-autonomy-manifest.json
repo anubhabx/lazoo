@@ -1,0 +1,50 @@
+{
+  "status": "PASS",
+  "schemaVersion": 20,
+  "mode": "deterministic-fake-transport",
+  "startedAt": "2026-10-29T14:13:51.0406353Z",
+  "durationMs": 2449,
+  "commands": [
+    {
+      "command": "cargo test -p lazood --test daemon claude_and_antigravity_deliver_governed_turns_and_tasks --locked -- --exact",
+      "exitCode": 0,
+      "durationMs": 1065
+    },
+    {
+      "command": "cargo test -p lazood --test daemon task_turn_rejects_a_provider_without_authority_override_support_before_io --locked -- --exact",
+      "exitCode": 0,
+      "durationMs": 733
+    },
+    {
+      "command": "cargo test -p lazoo-store --test store store_enables_wal_foreign_keys_and_schema_version --locked -- --exact",
+      "exitCode": 0,
+      "durationMs": 548
+    },
+    {
+      "command": "git diff --quiet and git diff --cached --quiet -- apps/lazoo-desktop",
+      "exitCode": 0,
+      "durationMs": null
+    }
+  ],
+  "evidence": {
+    "governedParityDelivered": true,
+    "askAuthorityDelivered": true,
+    "antigravityDelivered": true,
+    "refusalsFailClosedBeforeIo": true,
+    "noSupportClaimed": true,
+    "schemaTwenty": true,
+    "providerSmokeAbsent": true,
+    "externalModelUseAbsent": true,
+    "uiChangesAbsent": true
+  },
+  "boundaries": {
+    "providerSmoke": "NOT_RUN",
+    "externalModelUse": "NOT_RUN",
+    "desktopUi": "UNCHANGED",
+    "schemaMigration": "CURRENT_20_NATIVE_WORKSPACE_TRUST",
+    "unlocked": "CLAUDE_CODE_AND_ANTIGRAVITY_GOVERNED_AUTHORITY",
+    "stillRefused": "GROK_BUILD_EXCLUDED",
+    "liveGate": "NOT_RUN_NO_SUPPORT_CLAIMED",
+    "toolAccess": "GOVERNED_FOUR_PROVIDERS"
+  }
+}

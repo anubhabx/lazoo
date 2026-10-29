@@ -4,6 +4,7 @@ mod inbox;
 mod incident;
 mod memory;
 mod message;
+mod native_trust;
 mod rpc;
 mod task;
 mod terminal;
@@ -47,6 +48,13 @@ pub use message::{
     MessageEnvelope, MessageKind, MessageListParams, MessageMutationResult, MessagePriority,
     MessageReconcileResult, MessageRecord, MessageReference, MessageSender, MessageShowParams,
     MessageSummary, RetryMessageParams, SendMessageParams, UserMessageEndpoint, UserMessageKind,
+};
+pub use native_trust::{
+    NATIVE_TRUST_CONTRACT_V1, NativeTrustDecider, NativeTrustDecision, NativeTrustListParams,
+    NativeTrustMutationResult, NativeTrustNotificationState, NativeTrustPolicy,
+    NativeTrustPolicyParams, NativeTrustReconcileResult, NativeTrustRequestRecord,
+    NativeTrustShowParams, NativeTrustState, ResetNativeTrustPolicyParams,
+    ResolveNativeTrustParams, SetNativeTrustPolicyParams,
 };
 pub use rpc::{JsonRpcRequest, JsonRpcResponse, RpcError};
 pub use task::{

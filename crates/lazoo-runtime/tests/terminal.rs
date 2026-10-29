@@ -72,8 +72,32 @@ fn resize_and_bounds_are_validated() {
 #[test]
 fn stop_ends_the_contained_console_process() {
     let session = TerminalSession::spawn(command(&["/Q", "/K"])).unwrap();
+    let before_stop = session.resources().unwrap();
+    assert!(before_stop.active_processes >= 1);
+    assert!(before_stop.total_processes >= 1);
     session.stop().unwrap();
     assert!(!session.exit_status().unwrap().live);
+    assert_eq!(session.resources().unwrap().active_processes, 0);
+}
+
+#[test]
+fn read_only_view_does_not_keep_a_canonical_terminal_alive() {
+    let session = TerminalSession::spawn(command(&["/Q", "/K"])).unwrap();
+    let view = session.view();
+    let pid = view.pid();
+    drop(session);
+    assert!(matches!(view.exit_status(), Err(TerminalError::Stopped)));
+    for _ in 0..40 {
+        let process = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid) };
+        if process.is_err() {
+            return;
+        }
+        unsafe {
+            let _ = CloseHandle(process.unwrap());
+        }
+        thread::sleep(Duration::from_millis(25));
+    }
+    panic!("canonical terminal {pid} survived after its last owner dropped");
 }
 
 #[test]

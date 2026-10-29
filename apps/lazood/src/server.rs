@@ -41,7 +41,7 @@ pub async fn run() -> Result<(), DaemonError> {
     let dispatcher_app = app.clone();
     let dispatcher = tokio::spawn(async move { dispatcher_app.run_task_dispatcher().await });
     let notices_app = app.clone();
-    let notices = tokio::spawn(async move { notices_app.run_notice_delivery().await });
+    let notices = tokio::spawn(async move { Box::pin(notices_app.run_notice_delivery()).await });
     let idle_app = app.clone();
     let idle = tokio::spawn(async move { idle_app.run_timed_sweeps().await });
     let terminal_app = app.clone();
@@ -67,7 +67,7 @@ pub async fn run() -> Result<(), DaemonError> {
                 let client_app = app.clone();
                 clients.spawn(async move {
                     if let Ok(connection) = pending.authenticate().await {
-                        let _ = serve_connection(client_app, connection).await;
+                        let _ = Box::pin(serve_connection(client_app, connection)).await;
                     }
                 });
             }

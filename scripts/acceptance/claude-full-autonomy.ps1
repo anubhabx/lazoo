@@ -23,12 +23,12 @@ $stopwatch = [Diagnostics.Stopwatch]::StartNew()
 $commands = [Collections.Generic.List[object]]::new()
 $manifestStatus = 'FAIL'
 $evidence = [ordered]@{
-    fullAutonomyDelivered = $false
-    askAndSelfDecisionRefused = $false
-    otherProvidersRefused = $false
+    governedParityDelivered = $false
+    askAuthorityDelivered = $false
+    antigravityDelivered = $false
     refusalsFailClosedBeforeIo = $false
     noSupportClaimed = $true
-    schemaFifteen = $false
+    schemaTwenty = $false
     providerSmokeAbsent = $true
     externalModelUseAbsent = $true
     uiChangesAbsent = $false
@@ -52,16 +52,16 @@ function Invoke-Test([string]$Package, [string]$Target, [string]$Name) {
 
 try {
     Push-Location $repoRoot
-    Invoke-Test 'lazood' 'daemon' 'claude_code_runs_turns_and_tasks_only_under_full_autonomy'
-    $evidence.fullAutonomyDelivered = $true
-    $evidence.askAndSelfDecisionRefused = $true
-    $evidence.otherProvidersRefused = $true
+    Invoke-Test 'lazood' 'daemon' 'claude_and_antigravity_deliver_governed_turns_and_tasks'
+    $evidence.governedParityDelivered = $true
+    $evidence.askAuthorityDelivered = $true
+    $evidence.antigravityDelivered = $true
 
     Invoke-Test 'lazood' 'daemon' 'task_turn_rejects_a_provider_without_authority_override_support_before_io'
     $evidence.refusalsFailClosedBeforeIo = $true
 
     Invoke-Test 'lazoo-store' 'store' 'store_enables_wal_foreign_keys_and_schema_version'
-    $evidence.schemaFifteen = $true
+    $evidence.schemaTwenty = $true
 
     & $gitExe diff --quiet -- apps/lazoo-desktop
     $unstagedExit = $LASTEXITCODE
@@ -73,7 +73,7 @@ try {
         durationMs = $null
     })
     if (($unstagedExit -ne 0) -or ($stagedExit -ne 0)) {
-        throw 'desktop UI changes are outside the Claude full-autonomy slice'
+        throw 'desktop UI changes are outside the current provider-parity contract'
     }
     $evidence.uiChangesAbsent = $true
     $manifestStatus = 'PASS'
@@ -82,7 +82,7 @@ try {
     $stopwatch.Stop()
     $manifest = [ordered]@{
         status = $manifestStatus
-        schemaVersion = 19
+        schemaVersion = 20
         mode = 'deterministic-fake-transport'
         startedAt = $startedAt.ToString('o')
         durationMs = [long]$stopwatch.ElapsedMilliseconds
@@ -92,11 +92,11 @@ try {
             providerSmoke = 'NOT_RUN'
             externalModelUse = 'NOT_RUN'
             desktopUi = 'UNCHANGED'
-            schemaMigration = 'NONE'
-            unlocked = 'CLAUDE_CODE_FULL_AUTONOMY_ONLY'
-            stillRefused = 'CLAUDE_CODE_ASK_AND_SELF_DECISION_ANTIGRAVITY_OPENCODE_GROK_BUILD'
+            schemaMigration = 'CURRENT_20_NATIVE_WORKSPACE_TRUST'
+            unlocked = 'CLAUDE_CODE_AND_ANTIGRAVITY_GOVERNED_AUTHORITY'
+            stillRefused = 'GROK_BUILD_EXCLUDED'
             liveGate = 'NOT_RUN_NO_SUPPORT_CLAIMED'
-            toolAccess = 'CODEX_SESSIONS_ONLY'
+            toolAccess = 'GOVERNED_FOUR_PROVIDERS'
         }
     }
     $manifest | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $manifestPath -Encoding utf8

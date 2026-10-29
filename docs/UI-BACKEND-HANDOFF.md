@@ -1,9 +1,10 @@
 # Backend integration guide for the first UI
 
-Verified on 2026-10-29: this is the backend starting point for the first Codex UI,
-including its genuine native TUI during orchestrated work. The full gate passed
-44 steps, release native acceptance passed 13 checks, and all 2,048 CLI stress
-calls passed without stderr warnings. See the [verification record](verification/2026-10-29-ui-backend-readiness.md).
+The backend supports Codex, OpenCode, Claude Code and Antigravity, including their
+genuine native TUIs during orchestrated work. The current provider matrix and
+acceptance evidence are in the [provider parity handoff](UI-PROVIDER-PARITY-HANDOFF.md).
+The earlier [Codex verification record](verification/2026-10-29-ui-backend-readiness.md)
+is retained as the reference checkpoint; its provider restrictions are superseded here.
 The frontend is not implemented here. Full core v1 acceptance remains broader.
 
 ## Sources of truth
@@ -27,6 +28,7 @@ process execution. No frontend binding is added here.
 | Shared memory | `memory.policy.show`, `memory.search`, `memory.queue.status`, `memory.worker.show` |
 | Resource display | `system.resources`, `session.resources` |
 | Owner terminal | Terminal lifecycle RPCs and the separate authenticated byte channel |
+| Native workspace trust | `native.trust.list`, `native.trust.show`, `native.trust.policy.show` |
 
 The exact supported method names are dispatched in `apps/lazood/src/app.rs`;
 avoid deriving additional methods from this table. The CLI provides executable
@@ -46,7 +48,7 @@ must not be treated as an independent grant. An employee's configured authority
 is a ceiling; choosing another value in the UI cannot widen it.
 
 `collaborationToolsAvailable` reports whether Lazoo injects the roster, delegation,
-wait, reporting, and peer-message tools. It is currently true only for Codex.
+wait, reporting, and peer-message tools. It is true for the four governed providers.
 A startable conversational provider with that field false cannot be presented
 as providing automatic team orchestration.
 
@@ -60,15 +62,28 @@ Current daemon policy, independently of whether a provider is installed or logge
 | Provider | Conversation authority offered by Lazoo | Collaboration tools | Native live view |
 | --- | --- | --- | --- |
 | Codex | Modes up to the employee's configured ceiling | Yes | Yes |
-| OpenCode | Ask/Self Decision up to a governed employee's ceiling; only Full Autonomy for a Full Autonomy employee | No | No |
-| Claude Code | Full Autonomy only, and only for a Full Autonomy employee | No | No |
-| Antigravity | No governed conversation delivery | No | No |
+| OpenCode | Modes up to the employee's configured ceiling | Yes | Yes |
+| Claude Code | Modes up to the employee's configured ceiling | Yes | Yes |
+| Antigravity | Modes up to the employee's configured ceiling | Yes | Yes |
 | Grok Build | Excluded from core v1 and refused for governed delivery | No | No |
 
 These are Lazoo implementation limits, not claims about every feature of the
 vendor products. OpenCode governed starts also inspect configuration for native
 permission overrides and may refuse at launch. A launcher read is advisory;
 the mutation always rechecks its actual operating conditions.
+
+Claude and Antigravity startup waits for explicit native workspace trust by default.
+Show the pending notification and exact provider/path, then resolve it through
+`native.trust.resolve` with its revision and idempotency key. Offer the optional
+"Automatically accept next time" choice for that provider's future Lazoo-managed
+workspaces. It never authorizes unmanaged paths. Keep cancellation distinct from
+declining trust, and allow resetting the provider policy. See the parity handoff
+for the complete lifecycle and CLI examples.
+
+Antigravity needs a managed workspace where Lazoo can create its native hook/MCP
+configuration; existing configuration collisions are refused. OpenCode needs a
+verified selected model before launch. These conditions should be shown using
+the returned readiness or launch refusal, rather than hidden behind a spinner.
 
 The existing launch contract is two operations: `conversation.create`, then
 `turn.submit` with `activateIfNeeded: true`. It is not an atomic transaction across
@@ -146,11 +161,11 @@ lazooctl --json workspace show <conversation-id> --turn-limit 50 --before-turn-s
 
 Follow the [terminal client contract](superpowers/specs/2026-10-28-terminal-client-contract.md)
 for authenticated framing, byte offsets, output gaps, boot/revision fencing, and
-input acknowledgement uncertainty. Codex now has a genuine concurrent native TUI
-view of the same thread Lazoo controls. `session.terminal.view` opens it without
+input acknowledgement uncertainty. All four governed providers have a genuine concurrent native TUI
+view of the same session Lazoo controls. `session.terminal.view` opens it without
 stopping the employee or granting another path to submit turns or approvals.
 The separate `session.terminal.attach` operation remains a takeover of a suspended
-Codex or Claude session. Other providers do not yet support concurrent views.
+session for these providers. It must not compete with an active controller.
 
 Given `lead.session.id` or a worker card's session ID, call
 `session.terminal.status { id }` (CLI: `session terminal-status <id>`). Its fields
@@ -171,21 +186,24 @@ when attaching or viewing. Terminal
 exit is observed through bounded status/output polling, so session audit events
 alone are not an exit notification stream.
 
-For an active Codex session, send `session.terminal.view` with `id`,
+For an eligible active session, send `session.terminal.view` with `id`,
 `expectedRevision`, `columns`, `rows`, and `idempotencyKey` (CLI: `session view`).
 Retain the key and exact payload to reconcile a lost reply. A changed payload for
 that key is refused; opening a new view after closing the old one needs a new key.
 The current contract allows one view per session and eight total live terminals.
 Terminal keys and view metadata are bounded and expire with daemon restart.
 
-The native TUI advertises read-only viewing using Codex's own “Viewing sub-agent”
-label, including for a lead. Send prompts and approval decisions through Lazoo's
-controls. Native navigation and scrolling remain available, while the restricted
-bridge refuses native turn/configuration mutations. Closing the terminal preserves
-the canonical turn and pending approval; stopping the employee closes its view.
-The loopback bearer capability stays in a private child environment and is never
-part of UI data or terminal arguments. The UI needs only the existing authenticated
-terminal byte transport, not access to the private provider WebSocket.
+Send prompts and approval decisions through Lazoo's controls. Codex uses its own
+“Viewing sub-agent” label even for a lead; Codex/OpenCode native viewers can navigate
+while their restricted bridges refuse controller mutations. Claude/Antigravity
+borrow the canonical terminal's output and refuse all keyboard input; implement
+scrollback in the terminal renderer and keep resize available. The UI should label
+every view as read-only because each native TUI presents that boundary differently.
+Closing a view preserves its canonical turn and pending approval; stopping the
+employee closes the view. `terminal.show` retains closed metadata until cache
+eviction, while output reads can fail once the live handle is removed.
+Private loopback capabilities never enter UI data or terminal arguments. The UI
+needs only Lazoo's authenticated terminal byte transport.
 
 Production-path acceptance with the installed Codex 0.165.0-alpha.1.2 and a local
 Responses simulator proved streaming, collaboration-tool routing, history after
@@ -197,9 +215,8 @@ full gate both passed; their evidence and limits are in the
 
 ## Remaining full-product work
 
-Non-Codex collaboration tools, broader native authority coverage, concurrent native
-TUI support for other providers, additional configuration federation formats/plugins/skills, and
-the remaining whole-product performance windows are not completed by this guide.
+Additional configuration federation formats/plugins/skills and the remaining
+whole-product performance windows are not completed by this guide.
 Connectors, vectors, and voice remain later phases. The summary worker remains
 opt-in and unconfigured by default. Historical live-provider results must be
 dated separately from fresh deterministic verification.

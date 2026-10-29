@@ -290,14 +290,26 @@ fn lead_authority_modes(
     .collect()
 }
 
-/// `start_new_session` only attaches Lazoo's collaboration tools to Codex sessions.
+/// Lazoo attaches its governed collaboration catalog to every admitted native provider.
 const fn collaboration_tools_available(provider: ProviderKind) -> bool {
-    matches!(provider, ProviderKind::Codex)
+    matches!(
+        provider,
+        ProviderKind::Codex
+            | ProviderKind::OpenCode
+            | ProviderKind::ClaudeCode
+            | ProviderKind::Antigravity
+    )
 }
 
-/// Only Codex currently has the controller-isolated native live-view bridge.
+/// Each admitted native provider has a controller-isolated native live view; Grok is excluded.
 const fn native_view_supported(provider: ProviderKind) -> bool {
-    matches!(provider, ProviderKind::Codex)
+    matches!(
+        provider,
+        ProviderKind::Codex
+            | ProviderKind::OpenCode
+            | ProviderKind::ClaudeCode
+            | ProviderKind::Antigravity
+    )
 }
 
 fn workspace_invalid(message: impl Into<String>) -> RpcError {
@@ -525,11 +537,15 @@ mod tests {
         );
         assert_eq!(
             lead_authority_modes(ProviderKind::ClaudeCode, AuthorityMode::Ask),
-            Vec::<AuthorityMode>::new()
+            vec![AuthorityMode::Ask]
         );
         assert_eq!(
             lead_authority_modes(ProviderKind::ClaudeCode, AuthorityMode::FullAutonomy),
-            vec![AuthorityMode::FullAutonomy]
+            vec![
+                AuthorityMode::Ask,
+                AuthorityMode::SelfDecision,
+                AuthorityMode::FullAutonomy
+            ]
         );
         assert_eq!(
             lead_authority_modes(ProviderKind::OpenCode, AuthorityMode::SelfDecision),
@@ -537,24 +553,42 @@ mod tests {
         );
         assert_eq!(
             lead_authority_modes(ProviderKind::OpenCode, AuthorityMode::FullAutonomy),
-            vec![AuthorityMode::FullAutonomy]
+            vec![
+                AuthorityMode::Ask,
+                AuthorityMode::SelfDecision,
+                AuthorityMode::FullAutonomy
+            ]
         );
-        assert!(lead_authority_modes(ProviderKind::Antigravity, AuthorityMode::Ask).is_empty());
+        assert_eq!(
+            lead_authority_modes(ProviderKind::Antigravity, AuthorityMode::Ask),
+            vec![AuthorityMode::Ask]
+        );
         assert!(lead_authority_modes(ProviderKind::GrokBuild, AuthorityMode::Ask).is_empty());
     }
 
     #[test]
-    fn only_codex_leads_receive_collaboration_tools() {
-        assert!(collaboration_tools_available(ProviderKind::Codex));
-        assert!(!collaboration_tools_available(ProviderKind::ClaudeCode));
-        assert!(!collaboration_tools_available(ProviderKind::OpenCode));
+    fn all_governed_native_leads_receive_collaboration_tools() {
+        for provider in [
+            ProviderKind::Codex,
+            ProviderKind::OpenCode,
+            ProviderKind::ClaudeCode,
+            ProviderKind::Antigravity,
+        ] {
+            assert!(collaboration_tools_available(provider));
+        }
+        assert!(!collaboration_tools_available(ProviderKind::GrokBuild));
     }
 
     #[test]
-    fn only_codex_leads_advertise_native_live_view_support() {
-        assert!(native_view_supported(ProviderKind::Codex));
-        assert!(!native_view_supported(ProviderKind::ClaudeCode));
-        assert!(!native_view_supported(ProviderKind::OpenCode));
-        assert!(!native_view_supported(ProviderKind::Antigravity));
+    fn all_governed_native_leads_advertise_native_live_view_support() {
+        for provider in [
+            ProviderKind::Codex,
+            ProviderKind::OpenCode,
+            ProviderKind::ClaudeCode,
+            ProviderKind::Antigravity,
+        ] {
+            assert!(native_view_supported(provider));
+        }
+        assert!(!native_view_supported(ProviderKind::GrokBuild));
     }
 }

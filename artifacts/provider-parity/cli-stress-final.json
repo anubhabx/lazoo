@@ -1,0 +1,23 @@
+{
+  "status": "PASS",
+  "runId": "2c80354578624401bc5302699fee7786",
+  "invocationsRequested": 2048,
+  "concurrency": 16,
+  "binarySha256": {
+    "daemon": "2927D3326FE7770FE75168063802EBD89974CEC537431E8AE86D316AA552152F",
+    "cli": "B5502D7D36BAF7F4158B4D915E23E8CAB652DAE95114380A9C6771BC146C530B"
+  },
+  "successful": 2048,
+  "failures": [],
+  "stderrOnSuccess": [],
+  "exitCodes": [
+    {
+      "code": 0,
+      "count": 2048
+    }
+  ],
+  "failure": "",
+  "daemonStdout": "",
+  "daemonStderr": "",
+  "timeoutDiagnostic": null
+}

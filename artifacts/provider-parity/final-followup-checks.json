@@ -1,0 +1,22 @@
+{
+  "status": "PASS",
+  "change": "Antigravity owned-child auto-update opt-out; timed-out probe children terminate on drop. No other production changes after the 44-step coverage run.",
+  "format": true,
+  "workspaceAllTargetsClippy": true,
+  "providerTestSuite": true,
+  "workspaceReleaseBuild": true,
+  "logs": {
+    "final-followup-clippy": {
+      "sha256": "c15b6bd69b97035a6c7f01e86bdef3f2ff3152099d2c6bfb08c583d7116ece44",
+      "path": "final-followup-clippy.log"
+    },
+    "final-followup-provider-tests": {
+      "sha256": "d57935ada5721620ba31a75c8704a2adb00670a7f4e58b461ea1ef48601a1ee7",
+      "path": "final-followup-provider-tests.log"
+    },
+    "final-followup-release": {
+      "sha256": "89c523bc7d10fe4f6106f999bdfb2ea68c20f24829e79a9585e82601faa75519",
+      "path": "final-followup-release.log"
+    }
+  }
+}

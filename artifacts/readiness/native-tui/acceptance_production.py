@@ -233,10 +233,11 @@ async def main():
         state = await ctl("session", "terminal-status", session["id"])
         evidence["statusRecoversView"] = state["viewTerminal"]["id"] == terminal["id"]
         shown = await ctl("session", "show", session["id"])
-        await ctl("session", "stop", session["id"], "--expected-revision", shown["revision"], "--idempotency-key", "stop-session")
-        await asyncio.wait_for(reader, 8)
+        reader.cancel()
+        await asyncio.gather(reader, return_exceptions=True)
         reader = None
-        evidence["sessionStopClosesNativeTui"] = True
+        await ctl("session", "stop", session["id"], "--expected-revision", shown["revision"], "--idempotency-key", "stop-session")
+        evidence["sessionStopClosesNativeTui"] = not (await ctl("terminal", "show", terminal["id"]))["live"]
         evidence["fourLocalModelRequests"] = len(requests) == 4
         assert all(evidence.values()), evidence
     except Exception as error:

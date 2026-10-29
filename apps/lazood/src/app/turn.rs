@@ -17,9 +17,10 @@ use lazoo_providers::{
     ProviderKind, ToolCall, ToolResult, TurnEventObserver, TurnRequest,
 };
 use lazoo_store::{
-    BeginTurnSubmissionInput, CreateConversationInput, FailRecordedRootTurnBeforeProviderInput,
-    FailTurnInput, FinishTurnCancelInput, MarkTurnUncertainInput, ObserveTurnInput,
-    RecordTurnInput, RenameConversationInput, RequestTurnCancelInput, RetryTurnInput, StoreError,
+    BeginTurnSubmissionInput, BindPendingNativeSessionInput, CreateConversationInput,
+    FailRecordedRootTurnBeforeProviderInput, FailTurnInput, FinishTurnCancelInput,
+    MarkTurnUncertainInput, ObserveTurnInput, RecordTurnInput, RenameConversationInput,
+    RequestTurnCancelInput, RetryTurnInput, StoreError,
 };
 use serde_json::{Value, json};
 use tokio::time::{Duration, sleep};
@@ -114,12 +115,48 @@ impl AppTurnObserver {
 }
 
 impl TurnEventObserver for AppTurnObserver {
+    #[allow(clippy::too_many_lines)] // Correlate native identity before applying the durable event transition.
     fn observe(&self, event: &ProviderEvent) -> Result<(), ProviderError> {
         let current = self
             .app
             .store
             .get_turn(self.turn_id)
             .map_err(|error| observer_error(&error))?;
+        if let ProviderEvent::SessionStarted {
+            provider: ProviderKind::Antigravity,
+            session_id,
+            ..
+        } = event
+            && let Some(pending_native_session_id) = current.native_session_id.as_deref()
+            && pending_native_session_id.starts_with("pending:")
+        {
+            let session = self
+                .app
+                .store
+                .list_sessions()
+                .map_err(|error| observer_error(&error))?
+                .into_iter()
+                .find(|candidate| {
+                    candidate.owner_boot_id == Some(self.app.boot_id)
+                        && candidate.state == SessionLifecycleState::Idle
+                        && candidate.native_session_id.as_deref() == Some(pending_native_session_id)
+                })
+                .ok_or_else(|| {
+                    ProviderError::Observer(
+                        "pending Antigravity session binding is unavailable".to_owned(),
+                    )
+                })?;
+            self.app
+                .store
+                .bind_pending_native_session(&BindPendingNativeSessionInput {
+                    session_id: session.id,
+                    expected_revision: session.revision,
+                    owner_boot_id: self.app.boot_id,
+                    expected_pending_native_session_id: pending_native_session_id.to_owned(),
+                    native_session_id: session_id.clone(),
+                })
+                .map_err(|error| observer_error(&error))?;
+        }
         let (payload, raw) = bounded_event_payload(event);
         let (kind, provider, native_session_id, native_turn_id) = event_identity(event, &payload);
         self.capture_raw_frame(&kind, raw);
@@ -440,7 +477,7 @@ impl App {
                 if turn.task_id.is_some() {
                     "the selected provider cannot enforce this task authority ceiling"
                 } else {
-                    "conversation turn delivery supports Codex, OpenCode (whose launch must match the turn's authority), and Claude Code under full autonomy"
+                    "conversation turn delivery requires a governed Codex, OpenCode, Claude Code, or Antigravity session"
                 },
                 turn.id,
             ));
@@ -569,10 +606,39 @@ impl App {
     ) -> Result<Value, RpcError> {
         let turn_id = submitting.turn.id;
         let session_id = submitting.turn.recipient.session_id;
+        let reaps_failed_native_host = matches!(
+            submitting.turn.provider.as_deref(),
+            Some("opencode" | "claude-code" | "antigravity")
+        );
         let result = self
-            .run_registered_submitting_turn(request_id, submitting, live_turn)
+            .run_registered_submitting_turn(request_id, submitting, live_turn.clone())
             .await;
         if let Some(session_id) = session_id {
+            // Native cancellation/recovery can reap the canonical host. Retire its durable
+            // session as well, so a later prompt can wake/resume instead of reusing a dead host.
+            let failed_or_cancelled = result.is_err()
+                || self
+                    .store
+                    .get_turn(turn_id)
+                    .is_ok_and(|turn| turn.state == TurnState::Cancelled);
+            if reaps_failed_native_host
+                && failed_or_cancelled
+                && !live_turn.session.native_view_available()
+                && let Ok(session) = self.store.get_session(session_id)
+                && session.state == lazoo_protocol::SessionLifecycleState::Idle
+            {
+                let key = format!("native-terminal-ended:{session_id}:{turn_id}");
+                if let Err(error) = Box::pin(self.stop_session_command(
+                    session_id,
+                    session.revision,
+                    key.clone(),
+                    key,
+                ))
+                .await
+                {
+                    tracing::warn!(%session_id, code = %error.code, "ended native terminal could not be suspended");
+                }
+            }
             self.stop_resumed_session_after_failed_first_turn(turn_id, session_id)
                 .await;
         }

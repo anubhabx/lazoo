@@ -93,7 +93,8 @@ impl App {
             return Err(error);
         }
         let descriptor = lease.launch_descriptor();
-        let command = descriptor.command().clone();
+        let borrowed_terminal = descriptor.existing_terminal();
+        let command = descriptor.command();
         let open = TerminalOpenParams {
             executable: command.executable.to_string_lossy().into_owned(),
             args: command
@@ -106,22 +107,26 @@ impl App {
             rows: params.rows,
             idempotency_key: format!("session-view:{}:{}", session.id, params.idempotency_key),
         };
-        let mut terminal_command = TerminalCommand::new(
-            &command.executable,
-            &command.cwd,
-            params.columns,
-            params.rows,
-        )
-        .args(command.args);
-        for (name, value) in command.env {
-            terminal_command = terminal_command.env(name, value);
-        }
-        terminal_command = terminal_command
-            .env("TERM", "xterm-256color")
-            .env("COLORTERM", "truecolor");
-        let opened = self
-            .terminal_open_with_command(open, terminal_command, Some(Arc::clone(&lease)))
-            .await;
+        let opened = if let Some(canonical) = borrowed_terminal {
+            self.terminal_open_borrowed(open, canonical, Some(Arc::clone(&lease)))
+                .await
+        } else {
+            let mut terminal_command = TerminalCommand::new(
+                &command.executable,
+                &command.cwd,
+                params.columns,
+                params.rows,
+            )
+            .args(command.args);
+            for (name, value) in command.env {
+                terminal_command = terminal_command.env(name, value);
+            }
+            terminal_command = terminal_command
+                .env("TERM", "xterm-256color")
+                .env("COLORTERM", "truecolor");
+            self.terminal_open_with_command(open, terminal_command, Some(Arc::clone(&lease)))
+                .await
+        };
         let terminal = match opened {
             Ok(terminal) => terminal,
             Err(error) => {
@@ -131,24 +136,35 @@ impl App {
                 return Err(attach_failed(&error, session.id));
             }
         };
-        // The monitor owns only the watch receiver and a ConPTY clone.  In particular it must not
-        // retain the lease Arc, or the lease/terminal lifecycle would form a shutdown cycle.
-        let terminal_session = {
-            self.terminals
-                .lock()
-                .await
-                .sessions
-                .get(&terminal.id)
-                .map(|live| live.session.clone())
-        };
-        if let Some(terminal_session) = terminal_session {
-            let mut closed = lease.closed_subscription();
-            tokio::spawn(async move {
-                if !*closed.borrow_and_update() {
-                    let _ = closed.changed().await;
-                }
-                let _ = tokio::task::spawn_blocking(move || terminal_session.stop()).await;
-            });
+        // The monitor holds only the receiver and lifecycle fence. For a borrowed record,
+        // `terminal_stop` releases the logical view and never stops the canonical ConPTY.
+        let mut closed = lease.closed_subscription();
+        let app = self.clone();
+        let monitor_terminal = terminal.clone();
+        tokio::spawn(async move {
+            if !*closed.borrow_and_update() {
+                let _ = closed.changed().await;
+            }
+            let _ = app
+                .terminal_stop(TerminalStopParams {
+                    id: monitor_terminal.id,
+                    expected_boot_id: monitor_terminal.boot_id,
+                    expected_revision: monitor_terminal.revision,
+                })
+                .await;
+        });
+        if lease.is_closed() {
+            let error = "native view closed while opening".to_owned();
+            let _ = self
+                .terminal_stop(TerminalStopParams {
+                    id: terminal.id,
+                    expected_boot_id: terminal.boot_id,
+                    expected_revision: terminal.revision,
+                })
+                .await;
+            self.complete_view(session.id, &params, Err(error.clone()))
+                .await;
+            return Err(attach_failed(&error, session.id));
         }
         if let Err(error) = self.recheck_view_owner(&session, &params, &live).await {
             let _ = self
@@ -161,6 +177,19 @@ impl App {
             self.complete_view(session.id, &params, Err(error.message.clone()))
                 .await;
             return Err(error);
+        }
+        if lease.is_closed() {
+            let error = "native view closed while opening".to_owned();
+            let _ = self
+                .terminal_stop(TerminalStopParams {
+                    id: terminal.id,
+                    expected_boot_id: terminal.boot_id,
+                    expected_revision: terminal.revision,
+                })
+                .await;
+            self.complete_view(session.id, &params, Err(error.clone()))
+                .await;
+            return Err(attach_failed(&error, session.id));
         }
         self.complete_view(session.id, &params, Ok(terminal.clone()))
             .await;

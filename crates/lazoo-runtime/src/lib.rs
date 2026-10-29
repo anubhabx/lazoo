@@ -27,6 +27,7 @@ pub use single_instance::SingleInstance;
 pub use task_worktree::{PreparedGitTaskWorktree, prepare_git_task_worktree};
 pub use terminal::{
     TerminalCommand, TerminalError, TerminalExitStatus, TerminalOutput, TerminalSession,
+    TerminalView,
 };
 
 use std::{io, path::PathBuf};

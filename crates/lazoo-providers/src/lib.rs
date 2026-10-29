@@ -9,9 +9,15 @@ mod config_apply;
 mod contract;
 mod discovery;
 mod grok;
+mod interactive_session;
 mod json_rpc;
+mod mcp_bridge;
+mod native_hook_server;
+mod native_view;
 mod ndjson;
 mod opencode;
+mod opencode_http;
+mod opencode_view;
 mod preview;
 mod redaction;
 mod registry;
@@ -23,7 +29,6 @@ pub use codex::{
     CodexAdapter, CodexSession, normalize_codex_message, normalize_codex_permission_request,
     normalize_codex_tool_call,
 };
-pub use codex_view::{NativeViewLaunchDescriptor, NativeViewLease};
 pub use config::{
     ConfigurationFormat, DiscoveredIntegration, IntegrationKind, IntegrationTransport,
     PROVIDER_CONFIGURATION_V1, ProviderConfigurationFile, ProviderConfigurationReport,
@@ -46,7 +51,10 @@ pub use contract::{
 };
 pub use discovery::{DiscoveryEnvironment, DiscoverySource, rank_candidates};
 pub use grok::{GrokAdapter, GrokSession};
+pub use interactive_session::NativeInteractiveSession;
+pub use native_view::{NativeViewLaunchDescriptor, NativeViewLease};
 pub use opencode::{OpenCodeAdapter, OpenCodeSession};
+pub use opencode_http::OpenCodeHttpSession;
 pub use preview::{
     MigrationCandidate, MigrationPreview, MigrationProposal, MigrationSource, MigrationSummary,
     PROVIDER_MIGRATION_PREVIEW_V1, migration_preview,

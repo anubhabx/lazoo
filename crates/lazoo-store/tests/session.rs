@@ -4,9 +4,9 @@ use lazoo_protocol::{
     SessionLifecycleState,
 };
 use lazoo_store::{
-    BeginIdleSessionStopInput, BeginSessionInput, BeginSessionStopInput, CreateEmployeeInput,
-    FailSessionInput, FinishSessionStopInput, MarkSessionReadyInput, Store, StoreError,
-    UpdateEmployeeInput,
+    BeginIdleSessionStopInput, BeginSessionInput, BeginSessionStopInput,
+    BindPendingNativeSessionInput, CreateEmployeeInput, FailSessionInput, FinishSessionStopInput,
+    MarkSessionReadyInput, Store, StoreError, UpdateEmployeeInput,
 };
 use serde_json::json;
 use tempfile::tempdir;
@@ -66,6 +66,65 @@ fn ready_session(store: &Store, employee_id: Uuid, owner: Uuid, key: &str) -> Uu
         .unwrap()
         .session
         .id
+}
+
+#[test]
+fn pending_native_session_binds_once_with_live_owner_revision_and_idle_guards() {
+    let temporary = tempdir().unwrap();
+    let store = Store::open_path(temporary.path().join("lazoo.db")).unwrap();
+    let employee = store.create_employee(&employee()).unwrap().employee;
+    let owner = Uuid::new_v4();
+    let starting = store
+        .begin_session(&begin(employee.id, owner, "warm-pending"))
+        .unwrap();
+    let ready = store
+        .mark_session_ready(&MarkSessionReadyInput {
+            session_id: starting.session.id,
+            expected_revision: starting.session.revision,
+            owner_boot_id: owner,
+            native_session_id: "pending:ag-session".to_owned(),
+            native_host_pid: 4242,
+        })
+        .unwrap();
+    let bound = store
+        .bind_pending_native_session(&BindPendingNativeSessionInput {
+            session_id: ready.session.id,
+            expected_revision: ready.session.revision,
+            owner_boot_id: owner,
+            expected_pending_native_session_id: "pending:ag-session".to_owned(),
+            native_session_id: "ag-native-session".to_owned(),
+        })
+        .unwrap();
+    assert_eq!(
+        bound.session.native_session_id.as_deref(),
+        Some("ag-native-session")
+    );
+    assert_eq!(bound.session.revision, ready.session.revision + 1);
+    assert!(bound.event_sequence.is_some());
+    assert!(matches!(
+        store
+            .bind_pending_native_session(&BindPendingNativeSessionInput {
+                session_id: ready.session.id,
+                expected_revision: ready.session.revision,
+                owner_boot_id: owner,
+                expected_pending_native_session_id: "pending:ag-session".to_owned(),
+                native_session_id: "second-native-session".to_owned(),
+            })
+            .unwrap_err(),
+        StoreError::SessionStale { .. }
+    ));
+    assert!(matches!(
+        store
+            .bind_pending_native_session(&BindPendingNativeSessionInput {
+                session_id: bound.session.id,
+                expected_revision: bound.session.revision,
+                owner_boot_id: Uuid::new_v4(),
+                expected_pending_native_session_id: "pending:ag-session".to_owned(),
+                native_session_id: "third-native-session".to_owned(),
+            })
+            .unwrap_err(),
+        StoreError::SessionOwnership { .. }
+    ));
 }
 
 #[test]

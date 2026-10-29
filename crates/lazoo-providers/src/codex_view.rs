@@ -6,7 +6,6 @@
 use std::{
     collections::VecDeque,
     ffi::OsString,
-    fmt,
     net::SocketAddr,
     path::PathBuf,
     sync::{
@@ -16,7 +15,10 @@ use std::{
     time::Duration,
 };
 
-use crate::{CommandSpec, ProviderError, codex_broker::CodexBrokerReadHandle};
+use crate::{
+    CommandSpec, NativeViewLaunchDescriptor, NativeViewLease, ProviderError,
+    codex_broker::CodexBrokerReadHandle, native_view::NativeViewBackend,
+};
 use futures_util::{SinkExt, StreamExt};
 use serde_json::{Value, json};
 use tokio::{
@@ -44,34 +46,6 @@ const MAX_HANDSHAKES: usize = 4;
 const MAX_BUFFERED_NOTIFICATIONS: usize = 256;
 const WRITE_TIMEOUT: Duration = Duration::from_secs(2);
 
-/// Private terminal-launch data. It deliberately has no serialization implementation.
-pub struct NativeViewLaunchDescriptor {
-    remote_url: String,
-    command: CommandSpec,
-}
-impl NativeViewLaunchDescriptor {
-    #[must_use]
-    pub fn remote_url(&self) -> &str {
-        &self.remote_url
-    }
-    /// Caller must keep this in an internal terminal environment overlay.
-    #[must_use]
-    pub fn command(&self) -> CommandSpec {
-        self.command.clone()
-    }
-}
-impl fmt::Debug for NativeViewLaunchDescriptor {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("NativeViewLaunchDescriptor")
-            .field("remote_url", &self.remote_url)
-            .field("executable", &self.command.executable)
-            .field("args", &self.command.args)
-            .field("cwd", &self.command.cwd)
-            .field("env_keys", &self.command.env.keys().collect::<Vec<_>>())
-            .finish_non_exhaustive()
-    }
-}
-
 /// Inputs captured from the controller-owned session, never supplied by the viewer.
 #[derive(Clone, Debug)]
 pub(crate) struct CodexNativeViewConfig {
@@ -88,30 +62,21 @@ struct LeaseState {
     connection_tasks: Mutex<Vec<AbortHandle>>,
     closed_tx: watch::Sender<bool>,
 }
-/// Owns an ephemeral localhost listener and its in-memory bearer capability.
-pub struct NativeViewLease {
+/// Codex's restricted loopback backend for a provider-neutral native-view lease.
+struct CodexViewBackend {
     state: Arc<LeaseState>,
-    listener_task: JoinHandle<()>,
+    listener_task: Mutex<Option<JoinHandle<()>>>,
     address: SocketAddr,
     token: String,
     session_id: String,
     executable: PathBuf,
     cwd: PathBuf,
 }
-impl fmt::Debug for NativeViewLease {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("NativeViewLease")
-            .field("address", &self.address)
-            .field("session_id", &self.session_id)
-            .field("executable", &self.executable)
-            .field("cwd", &self.cwd)
-            .field("token", &"[REDACTED]")
-            .finish_non_exhaustive()
-    }
-}
-impl NativeViewLease {
+impl CodexViewBackend {
     /// Binds a fresh loopback endpoint. Two `UUIDv4` values provide at least 244 bits of entropy.
-    pub(crate) async fn open(config: CodexNativeViewConfig) -> Result<Self, ProviderError> {
+    pub(crate) async fn open(
+        config: CodexNativeViewConfig,
+    ) -> Result<NativeViewLease, ProviderError> {
         let listener = TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).await?;
         let address = listener.local_addr()?;
         let token = format!("{}{}", Uuid::new_v4().simple(), Uuid::new_v4().simple());
@@ -132,45 +97,19 @@ impl NativeViewLease {
             state: Arc::clone(&state),
         };
         let listener_task = tokio::spawn(accept_loop(listener, server, closed_rx));
-        Ok(Self {
+        Ok(NativeViewLease::from_backend(Self {
             state,
-            listener_task,
+            listener_task: Mutex::new(Some(listener_task)),
             address,
             token,
             session_id,
             executable: config.executable,
             cwd: config.cwd,
-        })
-    }
-    #[must_use]
-    pub fn local_addr(&self) -> SocketAddr {
-        self.address
-    }
-    #[must_use]
-    pub fn is_closed(&self) -> bool {
-        self.state.closed.load(Ordering::Acquire)
-    }
-    /// A daemon can select on this receiver without retaining the lease in its monitor task.
-    #[must_use]
-    pub fn closed_subscription(&self) -> watch::Receiver<bool> {
-        self.state.closed_tx.subscribe()
-    }
-    /// Resolves after this lease closes, so the daemon can stop the associated `ConPTY`.
-    pub async fn closed(&self) {
-        let mut receiver = self.state.closed_tx.subscribe();
-        if !*receiver.borrow_and_update() {
-            let _ = receiver.changed().await;
-        }
-    }
-    /// Closing a view has no authority to cancel canonical provider work.
-    pub fn close(&self) {
-        if self.state.close() {
-            self.listener_task.abort();
-        }
+        }))
     }
     /// Returns a genuine native Codex resume command with its token only in `env`.
     #[must_use]
-    pub fn launch_descriptor(&self) -> NativeViewLaunchDescriptor {
+    fn descriptor(&self) -> NativeViewLaunchDescriptor {
         let remote_url = format!("ws://{}", self.address);
         let mut command = CommandSpec::new(&self.executable, &self.cwd)
             .arg("resume")
@@ -183,10 +122,32 @@ impl NativeViewLease {
         command
             .env
             .insert(OsString::from(TOKEN_ENV), OsString::from(&self.token));
-        NativeViewLaunchDescriptor {
+        NativeViewLaunchDescriptor::Remote {
             remote_url,
             command,
         }
+    }
+}
+
+impl NativeViewBackend for CodexViewBackend {
+    fn close(&self) {
+        if self.state.close()
+            && let Some(task) = self.listener_task.lock().unwrap().take()
+        {
+            task.abort();
+        }
+    }
+
+    fn is_closed(&self) -> bool {
+        self.state.closed.load(Ordering::Acquire)
+    }
+
+    fn closed_subscription(&self) -> watch::Receiver<bool> {
+        self.state.closed_tx.subscribe()
+    }
+
+    fn launch_descriptor(&self) -> NativeViewLaunchDescriptor {
+        self.descriptor()
     }
 }
 
@@ -203,12 +164,6 @@ impl LeaseState {
         true
     }
 }
-impl Drop for NativeViewLease {
-    fn drop(&mut self) {
-        self.close();
-    }
-}
-
 impl crate::CodexSession {
     #[must_use]
     pub(crate) fn native_view_supported(&self) -> bool {
@@ -225,7 +180,7 @@ impl crate::CodexSession {
                 detail: Some("the controlled Codex host is unavailable".to_owned()),
             });
         }
-        NativeViewLease::open(CodexNativeViewConfig {
+        CodexViewBackend::open(CodexNativeViewConfig {
             broker,
             genuine_thread_start,
             executable,

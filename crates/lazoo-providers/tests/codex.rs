@@ -595,7 +595,11 @@ fn native_view_request_with_token(
     descriptor: &lazoo_providers::NativeViewLaunchDescriptor,
     token: &str,
 ) -> tokio_tungstenite::tungstenite::handshake::client::Request {
-    let mut request = descriptor.remote_url().into_client_request().unwrap();
+    let mut request = descriptor
+        .remote_url()
+        .expect("Codex uses a remote native viewer")
+        .into_client_request()
+        .unwrap();
     request
         .headers_mut()
         .insert(AUTHORIZATION, format!("Bearer {token}").parse().unwrap());
