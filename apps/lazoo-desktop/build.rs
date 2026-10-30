@@ -13,7 +13,15 @@ fn main() {
     tauri_build::try_build(
         tauri_build::Attributes::new()
             .windows_attributes(tauri_build::WindowsAttributes::new().window_icon_path(icon_path))
-            .app_manifest(tauri_build::AppManifest::new().commands(&["load_desktop_snapshot"])),
+            .app_manifest(tauri_build::AppManifest::new().commands(&[
+                "daemon_call",
+                "events_subscribe",
+                "events_unsubscribe",
+                "terminal_stream_start",
+                "terminal_stream_stop",
+                "terminal_stream_focus",
+                "terminal_write",
+            ])),
     )
     .expect("Tauri build configuration must be valid");
 }

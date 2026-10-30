@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "main",
-  "description": "Read-only snapshot access and native main-window controls",
+  "description": "Allowlisted daemon access, event and terminal streams, and native main-window controls",
   "windows": ["main"],
   "permissions": [
     "core:default",
@@ -11,6 +11,13 @@
     "core:window:allow-toggle-maximize",
     "core:window:allow-start-dragging",
     "core:window:allow-is-maximized",
-    "allow-load-desktop-snapshot"
+    "core:window:allow-set-focus",
+    "allow-daemon-call",
+    "allow-events-subscribe",
+    "allow-events-unsubscribe",
+    "allow-terminal-stream-start",
+    "allow-terminal-stream-stop",
+    "allow-terminal-stream-focus",
+    "allow-terminal-write"
   ]
 }

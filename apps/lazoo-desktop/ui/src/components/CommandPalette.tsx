@@ -1,304 +1,286 @@
+import { motion } from "motion/react";
 import {
-  Activity,
-  CornerDownLeft,
-  FolderGit2,
-  LayoutDashboard,
-  RefreshCw,
+  Home,
+  Inbox,
+  MessageSquare,
+  PanelRight,
+  Plus,
   Search,
-  ServerCog,
-  SquareArrowOutUpRight,
+  Settings,
+  SquareTerminal,
+  Users,
 } from "lucide-react";
-import { useEffect, useMemo, useState, type KeyboardEvent } from "react";
-import {
-  Dialog,
-  Header,
-  Input,
-  ListBox,
-  ListBoxItem,
-  ListBoxSection,
-  Modal,
-  ModalOverlay,
-  TextField,
-  type Selection as AriaSelection,
-} from "react-aria-components";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 
-import {
-  buildCommandGroups,
-  type CommandContext,
-  type CommandDefinition,
-} from "../model";
-import { Button } from "./primitives";
+import { useAppState, useStore } from "../lib/context";
+import { EASE, Kbd } from "./primitives";
 
-export const desktopCommands: CommandDefinition[] = [
-  {
-    id: "refresh",
-    label: "Refresh snapshot",
-    detail: "Read the latest local daemon state",
-    group: "Act",
-    keywords: ["sync", "reload"],
-  },
-  {
-    id: "navigate-control",
-    label: "Open control room",
-    detail: "Return to the operational overview",
-    group: "Navigate",
-    keywords: ["home", "overview"],
-  },
-  {
-    id: "navigate-projects",
-    label: "Open projects",
-    detail: "Show the registered project ledger",
-    group: "Navigate",
-    keywords: ["repository", "repos"],
-  },
-  {
-    id: "navigate-activity",
-    label: "Open activity",
-    detail: "Show durable control-plane events",
-    group: "Navigate",
-    keywords: ["events", "history", "ledger"],
-  },
-  {
-    id: "navigate-system",
-    label: "Open system",
-    detail: "Inspect daemon and storage facts",
-    group: "Navigate",
-    keywords: ["status", "runtime", "health"],
-  },
-  {
-    id: "inspect-project",
-    label: "Inspect selected project",
-    detail: "Return to the selected project's details",
-    group: "Inspect",
-    keywords: ["details", "repository"],
-    selectionKind: "project",
-  },
-  {
-    id: "inspect-event",
-    label: "Inspect selected event",
-    detail: "Return to the selected event's details",
-    group: "Inspect",
-    keywords: ["details", "ledger"],
-    selectionKind: "event",
-  },
-];
-
-const commandIcons = {
-  refresh: RefreshCw,
-  "navigate-control": LayoutDashboard,
-  "navigate-projects": FolderGit2,
-  "navigate-activity": Activity,
-  "navigate-system": ServerCog,
-  "inspect-project": SquareArrowOutUpRight,
-  "inspect-event": SquareArrowOutUpRight,
-};
-
-interface CommandPaletteProps {
-  isOpen: boolean;
-  context: CommandContext;
-  onOpenChange: (isOpen: boolean) => void;
-  onExecute: (command: CommandDefinition) => void;
-  onInspectSelection: () => void;
+interface Command {
+  id: string;
+  group: "Go to" | "Conversations" | "Terminals" | "Actions";
+  label: string;
+  hint?: string;
+  icon: ReactNode;
+  keywords?: string;
+  run: () => void;
 }
 
-function selectedKey(keys: AriaSelection) {
-  if (keys === "all") return null;
-  const key = keys.values().next().value;
-  return key == null ? null : String(key);
-}
-
-export function CommandPalette({
-  isOpen,
-  context,
-  onOpenChange,
-  onExecute,
-  onInspectSelection,
-}: CommandPaletteProps) {
+export function CommandPalette() {
+  const store = useStore();
+  const state = useAppState();
   const [query, setQuery] = useState("");
-  const [selectedId, setSelectedId] = useState<string | null>(null);
-  const groups = useMemo(
-    () => buildCommandGroups(desktopCommands, query, context),
-    [context, query],
-  );
-  const commands = groups.flatMap((group) => group.commands);
-  const activeId = commands.some((command) => command.id === selectedId)
-    ? selectedId
-    : (commands[0]?.id ?? null);
+  const [index, setIndex] = useState(0);
+  const input = useRef<HTMLInputElement>(null);
+
+  const dialog = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    if (!isOpen) return;
-    setQuery("");
-    setSelectedId(null);
-  }, [isOpen]);
+    input.current?.focus();
+    function onDown(event: MouseEvent) {
+      if (!dialog.current?.contains(event.target as Node)) {
+        store.togglePalette(false);
+      }
+    }
+    window.addEventListener("mousedown", onDown);
+    return () => window.removeEventListener("mousedown", onDown);
+  }, [store]);
 
-  const execute = (command: CommandDefinition | undefined) => {
-    if (!command) return;
-    onExecute(command);
-    onOpenChange(false);
-  };
+  const commands = useMemo<Command[]>(() => {
+    const list: Command[] = [
+      {
+        id: "go-home",
+        group: "Go to",
+        label: "Home",
+        icon: <Home size={14} aria-hidden="true" />,
+        run: () => {
+          store.selectSpace(null);
+          store.navigate({ kind: "launcher" });
+        },
+      },
+      ...state.projects.map((project) => ({
+        id: `go-project-${project.id}`,
+        group: "Go to" as const,
+        label: project.displayName,
+        hint: "project",
+        keywords: project.canonicalPath,
+        icon: <Home size={14} aria-hidden="true" />,
+        run: () => {
+          store.selectSpace(project.id);
+          store.navigate({ kind: "launcher" });
+        },
+      })),
+      {
+        id: "go-inbox",
+        group: "Go to",
+        label: "Inbox",
+        hint: state.inboxCounts?.unresolved
+          ? `${state.inboxCounts.unresolved} need you`
+          : undefined,
+        icon: <Inbox size={14} aria-hidden="true" />,
+        run: () => store.navigate({ kind: "inbox", filter: "all" }),
+      },
+      {
+        id: "go-settings",
+        group: "Go to",
+        label: "Settings",
+        icon: <Settings size={14} aria-hidden="true" />,
+        run: () => store.navigate({ kind: "settings", section: "general" }),
+      },
+      {
+        id: "go-employees",
+        group: "Go to",
+        label: "Employees",
+        icon: <Users size={14} aria-hidden="true" />,
+        run: () => store.navigate({ kind: "settings", section: "employees" }),
+      },
+      {
+        id: "new-work",
+        group: "Actions",
+        label: "New work",
+        hint: "Ctrl N",
+        icon: <Plus size={14} aria-hidden="true" />,
+        run: () => store.navigate({ kind: "launcher" }),
+      },
+    ];
+    for (const row of state.conversations?.conversations ?? []) {
+      list.push({
+        id: `conv-${row.id}`,
+        group: "Conversations",
+        label: row.title,
+        hint: row.leadName ?? undefined,
+        icon: <MessageSquare size={14} aria-hidden="true" />,
+        run: () => store.openConversation(row.id),
+      });
+    }
+    const conversation = state.conversation;
+    if (conversation && state.route.kind === "conversation") {
+      const id = conversation.conversation.id;
+      list.push({
+        id: "focus-lead",
+        group: "Terminals",
+        label: `Focus ${conversation.lead.name} (main)`,
+        icon: <SquareTerminal size={14} aria-hidden="true" />,
+        run: () => store.focusTab("lead"),
+      });
+      for (const worker of conversation.workers) {
+        list.push({
+          id: `focus-${worker.taskId}`,
+          group: "Terminals",
+          label: `Focus ${worker.name ?? "worker"}`,
+          hint: worker.state,
+          keywords: worker.label,
+          icon: <SquareTerminal size={14} aria-hidden="true" />,
+          run: () => store.focusTab(worker.taskId),
+        });
+      }
+      const mode = store.paneMode(id);
+      list.push({
+        id: "toggle-mode",
+        group: "Terminals",
+        label: mode === "native" ? "Show transcript" : "Show native terminal",
+        icon: <SquareTerminal size={14} aria-hidden="true" />,
+        run: () =>
+          store.setPaneMode(id, mode === "native" ? "transcript" : "native"),
+      });
+      list.push({
+        id: "toggle-details",
+        group: "Actions",
+        label: state.detailsOpen ? "Close details" : "Open details",
+        hint: "Ctrl I",
+        icon: <PanelRight size={14} aria-hidden="true" />,
+        run: () => store.toggleDetails(),
+      });
+    }
+    return list;
+  }, [state, store]);
 
-  const moveSelection = (direction: 1 | -1) => {
-    if (commands.length === 0) return;
-    const currentIndex = commands.findIndex(
-      (command) => command.id === activeId,
+  const filtered = useMemo(() => {
+    const needle = query.trim().toLowerCase();
+    if (!needle) return commands;
+    return commands.filter((command) =>
+      `${command.label} ${command.hint ?? ""} ${command.keywords ?? ""} ${command.group}`
+        .toLowerCase()
+        .includes(needle),
     );
-    const nextIndex =
-      currentIndex < 0
-        ? 0
-        : (currentIndex + direction + commands.length) % commands.length;
-    setSelectedId(commands[nextIndex]?.id ?? null);
-  };
+  }, [commands, query]);
 
-  const onSearchKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
-    if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+  useEffect(() => {
+    setIndex(0);
+  }, [query]);
+
+  const grouped = useMemo(() => {
+    const order: Command["group"][] = [
+      "Go to",
+      "Conversations",
+      "Terminals",
+      "Actions",
+    ];
+    return order
+      .map((group) => ({
+        group,
+        items: filtered.filter((command) => command.group === group),
+      }))
+      .filter((entry) => entry.items.length);
+  }, [filtered]);
+
+  function run(command: Command) {
+    store.togglePalette(false);
+    command.run();
+  }
+
+  function onKey(event: React.KeyboardEvent) {
+    if (event.key === "ArrowDown") {
       event.preventDefault();
-      moveSelection(event.key === "ArrowDown" ? 1 : -1);
-      return;
+      setIndex((value) => Math.min(value + 1, filtered.length - 1));
+    } else if (event.key === "ArrowUp") {
+      event.preventDefault();
+      setIndex((value) => Math.max(value - 1, 0));
+    } else if (event.key === "Enter") {
+      event.preventDefault();
+      const command = filtered[index];
+      if (command) run(command);
     }
-    if (event.key !== "Enter") return;
-    event.preventDefault();
-    if (event.ctrlKey && context.selection) {
-      onInspectSelection();
-      onOpenChange(false);
-      return;
-    }
-    execute(commands.find((command) => command.id === activeId));
-  };
+  }
+
+  const activeId = filtered[index]?.id;
 
   return (
-    <ModalOverlay
-      className="command-overlay"
-      isOpen={isOpen}
-      onOpenChange={onOpenChange}
-      isDismissable
-    >
-      <Modal className="command-modal">
-        <Dialog className="command-dialog" aria-label="Command palette">
-          <TextField className="command-search" aria-label="Search commands">
-            <Search aria-hidden size={18} strokeWidth={1.8} />
-            <Input
-              autoFocus
-              type="search"
-              value={query}
-              onChange={(event) => setQuery(event.currentTarget.value)}
-              onKeyDown={onSearchKeyDown}
-              placeholder="Search commands"
-            />
-            <kbd>Ctrl K</kbd>
-          </TextField>
-
-          <div className="command-results">
-            {commands.length > 0 ? (
-              <ListBox
-                aria-label="Command results"
-                selectionMode="single"
-                selectionBehavior="replace"
-                selectedKeys={activeId ? new Set([activeId]) : new Set()}
-                onSelectionChange={(keys) => setSelectedId(selectedKey(keys))}
-                onAction={(key) =>
-                  execute(
-                    commands.find((command) => command.id === String(key)),
-                  )
-                }
-              >
-                {groups.map((group) => (
-                  <ListBoxSection key={group.label} className="command-group">
-                    <Header className="command-group-label">
-                      {group.label}
-                    </Header>
-                    {group.commands.map((command) => {
-                      const Icon =
-                        commandIcons[command.id as keyof typeof commandIcons];
-                      return (
-                        <ListBoxItem
-                          id={command.id}
-                          key={command.id}
-                          className="command-row"
-                          textValue={`${command.label} ${command.detail}`}
-                          aria-label={`${command.label} — ${command.detail}`}
-                        >
-                          <span className="command-row-icon" aria-hidden>
-                            {Icon ? <Icon size={16} strokeWidth={1.7} /> : null}
-                          </span>
-                          <span className="command-row-copy">
-                            <strong>{command.label}</strong>
-                            <span>{command.detail}</span>
-                          </span>
-                          <CornerDownLeft
-                            className="command-enter-icon"
-                            aria-hidden
-                            size={14}
-                            strokeWidth={1.8}
-                          />
-                        </ListBoxItem>
-                      );
-                    })}
-                  </ListBoxSection>
-                ))}
-              </ListBox>
-            ) : (
-              <div className="command-empty" role="status">
-                <strong>No matching commands</strong>
-                <span>Try a view name, refresh, or inspect.</span>
-              </div>
-            )}
-          </div>
-
-          <footer className="command-footer">
-            <span>
-              <kbd>↑↓</kbd> Navigate
-            </span>
-            <span>
-              <kbd>Enter</kbd> Run
-            </span>
-            {context.selection ? (
-              <span>
-                <kbd>Ctrl Enter</kbd> Inspect
-              </span>
-            ) : null}
-            <span>
-              <kbd>Esc</kbd> Close
-            </span>
-          </footer>
-        </Dialog>
-      </Modal>
-    </ModalOverlay>
-  );
-}
-
-interface ActionBarProps {
-  viewLabel: string;
-  selectionLabel?: string;
-  selectionKind?: string;
-  onOpenCommand: () => void;
-  onCloseInspector: () => void;
-}
-
-export function ActionBar({
-  viewLabel,
-  selectionLabel,
-  selectionKind,
-  onOpenCommand,
-  onCloseInspector,
-}: ActionBarProps) {
-  return (
-    <div className="actionbar" role="toolbar" aria-label="Contextual actions">
-      <div className="actionbar-location">
-        <span>{selectionKind ?? "View"}</span>
-        <strong>{selectionLabel ?? viewLabel}</strong>
-      </div>
-      <div className="actionbar-actions">
-        {selectionLabel ? (
-          <Button aria-label="Dismiss inspector" onPress={onCloseInspector}>
-            <span>Close inspector</span>
-            <kbd>Esc</kbd>
-          </Button>
-        ) : null}
-        <Button aria-label="Open commands" onPress={onOpenCommand}>
-          <span>Commands</span>
-          <kbd>Ctrl K</kbd>
-        </Button>
-      </div>
-    </div>
+    <>
+      <motion.div
+        className="scrim"
+        initial={{ opacity: 0 }}
+        animate={{ opacity: 1 }}
+        exit={{ opacity: 0 }}
+        transition={{ duration: 0.15, ease: EASE }}
+        aria-hidden="true"
+      />
+      <motion.div
+        ref={dialog}
+        className="palette"
+        role="dialog"
+        aria-label="Command palette"
+        initial={{ opacity: 0, y: -8, scale: 0.98 }}
+        animate={{ opacity: 1, y: 0, scale: 1 }}
+        exit={{ opacity: 0, y: -8, scale: 0.98 }}
+        transition={{ duration: 0.22, ease: EASE }}
+        onKeyDown={onKey}
+      >
+        <div className="palette__input">
+          <Search size={15} aria-hidden="true" />
+          <input
+            ref={input}
+            type="text"
+            role="combobox"
+            aria-expanded="true"
+            aria-controls="palette-list"
+            aria-activedescendant={activeId ? `cmd-${activeId}` : undefined}
+            aria-label="Search commands"
+            placeholder="Search commands"
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+          />
+          <Kbd keys={["Esc"]} />
+        </div>
+        <div className="palette__list" id="palette-list" role="listbox">
+          {grouped.map(({ group, items }) => (
+            <div key={group}>
+              <div className="palette__group">{group}</div>
+              {items.map((command) => (
+                <button
+                  key={command.id}
+                  id={`cmd-${command.id}`}
+                  type="button"
+                  role="option"
+                  className="palette__item"
+                  aria-selected={command.id === activeId}
+                  onMouseEnter={() => setIndex(filtered.indexOf(command))}
+                  onClick={() => run(command)}
+                >
+                  <span className="row__icon">{command.icon}</span>
+                  <span className="truncate">{command.label}</span>
+                  {command.hint ? (
+                    <span className="meta">{command.hint}</span>
+                  ) : null}
+                </button>
+              ))}
+            </div>
+          ))}
+          {!filtered.length ? (
+            <div className="palette__group">No matches</div>
+          ) : null}
+        </div>
+        <div className="palette__foot">
+          <span>
+            <Kbd keys={["↑", "↓"]} /> select
+          </span>
+          <span>
+            <Kbd keys={["Enter"]} /> run
+          </span>
+          <span>
+            <Kbd keys={["Esc"]} /> close
+          </span>
+        </div>
+      </motion.div>
+    </>
   );
 }

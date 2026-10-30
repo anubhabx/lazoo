@@ -52,7 +52,7 @@ fn tauri_configuration_is_static_local_and_single_windowed() {
 }
 
 #[test]
-fn main_capability_allows_only_core_window_and_snapshot_commands() {
+fn main_capability_allows_only_core_window_and_desktop_bridge_commands() {
     let capability = read_json("capabilities/main.json");
 
     assert_eq!(capability["windows"], serde_json::json!(["main"]));
@@ -66,16 +66,39 @@ fn main_capability_allows_only_core_window_and_snapshot_commands() {
             "core:window:allow-toggle-maximize",
             "core:window:allow-start-dragging",
             "core:window:allow-is-maximized",
-            "allow-load-desktop-snapshot"
+            "core:window:allow-set-focus",
+            "allow-daemon-call",
+            "allow-events-subscribe",
+            "allow-events-unsubscribe",
+            "allow-terminal-stream-start",
+            "allow-terminal-stream-stop",
+            "allow-terminal-stream-focus",
+            "allow-terminal-write"
         ])
     );
 }
 
 #[test]
-fn build_manifest_declares_only_snapshot_command() {
+fn build_manifest_declares_only_the_desktop_bridge_commands() {
     let build_script = fs::read_to_string(manifest_path("build.rs")).expect("build.rs");
+    let commands = [
+        "daemon_call",
+        "events_subscribe",
+        "events_unsubscribe",
+        "terminal_stream_start",
+        "terminal_stream_stop",
+        "terminal_stream_focus",
+        "terminal_write",
+    ];
+    let declared = commands
+        .iter()
+        .map(|command| format!("\"{command}\","))
+        .collect::<Vec<_>>();
 
-    assert!(build_script.contains("commands(&[\"load_desktop_snapshot\"])"));
+    for entry in &declared {
+        assert!(build_script.contains(entry.as_str()), "{entry}");
+    }
+    assert!(!build_script.contains("load_desktop_snapshot"));
     assert!(!build_script.contains("system.shutdown"));
     assert!(!build_script.contains("project.register"));
 }
@@ -123,19 +146,20 @@ fn desktop_acceptance_covers_frontend_assets_and_native_interactions() {
     assert!(script.contains("function Send-WindowKeys"));
     assert!(script.contains("'^k'"));
     assert!(script.contains("Search commands"));
-    assert!(script.contains("'open{DOWN}{ENTER}'"));
-    assert!(script.contains("'control{ENTER}'"));
-    assert!(script.contains("'^~'"));
+    assert!(script.contains("'inbox{ENTER}'"));
+    assert!(script.contains("'^n'"));
+    assert!(script.contains("What should the team work on?"));
+    assert!(script.contains("Switch space:"));
+    assert!(script.contains("Nothing needs you"));
+    assert!(script.contains("Register a project"));
+    assert!(script.contains("$Configuration"));
     assert!(script.contains("'{ESC}'"));
     assert!(script.contains("function Invoke-AutomationElement"));
-    assert!(script.contains("Close inspector"));
-    assert!(script.contains("secondary inspect moved focus into inspector"));
-    assert!(script.contains("focus returned to project row"));
     assert!(script.contains("1180, 760"));
     assert!(script.contains("860, 620"));
     assert!(script.contains("highDpiScreenshot"));
     assert!(script.contains("commandPaletteScreenshot"));
-    assert!(script.contains("inspectorScreenshot"));
+    assert!(script.contains("settingsScreenshot"));
     assert!(script.contains("TextScaleFactor"));
     assert!(script.contains("BLOCKED: Windows text scaling"));
 }

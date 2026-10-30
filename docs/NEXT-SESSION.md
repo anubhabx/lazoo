@@ -1,5 +1,13 @@
 # Backend handoff: four-provider UI starting point, 2026-10-29
 
+## Desktop UI pilot, 2026-10-31
+
+The desktop is no longer the read-only shell. `feat/desktop-ui-pilot` (cut from `origin/main` at `87b63e8`) rebuilds `apps/lazoo-desktop` on the readiness contract: `daemon_call` behind a Rust allowlist, an events channel, a terminal byte-stream poller, and a React front end with a launcher, a conversation surface (agent tabs, Native and Transcript panes, attention strip, composer, details), the Inbox, Settings, and a command palette. Design: `docs/superpowers/specs/2026-10-31-desktop-ui-pilot-design.md`. Evidence and the live pilot on the owner's machine: `docs/verification/2026-10-31-desktop-ui-pilot.md`.
+
+Run it from a build: `npm --prefix apps/lazoo-desktop/ui ci`, `npm --prefix apps/lazoo-desktop/ui run build`, `cargo build -p lazoo-desktop -p lazood -p lazoo-keeper -p lazooctl -p lazoo-session-host`, start `lazoo-keeper.exe`, then `lazoo-desktop.exe` with the same `LAZOO_DATA_ROOT`. `scripts/acceptance/desktop-shell.ps1` accepts `-Configuration debug`.
+
+Open for the backend: the Codex native view on the owner's machine shows Codex's hooks-trust prompt first and, once it is dismissed, fails its `thread/resume` bootstrap (`remote app-server worker channel is closed`, exit 1) and then the session's view bridge reports `LZ-SESSION-VIEW-UNSUPPORTED`; the first occurrence also left the next turn rejected before acceptance (`LZ-TURN-PROVIDER`, `LZ-PROCESS-EXIT` incident). Transcript mode is unaffected. Terminal open and close emit no audit event, so the desktop polls status every 5 s while a pane has no stream. Open for the UI: worker tabs, approvals in the attention strip, native trust, and attach were built against fixtures and the contract but not exercised live (no delegation happened in the pilot turns); the full gate and a release build were not run on this host (2.5 GB free memory); `Alt+Left/Right` history traversal is not implemented.
+
 ## Current checkpoint
 
 The requested Codex-level parity is implemented for OpenCode, Claude Code and
