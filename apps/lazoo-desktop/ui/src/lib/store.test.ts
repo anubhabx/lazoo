@@ -71,7 +71,14 @@ describe("modelsForEvent", () => {
       "conversation",
       "launcher",
     ]);
-    expect(modelsForEvent("native.trust.requested")).toEqual(["trust"]);
+    expect(modelsForEvent("native.trust.requested")).toEqual([
+      "trust",
+      "conversation",
+    ]);
+    expect(modelsForEvent("native-trust.requested")).toEqual([
+      "trust",
+      "conversation",
+    ]);
     expect(modelsForEvent("memory.archived")).toEqual([]);
   });
 });

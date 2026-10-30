@@ -133,7 +133,8 @@ export function modelsForEvent(eventType: string): Model[] {
       models.add("projects").add("launcher");
       break;
     case "native":
-      models.add("trust");
+    case "native-trust":
+      models.add("trust").add("conversation");
       break;
     default:
       break;

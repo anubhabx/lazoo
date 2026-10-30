@@ -260,6 +260,7 @@ export function ConversationPage() {
                     visible={active?.key === tab.key}
                     agentName={tab.name}
                     isLead={tab.key === "lead"}
+                    finished={tab.done || tab.worker?.state === "failed"}
                     onShowTranscript={() =>
                       conversationId &&
                       store.setPaneMode(conversationId, "transcript")

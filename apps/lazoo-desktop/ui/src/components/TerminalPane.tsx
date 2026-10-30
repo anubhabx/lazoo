@@ -17,6 +17,8 @@ interface Props {
   visible: boolean;
   agentName: string;
   isLead: boolean;
+  /** The worker's task reached a terminal state; its session is gone or suspended. */
+  finished?: boolean;
   onShowTranscript: () => void;
 }
 
@@ -26,6 +28,7 @@ export function TerminalPane({
   visible,
   agentName,
   isLead,
+  finished = false,
   onShowTranscript,
 }: Props) {
   const terminals = useTerminals();
@@ -158,13 +161,26 @@ export function TerminalPane({
             {!sessionId ? (
               <>
                 <span className="frame-state__title">
-                  No native session yet
+                  {finished ? "No live session" : "No native session yet"}
                 </span>
                 <span>
-                  {isLead
-                    ? `${agentName} starts when you send the first request.`
-                    : `${agentName} has not started a session for this task.`}
+                  {finished
+                    ? `${agentName} finished this task; its turns are in the transcript.`
+                    : isLead
+                      ? `${agentName} starts when you send the first request.`
+                      : `${agentName} has not started a session for this task.`}
                 </span>
+                {finished ? (
+                  <div className="frame-state__actions">
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      onClick={onShowTranscript}
+                    >
+                      Show transcript
+                    </Button>
+                  </div>
+                ) : null}
               </>
             ) : entry?.opening || status?.viewOpening || status?.opening ? (
               <span className="frame-state__title">

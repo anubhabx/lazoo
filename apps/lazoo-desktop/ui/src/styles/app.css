@@ -909,6 +909,7 @@ button.chip:hover {
   inset: 0;
   display: grid;
   grid-template-rows: 32px 36px minmax(0, 1fr) auto auto;
+  grid-template-columns: minmax(0, 1fr);
   min-width: 0;
   min-height: 0;
 }
@@ -1095,6 +1096,7 @@ button.chip:hover {
   display: flex;
   align-items: center;
   gap: 10px;
+  min-width: 0;
   min-height: 32px;
   padding: 0 10px;
   border: 1px solid color-mix(in srgb, var(--lz-ember-500) 35%, transparent);
@@ -1113,6 +1115,16 @@ button.chip:hover {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.attention__text .mono {
+  overflow-wrap: anywhere;
+}
+
+.attention__actions .chip {
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .attention__text strong {
