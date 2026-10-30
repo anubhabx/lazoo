@@ -687,6 +687,10 @@ async fn native_view_websocket_is_authenticated_read_only_and_preserves_history_
     let wrong_thread =
         native_view_request(&mut viewer, 3, "thread/read", json!({"threadId":"other"})).await;
     assert_eq!(wrong_thread["error"]["code"], -32001);
+    // Sidebar reads the restricted bridge does not forward are refused, not proxied: a forwarded
+    // `plugin/list` closed the controller app-server on codex-cli 0.165.0-alpha.1.2.
+    let plugins = native_view_request(&mut viewer, 99, "plugin/list", json!({})).await;
+    assert_eq!(plugins["error"]["code"], -32001, "{plugins}");
     let mutation = native_view_request(
         &mut viewer,
         4,

@@ -284,7 +284,7 @@ async fn serve_connection(
     let config = WebSocketConfig::default()
         .read_buffer_size(8 * 1024)
         .write_buffer_size(8 * 1024)
-        .max_write_buffer_size(32 * 1024)
+        .max_write_buffer_size(MAX_FRAME_BYTES * 4)
         .max_message_size(Some(MAX_FRAME_BYTES))
         .max_frame_size(Some(MAX_FRAME_BYTES));
     let websocket = tokio::time::timeout(
@@ -483,7 +483,7 @@ async fn route_read(
                 )
                 .await
         }
-        "hooks/list" | "skills/list" | "plugin/list" => {
+        "hooks/list" | "skills/list" => {
             ensure_cwds(&params, &server.cwd)?;
             server
                 .broker
