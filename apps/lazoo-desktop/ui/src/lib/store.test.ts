@@ -65,6 +65,7 @@ describe("modelsForEvent", () => {
     expect(modelsForEvent("session.started")).toEqual([
       "launcher",
       "conversation",
+      "sessions",
     ]);
     expect(modelsForEvent("conversation.created")).toEqual([
       "conversations",

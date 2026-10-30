@@ -97,13 +97,26 @@ Fix in `crates/lazoo-providers/src/codex_view.rs` (two lines): the write buffer 
 
 Verified live on the fixed daemon (`lazoo-ui-diag2`): start a Codex conversation from the launcher, the native view opens on the hooks prompt, Escape dismisses it, the genuine TUI resumes the thread and shows the native conversation ("Viewing sub-agent — direct input is disabled"); a follow-up from the composer ("reply LAZOO_FIX_OK2 and list one to twelve") streamed into the native TUI as it happened, `turn.completed` twice, no `session.failed`, no incident, the view terminal still live and `viewable` afterwards. Footprint while the TUI streamed that turn (20 s window, debug desktop): 0.73 % CPU of the machine, 208 MiB private working set.
 
+## Fourth live run: delegation with the lead's native view resumed, and attach for the finished worker
+
+Same shape as the third run (two Codex employees under Ask), on the fixed daemon.
+
+| Step | Observed |
+|---|---|
+| Lead's native view | Opened on the hooks prompt, dismissed, resumed the thread; it then rendered the lead's work as it happened: `Called task_delegate` with the proposal result, `DELEGATED`, the Lazoo result notice (`[Lazoo task result] Child task … assigned to rune finished with state completed. Output: WORKER_OK`), `Called task_report`, `Worked for 4s`. The same view was still live and streaming when the run ended two minutes later (terminal `a2f8da9c`), so native rendering holds across a whole orchestration, not one turn |
+| Worker tab after completion | The desktop now looks the finished worker's employee up among the daemon's suspended sessions (`session.list`) when its card carries none, so the pane says "Session suspended" and offers "Attach and take over" (`session.terminal.attach`), beside "Show transcript" |
+| Attach | `session.terminal.attached` was recorded and the owner terminal launched `codex resume <thread>`; this machine's Codex 0.165.0-alpha.1.2 answered "this CLI has no complete local package … rerun the same command with --no-daemon (including resume or fork and its arguments)" and exited 1; the pane showed "Attachment closed · exit 1" |
+
+So every agent in the conversation has a pane with its terminal path wired: the lead's live view, and the finished worker's attach, which on this Codex build needs the daemon's resume argv to carry `--no-daemon` (backend finding 6). Zero `session.failed`, zero incidents across the run. The 20 s footprint sample taken while both terminals were open was discarded: a process left the desktop's tree during the window and the CPU delta went negative, so it is not a valid number; private working set in that window was 235 MiB.
+
 ## Findings for the backend owner
 
 1. **Native view bootstrap (fixed in this branch, see above).** The view launches `codex resume <thread> --remote ws://127.0.0.1:<port> --remote-auth-token-env LAZOO_NATIVE_VIEW_TOKEN --no-alt-screen`. With the owner's Codex configuration the TUI first shows "Hooks need review" (one hook new or changed). After the prompt is dismissed (skip, or presumably any choice) the TUI's `thread/resume` bootstrap fails with "remote app-server worker channel is closed" and exits 1. It reproduced on two sessions, after 90 s and after 8 s. After the first failure `session.terminal.status` reported `LZ-SESSION-VIEW-UNSUPPORTED` ("the provider does not support a native read-only view") for the same still-idle session, and the next turn on it was rejected before acceptance with an `LZ-PROCESS-EXIT` incident, so the failure appears to take the controller's app-server worker with it. The second session also lost its view bridge after its failed view. Suggested checks: whether the bridge's bootstrap window or its `thread/resume` handling tolerates the hooks prompt (run the view TUI with hooks already trusted, or with a view-mode flag that skips the review), and whether a viewer failure can close the controller's channel. The prompt is raised by hooks in the owner's own Codex configuration, not by Lazoo; a view that is left on the prompt keeps streaming indefinitely (third run).
 2. **No audit event for terminal open or close.** The desktop re-reads terminal status on conversation refreshes and, while a visible pane has no stream, every 5 s. A `terminal.*` event family would let it react immediately.
 3. **Claude Code 2.1.314 does not reach readiness** on this host under the debug daemon (`LZ-SESSION-START-FAILED`, "provider session did not become ready", twice, trust approved within seconds the second time). The 2026-10-17 live gates used 2.1.312.
 4. **Trust events are spelled `native-trust.*`** while the RPC family is `native.trust.*`; the contract index lists neither for the desktop's re-read table.
-5. **Schema is 20 on `main`.** The contract index still says 15 to 19 in places; the desktop reads whatever the daemon reports.
+5. **Codex attach argv on 0.165.0-alpha.1.2.** `session.terminal.attach` launches `codex resume <thread>`; this build refuses it without a background server and asks for `--no-daemon` ("including resume or fork and its arguments"). The 2026-10-17 attach evidence was on 0.153.4.
+6. **Schema is 20 on `main`.** The contract index still says 15 to 19 in places; the desktop reads whatever the daemon reports.
 
 ## Desktop changes made from the live run
 
@@ -116,6 +129,7 @@ Verified live on the fixed daemon (`lazoo-ui-diag2`): start a Codex conversation
 - `native-trust.*` events re-read the trust list and the open conversation.
 - A long trust path no longer widens the conversation grid; the pane toolbar stays in view.
 - A finished worker's Native pane says so and offers the transcript instead of claiming it never started.
+- A finished worker whose card carries no session is matched to its newest suspended session, so its pane offers attach as well as the transcript.
 
 ## Acceptance run
 

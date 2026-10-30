@@ -113,6 +113,7 @@ function scripted(): FakeBridge {
     truncated: false,
     nextBefore: null,
   });
+  bridge.on("session.list", []);
   bridge.on("session.resources", () => {
     throw { code: "LZ-SESSION-NOT-LIVE", message: "not live" };
   });
@@ -368,6 +369,71 @@ describe("conversation", () => {
     expect(bridge.callsTo("task.cancel")).toHaveLength(0);
     await user.click(screen.getByRole("button", { name: "Confirm: Cancel" }));
     await waitFor(() => expect(bridge.callsTo("task.cancel")).toHaveLength(1));
+  });
+});
+
+describe("finished workers", () => {
+  test("a finished worker without a card session is looked up among suspended sessions for attach", async () => {
+    const bridge = scripted();
+    const suspendedId = "ababab00-0000-4000-8000-00000000ab01";
+    bridge.on("session.list", [
+      {
+        id: suspendedId,
+        employeeId: workerCard().employeeId,
+        employeeConfigurationRevision: 1,
+        provider: "codex",
+        state: "suspended",
+        revision: 4,
+        ownerBootId: null,
+        nativeSessionId: "thread-9",
+        nativeHostPid: null,
+        failureCode: null,
+        failureMessage: null,
+        createdAt: "2026-10-31T10:00:00Z",
+        updatedAt: "2026-10-31T10:05:00Z",
+        startedAt: "2026-10-31T10:00:00Z",
+        stoppedAt: "2026-10-31T10:05:00Z",
+      },
+    ]);
+    bridge.on(
+      "workspace.conversation",
+      conversation({
+        workers: [
+          workerCard({
+            state: "complete",
+            taskState: "completed",
+            session: null,
+            actions: [],
+          }),
+        ],
+      }),
+    );
+    bridge.on("session.terminal.status", (params: unknown) =>
+      terminalStatus({
+        sessionId: String((params as { id: string }).id),
+        viewable: false,
+        viewBlockingCode: "LZ-SESSION-STATE",
+        viewBlockingReason: "only daemon-owned idle sessions can be viewed",
+        attachable: true,
+        blockingCode: null,
+        blockingReason: null,
+      }),
+    );
+    const user = userEvent.setup();
+    const { store } = mount(bridge);
+    await user.click(await screen.findByText("fix flaky daemon test"));
+    await screen.findByRole("tablist", { name: "Agents" });
+    act(() => store.focusTab(TASK_ID));
+    await waitFor(() =>
+      expect(
+        bridge
+          .callsTo("session.terminal.status")
+          .some((p) => (p as { id: string }).id === suspendedId),
+      ).toBe(true),
+    );
+    expect(
+      await screen.findByRole("button", { name: "Attach and take over" }),
+    ).toBeInTheDocument();
   });
 });
 

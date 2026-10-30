@@ -90,9 +90,16 @@ export function ConversationPage() {
   const routeTab = route.kind === "conversation" ? route.tab : "lead";
   const conversationId = route.kind === "conversation" ? route.id : null;
 
+  const sessions = state.sessions;
   const tabs = useMemo<Tab[]>(() => {
     if (!conversation) return [];
     const { lead, workers } = conversation;
+    // A finished worker's card carries no session, but the daemon keeps its suspended
+    // session, which `session.terminal.attach` can resume in the pane.
+    const suspendedFor = (employeeId: string) =>
+      sessions
+        .filter((s) => s.employeeId === employeeId && s.state === "suspended")
+        .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))[0]?.id ?? null;
     return [
       {
         key: "lead",
@@ -112,12 +119,16 @@ export function ConversationPage() {
         provider: worker.provider,
         tone: workerTone(worker.state),
         stateLabel: words(worker.state),
-        sessionId: worker.session?.id ?? null,
+        sessionId:
+          worker.session?.id ??
+          (worker.state === "complete" || worker.state === "failed"
+            ? suspendedFor(worker.employeeId)
+            : null),
         done: worker.state === "complete" || worker.taskState === "cancelled",
         worker,
       })),
     ];
-  }, [conversation]);
+  }, [conversation, sessions]);
 
   const active = tabs.find((tab) => tab.key === routeTab) ?? tabs[0] ?? null;
   const mode: PaneMode = conversationId

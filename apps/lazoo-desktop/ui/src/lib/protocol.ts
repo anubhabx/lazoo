@@ -99,6 +99,24 @@ export interface EmployeeRecord {
   disabledAt: Timestamp | null;
 }
 
+export interface EmployeeSessionRecord {
+  id: Uuid;
+  employeeId: Uuid;
+  employeeConfigurationRevision: number;
+  provider: string;
+  state: SessionLifecycleState;
+  revision: number;
+  ownerBootId: Uuid | null;
+  nativeSessionId: string | null;
+  nativeHostPid: number | null;
+  failureCode: string | null;
+  failureMessage: string | null;
+  createdAt: Timestamp;
+  updatedAt: Timestamp;
+  startedAt: Timestamp | null;
+  stoppedAt: Timestamp | null;
+}
+
 export interface ProviderListEntry {
   provider: string;
   detected: boolean;

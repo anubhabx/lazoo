@@ -5,6 +5,7 @@ import type { Bridge } from "./bridge";
 import { asFailure } from "./bridge";
 import type {
   AuthorityMode,
+  EmployeeSessionRecord,
   EventFrame,
   InboxAction,
   InboxCounts,
@@ -60,6 +61,8 @@ export interface AppState {
   inboxCounts: InboxCounts | null;
   inbox: InboxListResult | null;
   trust: NativeTrustRequestRecord[];
+  /** Every session the daemon knows; finished workers find their suspended session here. */
+  sessions: EmployeeSessionRecord[];
   /** Local "seen" marks against `lastResultAt`, per conversation. */
   seen: Record<Uuid, string>;
   paneModes: Record<Uuid, PaneMode>;
@@ -81,7 +84,8 @@ export type Model =
   | "conversation"
   | "inbox"
   | "inboxCounts"
-  | "trust";
+  | "trust"
+  | "sessions";
 
 const ALL_MODELS: Model[] = [
   "status",
@@ -92,6 +96,7 @@ const ALL_MODELS: Model[] = [
   "inbox",
   "inboxCounts",
   "trust",
+  "sessions",
 ];
 const SEEN_KEY = "lazoo.seen";
 const PANE_KEY = "lazoo.pane-modes";
@@ -123,8 +128,10 @@ export function modelsForEvent(eventType: string): Model[] {
       break;
     case "employee":
     case "roster":
-    case "session":
       models.add("launcher").add("conversation");
+      break;
+    case "session":
+      models.add("launcher").add("conversation").add("sessions");
       break;
     case "message":
       models.add("conversation");
@@ -157,6 +164,7 @@ function initialState(): AppState {
     inboxCounts: null,
     inbox: null,
     trust: [],
+    sessions: [],
     seen: readStorage<Record<Uuid, string>>(SEEN_KEY, {}),
     paneModes: readStorage<Record<Uuid, PaneMode>>(PANE_KEY, {}),
     defaultPaneMode: readStorage<PaneMode>(DEFAULT_PANE_KEY, "native"),
@@ -411,6 +419,12 @@ export class Store {
           this.set({ inbox, inboxCounts: inbox.counts });
           break;
         }
+        case "sessions": {
+          const sessions =
+            await this.bridge.call<EmployeeSessionRecord[]>("session.list");
+          this.set({ sessions: Array.isArray(sessions) ? sessions : [] });
+          break;
+        }
         case "trust": {
           const trust = await this.bridge.call<NativeTrustRequestRecord[]>(
             "native.trust.list",
@@ -449,6 +463,7 @@ export class Store {
         this.set({ conversation: null, conversationError: null });
       }
       void this.refresh("conversation");
+      void this.refresh("sessions");
       this.markSeen(route.id);
     } else if (route.kind === "inbox") {
       void this.refresh("inbox");
