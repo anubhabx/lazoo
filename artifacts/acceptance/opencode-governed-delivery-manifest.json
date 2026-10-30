@@ -1,74 +1,74 @@
 {
   "status": "PASS",
-  "schemaVersion": 19,
+  "schemaVersion": 20,
   "mode": "deterministic-fake-transport",
-  "startedAt": "2026-10-17T12:01:28.1558040Z",
-  "durationMs": 39063,
+  "startedAt": "2026-10-30T21:07:30.4898921Z",
+  "durationMs": 52180,
   "commands": [
     {
       "command": "cargo test -p lazoo-providers --test opencode opencode_launch_makes_every_governed_tool_ask_under_ask_and_self_decision --locked -- --exact",
       "exitCode": 0,
-      "durationMs": 363
+      "durationMs": 398
     },
     {
       "command": "cargo test -p lazoo-providers --test opencode opencode_launch_is_prompt_free_only_under_full_autonomy --locked -- --exact",
       "exitCode": 0,
-      "durationMs": 341
+      "durationMs": 378
     },
     {
       "command": "cargo test -p lazoo-providers --test opencode observed_acp_admits_command_edit_delete_and_move_as_governed_requests --locked -- --exact",
       "exitCode": 0,
-      "durationMs": 9740
+      "durationMs": 9863
     },
     {
       "command": "cargo test -p lazoo-providers --lib acp::tests::acp_delete_and_move_map_to_file_changes_and_every_other_kind_stays_refused --locked -- --exact",
       "exitCode": 0,
-      "durationMs": 395
+      "durationMs": 11559
     },
     {
       "command": "cargo test -p lazoo-providers --test opencode observed_acp_refuses_every_other_kind_with_a_cancel_and_a_recorded_reason --locked -- --exact",
       "exitCode": 0,
-      "durationMs": 14406
+      "durationMs": 14590
     },
     {
       "command": "cargo test -p lazood --test daemon opencode_ask_and_self_decision_turns_are_governed_through_the_approval_ledger --locked -- --exact",
       "exitCode": 0,
-      "durationMs": 2038
+      "durationMs": 2682
     },
     {
-      "command": "cargo test -p lazood --test daemon opencode_delivers_turns_and_tasks_under_every_authority_its_launch_enforces --locked -- --exact",
+      "command": "cargo test -p lazood --test daemon opencode_delivers_turns_and_tasks_under_governed_authority --locked -- --exact",
       "exitCode": 0,
-      "durationMs": 708
+      "durationMs": 978
     },
     {
-      "command": "cargo test -p lazood --test daemon a_prompt_free_opencode_session_refuses_a_narrower_delegated_task_before_any_session_starts --locked -- --exact",
+      "command": "cargo test -p lazood --test daemon a_full_autonomy_opencode_employee_serves_a_narrower_delegated_task --locked -- --exact",
       "exitCode": 0,
-      "durationMs": 524
+      "durationMs": 724
     },
     {
       "command": "cargo test -p lazoo-providers --test opencode governed_sessions_refuse_a_project_configuration_that_can_override_the_block --locked -- --exact",
       "exitCode": 0,
-      "durationMs": 2674
+      "durationMs": 2742
     },
     {
       "command": "cargo test -p lazoo-providers --lib opencode::tests::governed_sessions_refuse_configuration_that_can_override_the_block --locked -- --exact",
       "exitCode": 0,
-      "durationMs": 381
+      "durationMs": 441
     },
     {
       "command": "cargo test -p lazoo-providers --test opencode observed_acp_records_a_reused_jsonrpc_id_and_refusals_are_not_progress --locked -- --exact",
       "exitCode": 0,
-      "durationMs": 6508
+      "durationMs": 6652
     },
     {
       "command": "cargo test -p lazood --test daemon task_turn_rejects_a_provider_without_authority_override_support_before_io --locked -- --exact",
       "exitCode": 0,
-      "durationMs": 496
+      "durationMs": 610
     },
     {
       "command": "cargo test -p lazoo-store --test store store_enables_wal_foreign_keys_and_schema_version --locked -- --exact",
       "exitCode": 0,
-      "durationMs": 399
+      "durationMs": 459
     },
     {
       "command": "git diff --quiet and git diff --cached --quiet -- apps/lazoo-desktop",
@@ -84,12 +84,12 @@
     "approvalLedgerGovernsAskAndSelfDecision": true,
     "governedKindsMapped": true,
     "unsupportedKindsDeclinedWithoutApproval": true,
-    "promptFreeSessionNeverServesNarrowerAuthority": true,
-    "otherProvidersRefused": true,
-    "memoryWorkerStillExcludesOpenCode": true,
+    "narrowerAuthorityDelivered": true,
+    "grokExcluded": true,
+    "memoryWorkerSupportsOpenCode": true,
     "refusalsFailClosedBeforeIo": true,
     "noSupportClaimed": true,
-    "schemaNineteen": true,
+    "schemaTwenty": true,
     "providerSmokeAbsent": true,
     "externalModelUseAbsent": true,
     "uiChangesAbsent": true
@@ -98,11 +98,11 @@
     "providerSmoke": "NOT_RUN",
     "externalModelUse": "NOT_RUN",
     "desktopUi": "UNCHANGED",
-    "schemaMigration": "NONE",
+    "schemaMigration": "CURRENT_20_NATIVE_WORKSPACE_TRUST",
     "unlocked": "OPENCODE_ASK_AND_SELF_DECISION_THROUGH_THE_APPROVAL_LEDGER",
-    "stillRefused": "ACP_KINDS_OTHER_THAN_EXECUTE_EDIT_DELETE_MOVE_ANTIGRAVITY_GROK_BUILD_OPENCODE_MEMORY_WORKER",
+    "stillRefused": "ACP_KINDS_OTHER_THAN_EXECUTE_EDIT_DELETE_MOVE_AND_GROK_BUILD",
     "liveGate": "NOT_RUN_NO_SUPPORT_CLAIMED",
     "liveScript": "scripts/acceptance/opencode-governed-live.ps1 (integrator; excluded from the gate)",
-    "toolAccess": "CODEX_SESSIONS_ONLY"
+    "toolAccess": "GOVERNED_FOUR_PROVIDERS"
   }
 }
