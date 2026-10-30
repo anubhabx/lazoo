@@ -2,23 +2,23 @@
   "status": "PASS",
   "schemaVersion": 20,
   "mode": "deterministic-fake-transport",
-  "startedAt": "2026-10-30T21:04:29.0611674Z",
-  "durationMs": 2096,
+  "startedAt": "2026-10-30T21:33:14.8233139Z",
+  "durationMs": 2261,
   "commands": [
     {
       "command": "cargo test -p lazood --test daemon claude_and_antigravity_deliver_governed_turns_and_tasks --locked -- --exact",
       "exitCode": 0,
-      "durationMs": 945
+      "durationMs": 1015
     },
     {
       "command": "cargo test -p lazood --test daemon task_turn_rejects_a_provider_without_authority_override_support_before_io --locked -- --exact",
       "exitCode": 0,
-      "durationMs": 608
+      "durationMs": 678
     },
     {
       "command": "cargo test -p lazoo-store --test store store_enables_wal_foreign_keys_and_schema_version --locked -- --exact",
       "exitCode": 0,
-      "durationMs": 453
+      "durationMs": 482
     },
     {
       "command": "git diff --quiet and git diff --cached --quiet -- apps/lazoo-desktop",

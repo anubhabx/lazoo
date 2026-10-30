@@ -2,13 +2,13 @@
   "status": "PASS",
   "schemaVersion": 20,
   "mode": "deterministic-fake-transport",
-  "startedAt": "2026-10-30T21:07:30.4898921Z",
-  "durationMs": 52180,
+  "startedAt": "2026-10-30T21:36:00.5619815Z",
+  "durationMs": 41154,
   "commands": [
     {
       "command": "cargo test -p lazoo-providers --test opencode opencode_launch_makes_every_governed_tool_ask_under_ask_and_self_decision --locked -- --exact",
       "exitCode": 0,
-      "durationMs": 398
+      "durationMs": 390
     },
     {
       "command": "cargo test -p lazoo-providers --test opencode opencode_launch_is_prompt_free_only_under_full_autonomy --locked -- --exact",
@@ -18,57 +18,57 @@
     {
       "command": "cargo test -p lazoo-providers --test opencode observed_acp_admits_command_edit_delete_and_move_as_governed_requests --locked -- --exact",
       "exitCode": 0,
-      "durationMs": 9863
+      "durationMs": 9876
     },
     {
       "command": "cargo test -p lazoo-providers --lib acp::tests::acp_delete_and_move_map_to_file_changes_and_every_other_kind_stays_refused --locked -- --exact",
       "exitCode": 0,
-      "durationMs": 11559
+      "durationMs": 659
     },
     {
       "command": "cargo test -p lazoo-providers --test opencode observed_acp_refuses_every_other_kind_with_a_cancel_and_a_recorded_reason --locked -- --exact",
       "exitCode": 0,
-      "durationMs": 14590
+      "durationMs": 14501
     },
     {
       "command": "cargo test -p lazood --test daemon opencode_ask_and_self_decision_turns_are_governed_through_the_approval_ledger --locked -- --exact",
       "exitCode": 0,
-      "durationMs": 2682
+      "durationMs": 2720
     },
     {
       "command": "cargo test -p lazood --test daemon opencode_delivers_turns_and_tasks_under_governed_authority --locked -- --exact",
       "exitCode": 0,
-      "durationMs": 978
+      "durationMs": 1015
     },
     {
       "command": "cargo test -p lazood --test daemon a_full_autonomy_opencode_employee_serves_a_narrower_delegated_task --locked -- --exact",
       "exitCode": 0,
-      "durationMs": 724
+      "durationMs": 686
     },
     {
       "command": "cargo test -p lazoo-providers --test opencode governed_sessions_refuse_a_project_configuration_that_can_override_the_block --locked -- --exact",
       "exitCode": 0,
-      "durationMs": 2742
+      "durationMs": 2723
     },
     {
       "command": "cargo test -p lazoo-providers --lib opencode::tests::governed_sessions_refuse_configuration_that_can_override_the_block --locked -- --exact",
       "exitCode": 0,
-      "durationMs": 441
+      "durationMs": 418
     },
     {
       "command": "cargo test -p lazoo-providers --test opencode observed_acp_records_a_reused_jsonrpc_id_and_refusals_are_not_progress --locked -- --exact",
       "exitCode": 0,
-      "durationMs": 6652
+      "durationMs": 6603
     },
     {
       "command": "cargo test -p lazood --test daemon task_turn_rejects_a_provider_without_authority_override_support_before_io --locked -- --exact",
       "exitCode": 0,
-      "durationMs": 610
+      "durationMs": 606
     },
     {
       "command": "cargo test -p lazoo-store --test store store_enables_wal_foreign_keys_and_schema_version --locked -- --exact",
       "exitCode": 0,
-      "durationMs": 459
+      "durationMs": 473
     },
     {
       "command": "git diff --quiet and git diff --cached --quiet -- apps/lazoo-desktop",

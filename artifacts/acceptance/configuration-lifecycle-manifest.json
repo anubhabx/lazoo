@@ -1,10 +1,10 @@
 {
   "status": "PASS",
-  "startedAt": "2026-10-30T21:05:18.9876060Z",
-  "completedAt": "2026-10-30T21:05:26.1558791Z",
-  "durationMs": 7135,
+  "startedAt": "2026-10-30T21:33:56.1486538Z",
+  "completedAt": "2026-10-30T21:34:03.3281485Z",
+  "durationMs": 7145,
   "binarySha256": {
-    "daemon": "a61862c77af4fcfb9a06969a7669dde9303c33cfc535aae76ef4f63f6c1189fe",
+    "daemon": "e26a9046238b8c586f515b0f25174694f1c334b23ade0d0b4e104dc249140da5",
     "cli": "ad4effbf7607405ff34e9374b41ab01eefe5fb55e70b56142a79892bc0d7de28"
   },
   "codex": {
@@ -32,37 +32,37 @@
     {
       "command": "lazooctl --json status",
       "exitCode": 0,
-      "durationMs": 167
+      "durationMs": 163
     },
     {
       "command": "lazooctl --json provider probe codex",
       "exitCode": 0,
-      "durationMs": 2369
+      "durationMs": 2359
     },
     {
       "command": "lazooctl --json provider config-preview --selection {\"provider\":\"codex\",\"name\":\"acceptance-fixture\",\"command\":\"fixture-mcp\",\"args\":[\"--no-connect\"],\"url\":null,\"enabled\":false,\"replace\":false,\"selectedSecretFields\":[]}",
       "exitCode": 0,
-      "durationMs": 2162
+      "durationMs": 2181
     },
     {
-      "command": "lazooctl --json provider config-apply 0926d8aa-35ef-4fa4-8f91-e84369d91357 --expected-revision 1",
+      "command": "lazooctl --json provider config-apply 29e79b45-7a22-4043-9dca-52f85e6e49e2 --expected-revision 1",
       "exitCode": 0,
-      "durationMs": 2194
+      "durationMs": 2187
     },
     {
-      "command": "lazooctl --json provider config-apply 0926d8aa-35ef-4fa4-8f91-e84369d91357 --expected-revision 1",
+      "command": "lazooctl --json provider config-apply 29e79b45-7a22-4043-9dca-52f85e6e49e2 --expected-revision 1",
       "exitCode": 0,
-      "durationMs": 16
+      "durationMs": 19
     },
     {
-      "command": "lazooctl --json provider config-show 0926d8aa-35ef-4fa4-8f91-e84369d91357",
+      "command": "lazooctl --json provider config-show 29e79b45-7a22-4043-9dca-52f85e6e49e2",
       "exitCode": 0,
-      "durationMs": 17
+      "durationMs": 21
     },
     {
-      "command": "lazooctl --json provider config-rollback 0926d8aa-35ef-4fa4-8f91-e84369d91357 --expected-revision 4",
+      "command": "lazooctl --json provider config-rollback 29e79b45-7a22-4043-9dca-52f85e6e49e2 --expected-revision 4",
       "exitCode": 0,
-      "durationMs": 29
+      "durationMs": 34
     },
     {
       "command": "lazooctl --json system shutdown",

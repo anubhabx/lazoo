@@ -110,14 +110,28 @@ Same shape as the third run (two Codex employees under Ask), on the fixed daemon
 
 So every agent in the conversation has a pane with its terminal path wired: the lead's live view, and the finished worker's attach, which on this Codex build needs the daemon's resume argv to carry `--no-daemon` (backend finding 6). Zero `session.failed`, zero incidents across the run. The 20 s footprint sample taken while both terminals were open was discarded: a process left the desktop's tree during the window and the CPU delta went negative, so it is not a valid number; private working set in that window was 235 MiB.
 
+## Fifth live run: two native terminals at once, finished worker attached
+
+Same shape as the fourth run, on a daemon with two more fixes: `session.terminal.attach` now appends `--no-daemon` to `codex resume <thread>` when the installed CLI's own `resume --help` advertises the flag (0.165.0-alpha.1.2 does, 0.153.4 does not, so the documented shape and its tests are unchanged where the flag is unknown), and the task-graph acceptance script's desktop check is aligned with every other slice's (working-tree changes only) plus an allowlist assertion that the desktop never offers `task.delegate`, `task.start`, `task.report`, `message.*`, `terminal.open`, or `system.shutdown`.
+
+| Step | Observed |
+|---|---|
+| Lead | Native view resumed and rendered the whole orchestration as before (`task_delegate`, result notice with `WORKER_OK`, `task_report`); still live at the end (terminal `5acb5c79`) |
+| Worker tab after completion | "Attach and take over" launched `codex resume <thread> --no-daemon` (terminal `37b864e5`, live); after the hooks prompt the genuine Codex TUI resumed the worker's own thread and showed its turn: "reply with exactly WORKER_OK and nothing else." → `WORKER_OK · Worked for 5s`, composer enabled, frame note "Attached · keys go to this terminal" |
+| Both at once | Two live native terminals in the same conversation, one per agent; 30 s footprint with the worker tab focused: 0.078 % CPU of the machine, 221 MiB private working set, 453 MiB summed |
+| Daemon | 101 events, `session.failed` 0, incidents 0; worker session suspended, lead idle |
+
+With this, every agent in a conversation has a terminal path that works on this machine: a live read-only view while it runs, and an owner attachment of its suspended session after it finishes, beside the transcript in both cases.
+
 ## Findings for the backend owner
 
 1. **Native view bootstrap (fixed in this branch, see above).** The view launches `codex resume <thread> --remote ws://127.0.0.1:<port> --remote-auth-token-env LAZOO_NATIVE_VIEW_TOKEN --no-alt-screen`. With the owner's Codex configuration the TUI first shows "Hooks need review" (one hook new or changed). After the prompt is dismissed (skip, or presumably any choice) the TUI's `thread/resume` bootstrap fails with "remote app-server worker channel is closed" and exits 1. It reproduced on two sessions, after 90 s and after 8 s. After the first failure `session.terminal.status` reported `LZ-SESSION-VIEW-UNSUPPORTED` ("the provider does not support a native read-only view") for the same still-idle session, and the next turn on it was rejected before acceptance with an `LZ-PROCESS-EXIT` incident, so the failure appears to take the controller's app-server worker with it. The second session also lost its view bridge after its failed view. Suggested checks: whether the bridge's bootstrap window or its `thread/resume` handling tolerates the hooks prompt (run the view TUI with hooks already trusted, or with a view-mode flag that skips the review), and whether a viewer failure can close the controller's channel. The prompt is raised by hooks in the owner's own Codex configuration, not by Lazoo; a view that is left on the prompt keeps streaming indefinitely (third run).
 2. **No audit event for terminal open or close.** The desktop re-reads terminal status on conversation refreshes and, while a visible pane has no stream, every 5 s. A `terminal.*` event family would let it react immediately.
 3. **Claude Code 2.1.314 does not reach readiness** on this host under the debug daemon (`LZ-SESSION-START-FAILED`, "provider session did not become ready", twice, trust approved within seconds the second time). The 2026-10-17 live gates used 2.1.312.
 4. **Trust events are spelled `native-trust.*`** while the RPC family is `native.trust.*`; the contract index lists neither for the desktop's re-read table.
-5. **Codex attach argv on 0.165.0-alpha.1.2.** `session.terminal.attach` launches `codex resume <thread>`; this build refuses it without a background server and asks for `--no-daemon` ("including resume or fork and its arguments"). The 2026-10-17 attach evidence was on 0.153.4.
-6. **Schema is 20 on `main`.** The contract index still says 15 to 19 in places; the desktop reads whatever the daemon reports.
+5. **Codex attach argv on 0.165.0-alpha.1.2 (fixed in this branch).** `codex resume <thread>` is refused without a background server on this build; the daemon now probes `resume --help` and appends `--no-daemon` only when advertised (fifth run above).
+6. **`lazooctl message fail` can hang past its deadline.** During the gate's `resource-budget` storm, one `message fail` call stayed alive for 21 minutes against a live daemon (`artifacts/core-v1-gate.log`, 03:08 to 03:29); the same script passed alone before and after. The daemon's bounded-wait contract says 600 s at most.
+7. **Schema is 20 on `main`.** The contract index still says 15 to 19 in places; the desktop reads whatever the daemon reports.
 
 ## Desktop changes made from the live run
 
@@ -149,6 +163,10 @@ The rest of the gate was then run as the gate would have (`artifacts/core-v1-gat
 | Locked release build | Built inside the test step by the daemon's acceptance-contract tests (`Finished release profile`) |
 | `task-delegation-graph.ps1 -SkipBuild` alone | Passed every step, stopped at the desktop-diff assertion described above |
 | `scripts/gate.ps1 -AcceptanceOnly -Skip task-delegation-graph` | **GATE PASS: 38 steps**, manifest `artifacts/acceptance/core-v1-gate-manifest.json`; the 38 per-script manifests under `artifacts/acceptance` were regenerated by this run |
+
+### Full gate, second run (after the attach fix and the task-graph check alignment)
+
+`scripts/gate.ps1` on the final tree (`artifacts/core-v1-gate.log`, manifest `artifacts/acceptance/core-v1-gate-manifest.json`): 44 steps; format, clippy, test-host, `cargo test --workspace --locked` (PASS, 302 s), the locked release build, and 43 acceptance scripts PASS, including `task-delegation-graph` with its aligned desktop check. The one FAIL is `resource-budget`: its failure-storm loop's `lazooctl message fail <id>` call never returned (the CLI stayed alive 21 minutes, past every documented wait), which also held the gate's output pipe until the call was killed. Rerun alone on the same binaries right after: **PASS** (`artifacts/acceptance/resource-budget-manifest.json`), as it had at 02:40 in the acceptance-only run. A single uninterrupted all-PASS run was not obtained in this session; the hung CLI call is a backend/CLI finding (7 below).
 
 ## What the owner should look at first
 

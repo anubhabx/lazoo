@@ -1,8 +1,8 @@
 {
-  "status": "PASS",
-  "startedAt": "2026-10-30T21:01:52.4390298Z",
-  "durationMs": 541617,
-  "acceptanceOnly": true,
+  "status": "FAIL",
+  "startedAt": "2026-10-30T21:27:14.5078481Z",
+  "durationMs": 1985598,
+  "acceptanceOnly": false,
   "skipBuild": true,
   "provider": "codex",
   "excluded": [
@@ -15,233 +15,271 @@
   "stoppedAtCargoStep": false,
   "steps": [
     {
+      "step": "format",
+      "command": "cargo fmt --all -- --check",
+      "exitCode": 0,
+      "durationMs": 1499
+    },
+    {
+      "step": "clippy",
+      "command": "cargo clippy --workspace --all-targets --locked -- -D warnings",
+      "exitCode": 0,
+      "durationMs": 1060
+    },
+    {
+      "step": "test-host",
+      "command": "cargo build -p lazoo-session-host -p lazoo-turn-transport-fixture --locked",
+      "exitCode": 0,
+      "durationMs": 363
+    },
+    {
+      "step": "test",
+      "command": "cargo test --workspace --locked",
+      "exitCode": 0,
+      "durationMs": 301809
+    },
+    {
+      "step": "release",
+      "command": "cargo build --workspace --release --locked",
+      "exitCode": 0,
+      "durationMs": 661
+    },
+    {
       "step": "activation-policy",
       "command": "activation-policy.ps1",
       "exitCode": 0,
-      "durationMs": 119643
+      "durationMs": 34299
     },
     {
       "step": "approval-gate",
       "command": "approval-gate.ps1",
       "exitCode": 0,
-      "durationMs": 30273
+      "durationMs": 14957
     },
     {
       "step": "automatic-task-dispatch",
       "command": "automatic-task-dispatch.ps1",
       "exitCode": 0,
-      "durationMs": 6240
+      "durationMs": 5262
     },
     {
       "step": "claude-full-autonomy",
       "command": "claude-full-autonomy.ps1",
       "exitCode": 0,
-      "durationMs": 2514
+      "durationMs": 2655
     },
     {
       "step": "cli-deadlines",
       "command": "cli-deadlines.ps1",
       "exitCode": 0,
-      "durationMs": 10344
+      "durationMs": 6905
     },
     {
       "step": "coalesced-notices",
       "command": "coalesced-notices.ps1",
       "exitCode": 0,
-      "durationMs": 7473
+      "durationMs": 6193
     },
     {
       "step": "collaboration-bus",
       "command": "collaboration-bus.ps1 -SkipBuild",
       "exitCode": 0,
-      "durationMs": 9533
+      "durationMs": 9632
     },
     {
       "step": "collaboration-tools",
       "command": "collaboration-tools.ps1",
       "exitCode": 0,
-      "durationMs": 14326
+      "durationMs": 12587
     },
     {
       "step": "configurable-thresholds",
       "command": "configurable-thresholds.ps1",
       "exitCode": 0,
-      "durationMs": 5712
+      "durationMs": 3363
     },
     {
       "step": "configuration-lifecycle",
       "command": "configuration-lifecycle.ps1 -SkipBuild",
       "exitCode": 0,
-      "durationMs": 8083
+      "durationMs": 8085
     },
     {
       "step": "conversation-delivery",
       "command": "conversation-delivery.ps1 -SkipBuild -Provider codex",
       "exitCode": 0,
-      "durationMs": 25301
+      "durationMs": 25170
     },
     {
       "step": "conversation-rename",
       "command": "conversation-rename.ps1",
       "exitCode": 0,
-      "durationMs": 3900
+      "durationMs": 2653
     },
     {
       "step": "core-scenario",
       "command": "core-scenario.ps1",
       "exitCode": 0,
-      "durationMs": 5202
+      "durationMs": 5137
     },
     {
       "step": "core-services",
       "command": "core-services.ps1 -SkipBuild",
       "exitCode": 0,
-      "durationMs": 1876
+      "durationMs": 1903
     },
     {
       "step": "desktop-inbox",
       "command": "desktop-inbox.ps1",
       "exitCode": 0,
-      "durationMs": 5883
+      "durationMs": 4682
     },
     {
       "step": "employee-roster",
       "command": "employee-roster.ps1 -SkipBuild",
       "exitCode": 0,
-      "durationMs": 11059
+      "durationMs": 11133
     },
     {
       "step": "first-slice",
       "command": "first-slice.ps1 -SkipBuild",
       "exitCode": 0,
-      "durationMs": 10723
+      "durationMs": 10683
     },
     {
       "step": "idle-suspension",
       "command": "idle-suspension.ps1",
       "exitCode": 0,
-      "durationMs": 11906
+      "durationMs": 10480
     },
     {
       "step": "incident-thresholds",
       "command": "incident-thresholds.ps1",
       "exitCode": 0,
-      "durationMs": 4862
+      "durationMs": 4726
     },
     {
       "step": "lead-remediation",
       "command": "lead-remediation.ps1",
       "exitCode": 0,
-      "durationMs": 6907
+      "durationMs": 7170
     },
     {
       "step": "message-arrival",
       "command": "message-arrival.ps1",
       "exitCode": 0,
-      "durationMs": 3224
+      "durationMs": 3247
     },
     {
       "step": "message-priority",
       "command": "message-priority.ps1",
       "exitCode": 0,
-      "durationMs": 5233
+      "durationMs": 5151
     },
     {
       "step": "minimum-incidents",
       "command": "minimum-incidents.ps1",
       "exitCode": 0,
-      "durationMs": 7161
+      "durationMs": 7095
     },
     {
       "step": "native-session-ownership",
       "command": "native-session-ownership.ps1 -SkipBuild -Provider codex",
       "exitCode": 0,
-      "durationMs": 14004
+      "durationMs": 13115
     },
     {
       "step": "opencode-full-autonomy",
       "command": "opencode-full-autonomy.ps1",
       "exitCode": 0,
-      "durationMs": 6089
+      "durationMs": 3923
     },
     {
       "step": "opencode-governed-delivery",
       "command": "opencode-governed-delivery.ps1",
       "exitCode": 0,
-      "durationMs": 52595
+      "durationMs": 41528
     },
     {
       "step": "peer-messaging",
       "command": "peer-messaging.ps1",
       "exitCode": 0,
-      "durationMs": 6097
+      "durationMs": 6146
     },
     {
       "step": "provider-config-discovery",
       "command": "provider-config-discovery.ps1",
       "exitCode": 0,
-      "durationMs": 4052
+      "durationMs": 2818
     },
     {
       "step": "provider-migration-preview",
       "command": "provider-migration-preview.ps1",
       "exitCode": 0,
-      "durationMs": 3513
+      "durationMs": 2437
     },
     {
       "step": "raw-frame-archive",
       "command": "raw-frame-archive.ps1",
       "exitCode": 0,
-      "durationMs": 7241
+      "durationMs": 6253
     },
     {
       "step": "resource-accounting",
       "command": "resource-accounting.ps1",
       "exitCode": 0,
-      "durationMs": 3055
+      "durationMs": 2530
     },
     {
       "step": "resource-budget",
       "command": "resource-budget.ps1 -SkipBuild",
-      "exitCode": 0,
-      "durationMs": 100587
+      "exitCode": -1,
+      "durationMs": 1360047
     },
     {
       "step": "result-delivery",
       "command": "result-delivery.ps1",
       "exitCode": 0,
-      "durationMs": 7514
+      "durationMs": 7737
     },
     {
       "step": "session-terminal-attach",
       "command": "session-terminal-attach.ps1 -SkipBuild",
       "exitCode": 0,
-      "durationMs": 5330
+      "durationMs": 5350
+    },
+    {
+      "step": "task-delegation-graph",
+      "command": "task-delegation-graph.ps1 -SkipBuild",
+      "exitCode": 0,
+      "durationMs": 11697
     },
     {
       "step": "user-notifications",
       "command": "user-notifications.ps1",
       "exitCode": 0,
-      "durationMs": 3730
+      "durationMs": 4068
     },
     {
       "step": "workspace-actions",
       "command": "workspace-actions.ps1",
       "exitCode": 0,
-      "durationMs": 3879
+      "durationMs": 2896
     },
     {
       "step": "workspace-conversation",
       "command": "workspace-conversation.ps1",
       "exitCode": 0,
-      "durationMs": 3293
+      "durationMs": 3345
     },
     {
       "step": "workspace-read-models",
       "command": "workspace-read-models.ps1",
       "exitCode": 0,
-      "durationMs": 3029
+      "durationMs": 2997
     }
   ],
-  "failed": []
+  "failed": [
+    "resource-budget"
+  ]
 }

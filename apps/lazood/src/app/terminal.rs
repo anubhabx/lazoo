@@ -17,6 +17,7 @@ use lazoo_runtime::{
     TerminalCommand, TerminalError, TerminalExitStatus, TerminalSession, TerminalView,
 };
 use serde_json::{Value, json, to_value};
+use std::process::Stdio;
 use tokio::{sync::watch, time::timeout};
 use uuid::Uuid;
 
@@ -871,6 +872,7 @@ impl App {
             ));
         }
         let open = self.attach_command(&session, &params)?;
+        let open = with_native_resume_flags(open, &session.provider).await;
         if let Some(replayed) = self.reserve_attachment(session.id, &open).await? {
             return Ok(super::to_value(SessionTerminalAttachResult {
                 session_id: session.id,
@@ -1154,6 +1156,36 @@ fn clear_failed_stop(state: &mut TerminalState, boot_id: Uuid, id: Uuid, revisio
     {
         key.last = record;
     }
+}
+
+/// Codex builds from 0.160 refuse `codex resume <thread>` without a background server unless
+/// `--no-daemon` is passed, while older builds do not know the flag. The installed CLI's own
+/// `resume --help` decides, so the documented argument shape is only extended where it must be.
+async fn with_native_resume_flags(
+    mut open: TerminalOpenParams,
+    provider: &str,
+) -> TerminalOpenParams {
+    if provider != "codex" || open.args.first().map(String::as_str) != Some("resume") {
+        return open;
+    }
+    let probe = timeout(
+        Duration::from_secs(5),
+        tokio::process::Command::new(&open.executable)
+            .args(["resume", "--help"])
+            .stdin(Stdio::null())
+            .output(),
+    )
+    .await;
+    let advertises_no_daemon = matches!(
+        &probe,
+        Ok(Ok(output))
+            if String::from_utf8_lossy(&output.stdout).contains("--no-daemon")
+                || String::from_utf8_lossy(&output.stderr).contains("--no-daemon")
+    );
+    if advertises_no_daemon {
+        open.args.push("--no-daemon".to_owned());
+    }
+    open
 }
 
 #[cfg(test)]

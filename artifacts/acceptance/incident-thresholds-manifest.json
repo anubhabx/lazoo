@@ -2,53 +2,53 @@
   "status": "PASS",
   "schemaVersion": 20,
   "mode": "deterministic-fake-transport",
-  "startedAt": "2026-10-30T21:06:42.9806322Z",
-  "durationMs": 4438,
+  "startedAt": "2026-10-30T21:35:16.1287223Z",
+  "durationMs": 4320,
   "commands": [
     {
       "command": "cargo test -p lazoo-domain --test incident section_fourteen_two_thresholds_promote_stalls_crashes_and_deaths_at_once --locked -- --exact",
       "exitCode": 0,
-      "durationMs": 287
+      "durationMs": 270
     },
     {
       "command": "cargo test -p lazoo-domain --test incident threshold_window_promotes_three_equivalent_failures_inside_five_minutes --locked -- --exact",
       "exitCode": 0,
-      "durationMs": 254
+      "durationMs": 253
     },
     {
       "command": "cargo test -p lazoo-store --test incident stalls_and_crashes_promote_at_once_and_a_second_unexpected_exit_promotes --locked -- --exact",
       "exitCode": 0,
-      "durationMs": 534
+      "durationMs": 495
     },
     {
       "command": "cargo test -p lazoo-store --test incident equivalent_failures_fold_escalate_at_the_threshold_and_replay_without_writes --locked -- --exact",
       "exitCode": 0,
-      "durationMs": 467
+      "durationMs": 458
     },
     {
       "command": "cargo test -p lazoo-store --test delivery a_stall_or_a_death_under_assigned_work_opens_the_lead_window_on_its_first_occurrence --locked -- --exact",
       "exitCode": 0,
-      "durationMs": 514
+      "durationMs": 490
     },
     {
       "command": "cargo test -p lazood --test daemon restart_owner_loss_and_emergency_spool_fold_into_startup_incidents_once --locked -- --exact",
       "exitCode": 0,
-      "durationMs": 608
+      "durationMs": 606
     },
     {
       "command": "cargo test -p lazood --test daemon an_unremedied_window_reaches_the_user_on_the_sweep_and_nothing_else_changes --locked -- --exact",
       "exitCode": 0,
-      "durationMs": 706
+      "durationMs": 685
     },
     {
       "command": "cargo test -p lazoo-store --test delivery a_promoted_child_incident_gives_the_lead_two_remedies_inside_its_window --locked -- --exact",
       "exitCode": 0,
-      "durationMs": 511
+      "durationMs": 513
     },
     {
       "command": "cargo test -p lazoo-store --test store store_enables_wal_foreign_keys_and_schema_version --locked -- --exact",
       "exitCode": 0,
-      "durationMs": 455
+      "durationMs": 454
     },
     {
       "command": "git diff --quiet and git diff --cached --quiet -- apps/lazoo-desktop",
