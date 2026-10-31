@@ -35,7 +35,7 @@ Tech stack: Rust/Tokio/SQLite/Windows DPAPI, existing ACP/MCP bridges, React/Tau
 
 ## 5. Final verification and stacked PR
 - [x] Review full implementation for account leaks, continuation mistakes, authority regression.
-- [ ] Run format, targeted/workspace tests, strict lint, build and relevant acceptance scripts.
-- [ ] Update source-backed provider matrix, benchmark and limitations in verification/handoff docs.
+- [x] Run format, targeted/workspace tests, strict lint, build and relevant acceptance scripts.
+- [x] Update source-backed provider matrix, benchmark and limitations in verification/handoff docs.
 - [x] Fetch PR state; rebase on Claude's completed PR if first, otherwise stack on current pilot.
 - [ ] Push feature branch, raise PR with exact evidence and remaining live-acceptance limitations.

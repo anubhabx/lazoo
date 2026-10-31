@@ -25,9 +25,25 @@ failure; start a new session to select another eligible account.
   and empty-state controls were visible without overlap. This was a browser inspection,
   not evidence of a real authenticated account or native Tauri terminal interaction.
   [Inspected screenshot](../artifacts/accounts-settings.png).
-- Rust formatting and strict workspace/all-target Clippy passed.
-- The complete workspace/build/acceptance gate is being run; final results are recorded
-  below before publication.
+- The complete repository gate passed **44 steps** on implementation commit `04ee33c`:
+  formatting, strict workspace/all-target Clippy, test-fixture build, the entire workspace
+  test suite, locked release build, and all 39 default acceptance scripts. The run took
+  23.36 minutes. [Gate manifest](../artifacts/acceptance/copilot-accounts-gate.json).
+- The gate's default exclusions remain the paid/live provider adapters/lifecycle/OpenCode
+  checks, desktop-shell, and desktop-budget. The separate Copilot live acceptance is recorded
+  below; native desktop interaction and desktop resource-budget acceptance are not claimed.
+
+The gate ran with one Cargo build job, two test threads, incremental compilation disabled,
+and dev/test debug symbols disabled to fit the available disk. Release settings were unchanged:
+
+```powershell
+$env:CARGO_BUILD_JOBS='1'
+$env:CARGO_PROFILE_DEV_DEBUG='0'
+$env:CARGO_PROFILE_TEST_DEBUG='0'
+$env:CARGO_INCREMENTAL='0'
+$env:RUST_TEST_THREADS='2'
+pwsh -NoProfile -File scripts/gate.ps1 -OutputPath artifacts/acceptance/copilot-accounts-gate.json
+```
 
 The deterministic account tests exercise revision fencing, DPAPI/redacted transport,
 balanced concurrent selection, profile isolation, restart affinity, disabled/tombstoned
@@ -56,7 +72,9 @@ not live MCP tool invocation, native resume, or a pool of multiple Copilot ident
 ## Local proxy overhead
 
 `measure_loopback_routing_overhead` used five warm-up requests and 30 measured samples
-against the same local fixture upstream, directly and through the session proxy.
+against the same local fixture upstream, directly and through the session proxy, in an
+unoptimized test build. It reuses an established proxy; session startup and remote TLS/model
+generation are excluded.
 
 | Path | Median | p95 |
 | --- | ---: | ---: |

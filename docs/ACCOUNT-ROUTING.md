@@ -143,9 +143,10 @@ disk so removing an account does not delete provider history.
 
 Native session selection adds a local database transaction and private environment
 setup, without an additional network hop. The API pool adds a loopback HTTP hop,
-credential decryption, and a small metrics transaction. The same upstream request and
-streamed bytes are preserved. This is an availability/capacity feature; it cannot
+credential decryption, and a small metrics transaction. Request bodies and streamed
+response bytes are preserved. This is an availability/capacity feature; it cannot
 increase an individual subscription's quota or make model generation faster.
+Keys that share an upstream quota still share it after pooling.
 
 Moving fresh sessions across accounts can reduce prompt-cache reuse, increasing
 input usage and first-token latency. Keeping accepted sessions pinned avoids repeated
