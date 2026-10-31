@@ -1,7 +1,7 @@
 # Copilot and account routing verification
 
 Date: 2026-11-01 (Asia/Calcutta). Branch: `codex/copilot-account-routing`.
-Stack base: `feat/desktop-ui-refresh` at `dc89861`, PR #41; that PR is based on #40.
+Stack base: `feat/desktop-ui-refresh` at `9f84d80`, PR #41; that PR is based on #40.
 
 ## Scope
 
@@ -29,6 +29,11 @@ failure; start a new session to select another eligible account.
   formatting, strict workspace/all-target Clippy, test-fixture build, the entire workspace
   test suite, locked release build, and all 39 default acceptance scripts. The run took
   23.36 minutes. [Gate manifest](../artifacts/acceptance/copilot-accounts-gate.json).
+- The implementation was then cleanly rebased as `89d7905` onto the UI's additional
+  desktop-acceptance commit `9f84d80`. Comparing the trees confirmed identical product
+  source and default-gate scripts; the upstream change affects only the excluded desktop
+  acceptance script, its evidence and documentation. All six desktop configuration tests
+  that inspect that script were rerun successfully, and PowerShell parsing passed.
 - The gate's default exclusions remain the paid/live provider adapters/lifecycle/OpenCode
   checks, desktop-shell, and desktop-budget. The separate Copilot live acceptance is recorded
   below; native desktop interaction and desktop resource-budget acceptance are not claimed.
