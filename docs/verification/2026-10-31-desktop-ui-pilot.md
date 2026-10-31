@@ -27,7 +27,7 @@ Deliberate deviation from the design system: body type is 13 px / 18 px (metadat
 | `cargo test -p lazoo-desktop` | PASS: 23 unit tests (allowlist refusals, deadlines, frame shapes, base64, response parsing) and 6 configuration tests |
 | `cargo clippy -p lazoo-desktop --all-targets -- -D warnings`, `cargo fmt --check` | PASS (reported by the Rust implementer on the final sources) |
 | `scripts/acceptance/desktop-shell.ps1 -Configuration debug -SkipBuild` | See the "Acceptance run" section below |
-| Full `scripts/gate.ps1` | See the "Full gate" section below: format, clippy, 679 workspace tests, locked release build, and 38 acceptance scripts PASS; the one remaining step is a backend-slice invariant that is false on any UI branch by construction |
+| Full `scripts/gate.ps1` | **PASS, 44 steps in one run** on the final tree (see "Full gate, third run"); the two earlier runs and what they surfaced are kept below |
 
 The debug binaries were built with `CARGO_BUILD_JOBS=2`; the gate ran with `CARGO_BUILD_JOBS=2` and `RUST_TEST_THREADS=2` once the host had 5 GB free.
 
@@ -168,6 +168,10 @@ The rest of the gate was then run as the gate would have (`artifacts/core-v1-gat
 ### Full gate, second run (after the attach fix and the task-graph check alignment)
 
 `scripts/gate.ps1` on the final tree (`artifacts/core-v1-gate.log`, manifest `artifacts/acceptance/core-v1-gate-manifest.json`): 44 steps; format, clippy, test-host, `cargo test --workspace --locked` (PASS, 302 s), the locked release build, and 43 acceptance scripts PASS, including `task-delegation-graph` with its aligned desktop check. The one FAIL is `resource-budget`: its failure-storm loop's `lazooctl message fail <id>` call never returned (the CLI stayed alive 21 minutes, past every documented wait), which also held the gate's output pipe until the call was killed. Rerun alone on the same binaries right after: **PASS** (`artifacts/acceptance/resource-budget-manifest.json`), as it had at 02:40 in the acceptance-only run. A single uninterrupted all-PASS run was not obtained in this session; the hung CLI call is a backend/CLI finding (7 below).
+
+### Full gate, third run: PASS
+
+`scripts/gate.ps1` on the final tree (`c2e433d`, with the history keys): **GATE PASS: 44 steps** in one uninterrupted run (format, clippy, test-host, `cargo test --workspace --locked`, the locked release build, and all 39 acceptance scripts including `resource-budget` and `task-delegation-graph`). Manifest: `artifacts/acceptance/core-v1-gate-manifest.json`; transcript kept locally as `artifacts/core-v1-gate.log`. The earlier `resource-budget` hang did not recur.
 
 ## What the owner should look at first
 

@@ -2,28 +2,28 @@
   "status": "PASS",
   "schemaVersion": 20,
   "mode": "deterministic-fake-transport",
-  "startedAt": "2026-10-30T21:35:56.6559854Z",
-  "durationMs": 3497,
+  "startedAt": "2026-10-31T06:40:21.4822203Z",
+  "durationMs": 3508,
   "commands": [
     {
       "command": "cargo test -p lazood --test daemon opencode_delivers_turns_and_tasks_under_governed_authority --locked -- --exact",
       "exitCode": 0,
-      "durationMs": 1008
+      "durationMs": 998
     },
     {
       "command": "cargo test -p lazood --test daemon a_full_autonomy_opencode_employee_serves_a_narrower_delegated_task --locked -- --exact",
       "exitCode": 0,
-      "durationMs": 727
+      "durationMs": 744
     },
     {
       "command": "cargo test -p lazoo-providers --test opencode opencode_launch_is_prompt_free_only_under_full_autonomy --locked -- --exact",
       "exitCode": 0,
-      "durationMs": 618
+      "durationMs": 623
     },
     {
       "command": "cargo test -p lazood --test daemon task_turn_rejects_a_provider_without_authority_override_support_before_io --locked -- --exact",
       "exitCode": 0,
-      "durationMs": 586
+      "durationMs": 589
     },
     {
       "command": "cargo test -p lazoo-store --test store store_enables_wal_foreign_keys_and_schema_version --locked -- --exact",
