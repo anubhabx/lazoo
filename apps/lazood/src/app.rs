@@ -1102,17 +1102,17 @@ impl App {
         let session = match self.session_backend.start(provider, &session_request).await {
             Ok(session) => session,
             Err(error) => {
-                // The provider's own words reach the session record, the incident and the UI.
-                let message = format!("provider session did not become ready: {error}");
+                // Provider diagnostics stay out of the RPC error and the ledger; the log keeps them.
+                tracing::warn!(%error, %session_id, "provider session start failed");
                 self.record_session_failure(
                     session_id,
                     starting.session.revision,
                     "LZ-SESSION-START-FAILED",
-                    &message,
+                    "provider session did not become ready",
                 )?;
                 return Err(session_failure(
                     "LZ-SESSION-START-FAILED",
-                    &message,
+                    "provider session did not become ready",
                     session_id,
                 ));
             }
