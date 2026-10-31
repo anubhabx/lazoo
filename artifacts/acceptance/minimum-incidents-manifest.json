@@ -2,18 +2,18 @@
   "status": "PASS",
   "schemaVersion": 20,
   "mode": "deterministic-fake-transport",
-  "startedAt": "2026-10-31T06:40:00.5968991Z",
-  "durationMs": 6480,
+  "startedAt": "2026-10-31T09:09:27.0696373Z",
+  "durationMs": 6982,
   "commands": [
     {
       "command": "cargo test -p lazoo-domain --test incident known_codes_describe_the_situation_and_the_next_safe_action --locked -- --exact",
       "exitCode": 0,
-      "durationMs": 266
+      "durationMs": 258
     },
     {
       "command": "cargo test -p lazoo-domain --test incident threshold_window_promotes_three_equivalent_failures_inside_five_minutes --locked -- --exact",
       "exitCode": 0,
-      "durationMs": 253
+      "durationMs": 265
     },
     {
       "command": "cargo test -p lazoo-store --test incident equivalent_failures_fold_escalate_at_the_threshold_and_replay_without_writes --locked -- --exact",
@@ -23,52 +23,52 @@
     {
       "command": "cargo test -p lazoo-store --test incident acknowledge_and_resolve_are_revisioned_idempotent_and_recurrence_reopens_until_resolved --locked -- --exact",
       "exitCode": 0,
-      "durationMs": 477
+      "durationMs": 487
     },
     {
       "command": "cargo test -p lazoo-store --test incident emergency_spool_records_fold_into_keeper_incidents_exactly_once --locked -- --exact",
       "exitCode": 0,
-      "durationMs": 455
+      "durationMs": 481
     },
     {
       "command": "cargo test -p lazood --test daemon session_start_failure_raises_a_human_readable_incident --locked -- --exact",
       "exitCode": 0,
-      "durationMs": 612
+      "durationMs": 869
     },
     {
       "command": "cargo test -p lazood --test daemon provider_turn_failures_fold_into_one_incident_escalate_and_settle_through_rpc --locked -- --exact",
       "exitCode": 0,
-      "durationMs": 735
+      "durationMs": 752
     },
     {
       "command": "cargo test -p lazood --test daemon dead_letters_and_dispatch_failures_raise_incidents_with_their_scope --locked -- --exact",
       "exitCode": 0,
-      "durationMs": 788
+      "durationMs": 971
     },
     {
       "command": "cargo test -p lazood --test daemon restart_owner_loss_and_emergency_spool_fold_into_startup_incidents_once --locked -- --exact",
       "exitCode": 0,
-      "durationMs": 642
+      "durationMs": 701
     },
     {
       "command": "cargo test -p lazood --test daemon incident_tools_report_and_list_within_the_caller_scope --locked -- --exact",
       "exitCode": 0,
-      "durationMs": 633
+      "durationMs": 619
     },
     {
       "command": "cargo test -p lazooctl --test cli incident_cli_maps_list_show_acknowledge_and_resolve --locked -- --exact",
       "exitCode": 0,
-      "durationMs": 324
+      "durationMs": 317
     },
     {
       "command": "cargo test -p lazooctl --test cli incident_errors_use_exit_code_fifteen --locked -- --exact",
       "exitCode": 0,
-      "durationMs": 305
+      "durationMs": 275
     },
     {
       "command": "cargo test -p lazoo-store --test store store_enables_wal_foreign_keys_and_schema_version --locked -- --exact",
       "exitCode": 0,
-      "durationMs": 440
+      "durationMs": 432
     },
     {
       "command": "git diff --quiet and git diff --cached --quiet -- apps/lazoo-desktop",

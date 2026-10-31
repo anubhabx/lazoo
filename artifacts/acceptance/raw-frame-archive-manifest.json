@@ -2,48 +2,48 @@
   "status": "PASS",
   "schemaVersion": 20,
   "mode": "deterministic-fake-transport",
-  "startedAt": "2026-10-31T06:41:20.8036558Z",
-  "durationMs": 6634,
+  "startedAt": "2026-10-31T09:11:01.5229771Z",
+  "durationMs": 6098,
   "commands": [
     {
       "command": "cargo test -p lazoo-store --test memory raw_frame_archive_is_hashed_capped_and_counted_against_quota --locked -- --exact",
       "exitCode": 0,
-      "durationMs": 803
+      "durationMs": 792
     },
     {
       "command": "cargo test -p lazoo-store --test memory raw_frame_archive_respects_retention_opt_out --locked -- --exact",
       "exitCode": 0,
-      "durationMs": 585
+      "durationMs": 443
     },
     {
       "command": "cargo test -p lazoo-store --test memory raw_frames_and_canonical_archive_coexist_and_cleanup_removes_both --locked -- --exact",
       "exitCode": 0,
-      "durationMs": 609
+      "durationMs": 535
     },
     {
       "command": "cargo test -p lazoo-store --test store version_eighteen_archives_upgrade_as_canonical_turn_archives --locked -- --exact",
       "exitCode": 0,
-      "durationMs": 1814
+      "durationMs": 1668
     },
     {
       "command": "cargo test -p lazood --test daemon completed_turn_archives_redacted_raw_provider_frames --locked -- --exact",
       "exitCode": 0,
-      "durationMs": 744
+      "durationMs": 771
     },
     {
       "command": "cargo test -p lazood --test daemon raw_frame_capture_is_skipped_when_retention_is_disabled --locked -- --exact",
       "exitCode": 0,
-      "durationMs": 645
+      "durationMs": 661
     },
     {
       "command": "cargo test -p lazood --test daemon raw_frame_capture_is_bounded_by_the_policy_cap --locked -- --exact",
       "exitCode": 0,
-      "durationMs": 729
+      "durationMs": 667
     },
     {
       "command": "cargo test -p lazoo-store --test store store_enables_wal_foreign_keys_and_schema_version --locked -- --exact",
       "exitCode": 0,
-      "durationMs": 594
+      "durationMs": 464
     },
     {
       "command": "git diff --quiet and git diff --cached --quiet -- apps/lazoo-desktop",

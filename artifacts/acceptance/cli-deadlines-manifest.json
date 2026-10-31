@@ -2,23 +2,23 @@
   "status": "PASS",
   "schemaVersion": 20,
   "mode": "deterministic-fake-transport",
-  "startedAt": "2026-10-31T06:37:40.9814249Z",
-  "durationMs": 6519,
+  "startedAt": "2026-10-31T09:07:04.0687167Z",
+  "durationMs": 6507,
   "commands": [
     {
       "command": "cargo test -p lazooctl --lib tests::stalled_daemon_response_times_out_cleanly --locked -- --exact",
       "exitCode": 0,
-      "durationMs": 698
+      "durationMs": 670
     },
     {
       "command": "cargo test -p lazooctl --lib tests::response_timeout_tiers_read_only_queries_short_and_everything_else_long --locked -- --exact",
       "exitCode": 0,
-      "durationMs": 337
+      "durationMs": 357
     },
     {
       "command": "cargo test -p lazoo-runtime --test governor initialization_lock_held_elsewhere_times_out_in_child_helper --locked -- --exact",
       "exitCode": 0,
-      "durationMs": 5394
+      "durationMs": 5395
     },
     {
       "command": "git diff --quiet and git diff --cached --quiet -- apps/lazoo-desktop",

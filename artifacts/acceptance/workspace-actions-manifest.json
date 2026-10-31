@@ -2,13 +2,13 @@
   "status": "PASS",
   "schemaVersion": 20,
   "mode": "deterministic-fake-transport",
-  "startedAt": "2026-10-31T06:43:41.8204553Z",
-  "durationMs": 2603,
+  "startedAt": "2026-10-31T09:13:20.2251763Z",
+  "durationMs": 2778,
   "commands": [
     {
       "command": "cargo test -p lazoo-domain --test workspace cards_and_the_header_offer_only_the_actions_their_rows_allow --locked -- --exact",
       "exitCode": 0,
-      "durationMs": 388
+      "durationMs": 372
     },
     {
       "command": "cargo test -p lazood --test daemon the_user_acts_through_the_actions_the_header_and_cards_name --locked -- --exact",
@@ -18,12 +18,12 @@
     {
       "command": "cargo test -p lazood --test daemon the_user_opens_the_conversation_header_and_worker_dock_through_the_daemon --locked -- --exact",
       "exitCode": 0,
-      "durationMs": 833
+      "durationMs": 1000
     },
     {
       "command": "cargo test -p lazoo-store --test store store_enables_wal_foreign_keys_and_schema_version --locked -- --exact",
       "exitCode": 0,
-      "durationMs": 494
+      "durationMs": 515
     },
     {
       "command": "git diff --quiet and git diff --cached --quiet -- apps/lazoo-desktop",
