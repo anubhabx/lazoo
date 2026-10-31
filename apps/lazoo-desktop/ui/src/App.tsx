@@ -28,7 +28,13 @@ export function App({ store, bridge }: { store: Store; bridge: Bridge }) {
 
   useEffect(() => {
     void store.init();
+    // Warm the terminal renderer after the launcher has settled.
+    const warmTimer = setTimeout(() => {
+      if (typeof requestIdleCallback === "function")
+        requestIdleCallback(() => terminals.prewarm(), { timeout: 2000 });
+    }, 1500);
     return () => {
+      clearTimeout(warmTimer);
       store.dispose();
       terminals.dispose();
     };

@@ -93,6 +93,7 @@ export class TerminalManager {
   private readonly listeners = new Set<() => void>();
   private version = 0;
   private keys = readStorage<Record<string, string>>(KEYS, {});
+  private warm: { terminal: Terminal; host: HTMLElement } | null = null;
 
   constructor(
     private readonly bridge: Bridge,
@@ -167,9 +168,37 @@ export class TerminalManager {
       if (element.parentElement !== container) container.appendChild(element);
     } else {
       entry.terminal.open(container);
-      this.loadWebgl(entry);
+      // The DOM renderer paints at once; WebGL attaches when the open settles,
+      // so creating its context never blocks the page transition.
+      whenIdle(() => {
+        if (this.entries.get(sessionId) === entry) this.loadWebgl(entry);
+      });
     }
     this.fitSoon(entry);
+  }
+
+  /**
+   * Draw xterm's WebGL glyph atlas once while the app is idle. Every terminal
+   * with the same options shares it, and it lives while any owner does, so a
+   * hidden terminal keeps it warm and the first conversation opens without
+   * the ~200 ms first-draw stall.
+   */
+  prewarm() {
+    if (this.warm || typeof document === "undefined") return;
+    const host = document.createElement("div");
+    host.setAttribute("aria-hidden", "true");
+    host.style.cssText =
+      "position:fixed;left:-10000px;top:0;width:240px;height:64px;pointer-events:none;";
+    document.body.appendChild(host);
+    const terminal = this.factory();
+    try {
+      terminal.open(host);
+      terminal.loadAddon(new WebglAddon());
+      terminal.write("lazoo");
+    } catch {
+      // Without WebGL there is nothing to warm.
+    }
+    this.warm = { terminal, host };
   }
 
   private loadWebgl(entry: TerminalEntry) {
@@ -523,5 +552,17 @@ export class TerminalManager {
   dispose() {
     for (const sessionId of [...this.entries.keys()])
       void this.release(sessionId);
+    this.warm?.terminal.dispose();
+    this.warm?.host.remove();
+    this.warm = null;
+  }
+}
+
+/** Run once the main thread is idle (or after 500 ms at the latest). */
+export function whenIdle(task: () => void) {
+  if (typeof requestIdleCallback === "function") {
+    requestIdleCallback(() => task(), { timeout: 500 });
+  } else {
+    setTimeout(task, 0);
   }
 }

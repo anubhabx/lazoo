@@ -107,6 +107,8 @@ Safety defaults: no agent gets a full-autonomy ceiling; the reviewer and researc
 | Toasts, dialogs, palette | Spring in with a slight scale; overlays blur what is behind them |
 | Inputs | Focus ring is a soft iris glow, not an outline |
 
+Performance rules that keep this smooth (measured in the verification record, "Smoothness"): only opacity and transform animate; no backdrop filter or mask sits on anything that repaints continuously (blur is limited to the palette and dialogs); xterm's WebGL glyph atlas is drawn once at launch idle on a hidden terminal and shared, and each terminal's WebGL renderer attaches after its DOM renderer has painted, so opening a conversation never waits on either. To profile production React against the scripted daemon: `vite build --mode mock`, then `vite preview` with `?mock=1`; a normal production build contains no mock.
+
 Reduced motion (the Windows "Show animations" setting) removes the breathing, shimmer, glow drift, spinners, and press scale; layout stays understandable without motion.
 
 ## 7. Store changes

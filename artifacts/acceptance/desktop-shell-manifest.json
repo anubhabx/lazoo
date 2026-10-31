@@ -1,29 +1,29 @@
 {
   "schemaVersion": 1,
   "status": "PASS",
-  "startedAt": "2026-10-31T20:27:54.6214766Z",
-  "completedAt": "2026-10-31T20:28:09.1862419Z",
-  "durationMs": 14561,
+  "startedAt": "2026-10-31T20:51:38.0995920Z",
+  "completedAt": "2026-10-31T20:51:54.9000950Z",
+  "durationMs": 16797,
   "platform": "Microsoft Windows NT 10.0.26200.0",
   "rustcVersion": "rustc 1.98.0 (88d9e12ae 2026-08-18)",
   "cargoVersion": "cargo 1.98.0 (797e8a9bc 2026-08-05)",
   "repositoryRoot": "C:\\workspace\\Orchestrator-ui-refresh",
-  "isolatedDataRoot": "C:\\Users\\anubhab\\AppData\\Local\\Temp\\lazoo-desktop-acceptance-e30c862ed3214c67a2df5aa339c5c2a2\\data",
-  "temporaryProject": "C:\\Users\\anubhab\\AppData\\Local\\Temp\\lazoo-desktop-acceptance-e30c862ed3214c67a2df5aa339c5c2a2\\repository",
+  "isolatedDataRoot": "C:\\Users\\anubhab\\AppData\\Local\\Temp\\lazoo-desktop-acceptance-dbd94d0941bc4f2f908641ff374e6b41\\data",
+  "temporaryProject": "C:\\Users\\anubhab\\AppData\\Local\\Temp\\lazoo-desktop-acceptance-dbd94d0941bc4f2f908641ff374e6b41\\repository",
   "environment": {
     "windowsTextScalePercent": 100
   },
   "artifacts": {
     "manifest": "C:\\workspace\\Orchestrator-ui-refresh\\artifacts\\acceptance\\desktop-shell-manifest.json",
-    "runRoot": "C:\\Users\\anubhab\\AppData\\Local\\Temp\\lazoo-desktop-acceptance-e30c862ed3214c67a2df5aa339c5c2a2",
-    "defaultScreenshot": "C:\\Users\\anubhab\\AppData\\Local\\Temp\\lazoo-desktop-acceptance-e30c862ed3214c67a2df5aa339c5c2a2\\desktop-default.png",
-    "narrowScreenshot": "C:\\Users\\anubhab\\AppData\\Local\\Temp\\lazoo-desktop-acceptance-e30c862ed3214c67a2df5aa339c5c2a2\\desktop-narrow.png",
-    "commandPaletteScreenshot": "C:\\Users\\anubhab\\AppData\\Local\\Temp\\lazoo-desktop-acceptance-e30c862ed3214c67a2df5aa339c5c2a2\\desktop-command-palette.png",
-    "settingsScreenshot": "C:\\Users\\anubhab\\AppData\\Local\\Temp\\lazoo-desktop-acceptance-e30c862ed3214c67a2df5aa339c5c2a2\\desktop-settings.png",
+    "runRoot": "C:\\Users\\anubhab\\AppData\\Local\\Temp\\lazoo-desktop-acceptance-dbd94d0941bc4f2f908641ff374e6b41",
+    "defaultScreenshot": "C:\\Users\\anubhab\\AppData\\Local\\Temp\\lazoo-desktop-acceptance-dbd94d0941bc4f2f908641ff374e6b41\\desktop-default.png",
+    "narrowScreenshot": "C:\\Users\\anubhab\\AppData\\Local\\Temp\\lazoo-desktop-acceptance-dbd94d0941bc4f2f908641ff374e6b41\\desktop-narrow.png",
+    "commandPaletteScreenshot": "C:\\Users\\anubhab\\AppData\\Local\\Temp\\lazoo-desktop-acceptance-dbd94d0941bc4f2f908641ff374e6b41\\desktop-command-palette.png",
+    "settingsScreenshot": "C:\\Users\\anubhab\\AppData\\Local\\Temp\\lazoo-desktop-acceptance-dbd94d0941bc4f2f908641ff374e6b41\\desktop-settings.png",
     "highDpiScreenshot": null,
     "runtimeAssets": [
-      "C:\\workspace\\Orchestrator-ui-refresh\\apps\\lazoo-desktop\\ui\\dist\\assets\\index-3R2q0L3G.js",
-      "C:\\workspace\\Orchestrator-ui-refresh\\apps\\lazoo-desktop\\ui\\dist\\assets\\index-BBTzCmRH.css",
+      "C:\\workspace\\Orchestrator-ui-refresh\\apps\\lazoo-desktop\\ui\\dist\\assets\\index-BrwBlpen.js",
+      "C:\\workspace\\Orchestrator-ui-refresh\\apps\\lazoo-desktop\\ui\\dist\\assets\\index-CYcouI9X.css",
       "C:\\workspace\\Orchestrator-ui-refresh\\apps\\lazoo-desktop\\ui\\dist\\assets\\inter-latin-wght-normal-Dx4kXJAl.woff2",
       "C:\\workspace\\Orchestrator-ui-refresh\\apps\\lazoo-desktop\\ui\\dist\\assets\\ibm-plex-mono-latin-400-normal-DMJ8VG8y.woff2",
       "C:\\workspace\\Orchestrator-ui-refresh\\apps\\lazoo-desktop\\ui\\dist\\assets\\ibm-plex-mono-latin-500-normal-DSY6xOcd.woff2"
@@ -42,12 +42,12 @@
     {
       "command": "lazooctl --json status",
       "exitCode": 0,
-      "durationMs": 198
+      "durationMs": 460
     },
     {
-      "command": "lazooctl --json project register C:\\Users\\anubhab\\AppData\\Local\\Temp\\lazoo-desktop-acceptance-e30c862ed3214c67a2df5aa339c5c2a2\\repository --name Desktop acceptance --idempotency-key desktop-e30c862ed3214c67a2df5aa339c5c2a2",
+      "command": "lazooctl --json project register C:\\Users\\anubhab\\AppData\\Local\\Temp\\lazoo-desktop-acceptance-dbd94d0941bc4f2f908641ff374e6b41\\repository --name Desktop acceptance --idempotency-key desktop-dbd94d0941bc4f2f908641ff374e6b41",
       "exitCode": 0,
-      "durationMs": 91
+      "durationMs": 99
     },
     {
       "command": "lazooctl --json system shutdown",

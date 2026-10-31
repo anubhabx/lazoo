@@ -20,7 +20,10 @@ if (!root) throw new Error("Lazoo desktop root is missing");
 
 const bridge = runtimeAvailable()
   ? createTauriBridge()
-  : import.meta.env.DEV && window.location.search.includes("mock")
+  : // The scripted daemon: `vite dev`, or a `--mode mock` build for profiling
+    // production React. A normal production build drops it.
+    (import.meta.env.DEV || import.meta.env.MODE === "mock") &&
+      window.location.search.includes("mock")
     ? (await import("./lib/devBridge")).createDevBridge()
     : createOfflineBridge();
 const store = new Store(bridge);

@@ -407,13 +407,6 @@ kbd,
   overflow-y: auto;
   overflow-x: hidden;
   padding: 0 8px 12px;
-  mask-image: linear-gradient(
-    to bottom,
-    transparent 0,
-    #000 10px,
-    #000 calc(100% - 16px),
-    transparent 100%
-  );
 }
 
 .rail-section {
@@ -1544,8 +1537,8 @@ kbd,
   padding: 0 4px 0 10px;
   border: 1px solid var(--lz-color-border);
   border-radius: var(--lz-radius-full);
-  background: rgb(38 45 56 / 80%);
-  backdrop-filter: blur(8px);
+  /* Solid, not blurred: a backdrop filter over the terminal costs GPU every frame. */
+  background: var(--lz-slate-250);
   color: var(--lz-color-text-muted);
   font-size: var(--text-micro);
   white-space: nowrap;

@@ -46,3 +46,23 @@ The host disk sat between 0 and 1.4 GB free while another worktree built. Headro
 Three runs failed before the pass; each was the script, not the app. The first run showed the real dialog being offered on a fresh WebView profile and dismissed through "Not now". Its absence check then waited on "Set up your team", which the launcher's empty-team button also carries; the check now waits for "Not now" to disappear. The second run took the dismiss branch with no dialog open for the same reason; the dialog is now recognised by "Not now" and the check waits for the connection first, because the store decides whether to offer the dialog before it reports the connection. The third run looked for the removed status bar's "schema 20"; it now reads the Daemon page's "Schema" fact. The passing run took the "already offered" branch because the first run had offered the dialog in this profile.
 
 The real window's screenshots (Settings, Daemon at both sizes with "Desktop acceptance" expanded in the sidebar and "Start the first conversation" under it; the command palette with "Set up agents" and "Hide sidebar") match the browser review: slate surfaces, iris focus ring, the gliding selection.
+
+## Smoothness
+
+The acceptance run checks behaviour, not motion, so frame timing was measured separately. Method: the production bundle with React's production build and the scripted daemon (`vite build --mode mock`, served by `vite preview`, `?mock=1`), driven by agent-browser in Chromium at 1280×800 on the host GPU (ANGLE, RTX 3050, D3D11, 120 Hz). A page script records every `requestAnimationFrame` delta and every long animation frame (≥ 50 ms) with its top script, tagged by step. The pass covers a launcher suggestion, two project switches with sidebar expansion, opening a conversation (lead terminal), Transcript and Native, the palette with arrow keys, `Ctrl+B` twice, Settings (Employees, Harnesses), and back to New work.
+
+| Pass | Frames | p50 | p95 | p99 | Worst | Over 50 ms | Long animation frames |
+|---|---|---|---|---|---|---|---|
+| Warm (same session, second pass, every step confirmed) | 2,940 | 8.3 ms | 8.5 ms | 8.6 ms | 33 ms | 0 | 0 |
+| Cold first run (fresh profile, empty GPU shader cache, includes creating the team), after the fixes below | 3,121 | 8.3 ms | 8.5 ms | 8.7 ms | 192 ms | 5 | 4 |
+| Cold first run, before the fixes | 3,122 | 8.3 ms | 8.4 ms | 8.6 ms | 192 ms | 7 | 8 |
+
+What the cold stalls were, from long-animation-frame attribution and a DevTools trace:
+
+- xterm's WebGL addon draws its glyph atlas in one idle task, 190 to 207 ms, the first time any terminal opens in a session. This is CPU work and repeats on every launch. Fixed: `TerminalManager.prewarm()` draws the atlas on a hidden terminal 1.5 s after launch, at idle; terminals with the same options share it, so opening a conversation no longer pays it.
+- Creating each terminal's WebGL renderer ran inside the open itself (61 to 86 ms). Fixed: the DOM renderer paints first and WebGL attaches at the next idle period (`whenIdle`), which brought the open's own task to 26 to 30 ms.
+- The remaining cold frames have little or no script. The trace puts them on Chrome's GPU thread (raster flushes up to 199 ms) and GPU workers (pipeline work up to 190 ms): first-use shader compilation, which WebView2 keeps in its disk cache between launches. The warm pass shows none of them. Two effects that cost GPU work on every frame were removed: the backdrop blur behind the terminal's status pill, and the gradient mask on the sidebar scroller (re-applied while the selection glides). Blur remains only on the palette and dialogs, which are open briefly.
+
+The dev-mode React numbers taken first (slower by design) are not used for conclusions. A one-minute recording of the first-run setup and the pass above was shared with the owner (`lazoo-interactions.webm`, not committed).
+
+After these changes the frontend check (38 tests), the debug desktop build, and the real-window `desktop-shell.ps1` were run again: PASS in 16.8 s with the same gates.
