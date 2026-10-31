@@ -22,6 +22,7 @@ node_modules/
 .lazoo/
 .worktrees/
 .superpowers/
+artifacts/research/
 *.db
 *.db-shm
 *.db-wal
