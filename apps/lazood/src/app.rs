@@ -1,3 +1,5 @@
+mod account_proxy;
+mod accounts;
 mod approval;
 mod configuration;
 mod delivery;
@@ -245,6 +247,7 @@ pub struct App {
     provider_environment: DiscoveryEnvironment,
     session_backend: Arc<dyn SessionBackend>,
     live_sessions: Arc<Mutex<BTreeMap<Uuid, Arc<dyn ManagedSession>>>>,
+    account_routes: Arc<Mutex<BTreeMap<Uuid, account_proxy::AccountProxy>>>,
     live_turns: Arc<Mutex<BTreeMap<Uuid, Arc<LiveTurn>>>>,
     task_dispatch_notify: Arc<Notify>,
     approval_notify: Arc<Notify>,
@@ -341,6 +344,7 @@ impl App {
             provider_environment,
             session_backend,
             live_sessions: Arc::new(Mutex::new(BTreeMap::new())),
+            account_routes: Arc::new(Mutex::new(BTreeMap::new())),
             live_turns: Arc::new(Mutex::new(BTreeMap::new())),
             task_dispatch_notify: Arc::new(Notify::new()),
             approval_notify: Arc::new(Notify::new()),
@@ -412,6 +416,12 @@ impl App {
             "events.list" => self.list_events(request.params),
             "desktop.snapshot" => self.desktop_snapshot(&request.params),
             "provider.list" => self.provider_list(&request.params),
+            "provider.accounts.list" => self.account_list(&request.params),
+            "provider.accounts.put" => self.account_put(request.params),
+            "provider.accounts.remove" => self.account_remove(request.params),
+            "provider.accounts.policy" => self.account_policy_set(request.params),
+            "provider.accounts.login" => self.account_login(request.params).await,
+            "provider.accounts.verify" => self.account_verify(request.params).await,
             "provider.config" => self.provider_config(&request.params),
             "provider.config.preview" => self.provider_config_preview(&request.params),
             "provider.probe" => self.provider_probe(request.params).await,
@@ -685,22 +695,48 @@ impl App {
         let cwd = std::env::current_dir()
             .map_err(ProviderError::from)
             .map_err(provider_error)?;
-        let request = SessionRequest::new(cwd).with_permission_mode("untrusted");
+        let mut request = SessionRequest::new(cwd).with_permission_mode("untrusted");
+        let verification_guard = self
+            .store
+            .provider_account_verification_guard(provider.as_str())
+            .map_err(store_error)?;
+        if let Some(model) = params.model {
+            if model.is_empty() || model.len() > 200 || model.chars().any(char::is_control) {
+                return Err(invalid_params("invalid smoke model"));
+            }
+            request = request.with_model(model);
+        }
+        let account_binding = accounts::SmokeAccountBinding::new(self.store.clone());
+        let _account_route = self
+            .prepare_session_account(account_binding.id, provider, &mut request)
+            .await?;
         let session = self
             .session_backend
             .start(provider, &request)
             .await
             .map_err(provider_error)?;
         let session_id = session.id();
-        let turn = session
-            .turn_observed(&TurnRequest::new(params.prompt), &SmokeObserver)
-            .await;
+        let turn = timeout(
+            Duration::from_secs(60),
+            session.turn_observed(&TurnRequest::new(params.prompt), &SmokeObserver),
+        )
+        .await;
         let stop = session.stop().await;
-        let events = turn.map_err(provider_error)?;
+        let events = turn
+            .map_err(|_| {
+                accounts::account_failure(
+                    "provider verification timed out; request was not replayed",
+                )
+            })?
+            .map_err(provider_error)?;
         stop.map_err(provider_error)?;
-        if smoke_turn_answered(&events) {
-            self.record_verified_observation(provider).await?;
-        }
+        let model_answered = smoke_turn_answered(&events);
+        let route_verified = if model_answered {
+            self.record_verified_observation(provider, &verification_guard)
+                .await?
+        } else {
+            false
+        };
         let (events, transcript_truncated) = concise_events(events);
         Ok(to_value(ProviderSmokeResult {
             provider: provider.to_string(),
@@ -708,6 +744,8 @@ impl App {
             events,
             transcript_truncated,
             checked_at: Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true),
+            model_answered,
+            route_verified,
         }))
     }
 
@@ -722,7 +760,11 @@ impl App {
     /// truthful to record and the smoke result is returned unchanged. Authentication is
     /// `native: ready`, since a model answered through the native channel, and `external` stays
     /// as the base observation reported it, else `unknown`.
-    async fn record_verified_observation(&self, provider: ProviderKind) -> Result<(), RpcError> {
+    async fn record_verified_observation(
+        &self,
+        provider: ProviderKind,
+        guard: &lazoo_store::ProviderAccountVerificationGuard,
+    ) -> Result<bool, RpcError> {
         let fresh = self.observe_provider(provider).await;
         let usable = !matches!(fresh.verification.as_str(), "not-detected" | "degraded");
         let base = if usable {
@@ -740,7 +782,7 @@ impl App {
                 })
         };
         let Some(mut observation) = base else {
-            return Ok(());
+            return Ok(false);
         };
         let external = observation
             .authentication
@@ -751,15 +793,12 @@ impl App {
         "verified".clone_into(&mut observation.verification);
         observation.degradation_reason = None;
         observation.authentication = json!({"native": "ready", "external": external});
-        let key = format!("provider-smoke:{}", Uuid::new_v4());
-        self.store
-            .refresh_provider_observations(&RefreshProviderObservationsInput {
-                request_id: key.clone(),
-                idempotency_key: key,
-                observations: vec![observation],
-            })
+        let recorded = self
+            .store
+            .record_verified_provider_observation(&observation, guard)
             .map_err(store_error)?;
-        self.publish_events()
+        self.publish_events()?;
+        Ok(recorded)
     }
 
     async fn create_employee(&self, request: &JsonRpcRequest) -> Result<Value, RpcError> {
@@ -1092,12 +1131,29 @@ impl App {
                 | ProviderKind::OpenCode
                 | ProviderKind::ClaudeCode
                 | ProviderKind::Antigravity
+                | ProviderKind::GitHubCopilot
         ) {
             session_request = session_request.with_tools(tools::collaboration_tools());
         }
         if let Some(native_session_id) = resume.native_session_id() {
             session_request = session_request.resume(native_session_id);
         }
+
+        let route = self
+            .prepare_session_account(session_id, provider, &mut session_request)
+            .await;
+        let account_proxy = match route {
+            Ok(route) => route,
+            Err(error) => {
+                self.record_session_failure(
+                    session_id,
+                    starting.session.revision,
+                    &error.code,
+                    &error.message,
+                )?;
+                return Err(error);
+            }
+        };
 
         let session = match self.session_backend.start(provider, &session_request).await {
             Ok(session) => session,
@@ -1119,6 +1175,19 @@ impl App {
         };
         let session = Arc::<dyn ManagedSession>::from(session);
         let native_session_id = session.id();
+        if let Err(error) = self
+            .store
+            .bind_provider_native_identity(session_id, &native_session_id)
+        {
+            let _ = timeout(Duration::from_secs(10), session.stop()).await;
+            self.record_session_failure(
+                session_id,
+                starting.session.revision,
+                "LZ-ACCOUNT",
+                "account ownership could not be saved",
+            )?;
+            return Err(accounts::account_error(error));
+        }
         let Some(native_host_pid) = session.native_host_pid() else {
             let _ = timeout(Duration::from_secs(10), session.stop()).await;
             self.record_session_failure(
@@ -1137,6 +1206,9 @@ impl App {
             .lock()
             .await
             .insert(session_id, Arc::clone(&session));
+        if let Some(proxy) = account_proxy {
+            self.account_routes.lock().await.insert(session_id, proxy);
+        }
         let ready = match self.store.mark_session_ready(&MarkSessionReadyInput {
             session_id,
             expected_revision: starting.session.revision,
@@ -1147,6 +1219,7 @@ impl App {
             Ok(ready) => ready,
             Err(error) => {
                 self.live_sessions.lock().await.remove(&session_id);
+                self.account_routes.lock().await.remove(&session_id);
                 let _ = timeout(Duration::from_secs(10), session.stop()).await;
                 let _ = self.record_session_failure(
                     session_id,
@@ -1232,6 +1305,7 @@ impl App {
         let session_id = stopping.session.id;
         self.close_native_view_for_session(session_id).await;
         let session = self.live_sessions.lock().await.remove(&session_id);
+        self.account_routes.lock().await.remove(&session_id);
         let Some(session) = session else {
             self.record_session_failure(
                 session_id,
@@ -1439,6 +1513,7 @@ impl App {
 
     pub async fn shutdown_live_sessions(&self) {
         self.live_turns.lock().await.clear();
+        self.account_routes.lock().await.clear();
         let session_ids = self
             .live_sessions
             .lock()
@@ -1481,14 +1556,16 @@ impl App {
     }
 
     async fn observe_provider(&self, provider: ProviderKind) -> ProviderObservation {
-        match self
+        let mut observation = match self
             .providers
             .probe(provider, &self.provider_environment)
             .await
         {
             Ok(probe) => observation_from_probe(probe),
             Err(error) => observation_from_error(provider, &error),
-        }
+        };
+        self.overlay_account_observation(&mut observation);
+        observation
     }
 
     fn publish_events(&self) -> Result<(), RpcError> {
@@ -1547,6 +1624,7 @@ pub(crate) const fn provider_enforces_authority(
             | ProviderKind::OpenCode
             | ProviderKind::ClaudeCode
             | ProviderKind::Antigravity
+            | ProviderKind::GitHubCopilot
     )
 }
 
@@ -2076,6 +2154,7 @@ mod tests {
             ProviderKind::OpenCode,
             ProviderKind::ClaudeCode,
             ProviderKind::Antigravity,
+            ProviderKind::GitHubCopilot,
         ] {
             assert!(provider_enforces_authority(provider, AuthorityMode::Ask));
             assert!(session_serves_authority(

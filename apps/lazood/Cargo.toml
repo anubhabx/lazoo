@@ -7,6 +7,12 @@ rust-version.workspace = true
 
 [dependencies]
 chrono.workspace = true
+bytes.workspace = true
+futures-util.workspace = true
+http-body-util.workspace = true
+hyper.workspace = true
+hyper-util.workspace = true
+reqwest.workspace = true
 lazoo-domain = { path = "../../crates/lazoo-domain" }
 lazoo-ipc = { path = "../../crates/lazoo-ipc" }
 lazoo-protocol = { path = "../../crates/lazoo-protocol" }

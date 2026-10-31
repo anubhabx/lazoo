@@ -7,12 +7,14 @@ mod codex_view;
 mod config;
 mod config_apply;
 mod contract;
+mod copilot;
 mod discovery;
 mod grok;
 mod interactive_session;
 mod json_rpc;
 mod mcp_bridge;
 mod native_hook_server;
+mod native_resume;
 mod native_view;
 mod ndjson;
 mod opencode;
@@ -49,9 +51,11 @@ pub use contract::{
     ProviderSession, ProviderVerification, SessionRequest, ToolCall, ToolResult, ToolSpec,
     TurnEventObserver, TurnRequest, attach_args,
 };
+pub use copilot::{CopilotAdapter, CopilotSession};
 pub use discovery::{DiscoveryEnvironment, DiscoverySource, rank_candidates};
 pub use grok::{GrokAdapter, GrokSession};
 pub use interactive_session::NativeInteractiveSession;
+pub use native_resume::{prepare_native_resume_command, prepare_native_resume_terminal};
 pub use native_view::{NativeViewLaunchDescriptor, NativeViewLease};
 pub use opencode::{OpenCodeAdapter, OpenCodeSession};
 pub use opencode_http::OpenCodeHttpSession;

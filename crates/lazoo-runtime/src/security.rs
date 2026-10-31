@@ -133,11 +133,11 @@ impl OwnerSecurity {
     }
 }
 
-pub(crate) fn protect_for_current_user(data: &[u8]) -> Result<Vec<u8>, RuntimeError> {
+pub fn protect_for_current_user(data: &[u8]) -> Result<Vec<u8>, RuntimeError> {
     crypt_data(data, true)
 }
 
-pub(crate) fn unprotect_for_current_user(data: &[u8]) -> Result<Vec<u8>, RuntimeError> {
+pub fn unprotect_for_current_user(data: &[u8]) -> Result<Vec<u8>, RuntimeError> {
     crypt_data(data, false)
 }
 

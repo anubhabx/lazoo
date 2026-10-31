@@ -53,6 +53,7 @@ pub(crate) struct CodexNativeViewConfig {
     pub genuine_thread_start: Value,
     pub executable: PathBuf,
     pub cwd: PathBuf,
+    pub launch_environment: lazoo_runtime::LaunchEnvironment,
 }
 #[derive(Debug)]
 struct LeaseState {
@@ -71,6 +72,7 @@ struct CodexViewBackend {
     session_id: String,
     executable: PathBuf,
     cwd: PathBuf,
+    launch_environment: lazoo_runtime::LaunchEnvironment,
 }
 impl CodexViewBackend {
     /// Binds a fresh loopback endpoint. Two `UUIDv4` values provide at least 244 bits of entropy.
@@ -105,6 +107,7 @@ impl CodexViewBackend {
             session_id,
             executable: config.executable,
             cwd: config.cwd,
+            launch_environment: config.launch_environment,
         }))
     }
     /// Returns a genuine native Codex resume command with its token only in `env`.
@@ -119,6 +122,7 @@ impl CodexViewBackend {
             .arg("--remote-auth-token-env")
             .arg(TOKEN_ENV)
             .arg("--no-alt-screen");
+        command.apply_environment(&self.launch_environment);
         command
             .env
             .insert(OsString::from(TOKEN_ENV), OsString::from(&self.token));
@@ -167,12 +171,13 @@ impl LeaseState {
 impl crate::CodexSession {
     #[must_use]
     pub(crate) fn native_view_supported(&self) -> bool {
-        let (broker, bootstrap, _, _) = self.live_view_bootstrap();
+        let (broker, bootstrap, _, _, _) = self.live_view_bootstrap();
         !broker.is_closed() && bootstrap.is_object()
     }
 
     pub(crate) async fn open_native_view_lease(&self) -> Result<NativeViewLease, ProviderError> {
-        let (broker, genuine_thread_start, executable, cwd) = self.live_view_bootstrap();
+        let (broker, genuine_thread_start, executable, cwd, launch_environment) =
+            self.live_view_bootstrap();
         if broker.is_closed() || !genuine_thread_start.is_object() {
             return Err(ProviderError::Unsupported {
                 provider: crate::ProviderKind::Codex,
@@ -185,6 +190,7 @@ impl crate::CodexSession {
             genuine_thread_start,
             executable,
             cwd,
+            launch_environment,
         })
         .await
     }

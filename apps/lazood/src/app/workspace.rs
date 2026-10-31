@@ -298,10 +298,11 @@ const fn collaboration_tools_available(provider: ProviderKind) -> bool {
             | ProviderKind::OpenCode
             | ProviderKind::ClaudeCode
             | ProviderKind::Antigravity
+            | ProviderKind::GitHubCopilot
     )
 }
 
-/// Each admitted native provider has a controller-isolated native live view; Grok is excluded.
+/// Copilot ACP and Grok have no proven controller-isolated native live view.
 const fn native_view_supported(provider: ProviderKind) -> bool {
     matches!(
         provider,
@@ -573,6 +574,7 @@ mod tests {
             ProviderKind::OpenCode,
             ProviderKind::ClaudeCode,
             ProviderKind::Antigravity,
+            ProviderKind::GitHubCopilot,
         ] {
             assert!(collaboration_tools_available(provider));
         }
@@ -590,5 +592,6 @@ mod tests {
             assert!(native_view_supported(provider));
         }
         assert!(!native_view_supported(ProviderKind::GrokBuild));
+        assert!(!native_view_supported(ProviderKind::GitHubCopilot));
     }
 }

@@ -273,12 +273,38 @@ impl Drop for ProcessHandle {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Eq, PartialEq)]
 pub struct JobCommand {
     executable: PathBuf,
     args: Vec<OsString>,
     cwd: PathBuf,
     env: BTreeMap<OsString, OsString>,
+    env_remove: Vec<OsString>,
+}
+
+impl std::fmt::Debug for JobCommand {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("JobCommand")
+            .field("executable", &self.executable)
+            .field("args", &self.args)
+            .field("cwd", &self.cwd)
+            .field("env_keys", &self.env.keys().collect::<Vec<_>>())
+            .field("env_remove", &self.env_remove)
+            .finish()
+    }
+}
+
+#[cfg(test)]
+mod credential_debug_tests {
+    use super::JobCommand;
+
+    #[test]
+    fn job_command_never_formats_account_credentials() {
+        let command = JobCommand::new("provider.exe", ".")
+            .env("PROVIDER_API_KEY", "private-account-key-fixture");
+        assert!(!format!("{command:?}").contains("private-account-key-fixture"));
+    }
 }
 
 impl JobCommand {
@@ -289,6 +315,7 @@ impl JobCommand {
             args: Vec::new(),
             cwd: cwd.into(),
             env: BTreeMap::new(),
+            env_remove: Vec::new(),
         }
     }
 
@@ -307,6 +334,12 @@ impl JobCommand {
     #[must_use]
     pub fn env(mut self, key: impl Into<OsString>, value: impl Into<OsString>) -> Self {
         self.env.insert(key.into(), value.into());
+        self
+    }
+
+    #[must_use]
+    pub fn env_remove(mut self, key: impl Into<OsString>) -> Self {
+        self.env_remove.push(key.into());
         self
     }
 
@@ -341,6 +374,9 @@ impl JobChild {
         let gate = LaunchGate::create()?;
         let job = Arc::new(JobObject::kill_on_close()?);
         let mut process = Command::new(host);
+        for name in &command.env_remove {
+            process.env_remove(name);
+        }
         process
             .arg("--gate")
             .arg(gate.name())

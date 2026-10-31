@@ -29,6 +29,7 @@ import { newKey, readStorage, writeStorage } from "./util";
 
 export type SettingsSection =
   | "general"
+  | "accounts"
   | "employees"
   | "harnesses"
   | "projects"

@@ -252,7 +252,9 @@ impl NativeInteractiveSession {
             .into_iter()
             .map(seal_generated)
             .collect::<Result<Vec<_>, _>>()?;
-        let mut command = TerminalCommand::new(executable, &request.cwd, COLS, ROWS)
+        let mut command = request
+            .launch_environment
+            .apply_to_terminal(TerminalCommand::new(executable, &request.cwd, COLS, ROWS))
             .env("LAZOO_NATIVE_HOOK_URL", hooks.endpoint())
             .env("LAZOO_NATIVE_HOOK_TOKEN", hooks.token());
         command = interactive_command(provider, command, request, &generated);
@@ -301,7 +303,10 @@ impl NativeInteractiveSession {
         {
             *session.transcript.lock().map_err(|_| {
                 ProviderError::Protocol("native transcript state is poisoned".to_owned())
-            })? = Some(transcript::TranscriptBinding::from_native_id(id)?);
+            })? = Some(transcript::TranscriptBinding::from_native_id(
+                id,
+                &request.launch_environment,
+            )?);
         }
         let mut events = Vec::new();
         if let Err(error) = session.await_native_start(&mut events).await {
@@ -335,7 +340,9 @@ impl NativeInteractiveSession {
         }
     }
     fn command_spec(&self) -> CommandSpec {
-        CommandSpec::new(&self.executable, &self.request.cwd)
+        let mut command = CommandSpec::new(&self.executable, &self.request.cwd);
+        command.apply_environment(&self.request.launch_environment);
+        command
     }
 
     async fn run(
@@ -1055,7 +1062,10 @@ impl NativeInteractiveSession {
             ProviderError::Protocol("native transcript state is poisoned".to_owned())
         })?;
         if bound.is_none() {
-            *bound = Some(transcript::TranscriptBinding::from_native_id(id)?);
+            *bound = Some(transcript::TranscriptBinding::from_native_id(
+                id,
+                &self.request.launch_environment,
+            )?);
         }
         bound
             .as_ref()

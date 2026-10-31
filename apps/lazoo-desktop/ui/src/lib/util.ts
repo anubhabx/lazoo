@@ -86,6 +86,8 @@ export function providerLabel(provider: string | null | undefined): string {
       return "OpenCode";
     case "antigravity":
       return "Antigravity";
+    case "github-copilot":
+      return "GitHub Copilot";
     case "grok-build":
       return "Grok Build";
     default:

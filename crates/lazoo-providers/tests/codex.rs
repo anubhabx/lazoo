@@ -114,6 +114,39 @@ fn codex_fallback_is_structured_json_and_never_bypasses_permissions() {
 }
 
 #[test]
+fn codex_private_key_uses_a_process_local_provider_without_putting_the_key_in_argv() {
+    let mut request = SessionRequest::new(r"C:\repo");
+    request
+        .launch_environment
+        .set("OPENAI_API_KEY", "secret-account-key");
+    request
+        .launch_environment
+        .set("OPENAI_BASE_URL", "https://gateway.example/v1");
+    let command =
+        CodexAdapter::fallback_command(Path::new(r"C:\Tools\codex.exe"), &request, "Reply OK");
+    let args = command
+        .args
+        .iter()
+        .map(|argument| argument.to_string_lossy().into_owned())
+        .collect::<Vec<_>>();
+    assert!(args.contains(&r#"model_provider="lazoo-account""#.to_owned()));
+    assert!(args.contains(&r#"model_providers.lazoo-account.name="openai""#.to_owned()));
+    assert!(args.contains(&r#"model_providers.lazoo-account.env_key="OPENAI_API_KEY""#.to_owned()));
+    assert!(args.contains(
+        &r#"model_providers.lazoo-account.base_url="https://gateway.example/v1""#.to_owned()
+    ));
+    assert!(
+        !args
+            .iter()
+            .any(|argument| argument.contains("secret-account-key"))
+    );
+    assert_eq!(
+        command.env[&OsString::from("OPENAI_API_KEY")],
+        OsString::from("secret-account-key")
+    );
+}
+
+#[test]
 fn codex_declares_only_capabilities_backed_by_app_server() {
     assert_eq!(
         CodexAdapter::capabilities(),

@@ -316,7 +316,25 @@ export function createDevBridge(): Bridge {
           executable: "C:\\Users\\dev\\AppData\\Local\\agy\\bin\\agy.exe",
           discoverySource: "path",
         },
+        {
+          provider: "github-copilot",
+          detected: true,
+          executable: "C:\\Program Files\\GitHub Copilot\\copilot.exe",
+          discoverySource: "path",
+        },
       ],
+      "provider.accounts.list": () => ({
+        version: 1,
+        accounts: [],
+        policies: [],
+      }),
+      "provider.accounts.put": () => ({ ok: true }),
+      "provider.accounts.remove": () => ({ ok: true }),
+      "provider.accounts.policy": () => ({ ok: true }),
+      "provider.accounts.verify": () => ({
+        modelAnswered: true,
+        routeVerified: true,
+      }),
       "roster.get": () => ({ revision: 3, entries: [] }),
       "native.trust.policy.show": (params) => ({
         provider: params.provider,

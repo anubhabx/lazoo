@@ -32,7 +32,7 @@ export function status(overrides: Partial<SystemStatus> = {}): SystemStatus {
     uptimeMillis: 120_000,
     protocolVersion: 1,
     dataRoot: "C:\\Temp\\Lazoo",
-    schemaVersion: 19,
+    schemaVersion: 21,
     journalMode: "wal",
     projectCount: 1,
     eventHighWater: 40,

@@ -586,7 +586,7 @@ try {
     $keeper = Start-Keeper $script:dataRoot
     $script:keeperPid = $keeper.Id
     $status = Wait-Status
-    Assert-Equal $status.schemaVersion 20 'schema version'
+    Assert-Equal $status.schemaVersion 21 'schema version'
     $gates.schemaVersion = 'PASS'
     $registration = Invoke-Json @('project', 'register', $projectRoot, '--name', 'Desktop budget', '--idempotency-key', "desktop-budget-$runId")
     Assert-True ($null -ne $registration.project.id) 'project registered before the desktop starts'
@@ -762,7 +762,7 @@ try {
     }
     $manifest = [ordered]@{
         status = $manifestStatus
-        schemaVersion = 20
+        schemaVersion = 21
         mode = 'real-binaries-with-desktop'
         memoryBasis = 'private-working-set'
         startedAt = $startedAt.ToString('o')

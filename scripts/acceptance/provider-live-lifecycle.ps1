@@ -410,7 +410,7 @@ try {
 
     $daemon = Start-Daemon
     $status = Wait-Status
-    Assert-Equal $status.schemaVersion 20 'schema 20'
+    Assert-Equal $status.schemaVersion 21 'schema 21'
 
     # Authentication: a read-only probe, no model prompt. A known-missing login ends the run here.
     $probe = Invoke-Json @('provider', 'probe', $Provider)
@@ -677,7 +677,7 @@ try {
         outcome = $script:outcome
         failure = if ($failureMessage -eq '') { $null } else { $failureMessage }
         mode = 'live-native-subscription'
-        schemaVersion = 20
+        schemaVersion = 21
         startedAt = $startedAt.ToString('o')
         completedAt = [DateTime]::UtcNow.ToString('o')
         durationMs = $stopwatch.ElapsedMilliseconds

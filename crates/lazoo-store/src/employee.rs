@@ -492,7 +492,7 @@ pub(crate) fn merge_provider_observation(
     merged
 }
 
-fn write_provider_observation(
+pub(crate) fn write_provider_observation(
     transaction: &Transaction<'_>,
     observation: &ProviderObservation,
 ) -> Result<(), StoreError> {

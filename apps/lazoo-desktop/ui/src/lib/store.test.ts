@@ -91,7 +91,7 @@ describe("Store", () => {
     await store.init();
     const state = store.getSnapshot();
     expect(state.connection).toBe("connected");
-    expect(state.status?.schemaVersion).toBe(19);
+    expect(state.status?.schemaVersion).toBe(21);
     expect(state.conversations?.conversations).toHaveLength(1);
     expect(state.launcher?.leads[0]?.name).toBe("mira");
     expect(state.inboxCounts?.unresolved).toBe(1);

@@ -38,8 +38,9 @@ use crate::{
     ProviderEvent, ProviderKind, ProviderSession, SessionRequest, TurnEventObserver, TurnRequest,
     mcp_bridge::SessionMcpBridge,
     opencode::{
-        CONFIG_CONTENT_ENV, GOVERNED_PERMISSION, PERMISSION_ENV, SERVER_PASSWORD_ENV, config_home,
-        governed_config_conflict, home_directory,
+        CONFIG_CONTENT_ENV, GOVERNED_PERMISSION, LAZOO_PROVIDER_CONFIG_ENV, PERMISSION_ENV,
+        SERVER_PASSWORD_ENV, governed_config_conflict, private_provider_config,
+        selected_config_home, selected_environment_has, selected_home_directory,
     },
     opencode_view::{self, OpenCodeNativeViewConfig},
 };
@@ -66,6 +67,7 @@ pub struct OpenCodeHttpSession {
     session_id: String,
     executable: PathBuf,
     cwd: PathBuf,
+    launch_environment: lazoo_runtime::LaunchEnvironment,
     bridge: SessionMcpBridge,
     turn_timeout: Duration,
     turn_lock: Arc<Mutex<()>>,
@@ -120,9 +122,9 @@ impl OpenCodeHttpSession {
     ) -> Result<Self, ProviderError> {
         if let Some(detail) = governed_config_conflict(
             &request.cwd,
-            &|name| std::env::var_os(name).is_some(),
-            home_directory().as_deref(),
-            config_home().as_deref(),
+            &|name| selected_environment_has(request, name),
+            selected_home_directory(request).as_deref(),
+            selected_config_home(request).as_deref(),
         ) {
             return Err(ProviderError::Unsupported {
                 provider: ProviderKind::OpenCode,
@@ -134,19 +136,22 @@ impl OpenCodeHttpSession {
         let (model, variant) = selected_model(request)?;
         let password = format!("{}{}", Uuid::new_v4().simple(), Uuid::new_v4().simple());
         let bridge = SessionMcpBridge::open(ProviderKind::OpenCode, request.tools.clone()).await?;
-        let config = mcp_config(&bridge);
-        let command = JobCommand::new(executable, &request.cwd)
-            .args([
+        let config = mcp_config(&bridge, request)?;
+        let command = apply_launch_environment_without_private_provider_marker(
+            JobCommand::new(executable, &request.cwd).args([
                 OsString::from("serve"),
                 OsString::from("--pure"),
                 OsString::from("--hostname"),
                 OsString::from("127.0.0.1"),
                 OsString::from("--port"),
                 OsString::from(server.port().to_string()),
-            ])
-            .env(PERMISSION_ENV, GOVERNED_PERMISSION)
-            .env(SERVER_PASSWORD_ENV, &password)
-            .env(CONFIG_CONTENT_ENV, config);
+            ]),
+            &request.launch_environment,
+        )
+        .env(PERMISSION_ENV, GOVERNED_PERMISSION)
+        .env(SERVER_PASSWORD_ENV, &password)
+        .env_remove(LAZOO_PROVIDER_CONFIG_ENV)
+        .env(CONFIG_CONTENT_ENV, config);
         let child = match JobChild::spawn(&command) {
             Ok(child) => Arc::new(Mutex::new(child)),
             Err(error) => {
@@ -163,6 +168,7 @@ impl OpenCodeHttpSession {
             session_id: String::new(),
             executable: executable.to_path_buf(),
             cwd: request.cwd.clone(),
+            launch_environment: request.launch_environment.clone(),
             bridge,
             turn_timeout: request.turn_timeout(),
             turn_lock: Arc::new(Mutex::new(())),
@@ -437,6 +443,7 @@ impl ProviderSession for OpenCodeHttpSession {
                 session_id: self.session_id.clone(),
                 upstream: self.server,
                 upstream_password: self.password.clone(),
+                launch_environment: self.launch_environment.clone(),
             })
             .await
             .map(Some)
@@ -1086,9 +1093,43 @@ fn loopback_client() -> HttpClient {
     connector.enforce_http(true);
     Client::builder(TokioExecutor::new()).build(connector)
 }
-fn mcp_config(bridge: &SessionMcpBridge) -> String {
-    json!({"mcp":{"lazoo":{"type":"remote","url":bridge.endpoint(),"headers":{"Authorization":bridge.authorization()}}}}).to_string()
+fn mcp_config(
+    bridge: &SessionMcpBridge,
+    request: &SessionRequest,
+) -> Result<String, ProviderError> {
+    let mut root = serde_json::Map::new();
+    if let Some(config) = private_provider_config(&request.launch_environment)? {
+        root.extend(
+            config
+                .as_object()
+                .expect("private OpenCode provider config is an object")
+                .clone(),
+        );
+    }
+    root.insert("mcp".to_owned(), json!({"lazoo":{"type":"remote","url":bridge.endpoint(),"headers":{"Authorization":bridge.authorization()}}}));
+    Ok(Value::Object(root).to_string())
 }
+
+fn apply_launch_environment_without_private_provider_marker(
+    mut command: JobCommand,
+    environment: &lazoo_runtime::LaunchEnvironment,
+) -> JobCommand {
+    for name in environment.removals() {
+        command = command.env_remove(name);
+    }
+    command
+        .envs(
+            environment
+                .values()
+                .iter()
+                .filter(|(name, _)| {
+                    name.as_os_str() != std::ffi::OsStr::new(LAZOO_PROVIDER_CONFIG_ENV)
+                })
+                .map(|(name, value)| (name.clone(), value.clone())),
+        )
+        .env_remove(LAZOO_PROVIDER_CONFIG_ENV)
+}
+
 fn basic_header(password: &str) -> String {
     format!("Basic {}", base64(&format!("opencode:{password}")))
 }
@@ -1165,6 +1206,34 @@ mod tests {
     use tokio::sync::mpsc;
 
     use super::*;
+
+    #[tokio::test]
+    async fn private_api_backend_is_allowlisted_without_replacing_the_authenticated_mcp_bridge() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut request = SessionRequest::new(directory.path());
+        let bridge = SessionMcpBridge::open(ProviderKind::OpenCode, Vec::new())
+            .await
+            .unwrap();
+        let native: Value = serde_json::from_str(&mcp_config(&bridge, &request).unwrap()).unwrap();
+        assert!(native.get("enabled_providers").is_none());
+        request.launch_environment.set(LAZOO_PROVIDER_CONFIG_ENV, r#"{"anthropic":{"options":{"baseURL":"http://127.0.0.1:45678/v1","apiKey":"{env:ANTHROPIC_API_KEY}"}}}"#);
+        let config: Value = serde_json::from_str(&mcp_config(&bridge, &request).unwrap()).unwrap();
+        assert_eq!(config["enabled_providers"], json!(["anthropic"]));
+        assert_eq!(
+            config["provider"]["anthropic"]["options"]["baseURL"],
+            "http://127.0.0.1:45678/v1"
+        );
+        assert_eq!(config["mcp"]["lazoo"]["url"], bridge.endpoint());
+        assert_eq!(
+            config["mcp"]["lazoo"]["headers"]["Authorization"],
+            bridge.authorization()
+        );
+        request
+            .launch_environment
+            .set(LAZOO_PROVIDER_CONFIG_ENV, "{}");
+        assert!(mcp_config(&bridge, &request).is_err());
+        bridge.close();
+    }
 
     #[derive(Default)]
     struct Observer(
@@ -1264,6 +1333,7 @@ mod tests {
         (
             OpenCodeHttpSession {
                 child: None,
+                launch_environment: lazoo_runtime::LaunchEnvironment::default(),
                 client: loopback_client(),
                 server: address,
                 password: "test".to_owned(),

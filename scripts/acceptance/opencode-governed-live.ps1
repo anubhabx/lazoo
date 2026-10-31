@@ -409,7 +409,7 @@ try {
 
     $daemon = Start-Daemon
     $status = Wait-Status
-    Assert-Equal $status.schemaVersion 20 'schema 20'
+    Assert-Equal $status.schemaVersion 21 'schema 21'
 
     # Verification: the probe cannot see model readiness (the free model needs no login), so one
     # live smoke turn verifies the provider first. It counts as a live turn.
@@ -565,7 +565,7 @@ try {
         outcome = $script:outcome
         failure = if ($failureMessage -eq '') { $null } else { $failureMessage }
         mode = 'live-native-install'
-        schemaVersion = 20
+        schemaVersion = 21
         startedAt = $startedAt.ToString('o')
         completedAt = [DateTime]::UtcNow.ToString('o')
         durationMs = $stopwatch.ElapsedMilliseconds

@@ -124,6 +124,49 @@ export interface ProviderListEntry {
   discoverySource: string | null;
 }
 
+// ---- Provider accounts -------------------------------------------------
+export type AccountCredentialKind = "native-profile" | "api-key";
+export type AccountApiProtocol = "responses" | "anthropic";
+export type AccountRoutingMode =
+  "inherited" | "balanced" | "pinned" | "api-pool";
+export interface ProviderAccountSpec {
+  id: Uuid;
+  provider: string;
+  label: string;
+  credentialKind: AccountCredentialKind;
+  profileDirectory: string;
+  credentialEnvironment: string | null;
+  baseUrl: string | null;
+  apiProtocol: AccountApiProtocol | null;
+  backendProvider: string | null;
+  models: string[];
+  enabled: boolean;
+}
+export interface ProviderAccountRecord {
+  spec: ProviderAccountSpec;
+  revision: number;
+  hasSecret: boolean;
+  deleted: boolean;
+  selections: number;
+  requests: number;
+  failures: number;
+  cooldownUntil: number;
+  lastStatus: number | null;
+  lastLatencyMillis: number | null;
+  updatedAt: Timestamp;
+}
+export interface ProviderAccountPolicy {
+  provider: string;
+  mode: AccountRoutingMode;
+  accountId: Uuid | null;
+  revision: number;
+}
+export interface ProviderAccountsSnapshot {
+  version: number;
+  accounts: ProviderAccountRecord[];
+  policies: ProviderAccountPolicy[];
+}
+
 // ---- Inbox --------------------------------------------------------------
 
 export type InboxFilter =

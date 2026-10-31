@@ -248,6 +248,7 @@ export class TerminalManager {
   async refreshStatus(
     sessionId: string,
   ): Promise<SessionTerminalStatusResult | null> {
+    if (sessionId.startsWith("provider-login:")) return null;
     const entry = this.ensure(sessionId);
     try {
       const status = await this.bridge.call<SessionTerminalStatusResult>(
@@ -293,6 +294,13 @@ export class TerminalManager {
     entry.error = null;
     entry.bytes = 0;
     await this.startStream(entry);
+  }
+
+  /** Adopt a daemon-created terminal which is not an agent session, such as provider login. */
+  async adoptRecord(key: string, record: TerminalRecord) {
+    const entry = this.ensure(key);
+    await this.adopt(entry, record, "attach");
+    this.bump();
   }
 
   private keyFor(operation: string): string {
@@ -513,7 +521,8 @@ export class TerminalManager {
     entry.live = false;
     this.forgetKey(`session.terminal.${entry.kind ?? "view"}:${sessionId}`);
     this.bump();
-    void this.refreshStatus(sessionId);
+    if (!sessionId.startsWith("provider-login:"))
+      void this.refreshStatus(sessionId);
   }
 
   /**

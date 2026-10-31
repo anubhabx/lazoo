@@ -46,6 +46,8 @@ pub(super) struct TerminalState {
     view_keys: BTreeMap<(Uuid, String), ViewKey>,
 }
 struct LiveTerminal {
+    // A takeover proxy belongs to this terminal, so closing it releases its credential route.
+    account_route: Option<super::account_proxy::AccountProxy>,
     command: TerminalOpenParams,
     terminal: TerminalHandle,
     revision: u64,
@@ -466,6 +468,7 @@ impl App {
         }
         let id = Uuid::new_v4();
         let terminal = LiveTerminal {
+            account_route: None,
             command: params.clone(),
             terminal: TerminalHandle::Borrowed(session),
             revision: 1,
@@ -491,7 +494,7 @@ impl App {
 
     /// Internal launch path for provider-owned views. The public terminal RPC cannot supply an
     /// environment overlay; this keeps bearer capabilities out of protocol metadata.
-    async fn terminal_open_with_command(
+    pub(super) async fn terminal_open_with_command(
         &self,
         params: TerminalOpenParams,
         command: TerminalCommand,
@@ -582,6 +585,7 @@ impl App {
             Ok(session) => {
                 let id = session.id();
                 let terminal = LiveTerminal {
+                    account_route: None,
                     command: params.clone(),
                     terminal: TerminalHandle::Owned(session),
                     revision: 1,
@@ -830,6 +834,7 @@ impl App {
     /// the same native id would put two writers on one transcript. The TUI runs under the
     /// owner's own native configuration rather than the employee's authority mode, because the
     /// owner is at the keyboard; what is typed there never enters Lazoo's turn ledger.
+    #[allow(clippy::too_many_lines)] // Keep reservation, account routing, and cleanup in one flow.
     pub(super) async fn session_terminal_attach(&self, params: Value) -> Result<Value, RpcError> {
         let params: SessionTerminalAttachParams = serde_json::from_value(params)
             .map_err(|error| super::invalid_params(error.to_string()))?;
@@ -899,7 +904,52 @@ impl App {
                 return Err(super::session_store_error(error));
             }
         }
-        let opened = self.terminal_open(open).await;
+        let prepared = async {
+            let mut command =
+                TerminalCommand::new(&open.executable, &open.cwd, open.columns, open.rows)
+                    .args(open.args.clone());
+            let mut account_route = None;
+            if let Some(binding) = self
+                .store
+                .provider_account_binding(session.id)
+                .map_err(super::accounts::account_error)?
+                && let Some(account_id) = binding.account_id
+            {
+                let account = self
+                    .store
+                    .provider_account(account_id)
+                    .map_err(super::accounts::account_error)?;
+                let (environment, route) = self
+                    .bound_account_environment(session.id, &account, true)
+                    .await?;
+                let provider = session
+                    .provider
+                    .parse::<ProviderKind>()
+                    .map_err(super::provider_error)?;
+                command = lazoo_providers::prepare_native_resume_terminal(
+                    provider,
+                    command,
+                    &environment,
+                )
+                .map_err(super::provider_error)?;
+                account_route = route;
+            }
+            Ok::<_, RpcError>((command, account_route))
+        }
+        .await;
+        let (command, account_route) = match prepared {
+            Ok(prepared) => prepared,
+            Err(error) => {
+                self.terminals.lock().await.attachments.remove(&session.id);
+                return Err(error);
+            }
+        };
+        let opened = self.terminal_open_with_command(open, command, None).await;
+        if let Ok(record) = &opened
+            && let Some(terminal) = self.terminals.lock().await.sessions.get_mut(&record.id)
+        {
+            terminal.account_route = account_route;
+        }
         self.complete_attachment(session.id, opened).await
     }
 

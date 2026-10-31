@@ -123,7 +123,7 @@ pub(crate) async fn start_acp_session(
 }
 
 /// Starts an ACP session with an explicitly scoped MCP list.  The default entrypoint above
-/// preserves the existing empty list for every adapter except the `OpenCode` collaboration bridge.
+/// preserves the existing empty list for adapters without a session-scoped collaboration bridge.
 pub(crate) async fn start_acp_session_with_mcp(
     provider: ProviderKind,
     command: CommandSpec,
@@ -138,6 +138,20 @@ pub(crate) async fn start_acp_session_with_mcp(
         "ACP initialization",
     )
     .await?;
+    if mcp_servers
+        .iter()
+        .any(|server| matches!(server, McpServer::Http(_)))
+        && !handshake.response.agent_capabilities.mcp_capabilities.http
+    {
+        let _ = process.stop(STOP_TIMEOUT).await;
+        return Err(ProviderError::Unsupported {
+            provider,
+            capability: "HTTP MCP servers",
+            detail: Some(
+                "the ACP initialize handshake did not advertise HTTP MCP support".to_owned(),
+            ),
+        });
+    }
     let resumed = request.session_id.is_some();
     let session_id = if let Some(session_id) = &request.session_id {
         if !handshake.response.agent_capabilities.load_session {

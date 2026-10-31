@@ -376,7 +376,7 @@ fn known_target(
             .config_home()
             .map(|p| p.join(".config").join("opencode").join("opencode.json"))
             .ok_or(ConfigurationApplyError::UnsupportedProvider)?),
-        ProviderKind::GrokBuild | ProviderKind::Antigravity => {
+        ProviderKind::GitHubCopilot | ProviderKind::GrokBuild | ProviderKind::Antigravity => {
             Err(ConfigurationApplyError::UnsupportedProvider)
         }
     }
@@ -487,7 +487,7 @@ fn render(
         ProviderKind::Codex => render_codex(original, selection),
         ProviderKind::ClaudeCode => render_claude(original, selection),
         ProviderKind::OpenCode => render_opencode(original, selection),
-        ProviderKind::GrokBuild | ProviderKind::Antigravity => {
+        ProviderKind::GitHubCopilot | ProviderKind::GrokBuild | ProviderKind::Antigravity => {
             Err(ConfigurationApplyError::UnsupportedProvider)
         }
     }
@@ -701,7 +701,7 @@ fn entry_root(provider: ProviderKind) -> &'static str {
         ProviderKind::Codex => "mcp_servers",
         ProviderKind::ClaudeCode => "mcpServers",
         ProviderKind::OpenCode => "mcp",
-        ProviderKind::GrokBuild | ProviderKind::Antigravity => "",
+        ProviderKind::GitHubCopilot | ProviderKind::GrokBuild | ProviderKind::Antigravity => "",
     }
 }
 

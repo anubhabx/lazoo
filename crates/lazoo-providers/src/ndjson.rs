@@ -64,9 +64,12 @@ pub(crate) struct NdjsonProcess {
 
 impl NdjsonProcess {
     pub(crate) fn spawn(spec: &CommandSpec) -> Result<Self, ProviderError> {
-        let command = JobCommand::new(&spec.executable, &spec.cwd)
+        let mut command = JobCommand::new(&spec.executable, &spec.cwd)
             .args(spec.args.clone())
             .envs(spec.env.clone());
+        for name in &spec.env_remove {
+            command = command.env_remove(name);
+        }
         let mut child = JobChild::spawn(&command)?;
         let stdin = child
             .take_stdin()

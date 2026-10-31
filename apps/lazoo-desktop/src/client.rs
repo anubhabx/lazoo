@@ -145,6 +145,7 @@ pub const ALLOWED: &[(&str, Kind)] = &[
     ("provider.config", Kind::Read),
     ("provider.config.preview", Kind::Read),
     ("provider.config.operations.show", Kind::Read),
+    ("provider.accounts.list", Kind::Read),
     ("memory.policy.show", Kind::Read),
     ("memory.search", Kind::Read),
     ("memory.queue.status", Kind::Read),
@@ -199,6 +200,11 @@ pub const ALLOWED: &[(&str, Kind)] = &[
     ("native.trust.resolve", Kind::Mutation),
     ("native.trust.policy.set", Kind::Mutation),
     ("native.trust.policy.reset", Kind::Mutation),
+    ("provider.accounts.put", Kind::Mutation),
+    ("provider.accounts.remove", Kind::Mutation),
+    ("provider.accounts.policy", Kind::Mutation),
+    ("provider.accounts.login", Kind::Mutation),
+    ("provider.accounts.verify", Kind::Mutation),
 ];
 
 #[must_use]
@@ -384,8 +390,8 @@ mod tests {
             .iter()
             .filter(|(_, kind)| *kind == Kind::Read)
             .count();
-        assert_eq!(reads, 42);
-        assert_eq!(ALLOWED.len() - reads, 25);
+        assert_eq!(reads, 43);
+        assert_eq!(ALLOWED.len() - reads, 30);
     }
 
     #[test]

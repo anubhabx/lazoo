@@ -97,11 +97,14 @@ fn claude_discovery_reads_a_persisted_or_known_executable() {
 
 #[test]
 fn claude_launch_uses_stream_json_and_never_bypasses_permissions() {
-    let request = SessionRequest::new(r"C:\repo")
+    let mut request = SessionRequest::new(r"C:\repo")
         .resume("session-1")
         .with_model("claude-opus-4-1")
         .with_effort("high")
         .with_permission_mode("plan");
+    request
+        .launch_environment
+        .set("CLAUDE_CONFIG_DIR", r"C:\profiles\claude");
     let command = ClaudeAdapter::command(
         Path::new(r"C:\Tools\claude.exe"),
         &request,
@@ -110,6 +113,10 @@ fn claude_launch_uses_stream_json_and_never_bypasses_permissions() {
 
     assert_eq!(command.executable, PathBuf::from(r"C:\Tools\claude.exe"));
     assert_eq!(command.cwd, PathBuf::from(r"C:\repo"));
+    assert_eq!(
+        command.env[&OsString::from("CLAUDE_CONFIG_DIR")],
+        OsString::from(r"C:\profiles\claude")
+    );
     for required in [
         "--print",
         "--verbose",

@@ -121,6 +121,9 @@ impl App {
             for (name, value) in command.env {
                 terminal_command = terminal_command.env(name, value);
             }
+            for name in command.env_remove {
+                terminal_command = terminal_command.env_remove(name);
+            }
             terminal_command = terminal_command
                 .env("TERM", "xterm-256color")
                 .env("COLORTERM", "truecolor");

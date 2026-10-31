@@ -215,7 +215,7 @@ try {
 
     $daemon = Start-Daemon
     $status = Wait-Status
-    Assert-Equal ([int]$status.schemaVersion) 20 'schema 20'
+    Assert-Equal ([int]$status.schemaVersion) 21 'schema 21'
     $evidence.schemaTwenty = $true
 
     $employee = Invoke-Json @(
@@ -351,7 +351,7 @@ try {
     }
     $manifest = [ordered]@{
         status = $manifestStatus
-        schemaVersion = 20
+        schemaVersion = 21
         mode = 'real-binaries-disposable-data-root-no-provider'
         startedAt = $startedAt.ToString('o')
         durationMs = [long]$stopwatch.ElapsedMilliseconds

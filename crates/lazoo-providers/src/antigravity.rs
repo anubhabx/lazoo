@@ -72,6 +72,7 @@ impl AntigravityAdapter {
             }
             _ => {}
         }
+        command.apply_environment(&request.launch_environment);
         command
     }
 

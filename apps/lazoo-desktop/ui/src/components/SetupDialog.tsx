@@ -25,7 +25,13 @@ import {
 } from "./primitives";
 
 type Outcome = "creating" | "created" | "failed";
-const HARNESSES = ["claude-code", "codex", "opencode", "antigravity"];
+const HARNESSES = [
+  "claude-code",
+  "codex",
+  "opencode",
+  "antigravity",
+  "github-copilot",
+];
 
 export function SetupDialog() {
   const store = useStore();

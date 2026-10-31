@@ -55,6 +55,7 @@ pub(crate) struct OpenCodeNativeViewConfig {
     pub session_id: String,
     pub upstream: SocketAddr,
     pub upstream_password: String,
+    pub launch_environment: lazoo_runtime::LaunchEnvironment,
 }
 
 pub(crate) async fn open(
@@ -75,6 +76,7 @@ pub(crate) async fn open(
         session_id: config.session_id,
         executable: config.executable,
         cwd: config.cwd,
+        launch_environment: config.launch_environment,
     });
     tokio::spawn(accept(listener, Arc::clone(&state), closed_rx));
     Ok(NativeViewLease::from_backend(Backend(state)))
@@ -92,6 +94,7 @@ struct State {
     session_id: String,
     executable: PathBuf,
     cwd: PathBuf,
+    launch_environment: lazoo_runtime::LaunchEnvironment,
 }
 struct Backend(Arc<State>);
 impl NativeViewBackend for Backend {
@@ -116,6 +119,7 @@ impl NativeViewBackend for Backend {
             .arg("--dir")
             .arg(&self.0.cwd)
             .arg("--pure");
+        command.apply_environment(&self.0.launch_environment);
         command
             .env
             .insert(TOKEN_ENV.into(), self.0.viewer_password.clone().into());
@@ -1036,6 +1040,7 @@ mod tests {
             session_id: "ses_active".to_owned(),
             upstream: upstream_address,
             upstream_password: "upstream-secret".to_owned(),
+            launch_environment: lazoo_runtime::LaunchEnvironment::default(),
         })
         .await
         .unwrap();

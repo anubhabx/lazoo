@@ -114,6 +114,14 @@ function scripted(): FakeBridge {
     nextBefore: null,
   });
   bridge.on("session.list", []);
+  bridge.on("provider.accounts.list", {
+    version: 1,
+    accounts: [],
+    policies: [],
+  });
+  bridge.on("provider.accounts.put", { ok: true });
+  bridge.on("provider.accounts.remove", { ok: true });
+  bridge.on("provider.accounts.policy", { ok: true });
   bridge.on("session.resources", () => {
     throw { code: "LZ-SESSION-NOT-LIVE", message: "not live" };
   });
@@ -218,6 +226,302 @@ describe("shell", () => {
     await waitFor(() =>
       expect(
         screen.queryByLabelText("Search commands"),
+      ).not.toBeInTheDocument(),
+    );
+  });
+});
+
+describe("provider accounts", () => {
+  test("verifies routing only on explicit click and includes the selected model", async () => {
+    const bridge = scripted();
+    bridge.on("provider.accounts.verify", {
+      modelAnswered: true,
+      routeVerified: true,
+    });
+    const user = userEvent.setup();
+    const { store } = mount(bridge);
+    store.navigate({ kind: "settings", section: "accounts" });
+    await screen.findByRole("heading", { name: "Accounts" });
+    expect(bridge.callsTo("provider.accounts.verify")).toHaveLength(0);
+    await user.selectOptions(
+      screen.getByLabelText("Routing provider"),
+      "github-copilot",
+    );
+    await user.type(screen.getByLabelText("Verification model"), "test-model");
+    await user.click(screen.getByRole("button", { name: "Verify routing" }));
+    expect(await screen.findByText("Routing verified")).toBeInTheDocument();
+    expect(bridge.callsTo("provider.accounts.verify")[0]).toMatchObject({
+      provider: "github-copilot",
+      model: "test-model",
+    });
+  });
+  test("adds a redacted API account and clears its secret", async () => {
+    const bridge = scripted();
+    const user = userEvent.setup();
+    const { store } = mount(bridge);
+    store.navigate({ kind: "settings", section: "accounts" });
+    await screen.findByRole("heading", { name: "Accounts" });
+    await user.type(screen.getByLabelText("Label"), "work key");
+    await user.selectOptions(screen.getByLabelText("Credential"), "api-key");
+    await user.type(screen.getByLabelText("Secret"), "do-not-keep");
+    await user.click(screen.getByRole("button", { name: "Add account" }));
+    await waitFor(() =>
+      expect(bridge.callsTo("provider.accounts.put")).toHaveLength(1),
+    );
+    const request = bridge.callsTo("provider.accounts.put")[0] as Record<
+      string,
+      unknown
+    >;
+    expect(request.secret).toBe("do-not-keep");
+    expect(request.expectedRevision).toBe(0);
+    expect(screen.getByLabelText("Secret")).toHaveValue("");
+  });
+
+  test("sends the current revision for policy edits", async () => {
+    const bridge = scripted();
+    bridge.on("provider.accounts.list", {
+      version: 1,
+      accounts: [],
+      policies: [
+        { provider: "codex", mode: "inherited", accountId: null, revision: 7 },
+      ],
+    });
+    const user = userEvent.setup();
+    const { store } = mount(bridge);
+    store.navigate({ kind: "settings", section: "accounts" });
+    await user.selectOptions(
+      (await screen.findAllByLabelText("New sessions"))[0]!,
+      "balanced",
+    );
+    await waitFor(() =>
+      expect(bridge.callsTo("provider.accounts.policy")).toHaveLength(1),
+    );
+    expect(bridge.callsTo("provider.accounts.policy")[0]).toMatchObject({
+      provider: "codex",
+      mode: "balanced",
+      revision: 7,
+    });
+  });
+
+  test("pins to an enabled account and clears the pin when returning to inherited", async () => {
+    const bridge = scripted();
+    let policy = {
+      provider: "codex",
+      mode: "inherited",
+      accountId: null,
+      revision: 7,
+    };
+    const account = {
+      spec: {
+        id: "pin-me",
+        provider: "codex",
+        label: "Primary",
+        credentialKind: "native-profile",
+        profileDirectory: "",
+        credentialEnvironment: null,
+        baseUrl: null,
+        apiProtocol: null,
+        backendProvider: null,
+        models: [],
+        enabled: true,
+      },
+      revision: 1,
+      hasSecret: false,
+      deleted: false,
+      selections: 0,
+      requests: 0,
+      failures: 0,
+      cooldownUntil: 0,
+      lastStatus: null,
+      lastLatencyMillis: null,
+      updatedAt: "2026-11-01T00:00:00Z",
+    };
+    bridge.on("provider.accounts.list", () => ({
+      version: 1,
+      accounts: [account],
+      policies: [policy],
+    }));
+    bridge.on("provider.accounts.policy", (params: unknown) => {
+      policy = { ...(params as typeof policy), revision: policy.revision + 1 };
+      return policy;
+    });
+    const user = userEvent.setup();
+    const { store } = mount(bridge);
+    store.navigate({ kind: "settings", section: "accounts" });
+    const mode = await screen.findByLabelText("New sessions");
+    await user.selectOptions(mode, "pinned");
+    await waitFor(() =>
+      expect(bridge.callsTo("provider.accounts.policy")[0]).toMatchObject({
+        provider: "codex",
+        mode: "pinned",
+        accountId: "pin-me",
+        revision: 7,
+      }),
+    );
+    await user.selectOptions(mode, "inherited");
+    await waitFor(() =>
+      expect(bridge.callsTo("provider.accounts.policy")[1]).toMatchObject({
+        provider: "codex",
+        mode: "inherited",
+        accountId: null,
+      }),
+    );
+  });
+
+  test("hides and clears Copilot custom base URLs", async () => {
+    const bridge = scripted();
+    const user = userEvent.setup();
+    const { store } = mount(bridge);
+    store.navigate({ kind: "settings", section: "accounts" });
+    await screen.findByRole("heading", { name: "Accounts" });
+    await user.selectOptions(screen.getByLabelText("Credential"), "api-key");
+    await user.type(screen.getByLabelText("Base URL"), "https://example.test");
+    await user.selectOptions(
+      screen.getByLabelText("Provider"),
+      "github-copilot",
+    );
+    expect(screen.queryByLabelText("Base URL")).not.toBeInTheDocument();
+    await user.type(screen.getByLabelText("Label"), "Copilot token");
+    await user.type(screen.getByLabelText("Secret"), "token");
+    await user.click(screen.getByRole("button", { name: "Add account" }));
+    await waitFor(() =>
+      expect(bridge.callsTo("provider.accounts.put")).toHaveLength(1),
+    );
+    expect(
+      (
+        bridge.callsTo("provider.accounts.put")[0] as {
+          spec: { baseUrl: string | null };
+        }
+      ).spec.baseUrl,
+    ).toBeNull();
+  });
+
+  test("shows a stale account revision error instead of hiding it", async () => {
+    const bridge = scripted();
+    bridge.fail("provider.accounts.policy", {
+      code: "LZ-REVISION-CONFLICT",
+      message: "the account policy changed in another window",
+    });
+    const user = userEvent.setup();
+    const { store } = mount(bridge);
+    store.navigate({ kind: "settings", section: "accounts" });
+    await user.selectOptions(
+      (await screen.findAllByLabelText("New sessions"))[0]!,
+      "balanced",
+    );
+    expect(
+      await screen.findByText("the account policy changed in another window"),
+    ).toBeInTheDocument();
+  });
+
+  test("opens a writable native provider sign-in terminal", async () => {
+    const bridge = scripted();
+    const native = {
+      spec: {
+        id: "account-1",
+        provider: "github-copilot",
+        label: "Personal",
+        credentialKind: "native-profile",
+        profileDirectory: "",
+        credentialEnvironment: null,
+        baseUrl: null,
+        apiProtocol: null,
+        backendProvider: null,
+        models: [],
+        enabled: true,
+      },
+      revision: 3,
+      hasSecret: false,
+      deleted: false,
+      selections: 0,
+      requests: 0,
+      failures: 0,
+      cooldownUntil: 0,
+      lastStatus: null,
+      lastLatencyMillis: null,
+      updatedAt: "2026-11-01T00:00:00Z",
+    };
+    bridge.on("provider.accounts.list", {
+      version: 1,
+      accounts: [native],
+      policies: [],
+    });
+    bridge.on("provider.accounts.login", {
+      id: "login-term",
+      bootId: "boot",
+      pid: 1,
+      executable: "copilot",
+      args: [],
+      cwd: "",
+      columns: 100,
+      rows: 30,
+      revision: 1,
+      live: true,
+      exitCode: null,
+    });
+    const user = userEvent.setup();
+    const { store } = mount(bridge);
+    store.navigate({ kind: "settings", section: "accounts" });
+    await user.click(await screen.findByRole("button", { name: "Sign in" }));
+    expect(
+      await screen.findByRole("heading", { name: "Provider sign-in" }),
+    ).toBeInTheDocument();
+    expect(bridge.callsTo("provider.accounts.login")[0]).toMatchObject({
+      id: "account-1",
+      expectedRevision: 3,
+    });
+  });
+
+  test("rotates an API key with the account revision and clears the entered secret", async () => {
+    const bridge = scripted();
+    const account = {
+      spec: {
+        id: "api-account-1",
+        provider: "codex",
+        label: "Work",
+        credentialKind: "api-key",
+        profileDirectory: "",
+        credentialEnvironment: "OPENAI_API_KEY",
+        baseUrl: null,
+        apiProtocol: "responses",
+        backendProvider: null,
+        models: [],
+        enabled: true,
+      },
+      revision: 4,
+      hasSecret: true,
+      deleted: false,
+      selections: 0,
+      requests: 3,
+      failures: 0,
+      cooldownUntil: 0,
+      lastStatus: 200,
+      lastLatencyMillis: 20,
+      updatedAt: "2026-11-01T00:00:00Z",
+    };
+    bridge.on("provider.accounts.list", {
+      version: 1,
+      accounts: [account],
+      policies: [],
+    });
+    const user = userEvent.setup();
+    const { store } = mount(bridge);
+    store.navigate({ kind: "settings", section: "accounts" });
+    await user.click(await screen.findByRole("button", { name: "Rotate key" }));
+    const secret = screen.getByLabelText("New secret for Work");
+    await user.type(secret, "replacement-key");
+    await user.click(screen.getByRole("button", { name: "Save new key" }));
+    await waitFor(() =>
+      expect(bridge.callsTo("provider.accounts.put")).toHaveLength(1),
+    );
+    expect(bridge.callsTo("provider.accounts.put")[0]).toMatchObject({
+      spec: account.spec,
+      expectedRevision: 4,
+      secret: "replacement-key",
+    });
+    await waitFor(() =>
+      expect(
+        screen.queryByLabelText("New secret for Work"),
       ).not.toBeInTheDocument(),
     );
   });

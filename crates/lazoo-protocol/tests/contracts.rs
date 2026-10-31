@@ -42,6 +42,8 @@ fn provider_parameters_and_smoke_result_use_strict_camel_case_contracts() {
         events: vec![json!({"type": "turnCompleted"})],
         transcript_truncated: false,
         checked_at: "2026-08-30T00:00:00Z".to_owned(),
+        model_answered: true,
+        route_verified: true,
     };
     let value = serde_json::to_value(result).unwrap();
     assert_eq!(value["sessionId"], "session-1");

@@ -1,4 +1,6 @@
+mod accounts;
 mod configuration;
+pub use accounts::AccountCommand;
 mod memory;
 mod memory_worker;
 mod terminal;
@@ -43,6 +45,8 @@ pub struct Cli {
 
 #[derive(Debug, Subcommand)]
 pub enum Command {
+    #[command(subcommand)]
+    Account(AccountCommand),
     #[command(subcommand)]
     MemoryWorker(MemoryWorkerCommand),
     Status,
@@ -355,6 +359,8 @@ pub enum ProviderCommand {
         provider: String,
         #[arg(long)]
         prompt: String,
+        #[arg(long)]
+        model: Option<String>,
     },
 }
 
@@ -830,7 +836,10 @@ pub async fn execute_with(cli: &Cli, mut emit: impl FnMut(String)) -> Result<(),
         emit(render_result(&output, cli.json)?);
         return Ok(());
     }
-    let (method, params, follows) = command_request(&cli.command);
+    let (method, mut params, follows) = command_request(&cli.command);
+    if let Command::Account(command) = &cli.command {
+        accounts::supply_credential(command, &mut params)?;
+    }
     let mut connection =
         PipeClient::connect(&installation, "lazooctl", env!("CARGO_PKG_VERSION")).await?;
     let request = JsonRpcRequest {
@@ -880,6 +889,7 @@ fn response_timeout(method: &str) -> Duration {
         | "events.list"
         | "roster.get"
         | "provider.list"
+        | "provider.accounts.list"
         | "session.terminal.status" => SHORT_RESPONSE_TIMEOUT,
         _ => LONG_RESPONSE_TIMEOUT,
     }
@@ -895,6 +905,7 @@ fn timed_out(message: &'static str) -> CliError {
 #[must_use]
 pub fn command_request(command: &Command) -> (&'static str, Value, bool) {
     match command {
+        Command::Account(command) => accounts::command_request(command),
         Command::MemoryWorker(command) => memory_worker::command_request(command),
         Command::Terminal(command) => terminal::command_request(command),
         Command::Memory(command) => memory::command_request(command),
@@ -956,11 +967,17 @@ pub fn command_request(command: &Command) -> (&'static str, Value, bool) {
         Command::Provider(ProviderCommand::Probe { provider }) => {
             ("provider.probe", json!({"provider": provider}), false)
         }
-        Command::Provider(ProviderCommand::Smoke { provider, prompt }) => (
-            "provider.smoke",
-            json!({"provider": provider, "prompt": prompt}),
-            false,
-        ),
+        Command::Provider(ProviderCommand::Smoke {
+            provider,
+            prompt,
+            model,
+        }) => {
+            let mut params = json!({"provider": provider, "prompt": prompt});
+            if let Some(model) = model {
+                params["model"] = json!(model);
+            }
+            ("provider.smoke", params, false)
+        }
         Command::Employee(command) => employee_request(command),
         Command::Roster(RosterCommand::Show) => ("roster.get", json!({}), false),
         Command::Roster(RosterCommand::Refresh { idempotency_key }) => (
