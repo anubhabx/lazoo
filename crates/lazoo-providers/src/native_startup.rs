@@ -77,12 +77,14 @@ pub(crate) fn poll_screen(
         }
         return Ok(StartupState::Unknown);
     }
+    // Claude Code 2.1.316 draws the selection pointer as U+276F; older builds drew ">".
+    let pointer_on_no = screen.contains("> No, exit") || screen.contains("\u{276f} No, exit");
     if provider != ProviderKind::ClaudeCode
+        || !pointer_on_no
         || ![
             "Quick safety check",
             "Yes, I trust this folder",
             "Enter to confirm",
-            "> No, exit",
         ]
         .iter()
         .all(|marker| screen.contains(marker))
@@ -177,6 +179,28 @@ mod tests {
             &format!("{}-foreign", cwd.path().display()),
         );
         assert!(poll_screen(ProviderKind::ClaudeCode, cwd.path(), foreign.as_bytes()).is_err());
+        let heavy_pointer = raw.replace("\x1b[14;2H>", "\x1b[14;2H\u{276f}");
+        assert_eq!(
+            poll_screen(
+                ProviderKind::ClaudeCode,
+                cwd.path(),
+                heavy_pointer.as_bytes()
+            )
+            .unwrap(),
+            StartupState::TrustPrompt {
+                input: b"\x1b[B".to_vec()
+            }
+        );
+        let pointer_on_yes = raw.replace("\x1b[14;2H>", "\x1b[14;2H ");
+        assert_eq!(
+            poll_screen(
+                ProviderKind::ClaudeCode,
+                cwd.path(),
+                pointer_on_yes.as_bytes()
+            )
+            .unwrap(),
+            StartupState::Unknown
+        );
         let mut parser = NativeStartupScreen::default();
         for (index, byte) in raw.bytes().enumerate() {
             let state = parser

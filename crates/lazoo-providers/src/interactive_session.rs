@@ -564,13 +564,15 @@ impl NativeInteractiveSession {
                 }
                 _ => {}
             }
-            if !self
-                .terminal
-                .exit_status()
-                .map_err(|e| ProviderError::Protocol(format!("native startup status failed: {e}")))?
-                .live
-            {
-                return Err(ProviderError::ProcessExited { code: None });
+            let status = self.terminal.exit_status().map_err(|e| {
+                ProviderError::Protocol(format!("native startup status failed: {e}"))
+            })?;
+            if !status.live {
+                return Err(ProviderError::ProcessExited {
+                    code: status
+                        .exit_code
+                        .map(|code| i32::from_ne_bytes(code.to_ne_bytes())),
+                });
             }
         };
         drop(receiver);
