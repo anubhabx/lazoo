@@ -38,4 +38,5 @@ Tech stack: Rust/Tokio/SQLite/Windows DPAPI, existing ACP/MCP bridges, React/Tau
 - [x] Run format, targeted/workspace tests, strict lint, build and relevant acceptance scripts.
 - [x] Update source-backed provider matrix, benchmark and limitations in verification/handoff docs.
 - [x] Fetch PR state; rebase on Claude's completed PR if first, otherwise stack on current pilot.
-- [ ] Push feature branch, raise PR with exact evidence and remaining live-acceptance limitations.
+- [x] Push feature branch, raise PR with exact evidence and remaining live-acceptance limitations:
+  [PR #42](https://github.com/anubhabx/lazoo/pull/42), stacked on the latest PR #41.

@@ -2,6 +2,7 @@
 
 Date: 2026-11-01 (Asia/Calcutta). Branch: `codex/copilot-account-routing`.
 Stack base: `feat/desktop-ui-refresh` at `9f84d80`, PR #41; that PR is based on #40.
+Published as [PR #42](https://github.com/anubhabx/lazoo/pull/42).
 
 ## Scope
 
