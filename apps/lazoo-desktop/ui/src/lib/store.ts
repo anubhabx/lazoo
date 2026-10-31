@@ -195,6 +195,9 @@ export class Store {
   private statusTimer: ReturnType<typeof setInterval> | null = null;
   private disposed = false;
   private everConnected = false;
+  /** Lazoo's own navigation history (IA section 6.4): Alt+Left/Right traverse it. */
+  private history: Route[] = [{ kind: "launcher" }];
+  private historyIndex = 0;
   private pendingKeys = readStorage<Record<string, string>>(PENDING_KEY, {});
 
   constructor(
@@ -455,8 +458,15 @@ export class Store {
 
   // ---- navigation -----------------------------------------------------
 
-  navigate(route: Route) {
+  navigate(route: Route, record = true) {
     const previous = this.state.route;
+    if (record) {
+      this.history = [
+        ...this.history.slice(0, this.historyIndex + 1),
+        route,
+      ].slice(-50);
+      this.historyIndex = this.history.length - 1;
+    }
     this.set({ route, paletteOpen: false, composerError: null });
     if (route.kind === "conversation") {
       if (previous.kind !== "conversation" || previous.id !== route.id) {
@@ -470,6 +480,26 @@ export class Store {
     } else if (route.kind === "launcher") {
       void this.refresh("launcher");
     }
+  }
+
+  canGoBack() {
+    return this.historyIndex > 0;
+  }
+
+  canGoForward() {
+    return this.historyIndex < this.history.length - 1;
+  }
+
+  back() {
+    if (!this.canGoBack()) return;
+    this.historyIndex -= 1;
+    this.navigate(this.history[this.historyIndex]!, false);
+  }
+
+  forward() {
+    if (!this.canGoForward()) return;
+    this.historyIndex += 1;
+    this.navigate(this.history[this.historyIndex]!, false);
   }
 
   openConversation(id: Uuid, tab: Uuid | "lead" = "lead") {
@@ -489,8 +519,8 @@ export class Store {
       conversations: null,
       launcher: null,
       conversation: null,
-      route: { kind: "launcher" },
     });
+    this.navigate({ kind: "launcher" });
     void this.refresh("conversations");
     void this.refresh("launcher");
   }

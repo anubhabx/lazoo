@@ -145,6 +145,7 @@ With this, every agent in a conversation has a terminal path that works on this 
 - A long trust path no longer widens the conversation grid; the pane toolbar stays in view.
 - A finished worker's Native pane says so and offers the transcript instead of claiming it never started.
 - A finished worker whose card carries no session is matched to its newest suspended session, so its pane offers attach as well as the transcript.
+- `Alt+Left` and `Alt+Right` traverse Lazoo's route history (IA section 6.4), ignored while a native pane has focus so a TUI keeps its keys; covered by a store test.
 
 ## Acceptance run
 

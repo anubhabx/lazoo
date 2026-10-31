@@ -75,6 +75,18 @@ function Shell() {
         store.navigate({ kind: "launcher" });
         return;
       }
+      if (
+        event.altKey &&
+        (event.key === "ArrowLeft" || event.key === "ArrowRight")
+      ) {
+        // Lazoo's history, never a terminal's: a focused native pane keeps its keys.
+        const target = event.target as HTMLElement | null;
+        if (target?.closest?.(".xterm")) return;
+        event.preventDefault();
+        if (event.key === "ArrowLeft") store.back();
+        else store.forward();
+        return;
+      }
       if (event.key === "Escape") {
         const snapshot = store.getSnapshot();
         if (snapshot.paletteOpen) store.togglePalette(false);

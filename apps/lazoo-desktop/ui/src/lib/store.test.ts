@@ -283,6 +283,25 @@ describe("Store", () => {
     store.dispose();
   });
 
+  test("Alt+Left/Right history traverses Lazoo routes without recording the traversal", async () => {
+    const bridge = scripted();
+    const store = new Store(bridge, { statusPollMs: 0 });
+    await store.init();
+    store.navigate({ kind: "inbox", filter: "all" });
+    store.navigate({ kind: "settings", section: "general" });
+    expect(store.canGoBack()).toBe(true);
+    store.back();
+    expect(store.getSnapshot().route).toEqual({ kind: "inbox", filter: "all" });
+    store.back();
+    expect(store.getSnapshot().route).toEqual({ kind: "launcher" });
+    expect(store.canGoBack()).toBe(false);
+    store.forward();
+    expect(store.getSnapshot().route).toEqual({ kind: "inbox", filter: "all" });
+    store.navigate({ kind: "settings", section: "daemon" });
+    expect(store.canGoForward()).toBe(false);
+    store.dispose();
+  });
+
   test("transient failures are the only ones that keep a key", () => {
     expect(
       isTransient({ code: "LZ-DESKTOP-DAEMON-OFFLINE", message: "" }),
