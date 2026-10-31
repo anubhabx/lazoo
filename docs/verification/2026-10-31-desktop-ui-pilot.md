@@ -27,7 +27,7 @@ Deliberate deviation from the design system: body type is 13 px / 18 px (metadat
 | `cargo test -p lazoo-desktop` | PASS: 23 unit tests (allowlist refusals, deadlines, frame shapes, base64, response parsing) and 6 configuration tests |
 | `cargo clippy -p lazoo-desktop --all-targets -- -D warnings`, `cargo fmt --check` | PASS (reported by the Rust implementer on the final sources) |
 | `scripts/acceptance/desktop-shell.ps1 -Configuration debug -SkipBuild` | See the "Acceptance run" section below |
-| Full `scripts/gate.ps1` | **PASS, 44 steps in one run** on the final tree (see "Full gate, third run"); the two earlier runs and what they surfaced are kept below |
+| Full `scripts/gate.ps1` | **PASS, 44 steps in one run** on the final tree `0b73f83` (see "Full gate, fifth run"); the earlier runs and what they surfaced are kept below |
 
 The debug binaries were built with `CARGO_BUILD_JOBS=2`; the gate ran with `CARGO_BUILD_JOBS=2` and `RUST_TEST_THREADS=2` once the host had 5 GB free.
 
@@ -194,6 +194,14 @@ The rest of the gate was then run as the gate would have (`artifacts/core-v1-gat
 ### Full gate, third run: PASS
 
 `scripts/gate.ps1` on the final tree (`c2e433d`, with the history keys): **GATE PASS: 44 steps** in one uninterrupted run (format, clippy, test-host, `cargo test --workspace --locked`, the locked release build, and all 39 acceptance scripts including `resource-budget` and `task-delegation-graph`). Manifest: `artifacts/acceptance/core-v1-gate-manifest.json`; transcript kept locally as `artifacts/core-v1-gate.log`. The earlier `resource-budget` hang did not recur.
+
+### Full gate, fourth run: FAIL at the redaction test
+
+On `a4c1777` (the trust-pointer fix plus the provider error inside the failure message): format, clippy and test-host passed; `cargo test --workspace --locked` failed one test, `failed_native_start_is_redacted_and_persisted` (`apps/lazood/tests/daemon.rs`), which asserts that a provider's private diagnostic never appears in the `LZ-SESSION-START-FAILED` message. The message change was withdrawn in `0b73f83` (the daemon logs the provider error at warn level instead).
+
+### Full gate, fifth run: PASS
+
+`scripts/gate.ps1` on `0b73f83`: **GATE PASS: 44 steps** in one uninterrupted run (14:27 to 14:43 local), `CARGO_BUILD_JOBS=2`, `RUST_TEST_THREADS=2`; manifest `artifacts/acceptance/core-v1-gate-manifest.json`.
 
 ## What the owner should look at first
 
