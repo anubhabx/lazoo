@@ -32,13 +32,17 @@ No backend, protocol, or Rust source changed; `employee.create`, `employee.list`
 
 The dev mock (`npx vite --port 1431`, `?mock=1`, and `&fresh=1` for a machine with no employees) was driven with agent-browser at 1280×800 in Chromium, the engine WebView2 uses. Reviewed: the setup dialog (detected harness chips, five rows with reasons, the expanded editor), "Your team is ready", the empty-team launcher, the populated launcher with the lead preselected, a project home with the project expanded in the sidebar and its unread and needs-you markers, a conversation in Native and Transcript modes with the attention strip, the command palette, Settings (Employees, Harnesses). One defect found and fixed during review: nested project rows overflowed their grid track and clipped their status dots (`grid-template-columns: minmax(0, 1fr)` on the sidebar sections).
 
-## Not run in this session
+## Rust checks and the real window
 
-The host disk sat between 0 and 1.4 GB free while another worktree built, so the Tauri desktop was not rebuilt and the real-window acceptance and `cargo test -p lazoo-desktop` were not run. A failed link at zero free space would also risk the shared build cache. With room on the disk, run:
+The host disk sat between 0 and 1.4 GB free while another worktree built. Headroom came from deleting the main checkout's rustc incremental cache (`target/debug/incremental`, 5.7 GB of compilation cache; compiled crates stay in `deps`). The worktree's `target` is a junction to the main checkout's, so only the four desktop crates recompiled. Afterwards the main checkout's `lazoo-desktop` debug binary and test binaries were rebuilt from its own sources, so the shared cache does not carry this branch's UI.
 
-```powershell
-npm --prefix apps/lazoo-desktop/ui run build
-cargo test -p lazoo-desktop
-cargo build -p lazoo-desktop
-pwsh -File scripts/acceptance/desktop-shell.ps1 -Configuration debug -SkipBuild
-```
+| Check | Result |
+|---|---|
+| `cargo test -p lazoo-desktop` | PASS: 23 unit and 6 configuration tests, including the acceptance-script contract with the sidebar project and setup-dialog steps |
+| `cargo clippy -p lazoo-desktop --all-targets -- -D warnings`, `cargo fmt --all -- --check` | PASS |
+| `cargo build -p lazoo-desktop` (debug, this branch's `ui/dist` embedded) | PASS |
+| `scripts/acceptance/desktop-shell.ps1 -Configuration debug -SkipBuild` | **PASS** in 14.6 s, manifest `artifacts/acceptance/desktop-shell-manifest.json`. Gates runtimeAssets, releaseBuild (binary presence), cleanupIsolation, daemonReady, desktopWindow, customTitlebar, setupDialog, launcher, connection, projectSidebar, commandPaletteKeyboard, inboxPage, settingsProjects, defaultScreenshot (1180×760), narrowScreenshot (860×620), processIsolation all PASS; highDpiEvidence BLOCKED because Windows text scaling is 100 % (unchanged rule) |
+
+Three runs failed before the pass; each was the script, not the app. The first run showed the real dialog being offered on a fresh WebView profile and dismissed through "Not now". Its absence check then waited on "Set up your team", which the launcher's empty-team button also carries; the check now waits for "Not now" to disappear. The second run took the dismiss branch with no dialog open for the same reason; the dialog is now recognised by "Not now" and the check waits for the connection first, because the store decides whether to offer the dialog before it reports the connection. The third run looked for the removed status bar's "schema 20"; it now reads the Daemon page's "Schema" fact. The passing run took the "already offered" branch because the first run had offered the dialog in this profile.
+
+The real window's screenshots (Settings, Daemon at both sizes with "Desktop acceptance" expanded in the sidebar and "Start the first conversation" under it; the command palette with "Set up agents" and "Hide sidebar") match the browser review: slate surfaces, iris focus ring, the gliding selection.

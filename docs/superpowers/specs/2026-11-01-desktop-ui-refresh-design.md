@@ -121,7 +121,7 @@ Reduced motion (the Windows "Show animations" setting) removes the breathing, sh
 
 - `npm run check`: prettier, types, vitest (store, presets, transcript, app with axe on the sidebar and setup dialog), production build.
 - `cargo test -p lazoo-desktop`: the acceptance-script contract test now requires the sidebar project and setup-dialog steps.
-- `scripts/acceptance/desktop-shell.ps1`: dismisses the setup dialog when offered, restores a collapsed sidebar, and selects the project from the sidebar (gate `projectSidebar` replaces `spaceSwitch`).
+- `scripts/acceptance/desktop-shell.ps1`: dismisses the setup dialog when offered (recognised by its "Not now" button), restores a collapsed sidebar, selects the project from the sidebar (gate `projectSidebar` replaces `spaceSwitch`), and reads the schema from Settings, Daemon now that the status bar is gone.
 - Visual review through the dev mock (`vite dev`, `?mock=1`, `&fresh=1` for first run) at 1280×800. Record: `docs/verification/2026-11-01-desktop-ui-refresh.md`.
 
 ## 9. Not done here

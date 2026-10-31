@@ -685,11 +685,15 @@ try {
 
     # The quick-setup dialog opens by itself once per WebView profile when a
     # harness is detected; dismiss it so the launcher underneath is reachable.
+    # The launcher's empty-team button is also named 'Set up your team', so the
+    # dialog is recognised by its own 'Not now' button. The store decides
+    # whether to offer it before it reports the connection, so wait for that.
+    Wait-UiText $windowHandle @('connected') 20 | Out-Null
     $setupNames = @(Get-AutomationNames $windowHandle)
-    if ('Set up your team' -in $setupNames) {
+    if ('Set up your team' -in $setupNames -and 'Not now' -in $setupNames) {
         $notNow = Wait-InvokableElement $windowHandle 'Not now'
         Invoke-AutomationElement $notNow
-        Wait-UiTextAbsent $windowHandle @('Set up your team')
+        Wait-UiTextAbsent $windowHandle @('Not now')
         $gates.setupDialog = 'PASS: offered and dismissed'
     } else {
         $gates.setupDialog = 'PASS: already offered in this WebView profile'
@@ -761,7 +765,8 @@ try {
     Capture-Window $windowHandle $settingsScreenshot | Out-Null
     $daemonSection = Wait-InvokableElement $windowHandle 'Daemon'
     Invoke-AutomationElement $daemonSection
-    Wait-AutomationElement $windowHandle 'schema' $true | Out-Null
+    # The schema version is a Daemon fact now that the status bar is gone.
+    Wait-AutomationElement $windowHandle 'Schema' | Out-Null
     $gates.settingsProjects = 'PASS'
 
     Assert-True ([WindowNative]::MoveWindow($windowHandle, 40, 40, 1180, 760, $true)) 'default window resize'
