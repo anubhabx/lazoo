@@ -3,8 +3,12 @@
 
 import type { Bridge } from "./bridge";
 import { asFailure } from "./bridge";
+import type { AgentDraft } from "./presets";
+import { employeeParams } from "./presets";
 import type {
   AuthorityMode,
+  ConversationRow,
+  EmployeeRecord,
   EmployeeSessionRecord,
   EventFrame,
   InboxAction,
@@ -13,6 +17,7 @@ import type {
   InboxListResult,
   NativeTrustRequestRecord,
   ProjectRecord,
+  ProviderListEntry,
   RpcFailure,
   SystemStatus,
   Uuid,
@@ -55,12 +60,23 @@ export interface AppState {
   spaceId: Uuid | null;
   route: Route;
   conversations: WorkspaceConversationsResult | null;
+  /** Sidebar lists: Home (`"home"`) and every expanded project, newest first. */
+  spaceConversations: Record<string, ConversationRow[]>;
+  /** Projects open in the sidebar, remembered across launches. */
+  expandedProjects: Record<Uuid, boolean>;
+  sidebarCollapsed: boolean;
   launcher: WorkspaceLauncherResult | null;
   conversation: WorkspaceConversationResult | null;
   conversationError: RpcFailure | null;
   inboxCounts: InboxCounts | null;
   inbox: InboxListResult | null;
   trust: NativeTrustRequestRecord[];
+  employees: EmployeeRecord[] | null;
+  providers: ProviderListEntry[] | null;
+  /** The quick-setup dialog that offers the default agents. */
+  setupOpen: boolean;
+  /** A lead the user just created; the launcher selects it. */
+  preferredLeadId: Uuid | null;
   /** Every session the daemon knows; finished workers find their suspended session here. */
   sessions: EmployeeSessionRecord[];
   /** Local "seen" marks against `lastResultAt`, per conversation. */
@@ -85,7 +101,9 @@ export type Model =
   | "inbox"
   | "inboxCounts"
   | "trust"
-  | "sessions";
+  | "sessions"
+  | "employees"
+  | "providers";
 
 const ALL_MODELS: Model[] = [
   "status",
@@ -97,8 +115,14 @@ const ALL_MODELS: Model[] = [
   "inboxCounts",
   "trust",
   "sessions",
+  "employees",
+  "providers",
 ];
 const SEEN_KEY = "lazoo.seen";
+const EXPANDED_KEY = "lazoo.expanded-projects";
+const SIDEBAR_KEY = "lazoo.sidebar-collapsed";
+/** `offered` once the setup dialog has been shown; it opens by itself only once. */
+export const SETUP_KEY = "lazoo.setup";
 const PANE_KEY = "lazoo.pane-modes";
 const DEFAULT_PANE_KEY = "lazoo.default-pane";
 const PENDING_KEY = "lazoo.pending-keys";
@@ -127,8 +151,10 @@ export function modelsForEvent(eventType: string): Model[] {
         .add("inboxCounts");
       break;
     case "employee":
+      models.add("launcher").add("conversation").add("employees");
+      break;
     case "roster":
-      models.add("launcher").add("conversation");
+      models.add("launcher").add("conversation").add("providers");
       break;
     case "session":
       models.add("launcher").add("conversation").add("sessions");
@@ -137,7 +163,7 @@ export function modelsForEvent(eventType: string): Model[] {
       models.add("conversation");
       break;
     case "project":
-      models.add("projects").add("launcher");
+      models.add("projects").add("launcher").add("conversations");
       break;
     case "native":
     case "native-trust":
@@ -158,12 +184,19 @@ function initialState(): AppState {
     spaceId: null,
     route: { kind: "launcher" },
     conversations: null,
+    spaceConversations: {},
+    expandedProjects: readStorage<Record<Uuid, boolean>>(EXPANDED_KEY, {}),
+    sidebarCollapsed: readStorage<boolean>(SIDEBAR_KEY, false),
     launcher: null,
     conversation: null,
     conversationError: null,
     inboxCounts: null,
     inbox: null,
     trust: [],
+    employees: null,
+    providers: null,
+    setupOpen: false,
+    preferredLeadId: null,
     sessions: [],
     seen: readStorage<Record<Uuid, string>>(SEEN_KEY, {}),
     paneModes: readStorage<Record<Uuid, PaneMode>>(PANE_KEY, {}),
@@ -235,7 +268,10 @@ export class Store {
       this.refresh("launcher"),
       this.refresh("inboxCounts"),
       this.refresh("trust"),
+      this.refresh("employees"),
+      this.refresh("providers"),
     ]);
+    this.offerSetup();
     this.startStatusPolling();
     await this.connectEvents();
   }
@@ -361,12 +397,36 @@ export class Store {
           break;
         }
         case "conversations": {
-          const conversations =
-            await this.bridge.call<WorkspaceConversationsResult>(
-              "workspace.conversations",
-              { projectId: this.state.spaceId, limit: 200 },
-            );
-          if (conversations.projectId === this.state.spaceId) {
+          const current = this.state.spaceId;
+          const known = new Set(this.state.projects.map((p) => p.id));
+          const others = [
+            null,
+            ...Object.keys(this.state.expandedProjects).filter(
+              (id) => this.state.expandedProjects[id] && known.has(id),
+            ),
+          ].filter((id) => id !== current);
+          // The current space is read last so its reply is the freshest.
+          const results = await Promise.all(
+            [...others, current].map((projectId) =>
+              this.bridge
+                .call<WorkspaceConversationsResult>("workspace.conversations", {
+                  projectId,
+                  limit: projectId === current ? 200 : 50,
+                })
+                .catch((error: unknown) => {
+                  if (projectId === current) throw error;
+                  return null;
+                }),
+            ),
+          );
+          const lists = { ...this.state.spaceConversations };
+          for (const result of results) {
+            if (result)
+              lists[result.projectId ?? "home"] = result.conversations;
+          }
+          this.set({ spaceConversations: lists });
+          const conversations = results.at(-1);
+          if (conversations && conversations.projectId === this.state.spaceId) {
             this.marks.set("conversations", conversations.eventHighWater);
             this.set({ conversations });
             // The open conversation is being watched: a result that lands now is seen.
@@ -426,6 +486,18 @@ export class Store {
           const sessions =
             await this.bridge.call<EmployeeSessionRecord[]>("session.list");
           this.set({ sessions: Array.isArray(sessions) ? sessions : [] });
+          break;
+        }
+        case "employees": {
+          const employees =
+            await this.bridge.call<EmployeeRecord[]>("employee.list");
+          this.set({ employees: Array.isArray(employees) ? employees : [] });
+          break;
+        }
+        case "providers": {
+          const providers =
+            await this.bridge.call<ProviderListEntry[]>("provider.list");
+          this.set({ providers: Array.isArray(providers) ? providers : [] });
           break;
         }
         case "trust": {
@@ -513,16 +585,86 @@ export class Store {
   }
 
   selectSpace(spaceId: Uuid | null) {
-    if (spaceId === this.state.spaceId) return;
+    if (spaceId === this.state.spaceId) {
+      this.navigate({ kind: "launcher" });
+      return;
+    }
     this.set({
       spaceId,
       conversations: null,
       launcher: null,
       conversation: null,
     });
+    // After the switch, so the read it starts is for the new space.
+    if (spaceId) this.setProjectExpanded(spaceId, true);
     this.navigate({ kind: "launcher" });
     void this.refresh("conversations");
     void this.refresh("launcher");
+  }
+
+  setProjectExpanded(projectId: Uuid, expanded: boolean) {
+    if (Boolean(this.state.expandedProjects[projectId]) === expanded) return;
+    const expandedProjects = { ...this.state.expandedProjects };
+    if (expanded) expandedProjects[projectId] = true;
+    else delete expandedProjects[projectId];
+    writeStorage(EXPANDED_KEY, expandedProjects);
+    this.set({ expandedProjects });
+    if (expanded) void this.refresh("conversations");
+  }
+
+  toggleSidebar(collapsed?: boolean) {
+    const next = collapsed ?? !this.state.sidebarCollapsed;
+    writeStorage(SIDEBAR_KEY, next);
+    this.set({ sidebarCollapsed: next });
+  }
+
+  /** The setup dialog opens by itself once, when a harness is detected. */
+  private offerSetup() {
+    if (readStorage<string | null>(SETUP_KEY, null)) return;
+    if (!this.state.providers?.some((entry) => entry.detected)) return;
+    writeStorage(SETUP_KEY, "offered");
+    this.set({ setupOpen: true });
+  }
+
+  openSetup(open = true) {
+    if (open) void this.refresh("providers");
+    this.set({ setupOpen: open, paletteOpen: false });
+  }
+
+  /**
+   * Create the drafted agents one at a time, reporting each outcome. Names are
+   * the idempotency scope, so a retried setup never creates a twin.
+   */
+  async createTeam(
+    drafts: AgentDraft[],
+    onProgress: (
+      key: string,
+      outcome: "creating" | "created" | "failed",
+    ) => void,
+  ): Promise<number> {
+    let created = 0;
+    for (const draft of drafts) {
+      onProgress(draft.key, "creating");
+      const params = employeeParams(draft);
+      const result = await this.mutate(
+        "employee.create",
+        params,
+        `employee.create:${params.name.toLowerCase()}:${params.provider}`,
+      );
+      if (result) {
+        created += 1;
+        onProgress(draft.key, "created");
+        const id =
+          (result as { employee?: { id?: Uuid }; id?: Uuid }).employee?.id ??
+          (result as { id?: Uuid }).id;
+        if (draft.key === "lead" && id) this.set({ preferredLeadId: id });
+      } else {
+        onProgress(draft.key, "failed");
+      }
+    }
+    void this.refresh("employees");
+    void this.refresh("launcher");
+    return created;
   }
 
   togglePalette(open?: boolean) {

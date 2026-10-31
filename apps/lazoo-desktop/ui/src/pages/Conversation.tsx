@@ -1,5 +1,5 @@
 import { AnimatePresence, motion } from "motion/react";
-import { PanelRight } from "lucide-react";
+import { ArrowUp, PanelRight } from "lucide-react";
 import {
   useEffect,
   useMemo,
@@ -12,9 +12,13 @@ import { AttentionStrip } from "../components/AttentionStrip";
 import { TerminalPane } from "../components/TerminalPane";
 import { TranscriptPane } from "../components/TranscriptPane";
 import {
+  Avatar,
+  Badge,
   Button,
   EASE,
+  SPRING,
   Segmented,
+  Skeleton,
   StatusWord,
   fadeFast,
 } from "../components/primitives";
@@ -177,7 +181,13 @@ export function ConversationPage() {
                 </Button>
               </>
             ) : (
-              <span className="frame-state__title">Opening conversation…</span>
+              <div className="frame-loading" role="status">
+                <span className="sr-only">Opening conversation…</span>
+                <Skeleton width="38%" height={12} />
+                <Skeleton width="72%" height={10} />
+                <Skeleton width="64%" height={10} />
+                <Skeleton width="48%" height={10} />
+              </div>
             )}
           </div>
         </div>
@@ -211,17 +221,22 @@ export function ConversationPage() {
                 exit={{ opacity: 0, x: -6 }}
                 transition={{ duration: 0.22, ease: EASE }}
               >
-                <span className="dot" data-tone={tab.tone} aria-hidden="true" />
-                <span className="tab__name">{tab.name}</span>
-                {tab.key === "lead" ? (
-                  <span className="tab__role">main</span>
-                ) : null}
                 {active?.key === tab.key ? (
                   <motion.span
                     className="tab__indicator"
                     layoutId="tab-indicator"
-                    transition={{ duration: 0.15, ease: EASE }}
+                    transition={SPRING}
                   />
+                ) : null}
+                <Avatar
+                  name={tab.name}
+                  provider={tab.provider}
+                  size={18}
+                  status={tab.tone}
+                />
+                <span className="tab__name">{tab.name}</span>
+                {tab.key === "lead" ? (
+                  <span className="tab__role">lead</span>
                 ) : null}
               </motion.button>
             ))}
@@ -339,85 +354,58 @@ function PaneSlot({
 }
 
 function Header({ tab }: { tab: Tab | null }) {
-  const store = useStore();
   const { conversation } = useAppState();
-  const [renaming, setRenaming] = useState(false);
-  const [draft, setDraft] = useState("");
   if (!conversation || !tab) return <div className="conv__header" />;
   const { lead } = conversation;
   const actions = tab.worker
     ? tab.worker.actions
     : lead.actions.filter((a) => a.action !== "rename");
-
-  function startRename() {
-    setDraft(conversation!.title);
-    setRenaming(true);
-  }
-
-  async function commitRename() {
-    setRenaming(false);
-    const next = draft.trim();
-    if (!next || next === conversation!.title) return;
-    await store.rename(next);
-  }
+  const model = tab.worker ? tab.worker.model : lead.model;
+  const working = tab.tone === "running" || tab.tone === "starting";
+  const workerCount = conversation.workers.length;
 
   return (
     <div className="conv__header">
-      {renaming ? (
-        <input
-          className="input"
-          style={{ maxWidth: 320, height: 26 }}
-          aria-label="Conversation title"
-          value={draft}
-          autoFocus
-          onChange={(event) => setDraft(event.target.value)}
-          onBlur={() => void commitRename()}
-          onKeyDown={(event) => {
-            if (event.key === "Enter") void commitRename();
-            if (event.key === "Escape") setRenaming(false);
-          }}
-        />
-      ) : (
-        <button
-          type="button"
-          className="btn btn--ghost btn--sm"
-          style={{ maxWidth: 320 }}
-          title="Rename conversation"
-          aria-label={`Rename conversation: ${conversation.title}`}
-          onClick={startRename}
-        >
-          <span className="truncate">{conversation.title}</span>
-        </button>
-      )}
-      <span className="sep">/</span>
       <span className="conv__identity">
         <strong>{tab.name}</strong>
-        <span>{tab.key === "lead" ? "lead" : "worker"}</span>
-        <span className="sep">·</span>
-        <span>{providerLabel(tab.provider)}</span>
-        {tab.key === "lead" && lead.model ? (
-          <>
-            <span className="sep">·</span>
-            <span className="truncate">{lead.model}</span>
-          </>
-        ) : null}
-        {tab.worker?.model ? (
-          <>
-            <span className="sep">·</span>
-            <span className="truncate">{tab.worker.model}</span>
-          </>
-        ) : null}
-        <span className="sep">·</span>
-        <span>
+        <Badge tone={tab.key === "lead" ? "accent" : "neutral"}>
+          {tab.key === "lead" ? "lead" : "worker"}
+        </Badge>
+        <span className="conv__meta">
+          {providerLabel(tab.provider)}
+          {model ? ` · ${model}` : ""}
+          {" · "}
           {authorityLabel(
             tab.worker
               ? tab.worker.effectiveAuthority
               : (lead.authority ?? "ask"),
           )}
         </span>
-        <span className="sep">·</span>
-        <StatusWord tone={tab.tone} label={tab.stateLabel} />
+        <span className="sep" aria-hidden="true">
+          ·
+        </span>
+        {working ? (
+          <span className="status-word">
+            <span className="dot" data-tone={tab.tone} aria-hidden="true" />
+            <span className="shimmer-text">
+              {tab.stateLabel === "busy" ? "working" : tab.stateLabel}
+            </span>
+          </span>
+        ) : (
+          <StatusWord tone={tab.tone} label={tab.stateLabel} />
+        )}
+        {tab.key === "lead" && workerCount > 0 ? (
+          <span className="conv__meta">
+            {" · "}
+            {workerCount} {workerCount === 1 ? "worker" : "workers"}
+          </span>
+        ) : null}
       </span>
+      {tab.worker ? (
+        <span className="conv__task truncate" title={tab.worker.label}>
+          {tab.worker.label}
+        </span>
+      ) : null}
       <div className="conv__actions">
         {actions.map((action) => (
           <ActionButton key={action.action} action={action} />
@@ -513,7 +501,7 @@ function Composer() {
     const element = textarea.current;
     if (!element) return;
     element.style.height = "0px";
-    element.style.height = `${Math.min(element.scrollHeight, 160)}px`;
+    element.style.height = `${Math.min(element.scrollHeight, 200)}px`;
   }, [text]);
 
   async function send() {
@@ -545,10 +533,7 @@ function Composer() {
         void send();
       }}
     >
-      <div className="composer__box">
-        <span className="composer__chevron" aria-hidden="true">
-          ›
-        </span>
+      <div className="composer__box" data-ready={Boolean(text.trim())}>
         <textarea
           ref={textarea}
           rows={1}
@@ -558,52 +543,50 @@ function Composer() {
           onChange={(event) => setText(event.target.value)}
           onKeyDown={onKey}
         />
-        <Button
-          type="submit"
-          variant="primary"
-          size="sm"
-          disabled={busy || !text.trim()}
-        >
-          {busy ? "Sending…" : "Send"}
-        </Button>
-      </div>
-      <div className="composer__row">
-        {modes.length > 1 ? (
-          <select
-            className="select"
-            style={{
-              height: 22,
-              minHeight: 22,
-              width: "auto",
-              fontSize: 11,
-              padding: "0 24px 0 8px",
-            }}
-            aria-label="Authority for this request"
-            value={authority}
-            onChange={(event) =>
-              setAuthority(event.target.value as AuthorityMode)
-            }
-          >
-            {modes.map((mode) => (
-              <option key={mode} value={mode}>
-                {authorityLabel(mode)}
-              </option>
-            ))}
-          </select>
-        ) : (
-          <span>{authorityLabel(authority)}</span>
-        )}
-        <span className="sep">·</span>
-        <span>Enter sends, Shift+Enter adds a line</span>
-        {state.composerError ? (
-          <>
-            <span className="sep">·</span>
-            <span className="composer__error" role="alert">
-              {state.composerError.code}: {state.composerError.message}
+        <div className="composer__controls">
+          {modes.length > 1 ? (
+            <select
+              className="select select--pill"
+              aria-label="Authority for this request"
+              value={authority}
+              onChange={(event) =>
+                setAuthority(event.target.value as AuthorityMode)
+              }
+            >
+              {modes.map((mode) => (
+                <option key={mode} value={mode}>
+                  {authorityLabel(mode)}
+                </option>
+              ))}
+            </select>
+          ) : (
+            <span className="composer__authority">
+              {authorityLabel(authority)}
             </span>
-          </>
-        ) : null}
+          )}
+          <span className="composer__hint" aria-hidden="true">
+            Enter sends · Shift+Enter adds a line
+          </span>
+          <span className="spacer" />
+          <Button
+            type="submit"
+            variant="primary"
+            size="sm"
+            icon
+            className="composer__send"
+            loading={busy}
+            disabled={!text.trim()}
+            aria-label={busy ? "Sending" : "Send"}
+          >
+            {busy ? null : <ArrowUp size={15} aria-hidden="true" />}
+          </Button>
+        </div>
       </div>
+      {state.composerError ? (
+        <p className="composer__error" role="alert">
+          {state.composerError.code}: {state.composerError.message}
+        </p>
+      ) : null}
     </form>
   );
 }

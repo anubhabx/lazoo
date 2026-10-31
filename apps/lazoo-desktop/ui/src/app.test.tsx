@@ -499,3 +499,181 @@ describe("offline", () => {
     ).toBeGreaterThan(0);
   });
 });
+
+describe("projects in the sidebar", () => {
+  test("a project opens its home, expands its conversations, and reads them by project", async () => {
+    const bridge = scripted();
+    bridge.on("workspace.conversations", (params: unknown) => {
+      const projectId = (params as { projectId: string | null }).projectId;
+      return projectId
+        ? {
+            ...conversations([
+              {
+                ...conversations().conversations[0]!,
+                id: "33333333-3333-4333-8333-333333333399",
+                title: "tidy the project readme",
+              },
+            ]),
+            projectId,
+          }
+        : conversations();
+    });
+    bridge.on("workspace.launcher", (params: unknown) =>
+      launcher({
+        project: (params as { projectId: string | null }).projectId
+          ? project()
+          : null,
+      }),
+    );
+    const user = userEvent.setup();
+    const { store, container } = mount(bridge);
+    const projects = await screen.findByRole("region", { name: "Projects" });
+    await user.click(
+      await within(projects).findByRole("button", {
+        name: "Desktop acceptance",
+      }),
+    );
+    expect(store.getSnapshot().spaceId).toBe(project().id);
+    expect(
+      await within(projects).findByText("tidy the project readme"),
+    ).toBeInTheDocument();
+    expect(
+      within(projects).getByRole("button", {
+        name: "Collapse Desktop acceptance",
+      }),
+    ).toHaveAttribute("aria-expanded", "true");
+    const reads = bridge.callsTo("workspace.conversations") as {
+      projectId: string | null;
+    }[];
+    expect(reads.some((read) => read.projectId === project().id)).toBe(true);
+    await expectNoSeriousViolations(container);
+  });
+
+  test("Ctrl+B collapses and restores the sidebar", async () => {
+    const bridge = scripted();
+    const user = userEvent.setup();
+    const { container } = mount(bridge);
+    await screen.findByText("New work");
+    const shell = container.querySelector(".shell")!;
+    expect(shell).toHaveAttribute("data-sidebar", "open");
+    await user.keyboard("{Control>}b{/Control}");
+    expect(shell).toHaveAttribute("data-sidebar", "collapsed");
+    await user.click(screen.getByRole("button", { name: "Show sidebar" }));
+    expect(shell).toHaveAttribute("data-sidebar", "open");
+  });
+});
+
+describe("first-run setup", () => {
+  function withHarnesses(bridge: FakeBridge) {
+    bridge.on("provider.list", [
+      {
+        provider: "claude-code",
+        detected: true,
+        executable: "claude.exe",
+        discoverySource: "path",
+      },
+      {
+        provider: "codex",
+        detected: true,
+        executable: "codex.cmd",
+        discoverySource: "path",
+      },
+      {
+        provider: "opencode",
+        detected: false,
+        executable: null,
+        discoverySource: null,
+      },
+    ]);
+    bridge.on("employee.list", []);
+    bridge.on("employee.create", (params: unknown) => ({
+      employee: { id: `id-${(params as { name: string }).name}` },
+      rosterRevision: 2,
+      eventSequence: 41,
+    }));
+    return bridge;
+  }
+
+  test("offers the recommended team once and creates every agent as data", async () => {
+    const bridge = withHarnesses(scripted());
+    const user = userEvent.setup();
+    const { store, container, unmount } = mount(bridge);
+    const dialog = await screen.findByRole("dialog", {
+      name: "Set up your team",
+    });
+    expect(within(dialog).getByText("atlas")).toBeInTheDocument();
+    expect(within(dialog).getByText("opus · high")).toBeInTheDocument();
+    await expectNoSeriousViolations(container);
+    await user.click(
+      within(dialog).getByRole("button", { name: "Create 4 agents" }),
+    );
+    expect(
+      await screen.findByRole("dialog", { name: "Your team is ready" }),
+    ).toBeInTheDocument();
+    const created = bridge.callsTo("employee.create") as Record<
+      string,
+      unknown
+    >[];
+    expect(created.map((params) => params.name)).toEqual([
+      "atlas",
+      "forge",
+      "pixel",
+      "sentinel",
+    ]);
+    expect(created[0]).toMatchObject({
+      provider: "claude-code",
+      role: "lead",
+      model: "opus",
+      reasoningEffort: "high",
+      authorityMode: "self-decision",
+      activationPolicy: "notice-turns",
+      enabled: true,
+    });
+    expect(typeof created[0]!.idempotencyKey).toBe("string");
+    expect(created[3]).toMatchObject({
+      provider: "codex",
+      model: "gpt-6-astra",
+      checkoutPolicy: "read-only",
+    });
+    expect(store.getSnapshot().preferredLeadId).toBe("id-atlas");
+    unmount();
+
+    // Offered once: the next launch does not open it by itself.
+    mount(withHarnesses(scripted()));
+    await screen.findByText("New work");
+    await waitFor(() =>
+      expect(bridge.callsTo("provider.list").length).toBeGreaterThan(0),
+    );
+    expect(
+      screen.queryByRole("dialog", { name: "Set up your team" }),
+    ).not.toBeInTheDocument();
+  });
+
+  test("a row can be edited and left out before creating", async () => {
+    const bridge = withHarnesses(scripted());
+    const user = userEvent.setup();
+    mount(bridge);
+    const dialog = await screen.findByRole("dialog", {
+      name: "Set up your team",
+    });
+    await user.click(
+      within(dialog).getByRole("checkbox", { name: "Include pixel" }),
+    );
+    await user.click(
+      within(dialog).getByRole("button", { name: "Edit atlas" }),
+    );
+    const name = await within(dialog).findByLabelText("Name");
+    await user.clear(name);
+    await user.type(name, "orion");
+    await user.click(
+      within(dialog).getByRole("button", { name: "Create 3 agents" }),
+    );
+    await screen.findByRole("dialog", { name: "Your team is ready" });
+    const created = bridge.callsTo("employee.create") as { name: string }[];
+    expect(created.map((params) => params.name)).toEqual([
+      "orion",
+      "forge",
+      "sentinel",
+    ]);
+  });
+});

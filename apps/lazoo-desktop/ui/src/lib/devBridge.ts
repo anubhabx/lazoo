@@ -6,6 +6,8 @@ import type {
   EventFrame,
   EventSummary,
   InboxItem,
+  LeadCandidate,
+  ProjectRecord,
   TerminalFrame,
   WorkerCard,
   WorkspaceConversationResult,
@@ -18,6 +20,8 @@ import {
   conversationRow,
   inboxItem,
   launcher,
+  leadCandidate,
+  PROJECT_ID,
   project,
   status,
   terminalRecord,
@@ -35,6 +39,63 @@ export function createDevBridge(): Bridge {
   let turns = [turnSummary()];
   const trust: never[] = [];
   const liveTerminal = terminalRecord();
+  // `?mock=1&fresh=1` starts with no employees to show first-run setup.
+  const fresh = window.location.search.includes("fresh");
+  const minutesAgo = (minutes: number) =>
+    new Date(Date.now() - minutes * 60_000).toISOString();
+  const leads: LeadCandidate[] = fresh
+    ? []
+    : [
+        leadCandidate(),
+        leadCandidate({
+          employeeId: "bbbbbbbb-0000-4000-8000-000000000001",
+          name: "rune",
+          provider: "claude-code",
+          role: "frontend",
+          model: "sonnet",
+          reasoningEffort: "medium",
+          availability: "idle",
+        }),
+        leadCandidate({
+          employeeId: "bbbbbbbb-0000-4000-8000-000000000002",
+          name: "kit",
+          provider: "antigravity",
+          role: "research",
+          model: null,
+          reasoningEffort: null,
+        }),
+      ];
+  const projects: ProjectRecord[] = [
+    project(),
+    {
+      ...project(),
+      id: "44444444-4444-4444-8444-444444444445",
+      canonicalPath: "C:\\workspace\\lazoo-web",
+      displayName: "lazoo-web",
+    },
+  ];
+  const projectRows = [
+    conversationRow({
+      id: "33333333-3333-4333-8333-333333333336",
+      title: "Sidebar keyboard navigation",
+      marker: "needs-attention",
+      updatedAt: minutesAgo(12),
+    }),
+    conversationRow({
+      id: "33333333-3333-4333-8333-333333333337",
+      title: "Migrate settings to the new tokens",
+      marker: "completed",
+      lastResultAt: minutesAgo(90),
+      updatedAt: minutesAgo(90),
+    }),
+    conversationRow({
+      id: "33333333-3333-4333-8333-333333333338",
+      title: "Audit bundle size",
+      marker: null,
+      workers: { total: 0, running: 0, waiting: 0, failed: 0, completed: 0 },
+      updatedAt: minutesAgo(60 * 26),
+    }),
+  ];
 
   function emit(eventType: string) {
     sequence += 1;
@@ -89,24 +150,72 @@ export function createDevBridge(): Bridge {
   const handlers: Record<string, (params: Record<string, unknown>) => unknown> =
     {
       "system.status": () => status({ eventHighWater: sequence }),
-      "project.list": () => [project()],
-      "workspace.conversations": () =>
-        conversations([
-          conversationRow(),
-          conversationRow({
-            id: "33333333-3333-4333-8333-333333333334",
-            title: "add retry budget to dispatch",
-            marker: "needs-attention",
-            updatedAt: new Date(Date.now() - 3 * 86_400_000).toISOString(),
-          }),
-          conversationRow({
-            id: "33333333-3333-4333-8333-333333333335",
-            title: "doc pass on NEXT-SESSION",
-            marker: null,
-            updatedAt: new Date(Date.now() - 12 * 86_400_000).toISOString(),
-          }),
-        ]),
-      "workspace.launcher": () => launcher({ eventHighWater: sequence }),
+      "project.list": () => [...projects],
+      "project.register": (params) => {
+        const record = {
+          ...project(),
+          id: `44444444-4444-4444-8444-${String(projects.length).padStart(12, "0")}`,
+          canonicalPath: String(params.path),
+          displayName:
+            (params.displayName as string | null) ??
+            String(params.path).split(/[\\/]/).pop() ??
+            "project",
+        };
+        projects.push(record);
+        emit("project.registered");
+        return { project: record };
+      },
+      "employee.create": (params) => {
+        const lead = leadCandidate({
+          employeeId: `cccccccc-0000-4000-8000-${String(leads.length).padStart(12, "0")}`,
+          name: String(params.name),
+          provider: String(params.provider),
+          role: String(params.role),
+          model: (params.model as string | null) ?? null,
+          reasoningEffort: (params.reasoningEffort as string | null) ?? null,
+          defaultAuthority:
+            params.authorityMode as LeadCandidate["defaultAuthority"],
+        });
+        leads.push(lead);
+        emit("employee.created");
+        return {
+          employee: { id: lead.employeeId, name: lead.name, enabled: true },
+          rosterRevision: leads.length,
+          eventSequence: sequence,
+        };
+      },
+      "workspace.conversations": (params) =>
+        params.projectId === PROJECT_ID
+          ? { ...conversations(projectRows), projectId: PROJECT_ID }
+          : params.projectId
+            ? { ...conversations([]), projectId: params.projectId as string }
+            : conversations([
+                conversationRow(),
+                conversationRow({
+                  id: "33333333-3333-4333-8333-333333333334",
+                  title: "add retry budget to dispatch",
+                  marker: "needs-attention",
+                  updatedAt: new Date(
+                    Date.now() - 3 * 86_400_000,
+                  ).toISOString(),
+                }),
+                conversationRow({
+                  id: "33333333-3333-4333-8333-333333333335",
+                  title: "doc pass on NEXT-SESSION",
+                  marker: null,
+                  updatedAt: new Date(
+                    Date.now() - 12 * 86_400_000,
+                  ).toISOString(),
+                }),
+              ]),
+      "workspace.launcher": (params) =>
+        launcher({
+          eventHighWater: sequence,
+          project:
+            projects.find((entry) => entry.id === params.projectId) ?? null,
+          leads: [...leads],
+          rememberedLeadId: fresh ? null : (leads[0]?.employeeId ?? null),
+        }),
       "workspace.conversation": () => current(),
       "inbox.counts": () => ({
         version: 1,
@@ -175,7 +284,13 @@ export function createDevBridge(): Bridge {
       "conversation.create": () => ({ conversation: { id: CONVERSATION_ID } }),
       "conversation.rename": () => ({ ok: true }),
       "task.cancel": () => ({ ok: true }),
-      "employee.list": () => [],
+      "employee.list": () =>
+        leads.map((lead) => ({
+          id: lead.employeeId,
+          name: lead.name,
+          provider: lead.provider,
+          enabled: true,
+        })),
       "provider.list": () => [
         {
           provider: "codex",
@@ -197,9 +312,9 @@ export function createDevBridge(): Bridge {
         },
         {
           provider: "antigravity",
-          detected: false,
-          executable: null,
-          discoverySource: null,
+          detected: true,
+          executable: "C:\\Users\\dev\\AppData\\Local\\agy\\bin\\agy.exe",
+          discoverySource: "path",
         },
       ],
       "roster.get": () => ({ revision: 3, entries: [] }),

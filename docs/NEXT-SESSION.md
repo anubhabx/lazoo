@@ -1,5 +1,9 @@
 # Backend handoff: four-provider UI starting point, 2026-10-29
 
+## Desktop UI refresh, 2026-11-01
+
+`feat/desktop-ui-refresh` (stacked on `feat/desktop-ui-pilot`, pull request #40) replaces the pilot's design system and first run without touching the backend. The palette is slate lifted off black with one iris accent (no ember or amber), soft status hues, a top-highlight-plus-shadow depth model, and spring-settled motion; `design-system/tokens.css` is the single source and `tokens.json` is generated from it (`node design-system/build-tokens.mjs`). Base components live in `ui/src/components/primitives.tsx` and `ui/src/styles/components.css`; pages only lay them out. The sidebar now runs full height with projects first (expandable, each with its newest conversations), then Recents for Home; the titlebar is back, forward, and a breadcrumb; the status bar is gone; `Ctrl+B` collapses the sidebar. The app ships six agent presets (`ui/src/lib/presets.ts`) chosen from October 2026 community comparisons, offered once in a setup dialog for whatever harnesses `provider.list` detects and editable before `employee.create`. Design: `docs/superpowers/specs/2026-11-01-desktop-ui-refresh-design.md`. Evidence: `docs/verification/2026-11-01-desktop-ui-refresh.md`.
+
 ## Desktop UI pilot, 2026-10-31
 
 The desktop is no longer the read-only shell. `feat/desktop-ui-pilot` (cut from `origin/main` at `87b63e8`) rebuilds `apps/lazoo-desktop` on the readiness contract: `daemon_call` behind a Rust allowlist, an events channel, a terminal byte-stream poller, and a React front end with a launcher, a conversation surface (agent tabs, Native and Transcript panes, attention strip, composer, details), the Inbox, Settings, and a command palette. Design: `docs/superpowers/specs/2026-10-31-desktop-ui-pilot-design.md`. Evidence and the live pilot on the owner's machine: `docs/verification/2026-10-31-desktop-ui-pilot.md`.

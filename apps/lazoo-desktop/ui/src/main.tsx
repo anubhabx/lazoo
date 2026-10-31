@@ -1,6 +1,7 @@
 import "./styles/fonts.css";
 import "../../../../design-system/tokens.css";
 import "@xterm/xterm/css/xterm.css";
+import "./styles/components.css";
 import "./styles/app.css";
 
 import { StrictMode } from "react";

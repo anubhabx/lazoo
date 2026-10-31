@@ -149,7 +149,8 @@ fn desktop_acceptance_covers_frontend_assets_and_native_interactions() {
     assert!(script.contains("'inbox{ENTER}'"));
     assert!(script.contains("'^n'"));
     assert!(script.contains("What should the team work on?"));
-    assert!(script.contains("Switch space:"));
+    assert!(script.contains("Collapse Desktop acceptance"));
+    assert!(script.contains("Set up your team"));
     assert!(script.contains("Nothing needs you"));
     assert!(script.contains("Register a project"));
     assert!(script.contains("$Configuration"));

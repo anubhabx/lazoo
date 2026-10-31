@@ -4,6 +4,8 @@
 
 **Status:** Implemented on `feat/desktop-ui-pilot` against the backend readiness checkpoint (`origin/main` at `87b63e8`, pull request #39). The previous read-only shell is discarded; this document replaces its UI decisions. The information architecture (`2026-08-30-lazoo-desktop-information-architecture-design.md`) and design system (`2026-08-29-lazoo-desktop-design-system.md`) remain the vocabulary and token source; where this document is more specific, it wins for the pilot.
 
+> **Superseded in part (2026-11-01):** colour, type, motion, the rail, the titlebar, and first-run are redesigned in `2026-11-01-desktop-ui-refresh-design.md` (slate palette, iris accent, projects-first sidebar, shipped agents). Sections 4 to 6 below still hold.
+
 ## 1. Moodboard: what is borrowed, and from where
 
 A designer steals. These are the exact parts taken and the reason each was taken.

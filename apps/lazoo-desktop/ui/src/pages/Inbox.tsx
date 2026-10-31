@@ -1,6 +1,14 @@
 import { AnimatePresence, motion } from "motion/react";
+import { CheckCheck } from "lucide-react";
 
-import { Button, EASE, Empty } from "../components/primitives";
+import {
+  Avatar,
+  Button,
+  EASE,
+  Empty,
+  SPRING,
+  Skeleton,
+} from "../components/primitives";
 import { useAppState, useStore } from "../lib/context";
 import type { InboxFilter, InboxItem } from "../lib/protocol";
 import { providerLabel, relativeTime, words } from "../lib/util";
@@ -55,8 +63,15 @@ export function InboxPage() {
                   store.navigate({ kind: "inbox", filter: entry.value })
                 }
               >
+                {filter === entry.value ? (
+                  <motion.span
+                    layoutId="inbox-filter"
+                    className="filters__thumb"
+                    transition={SPRING}
+                  />
+                ) : null}
                 {entry.label}
-                {count ? ` ${count}` : ""}
+                {count ? <span className="filters__count">{count}</span> : null}
               </button>
             );
           })}
@@ -72,9 +87,20 @@ export function InboxPage() {
       </header>
       <div className="page__body">
         {!inbox ? (
-          <span className="meta">Reading the Inbox…</span>
+          <div className="list" aria-busy="true">
+            {[0, 1, 2].map((index) => (
+              <div key={index} className="item">
+                <Skeleton width={8} height={8} radius={4} />
+                <div className="item__main">
+                  <Skeleton width="46%" height={12} />
+                  <Skeleton width="70%" height={10} />
+                </div>
+              </div>
+            ))}
+          </div>
         ) : inbox.items.length === 0 ? (
           <Empty
+            icon={<CheckCheck size={18} aria-hidden="true" />}
             title={
               filter === "resolved"
                 ? "Nothing resolved yet"
@@ -131,7 +157,16 @@ function InboxRow({ item }: { item: InboxItem }) {
       exit={{ opacity: 0, y: -6 }}
       transition={{ duration: 0.22, ease: EASE }}
     >
-      <span className="dot" data-tone={toneFor(item)} aria-hidden="true" />
+      {item.scope.employeeName ? (
+        <Avatar
+          name={item.scope.employeeName}
+          provider={item.scope.provider}
+          size={24}
+          status={toneFor(item)}
+        />
+      ) : (
+        <span className="dot" data-tone={toneFor(item)} aria-hidden="true" />
+      )}
       <div className="item__main">
         <span className="item__title">
           {conversationId ? (

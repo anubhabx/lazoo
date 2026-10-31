@@ -1,6 +1,17 @@
+import { motion } from "motion/react";
+import { Sparkles } from "lucide-react";
 import { useCallback, useEffect, useState, type FormEvent } from "react";
 
-import { Button, Field, Segmented } from "../components/primitives";
+import {
+  Avatar,
+  Badge,
+  Button,
+  Field,
+  ProjectGlyph,
+  SPRING,
+  Segmented,
+  Switch,
+} from "../components/primitives";
 import { useAppState, useBridge, useStore } from "../lib/context";
 import type {
   AuthorityMode,
@@ -47,6 +58,13 @@ export function SettingsPage() {
               store.navigate({ kind: "settings", section: entry.id })
             }
           >
+            {section === entry.id ? (
+              <motion.span
+                layoutId="settings-selection"
+                className="rail-selection"
+                transition={SPRING}
+              />
+            ) : null}
             <span className="row__label">{entry.label}</span>
           </button>
         ))}
@@ -115,26 +133,28 @@ function JsonFacts({ value }: { value: unknown }) {
         (key) => typeof (first as Record<string, unknown>)[key] !== "object",
       );
       return (
-        <table className="table">
-          <thead>
-            <tr>
-              {columns.map((column) => (
-                <th key={column}>{words(column)}</th>
-              ))}
-            </tr>
-          </thead>
-          <tbody>
-            {value.map((row: Record<string, unknown>, index) => (
-              <tr key={index}>
+        <div className="table-wrap">
+          <table className="table">
+            <thead>
+              <tr>
                 {columns.map((column) => (
-                  <td key={column} className="mono">
-                    {String(row[column] ?? "")}
-                  </td>
+                  <th key={column}>{words(column)}</th>
                 ))}
               </tr>
-            ))}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {value.map((row: Record<string, unknown>, index) => (
+                <tr key={index}>
+                  {columns.map((column) => (
+                    <td key={column} className="mono">
+                      {String(row[column] ?? "")}
+                    </td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       );
     }
     return <span className="mono">{value.map(String).join(", ")}</span>;
@@ -282,46 +302,76 @@ function Employees() {
         Named identities on a harness. Creating one runs a bounded readiness
         probe, never a model.
       </p>
+      <div className="settings__callout">
+        <Sparkles size={16} aria-hidden="true" />
+        <span>
+          Lazoo ships a recommended team for the harnesses on this machine: a
+          lead, builders, and a reviewer, each on the model developers prefer
+          for that work.
+        </span>
+        <Button variant="accent" size="sm" onClick={() => store.openSetup()}>
+          Set up agents
+        </Button>
+      </div>
       <Failure error={employees.error} />
       {list.length ? (
-        <table className="table">
-          <thead>
-            <tr>
-              <th>Name</th>
-              <th>Harness</th>
-              <th>Role</th>
-              <th>Model</th>
-              <th>Authority</th>
-              <th>Activation</th>
-              <th>Enabled</th>
-              <th />
-            </tr>
-          </thead>
-          <tbody>
-            {list.map((employee) => (
-              <tr key={employee.id}>
-                <td>{employee.name}</td>
-                <td>{providerLabel(employee.provider)}</td>
-                <td>{employee.role || "—"}</td>
-                <td className="mono">{employee.model ?? "—"}</td>
-                <td>{authorityLabel(employee.authorityMode)}</td>
-                <td>{words(employee.activationPolicy)}</td>
-                <td>{employee.enabled ? "yes" : "no"}</td>
-                <td>
-                  {employee.enabled ? (
-                    <Button
-                      size="sm"
-                      variant="ghost"
-                      onClick={() => void disable(employee)}
-                    >
-                      Disable
-                    </Button>
-                  ) : null}
-                </td>
+        <div className="table-wrap">
+          <table className="table">
+            <thead>
+              <tr>
+                <th>Name</th>
+                <th>Harness</th>
+                <th>Role</th>
+                <th>Model</th>
+                <th>Authority</th>
+                <th>Activation</th>
+                <th>Enabled</th>
+                <th />
               </tr>
-            ))}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {list.map((employee) => (
+                <tr key={employee.id}>
+                  <td>
+                    <span className="cell-identity">
+                      <Avatar
+                        name={employee.name}
+                        provider={employee.provider}
+                        size={20}
+                      />
+                      {employee.name}
+                    </span>
+                  </td>
+                  <td>{providerLabel(employee.provider)}</td>
+                  <td>
+                    {employee.role ? <Badge>{employee.role}</Badge> : "—"}
+                  </td>
+                  <td className="mono">{employee.model ?? "—"}</td>
+                  <td>{authorityLabel(employee.authorityMode)}</td>
+                  <td>{words(employee.activationPolicy)}</td>
+                  <td>
+                    {employee.enabled ? (
+                      <Badge tone="success">enabled</Badge>
+                    ) : (
+                      <Badge>disabled</Badge>
+                    )}
+                  </td>
+                  <td>
+                    {employee.enabled ? (
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        onClick={() => void disable(employee)}
+                      >
+                        Disable
+                      </Button>
+                    ) : null}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       ) : employees.data ? (
         <p className="meta">No employees yet.</p>
       ) : null}
@@ -461,37 +511,45 @@ function Harnesses() {
       </p>
       <Failure error={providers.error} />
       {providers.data ? (
-        <table className="table">
-          <thead>
-            <tr>
-              <th>Harness</th>
-              <th>Detected</th>
-              <th>Executable</th>
-              <th>Source</th>
-              <th>Auto-accept managed trust</th>
-            </tr>
-          </thead>
-          <tbody>
-            {providers.data.map((entry) => (
-              <tr key={entry.provider}>
-                <td>{providerLabel(entry.provider)}</td>
-                <td>{entry.detected ? "yes" : "no"}</td>
-                <td className="mono" title={entry.executable ?? undefined}>
-                  {entry.executable ?? "—"}
-                </td>
-                <td>{entry.discoverySource ?? "—"}</td>
-                <td>
-                  {entry.provider === "claude-code" ||
-                  entry.provider === "antigravity" ? (
-                    <TrustPolicy provider={entry.provider} />
-                  ) : (
-                    <span className="meta">not applicable</span>
-                  )}
-                </td>
+        <div className="table-wrap">
+          <table className="table">
+            <thead>
+              <tr>
+                <th>Harness</th>
+                <th>Detected</th>
+                <th>Executable</th>
+                <th>Source</th>
+                <th>Auto-accept managed trust</th>
               </tr>
-            ))}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {providers.data.map((entry) => (
+                <tr key={entry.provider}>
+                  <td>{providerLabel(entry.provider)}</td>
+                  <td>
+                    {entry.detected ? (
+                      <Badge tone="success">detected</Badge>
+                    ) : (
+                      <Badge>not found</Badge>
+                    )}
+                  </td>
+                  <td className="mono" title={entry.executable ?? undefined}>
+                    {entry.executable ?? "—"}
+                  </td>
+                  <td>{entry.discoverySource ?? "—"}</td>
+                  <td>
+                    {entry.provider === "claude-code" ||
+                    entry.provider === "antigravity" ? (
+                      <TrustPolicy provider={entry.provider} />
+                    ) : (
+                      <span className="meta">not applicable</span>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       ) : null}
       <div className="card">
         <h3>Roster</h3>
@@ -536,9 +594,11 @@ function TrustPolicy({ provider }: { provider: string }) {
     policy.reload();
   }
   return (
-    <Button size="sm" variant="ghost" onClick={() => void toggle()}>
-      {current.autoAcceptManagedNextTime ? "On · turn off" : "Off · turn on"}
-    </Button>
+    <Switch
+      checked={current.autoAcceptManagedNextTime}
+      label={`Auto-accept managed workspace trust for ${providerLabel(provider)}`}
+      onChange={() => void toggle()}
+    />
   );
 }
 
@@ -577,26 +637,33 @@ function Projects() {
         conversations.
       </p>
       {projects.length ? (
-        <table className="table">
-          <thead>
-            <tr>
-              <th>Name</th>
-              <th>Path</th>
-              <th>Checkout</th>
-              <th>Registered</th>
-            </tr>
-          </thead>
-          <tbody>
-            {projects.map((project) => (
-              <tr key={project.id}>
-                <td>{project.displayName}</td>
-                <td className="mono">{project.canonicalPath}</td>
-                <td>{words(project.checkoutMode)}</td>
-                <td>{new Date(project.createdAt).toLocaleDateString()}</td>
+        <div className="table-wrap">
+          <table className="table">
+            <thead>
+              <tr>
+                <th>Name</th>
+                <th>Path</th>
+                <th>Checkout</th>
+                <th>Registered</th>
               </tr>
-            ))}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {projects.map((project) => (
+                <tr key={project.id}>
+                  <td>
+                    <span className="cell-identity">
+                      <ProjectGlyph name={project.displayName} size={18} />
+                      {project.displayName}
+                    </span>
+                  </td>
+                  <td className="mono">{project.canonicalPath}</td>
+                  <td>{words(project.checkoutMode)}</td>
+                  <td>{new Date(project.createdAt).toLocaleDateString()}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       ) : (
         <p className="meta">
           No projects registered. Home holds projectless conversations.

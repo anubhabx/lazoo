@@ -1,13 +1,31 @@
 import { AnimatePresence, motion } from "motion/react";
-import { Inbox, Plus, Settings } from "lucide-react";
-import { Fragment, useMemo } from "react";
+import {
+  ChevronRight,
+  FolderPlus,
+  Inbox,
+  PanelLeft,
+  Plus,
+  Search,
+  Settings,
+} from "lucide-react";
+import { useState, type FormEvent, type ReactNode } from "react";
 
 import { useAppState, useStore } from "../lib/context";
-import type { ConversationRow } from "../lib/protocol";
-import { dayGroup, relativeTime, type DayGroup } from "../lib/util";
-import { EASE } from "./primitives";
+import type { ConversationRow, ProjectRecord } from "../lib/protocol";
+import { relativeTime } from "../lib/util";
+import {
+  Button,
+  Dialog,
+  Dot,
+  EASE,
+  Field,
+  Kbd,
+  ProjectGlyph,
+  SPRING,
+} from "./primitives";
 
-const GROUPS: DayGroup[] = ["Today", "Previous 7 days", "Earlier"];
+/** How many conversations an open project shows before "Show all". */
+const PROJECT_PREVIEW = 5;
 
 export function markerTone(
   row: ConversationRow,
@@ -31,142 +49,436 @@ export function markerTone(
   }
 }
 
+/** The selected row's highlight glides from row to row. */
+function Selection() {
+  return (
+    <motion.span
+      layoutId="rail-selection"
+      className="rail-selection"
+      transition={SPRING}
+    />
+  );
+}
+
 export function Rail() {
   const store = useStore();
   const state = useAppState();
   const route = state.route;
-  const rows = state.conversations?.conversations ?? [];
-
-  const grouped = useMemo(() => {
-    const map = new Map<DayGroup, ConversationRow[]>();
-    for (const row of rows) {
-      const group = dayGroup(row.updatedAt);
-      map.set(group, [...(map.get(group) ?? []), row]);
-    }
-    return map;
-  }, [rows]);
-
+  const [adding, setAdding] = useState(false);
   const unresolved = state.inboxCounts?.unresolved ?? 0;
+  const home = state.spaceConversations.home ?? [];
+  const homeLoaded = "home" in state.spaceConversations;
+  const onLauncher = route.kind === "launcher";
 
   return (
-    <nav className="rail" aria-label="Spaces and conversations">
-      <div className="rail__top">
-        <button
-          type="button"
-          className="row row--strong"
-          aria-current={route.kind === "launcher" ? "page" : undefined}
-          onClick={() => store.navigate({ kind: "launcher" })}
-        >
-          <span className="row__icon">
-            <Plus size={14} aria-hidden="true" />
+    <aside className="rail" aria-label="Spaces and conversations">
+      <div className="rail__inner">
+        <div className="rail__head">
+          <span className="wordmark">
+            <span className="wordmark__mark" aria-hidden="true" />
+            lazoo
           </span>
-          <span className="row__label">New work</span>
-        </button>
-      </div>
-      <div
-        className="rail__history"
-        role="list"
-        aria-label="Conversation history"
-      >
-        <AnimatePresence initial={false}>
-          {GROUPS.filter((group) => grouped.has(group)).map((group) => (
-            <Fragment key={group}>
-              <motion.div
-                className="rail__group"
-                layout
-                initial={{ opacity: 0 }}
-                animate={{ opacity: 1 }}
-                exit={{ opacity: 0 }}
-                transition={{ duration: 0.22, ease: EASE }}
-              >
-                {group}
-              </motion.div>
-              {grouped.get(group)!.map((row) => {
-                const marker = markerTone(row, state.seen);
-                const selected =
-                  route.kind === "conversation" && route.id === row.id;
-                return (
-                  <motion.div
-                    key={row.id}
-                    role="listitem"
-                    layout
-                    initial={{ opacity: 0, y: 4 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    exit={{ opacity: 0, y: -4 }}
-                    transition={{ duration: 0.22, ease: EASE }}
+          <Button
+            variant="ghost"
+            size="sm"
+            icon
+            tip="Hide sidebar  Ctrl B"
+            tipSide="right"
+            aria-label="Hide sidebar"
+            onClick={() => store.toggleSidebar(true)}
+          >
+            <PanelLeft size={15} aria-hidden="true" />
+          </Button>
+        </div>
+
+        <nav className="rail__actions" aria-label="Primary">
+          <RailButton
+            icon={<Plus size={15} aria-hidden="true" />}
+            label="New work"
+            current={onLauncher && state.spaceId === null}
+            trailing={<Kbd keys={["Ctrl", "N"]} />}
+            onClick={() => store.selectSpace(null)}
+          />
+          <RailButton
+            icon={<Search size={15} aria-hidden="true" />}
+            label="Search"
+            ariaLabel="Open command palette"
+            trailing={<Kbd keys={["Ctrl", "K"]} />}
+            onClick={() => store.togglePalette(true)}
+          />
+          <RailButton
+            icon={<Inbox size={15} aria-hidden="true" />}
+            label="Inbox"
+            current={route.kind === "inbox"}
+            onClick={() => store.navigate({ kind: "inbox", filter: "all" })}
+            trailing={
+              <AnimatePresence>
+                {unresolved > 0 ? (
+                  <motion.span
+                    className="rail-badge"
+                    aria-label={`${unresolved} items need you`}
+                    initial={{ opacity: 0, scale: 0.6 }}
+                    animate={{ opacity: 1, scale: 1 }}
+                    exit={{ opacity: 0, scale: 0.6 }}
+                    transition={SPRING}
                   >
-                    <button
-                      type="button"
-                      className={`row ${marker ? "row--strong" : ""}`.trim()}
-                      aria-current={selected ? "page" : undefined}
-                      aria-label={`${row.title}${marker ? `, ${marker.label}` : ""}`}
-                      title={row.markerReason ?? row.title}
-                      onClick={() => store.openConversation(row.id)}
-                    >
-                      <span className="marker">
-                        {marker ? (
-                          <span
-                            className="dot"
-                            data-tone={marker.tone}
-                            aria-hidden="true"
-                          />
-                        ) : null}
-                      </span>
-                      <span className="row__label">{row.title}</span>
-                      <span className="row__meta">
-                        {relativeTime(row.updatedAt)}
-                      </span>
-                    </button>
-                  </motion.div>
-                );
-              })}
-            </Fragment>
-          ))}
-        </AnimatePresence>
-        {state.conversations && rows.length === 0 ? (
-          <div className="rail__group">No conversations yet</div>
-        ) : null}
-      </div>
-      <div className="rail__foot">
-        <button
-          type="button"
-          className="row"
-          aria-current={route.kind === "inbox" ? "page" : undefined}
-          onClick={() => store.navigate({ kind: "inbox", filter: "all" })}
-        >
-          <span className="row__icon">
-            <Inbox size={14} aria-hidden="true" />
-          </span>
-          <span className="row__label">Inbox</span>
-          <AnimatePresence>
-            {unresolved > 0 ? (
-              <motion.span
-                className="row__badge"
-                aria-label={`${unresolved} items need you`}
-                initial={{ opacity: 0, scale: 0.9 }}
-                animate={{ opacity: 1, scale: 1 }}
-                exit={{ opacity: 0, scale: 0.9 }}
-                transition={{ duration: 0.15, ease: EASE }}
+                    {unresolved}
+                  </motion.span>
+                ) : null}
+              </AnimatePresence>
+            }
+          />
+        </nav>
+
+        <div className="rail__scroll">
+          <section className="rail-section" aria-label="Projects">
+            <div className="rail-section__head">
+              <span>Projects</span>
+              <Button
+                variant="ghost"
+                size="sm"
+                icon
+                tip="Add a project"
+                tipSide="right"
+                aria-label="Add a project"
+                onClick={() => setAdding(true)}
               >
-                {unresolved}
-              </motion.span>
+                <Plus size={14} aria-hidden="true" />
+              </Button>
+            </div>
+            {state.projects.map((project) => (
+              <ProjectEntry key={project.id} project={project} />
+            ))}
+            {state.projects.length === 0 ? (
+              <button
+                type="button"
+                className="rail-row rail-row--hint"
+                onClick={() => setAdding(true)}
+              >
+                <span className="rail-row__icon">
+                  <FolderPlus size={15} aria-hidden="true" />
+                </span>
+                <span className="rail-row__label">Add your first project</span>
+              </button>
             ) : null}
-          </AnimatePresence>
+          </section>
+
+          <section className="rail-section" aria-label="Recents">
+            <div className="rail-section__head">
+              <span>Recents</span>
+            </div>
+            <div role="list" aria-label="Conversation history">
+              <AnimatePresence initial={false}>
+                {home.map((row) => (
+                  <ConversationEntry key={row.id} row={row} />
+                ))}
+              </AnimatePresence>
+            </div>
+            {homeLoaded && home.length === 0 ? (
+              <p className="rail-section__empty">No conversations yet</p>
+            ) : null}
+          </section>
+        </div>
+
+        <div className="rail__foot">
+          <RailButton
+            icon={<Settings size={15} aria-hidden="true" />}
+            label="Settings"
+            current={route.kind === "settings"}
+            onClick={() =>
+              store.navigate({ kind: "settings", section: "general" })
+            }
+          />
+          <Connection />
+        </div>
+      </div>
+      <AddProjectDialog open={adding} onClose={() => setAdding(false)} />
+    </aside>
+  );
+}
+
+function RailButton({
+  icon,
+  label,
+  ariaLabel,
+  current = false,
+  trailing,
+  onClick,
+}: {
+  icon: ReactNode;
+  label: string;
+  ariaLabel?: string;
+  current?: boolean;
+  trailing?: ReactNode;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      className="rail-row"
+      aria-current={current ? "page" : undefined}
+      aria-label={ariaLabel}
+      onClick={onClick}
+    >
+      {current ? <Selection /> : null}
+      <span className="rail-row__icon">{icon}</span>
+      <span className="rail-row__label">{label}</span>
+      {trailing ? <span className="rail-row__trail">{trailing}</span> : null}
+    </button>
+  );
+}
+
+function Connection() {
+  const state = useAppState();
+  const connection = state.connection;
+  const tone =
+    connection === "connected"
+      ? "healthy"
+      : connection === "connecting"
+        ? "running"
+        : connection === "uncertain"
+          ? "blocked"
+          : "failed";
+  const label =
+    connection === "connected"
+      ? "Connected"
+      : connection === "connecting"
+        ? "Connecting"
+        : connection === "uncertain"
+          ? "Reconnecting"
+          : "Daemon offline";
+  return (
+    <span
+      className="rail-conn"
+      title={state.connectionError?.message ?? label}
+      data-state={connection}
+    >
+      <Dot tone={tone} />
+      <span>{label}</span>
+    </span>
+  );
+}
+
+function ProjectEntry({ project }: { project: ProjectRecord }) {
+  const store = useStore();
+  const state = useAppState();
+  const route = state.route;
+  const expanded = Boolean(state.expandedProjects[project.id]);
+  const rows = state.spaceConversations[project.id] ?? [];
+  const needsYou = rows.filter(
+    (row) => row.marker === "needs-attention",
+  ).length;
+  const current = route.kind === "launcher" && state.spaceId === project.id;
+  const preview = rows.slice(0, PROJECT_PREVIEW);
+
+  return (
+    <div className="rail-project" data-expanded={expanded}>
+      <div className="rail-project__row">
+        <button
+          type="button"
+          className="rail-row"
+          aria-current={current ? "page" : undefined}
+          title={project.canonicalPath}
+          onClick={() => store.selectSpace(project.id)}
+        >
+          {current ? <Selection /> : null}
+          <span className="rail-row__icon">
+            <ProjectGlyph name={project.displayName} size={18} />
+          </span>
+          <span className="rail-row__label">{project.displayName}</span>
+          {needsYou > 0 ? (
+            <span className="rail-row__trail">
+              <span className="rail-badge" aria-label={`${needsYou} need you`}>
+                {needsYou}
+              </span>
+            </span>
+          ) : null}
         </button>
         <button
           type="button"
-          className="row"
-          aria-current={route.kind === "settings" ? "page" : undefined}
-          onClick={() =>
-            store.navigate({ kind: "settings", section: "general" })
-          }
+          className="rail-project__toggle"
+          aria-expanded={expanded}
+          aria-label={`${expanded ? "Collapse" : "Expand"} ${project.displayName}`}
+          onClick={() => store.setProjectExpanded(project.id, !expanded)}
         >
-          <span className="row__icon">
-            <Settings size={14} aria-hidden="true" />
-          </span>
-          <span className="row__label">Settings</span>
+          <ChevronRight size={13} aria-hidden="true" />
         </button>
       </div>
-    </nav>
+      <AnimatePresence initial={false}>
+        {expanded ? (
+          <motion.div
+            key="children"
+            className="rail-project__children"
+            role="list"
+            aria-label={`${project.displayName} conversations`}
+            initial={{ height: 0, opacity: 0 }}
+            animate={{ height: "auto", opacity: 1 }}
+            exit={{ height: 0, opacity: 0 }}
+            transition={{ duration: 0.24, ease: EASE }}
+          >
+            {preview.map((row) => (
+              <ConversationEntry key={row.id} row={row} nested />
+            ))}
+            {rows.length === 0 && project.id in state.spaceConversations ? (
+              <button
+                type="button"
+                className="rail-row rail-row--nested rail-row--hint"
+                onClick={() => store.selectSpace(project.id)}
+              >
+                <span className="rail-row__label">
+                  Start the first conversation
+                </span>
+              </button>
+            ) : null}
+            {rows.length > PROJECT_PREVIEW ? (
+              <button
+                type="button"
+                className="rail-row rail-row--nested rail-row--hint"
+                onClick={() => store.selectSpace(project.id)}
+              >
+                <span className="rail-row__label">Show all {rows.length}</span>
+              </button>
+            ) : null}
+          </motion.div>
+        ) : null}
+      </AnimatePresence>
+    </div>
+  );
+}
+
+function ConversationEntry({
+  row,
+  nested = false,
+}: {
+  row: ConversationRow;
+  nested?: boolean;
+}) {
+  const store = useStore();
+  const state = useAppState();
+  const route = state.route;
+  const marker = markerTone(row, state.seen);
+  const selected = route.kind === "conversation" && route.id === row.id;
+  return (
+    <motion.div
+      role="listitem"
+      layout="position"
+      initial={{ opacity: 0, x: -4 }}
+      animate={{ opacity: 1, x: 0 }}
+      exit={{ opacity: 0, x: -4 }}
+      transition={{ duration: 0.2, ease: EASE }}
+    >
+      <button
+        type="button"
+        className={`rail-row rail-row--conv ${nested ? "rail-row--nested" : ""} ${marker ? "rail-row--strong" : ""}`.trim()}
+        aria-current={selected ? "page" : undefined}
+        aria-label={`${row.title}${marker ? `, ${marker.label}` : ""}`}
+        title={row.markerReason ?? row.title}
+        onClick={() => store.openConversation(row.id)}
+      >
+        {selected ? <Selection /> : null}
+        <span className="rail-row__label">{row.title}</span>
+        <span className="rail-row__trail">
+          {marker ? <Dot tone={marker.tone} /> : null}
+          <span className="rail-row__time">{relativeTime(row.updatedAt)}</span>
+        </span>
+      </button>
+    </motion.div>
+  );
+}
+
+function AddProjectDialog({
+  open,
+  onClose,
+}: {
+  open: boolean;
+  onClose: () => void;
+}) {
+  const store = useStore();
+  const [path, setPath] = useState("");
+  const [name, setName] = useState("");
+  const [isolated, setIsolated] = useState(true);
+  const busy = store.isBusy(`project.register:${path.trim().toLowerCase()}`);
+
+  async function submit(event: FormEvent) {
+    event.preventDefault();
+    if (!path.trim()) return;
+    const result = (await store.mutate(
+      "project.register",
+      {
+        path: path.trim(),
+        displayName: name.trim() || null,
+        checkoutMode: isolated ? "isolated" : "lead-main",
+      },
+      `project.register:${path.trim().toLowerCase()}`,
+    )) as { project?: { id?: string } } | null;
+    if (!result) return;
+    setPath("");
+    setName("");
+    onClose();
+    store.toast({ tone: "info", title: "Project added" });
+    await store.refresh("projects");
+    if (result.project?.id) store.selectSpace(result.project.id);
+  }
+
+  return (
+    <Dialog
+      open={open}
+      onClose={onClose}
+      title="Add a project"
+      description="A local Git repository. Its conversations, agents' worktrees, and history stay inside it."
+      width={480}
+    >
+      <form className="stack" onSubmit={(event) => void submit(event)}>
+        <Field label="Repository path" htmlFor="add-project-path">
+          <input
+            id="add-project-path"
+            className="input mono-input"
+            placeholder="C:\workspace\my-repo"
+            value={path}
+            data-autofocus
+            onChange={(event) => setPath(event.target.value)}
+          />
+        </Field>
+        <Field
+          label="Name"
+          htmlFor="add-project-name"
+          hint="Defaults to the folder name."
+        >
+          <input
+            id="add-project-name"
+            className="input"
+            value={name}
+            onChange={(event) => setName(event.target.value)}
+          />
+        </Field>
+        <label className="check-row">
+          <input
+            type="checkbox"
+            checked={isolated}
+            onChange={(event) => setIsolated(event.target.checked)}
+          />
+          <span>
+            <strong>Isolate every agent in its own worktree</strong>
+            <span className="meta">
+              Recommended. Agents never write to your checkout or to each
+              other&apos;s branches.
+            </span>
+          </span>
+        </label>
+        <div className="form-actions">
+          <Button variant="ghost" onClick={onClose}>
+            Cancel
+          </Button>
+          <Button
+            type="submit"
+            variant="primary"
+            loading={busy}
+            disabled={!path.trim()}
+          >
+            Add project
+          </Button>
+        </div>
+      </form>
+    </Dialog>
   );
 }

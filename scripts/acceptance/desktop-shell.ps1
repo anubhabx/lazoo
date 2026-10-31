@@ -683,6 +683,21 @@ try {
     ) | Out-Null
     $gates.customTitlebar = 'PASS'
 
+    # The quick-setup dialog opens by itself once per WebView profile when a
+    # harness is detected; dismiss it so the launcher underneath is reachable.
+    $setupNames = @(Get-AutomationNames $windowHandle)
+    if ('Set up your team' -in $setupNames) {
+        $notNow = Wait-InvokableElement $windowHandle 'Not now'
+        Invoke-AutomationElement $notNow
+        Wait-UiTextAbsent $windowHandle @('Set up your team')
+        $gates.setupDialog = 'PASS: offered and dismissed'
+    } else {
+        $gates.setupDialog = 'PASS: already offered in this WebView profile'
+    }
+    if ('Show sidebar' -in @(Get-AutomationNames $windowHandle)) {
+        Invoke-AutomationElement (Wait-InvokableElement $windowHandle 'Show sidebar')
+    }
+
     Wait-UiText $windowHandle @(
         'New work',
         'Inbox',
@@ -696,13 +711,13 @@ try {
     Wait-UiText $windowHandle @('connected') 20 | Out-Null
     $gates.connection = 'PASS'
 
-    $spaceSwitcher = Wait-AutomationElement $windowHandle 'Switch space:' $true
-    Invoke-AutomationOption $spaceSwitcher
-    $projectOption = Wait-AutomationElement $windowHandle 'Desktop acceptance'
-    Invoke-AutomationOption $projectOption
-    Wait-UiText $windowHandle @('Desktop acceptance') | Out-Null
-    Wait-AutomationElement $windowHandle 'Switch space: Desktop acceptance' $true | Out-Null
-    $gates.spaceSwitch = 'PASS'
+    # Projects live in the sidebar: selecting one opens its home and expands it.
+    Wait-UiText $windowHandle @('Projects', 'Recents') | Out-Null
+    $projectRow = Wait-InvokableElement $windowHandle 'Desktop acceptance'
+    Invoke-AutomationElement $projectRow
+    Wait-AutomationElement $windowHandle 'Collapse Desktop acceptance' | Out-Null
+    Wait-UiText $windowHandle @('Start the first conversation') | Out-Null
+    $gates.projectSidebar = 'PASS'
 
     $commandTrigger = Wait-AutomationElement $windowHandle 'Open command palette'
     Send-WindowKeys $windowHandle '^k' $commandTrigger

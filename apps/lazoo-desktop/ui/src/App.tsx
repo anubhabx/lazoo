@@ -4,7 +4,7 @@ import { useEffect, useMemo } from "react";
 import { CommandPalette } from "./components/CommandPalette";
 import { DetailsPanel } from "./components/DetailsPanel";
 import { Rail } from "./components/Rail";
-import { StatusBar } from "./components/StatusBar";
+import { SetupDialog } from "./components/SetupDialog";
 import { Titlebar } from "./components/Titlebar";
 import { Toasts } from "./components/Toasts";
 import { EASE } from "./components/primitives";
@@ -75,6 +75,13 @@ function Shell() {
         store.navigate({ kind: "launcher" });
         return;
       }
+      if (event.ctrlKey && !event.altKey && key === "b") {
+        const target = event.target as HTMLElement | null;
+        if (target?.closest?.(".xterm")) return;
+        event.preventDefault();
+        store.toggleSidebar();
+        return;
+      }
       if (
         event.altKey &&
         (event.key === "ArrowLeft" || event.key === "ArrowRight")
@@ -89,6 +96,7 @@ function Shell() {
       }
       if (event.key === "Escape") {
         const snapshot = store.getSnapshot();
+        if (snapshot.setupOpen) return;
         if (snapshot.paletteOpen) store.togglePalette(false);
         else if (snapshot.detailsOpen) store.toggleDetails(false);
       }
@@ -102,40 +110,46 @@ function Shell() {
       ? `conversation:${route.id}`
       : route.kind === "settings"
         ? "settings"
-        : route.kind;
+        : route.kind === "launcher"
+          ? `launcher:${state.spaceId ?? "home"}`
+          : route.kind;
 
   return (
-    <div className="shell">
-      <Titlebar />
+    <div
+      className="shell"
+      data-sidebar={state.sidebarCollapsed ? "collapsed" : "open"}
+    >
       <Rail />
-      <main className="stage" aria-label="Workspace">
+      <div className="main">
+        <Titlebar />
+        <main className="stage" aria-label="Workspace">
+          <AnimatePresence initial={false}>
+            <motion.div
+              key={pageKey}
+              className="page-layer"
+              initial={{ opacity: 0, y: 6 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -3 }}
+              transition={{ duration: 0.2, ease: EASE }}
+            >
+              {route.kind === "launcher" ? <LauncherPage /> : null}
+              {route.kind === "conversation" ? <ConversationPage /> : null}
+              {route.kind === "inbox" ? <InboxPage /> : null}
+              {route.kind === "settings" ? <SettingsPage /> : null}
+            </motion.div>
+          </AnimatePresence>
+        </main>
         <AnimatePresence initial={false}>
-          <motion.div
-            key={pageKey}
-            className="page-layer"
-            style={{ position: "absolute", inset: 0 }}
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            transition={{ duration: 0.15, ease: EASE }}
-          >
-            {route.kind === "launcher" ? <LauncherPage /> : null}
-            {route.kind === "conversation" ? <ConversationPage /> : null}
-            {route.kind === "inbox" ? <InboxPage /> : null}
-            {route.kind === "settings" ? <SettingsPage /> : null}
-          </motion.div>
+          {state.detailsOpen && route.kind === "conversation" ? (
+            <DetailsPanel key="details" />
+          ) : null}
         </AnimatePresence>
-      </main>
-      <AnimatePresence initial={false}>
-        {state.detailsOpen && route.kind === "conversation" ? (
-          <DetailsPanel key="details" />
-        ) : null}
-      </AnimatePresence>
-      <StatusBar />
+      </div>
       <Toasts />
       <AnimatePresence>
         {state.paletteOpen ? <CommandPalette key="palette" /> : null}
       </AnimatePresence>
+      <SetupDialog />
     </div>
   );
 }

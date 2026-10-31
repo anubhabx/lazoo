@@ -6,14 +6,16 @@ import {
   PanelRight,
   Plus,
   Search,
+  PanelLeft,
   Settings,
+  Sparkles,
   SquareTerminal,
   Users,
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 
 import { useAppState, useStore } from "../lib/context";
-import { EASE, Kbd } from "./primitives";
+import { EASE, Kbd, ProjectGlyph, SPRING } from "./primitives";
 
 interface Command {
   id: string;
@@ -63,11 +65,8 @@ export function CommandPalette() {
         label: project.displayName,
         hint: "project",
         keywords: project.canonicalPath,
-        icon: <Home size={14} aria-hidden="true" />,
-        run: () => {
-          store.selectSpace(project.id);
-          store.navigate({ kind: "launcher" });
-        },
+        icon: <ProjectGlyph name={project.displayName} size={15} />,
+        run: () => store.selectSpace(project.id),
       })),
       {
         id: "go-inbox",
@@ -100,6 +99,22 @@ export function CommandPalette() {
         hint: "Ctrl N",
         icon: <Plus size={14} aria-hidden="true" />,
         run: () => store.navigate({ kind: "launcher" }),
+      },
+      {
+        id: "setup-agents",
+        group: "Actions",
+        label: "Set up agents",
+        keywords: "team employees onboarding recommended defaults",
+        icon: <Sparkles size={14} aria-hidden="true" />,
+        run: () => store.openSetup(),
+      },
+      {
+        id: "toggle-sidebar",
+        group: "Actions",
+        label: state.sidebarCollapsed ? "Show sidebar" : "Hide sidebar",
+        hint: "Ctrl B",
+        icon: <PanelLeft size={14} aria-hidden="true" />,
+        run: () => store.toggleSidebar(),
       },
     ];
     for (const row of state.conversations?.conversations ?? []) {
@@ -219,10 +234,15 @@ export function CommandPalette() {
         className="palette"
         role="dialog"
         aria-label="Command palette"
-        initial={{ opacity: 0, y: -8, scale: 0.98 }}
+        initial={{ opacity: 0, y: -10, scale: 0.98 }}
         animate={{ opacity: 1, y: 0, scale: 1 }}
-        exit={{ opacity: 0, y: -8, scale: 0.98 }}
-        transition={{ duration: 0.22, ease: EASE }}
+        exit={{
+          opacity: 0,
+          y: -6,
+          scale: 0.99,
+          transition: { duration: 0.14 },
+        }}
+        transition={SPRING}
         onKeyDown={onKey}
       >
         <div className="palette__input">
@@ -256,6 +276,13 @@ export function CommandPalette() {
                   onMouseEnter={() => setIndex(filtered.indexOf(command))}
                   onClick={() => run(command)}
                 >
+                  {command.id === activeId ? (
+                    <motion.span
+                      layoutId="palette-selection"
+                      className="palette__highlight"
+                      transition={SPRING}
+                    />
+                  ) : null}
                   <span className="row__icon">{command.icon}</span>
                   <span className="truncate">{command.label}</span>
                   {command.hint ? (

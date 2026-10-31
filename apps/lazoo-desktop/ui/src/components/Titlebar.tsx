@@ -1,9 +1,17 @@
 import { AnimatePresence, motion } from "motion/react";
-import { ChevronDown, Minus, Search, Square, X } from "lucide-react";
-import { useEffect, useRef, useState, type MouseEvent } from "react";
+import {
+  ArrowLeft,
+  ArrowRight,
+  ChevronRight,
+  Minus,
+  PanelLeft,
+  Square,
+  X,
+} from "lucide-react";
+import { useState, type MouseEvent } from "react";
 
 import { useAppState, useBridge, useStore } from "../lib/context";
-import { Kbd, StatusWord, fade } from "./primitives";
+import { Button, EASE, ProjectGlyph } from "./primitives";
 
 export function Titlebar() {
   const bridge = useBridge();
@@ -21,173 +29,182 @@ export function Titlebar() {
     void bridge.window.startDragging();
   }
 
-  const connection = state.connection;
-  const tone =
-    connection === "connected"
-      ? "healthy"
-      : connection === "connecting"
-        ? "running"
-        : connection === "uncertain"
-          ? "blocked"
-          : "failed";
-  const label =
-    connection === "connected"
-      ? "Connected"
-      : connection === "connecting"
-        ? "Connecting"
-        : connection === "uncertain"
-          ? "Reconnecting"
-          : "Daemon offline";
-
   return (
     <header className="titlebar" onMouseDown={onDrag}>
-      <div className="titlebar__brand">
-        <span className="wordmark">
-          <span className="wordmark__mark" aria-hidden="true" />
-          lazoo
-        </span>
-        <SpaceSwitcher />
+      <div className="titlebar__nav">
+        <AnimatePresence initial={false}>
+          {state.sidebarCollapsed ? (
+            <motion.span
+              key="expand"
+              className="titlebar__expand"
+              initial={{ opacity: 0, x: -6 }}
+              animate={{ opacity: 1, x: 0 }}
+              exit={{ opacity: 0, x: -6 }}
+              transition={{ duration: 0.18, ease: EASE }}
+            >
+              <Button
+                variant="ghost"
+                size="sm"
+                icon
+                tip="Show sidebar  Ctrl B"
+                aria-label="Show sidebar"
+                onClick={() => store.toggleSidebar(false)}
+              >
+                <PanelLeft size={15} aria-hidden="true" />
+              </Button>
+            </motion.span>
+          ) : null}
+        </AnimatePresence>
+        <Button
+          variant="ghost"
+          size="sm"
+          icon
+          tip="Back  Alt ←"
+          aria-label="Back"
+          disabled={!store.canGoBack()}
+          onClick={() => store.back()}
+        >
+          <ArrowLeft size={15} aria-hidden="true" />
+        </Button>
+        <Button
+          variant="ghost"
+          size="sm"
+          icon
+          tip="Forward  Alt →"
+          aria-label="Forward"
+          disabled={!store.canGoForward()}
+          onClick={() => store.forward()}
+        >
+          <ArrowRight size={15} aria-hidden="true" />
+        </Button>
       </div>
-      <div className="titlebar__center">
+      <Breadcrumb />
+      <div className="window-controls" data-no-drag>
         <button
           type="button"
-          className="search-trigger"
-          aria-label="Open command palette"
-          onClick={() => store.togglePalette(true)}
+          aria-label="Minimize window"
+          onClick={() => void bridge.window.minimize()}
         >
-          <Search size={14} aria-hidden="true" />
-          <span className="search-trigger__label">Search or run a command</span>
-          <Kbd keys={["Ctrl", "K"]} />
+          <Minus size={14} aria-hidden="true" />
         </button>
-      </div>
-      <div className="titlebar__right">
-        <span
-          className="conn"
-          title={state.connectionError?.message ?? undefined}
+        <button
+          type="button"
+          aria-label="Maximize or restore window"
+          onClick={() => void bridge.window.toggleMaximize()}
         >
-          <StatusWord tone={tone} label={label} />
-        </span>
-        <div className="window-controls" data-no-drag>
-          <button
-            type="button"
-            aria-label="Minimize window"
-            onClick={() => void bridge.window.minimize()}
-          >
-            <Minus size={14} aria-hidden="true" />
-          </button>
-          <button
-            type="button"
-            aria-label="Maximize or restore window"
-            onClick={() => void bridge.window.toggleMaximize()}
-          >
-            <Square size={11} aria-hidden="true" />
-          </button>
-          <button
-            type="button"
-            aria-label="Close window"
-            data-close
-            onClick={() => void bridge.window.close()}
-          >
-            <X size={15} aria-hidden="true" />
-          </button>
-        </div>
+          <Square size={11} aria-hidden="true" />
+        </button>
+        <button
+          type="button"
+          aria-label="Close window"
+          data-close
+          onClick={() => void bridge.window.close()}
+        >
+          <X size={15} aria-hidden="true" />
+        </button>
       </div>
     </header>
   );
 }
 
-function SpaceSwitcher() {
+/** Where you are: the space, then the page or conversation inside it. */
+function Breadcrumb() {
   const store = useStore();
   const state = useAppState();
-  const [open, setOpen] = useState(false);
-  const anchor = useRef<HTMLDivElement>(null);
+  const route = state.route;
+  const project = state.projects.find((entry) => entry.id === state.spaceId);
+  const conversation =
+    route.kind === "conversation" ? state.conversation : null;
+  const conversationProject = conversation?.scope.projectName ?? null;
 
-  useEffect(() => {
-    if (!open) return;
-    function onDown(event: globalThis.MouseEvent) {
-      if (!anchor.current?.contains(event.target as Node)) setOpen(false);
-    }
-    function onKey(event: KeyboardEvent) {
-      if (event.key === "Escape") setOpen(false);
-    }
-    window.addEventListener("mousedown", onDown);
-    window.addEventListener("keydown", onKey);
-    return () => {
-      window.removeEventListener("mousedown", onDown);
-      window.removeEventListener("keydown", onKey);
-    };
-  }, [open]);
+  if (route.kind === "inbox" || route.kind === "settings") {
+    return (
+      <nav className="crumbs" aria-label="Location">
+        <span className="crumbs__current">
+          {route.kind === "inbox" ? "Inbox" : "Settings"}
+        </span>
+      </nav>
+    );
+  }
 
-  const current = state.projects.find(
-    (project) => project.id === state.spaceId,
-  );
-  const name = current?.displayName ?? "Home";
+  const spaceName =
+    route.kind === "conversation"
+      ? (conversationProject ??
+        (conversation ? "Home" : (project?.displayName ?? "Home")))
+      : (project?.displayName ?? "Home");
+  const spaceId =
+    route.kind === "conversation"
+      ? (conversation?.scope.projectId ?? (conversation ? null : state.spaceId))
+      : state.spaceId;
 
   return (
-    <div className="popover-anchor" ref={anchor} data-no-drag>
+    <nav className="crumbs" aria-label="Location">
       <button
         type="button"
-        className="btn btn--ghost btn--sm"
-        aria-haspopup="listbox"
-        aria-expanded={open}
-        aria-label={`Switch space: ${name}`}
-        onClick={() => setOpen((value) => !value)}
+        className="crumbs__space"
+        title={spaceId ? "Open project home" : "Open Home"}
+        onClick={() => store.selectSpace(spaceId ?? null)}
       >
-        <span className="truncate" style={{ maxWidth: 110 }}>
-          {name}
-        </span>
-        <ChevronDown size={12} aria-hidden="true" />
+        {spaceId ? <ProjectGlyph name={spaceName} size={16} /> : null}
+        <span className="truncate">{spaceName}</span>
       </button>
-      <AnimatePresence>
-        {open ? (
-          <motion.div
-            className="menu"
-            role="listbox"
-            aria-label="Spaces"
-            {...fade}
-          >
-            <button
-              type="button"
-              role="option"
-              className="row"
-              aria-selected={state.spaceId === null}
-              onClick={() => {
-                store.selectSpace(null);
-                setOpen(false);
-              }}
-            >
-              <span className="row__label">Home</span>
-              <span className="row__meta">projectless</span>
-            </button>
-            {state.projects.map((project) => (
-              <button
-                key={project.id}
-                type="button"
-                role="option"
-                className="row"
-                aria-selected={state.spaceId === project.id}
-                title={project.canonicalPath}
-                onClick={() => {
-                  store.selectSpace(project.id);
-                  setOpen(false);
-                }}
-              >
-                <span className="row__label">{project.displayName}</span>
-              </button>
-            ))}
-            <button
-              type="button"
-              className="row"
-              onClick={() => {
-                store.navigate({ kind: "settings", section: "projects" });
-                setOpen(false);
-              }}
-            >
-              <span className="row__label">Register a project…</span>
-            </button>
-          </motion.div>
-        ) : null}
-      </AnimatePresence>
-    </div>
+      {conversation ? (
+        <>
+          <ChevronRight size={13} className="crumbs__sep" aria-hidden="true" />
+          <ConversationTitle />
+        </>
+      ) : null}
+    </nav>
+  );
+}
+
+function ConversationTitle() {
+  const store = useStore();
+  const { conversation } = useAppState();
+  const [renaming, setRenaming] = useState(false);
+  const [draft, setDraft] = useState("");
+  if (!conversation) return null;
+  const canRename = conversation.lead.actions.some(
+    (action) => action.action === "rename",
+  );
+
+  async function commit() {
+    setRenaming(false);
+    const next = draft.trim();
+    if (!next || next === conversation!.title) return;
+    await store.rename(next);
+  }
+
+  if (renaming) {
+    return (
+      <input
+        className="input input--sm crumbs__input"
+        aria-label="Conversation title"
+        value={draft}
+        autoFocus
+        data-no-drag
+        onChange={(event) => setDraft(event.target.value)}
+        onBlur={() => void commit()}
+        onKeyDown={(event) => {
+          if (event.key === "Enter") void commit();
+          if (event.key === "Escape") setRenaming(false);
+        }}
+      />
+    );
+  }
+  return (
+    <button
+      type="button"
+      className="crumbs__current crumbs__title"
+      title={canRename ? "Rename conversation" : conversation.title}
+      aria-label={`Rename conversation: ${conversation.title}`}
+      disabled={!canRename}
+      onClick={() => {
+        setDraft(conversation.title);
+        setRenaming(true);
+      }}
+    >
+      <span className="truncate">{conversation.title}</span>
+    </button>
   );
 }
