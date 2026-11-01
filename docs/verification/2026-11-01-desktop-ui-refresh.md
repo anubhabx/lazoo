@@ -83,3 +83,5 @@ These conversations had no live sessions, so no terminal was created; the termin
 ## Owner sign-off
 
 On 2026-11-01, after the screenshots and the one-minute recording, the owner approved the look and feel as is and kept the shipped agent defaults (Claude Code Opus lead, Codex GPT-6.1 Sol builder, Claude Code Sonnet frontend, Codex GPT-6 Astra read-only reviewer, Antigravity researcher and OpenCode quick fixes when installed).
+
+The owner then ran this branch's desktop build against their own data root and confirmed the real app feels smooth and alive (opening it, moving between projects and conversations, the palette, `Ctrl+B`, and the start page).
