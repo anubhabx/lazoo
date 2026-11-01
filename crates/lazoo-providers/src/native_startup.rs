@@ -6,7 +6,11 @@ const MAX_SCREEN: usize = 64 * 1024;
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum StartupState {
     Unknown,
-    TrustPrompt { input: Vec<u8> },
+    TrustPrompt {
+        input: Vec<u8>,
+    },
+    /// The native trust dialog shows Yes selected; Enter accepts it.
+    TrustSelected,
     Ready,
 }
 #[derive(Default)]
@@ -77,10 +81,9 @@ pub(crate) fn poll_screen(
         }
         return Ok(StartupState::Unknown);
     }
-    // Claude Code 2.1.316 draws the selection pointer as U+276F; older builds drew ">".
-    let pointer_on_no = screen.contains("> No, exit") || screen.contains("\u{276f} No, exit");
+    let pointer = claude_trust_pointer(bytes);
     if provider != ProviderKind::ClaudeCode
-        || !pointer_on_no
+        || pointer.is_none()
         || ![
             "Quick safety check",
             "Yes, I trust this folder",
@@ -96,13 +99,96 @@ pub(crate) fn poll_screen(
         .and_then(|(_, tail)| tail.split_once("Quick safety check").map(|(path, _)| path))
         .ok_or_else(|| protocol("native trust workspace is ambiguous"))?;
     let canonical = cwd.canonicalize()?;
-    if path_text(displayed) != path_text(&canonical.to_string_lossy()) {
+    // A workspace path wider than the terminal wraps onto the next row, and that cursor move
+    // normalizes to a space. ponytail: whitespace is ignored on both sides, so paths that
+    // differ only in spacing compare equal; parse rows if that ever matters.
+    let compact = |value: &str| path_text(value).split_whitespace().collect::<String>();
+    if compact(displayed) != compact(&canonical.to_string_lossy()) {
         return Err(protocol("native trust screen showed a foreign workspace"));
     }
-    // The native screen defaults to No. Select Yes; the caller sends Enter separately.
+    // The native screen defaults to No. Select Yes; the caller confirms only once Yes shows.
+    if pointer == Some(TrustOption::Yes) {
+        return Ok(StartupState::TrustSelected);
+    }
     Ok(StartupState::TrustPrompt {
         input: b"\x1b[B".to_vec(),
     })
+}
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum TrustOption {
+    No,
+    Yes,
+}
+/// The option under Claude Code's latest selection pointer. A moved selection is redrawn as
+/// bare glyphs at absolute positions (`CSI 14;2H` space, `CSI 15;2H` pointer), so the rows of
+/// the labels and of the last pointer glyph decide it, not the label text next to a pointer.
+/// Claude Code 2.1.316 draws the pointer as U+276F; older builds drew ">".
+fn claude_trust_pointer(bytes: &[u8]) -> Option<TrustOption> {
+    let mut rows: std::collections::BTreeMap<usize, String> = std::collections::BTreeMap::new();
+    let mut row = 1_usize;
+    let mut pointer_row = None;
+    let mut chars = String::from_utf8_lossy(bytes)
+        .chars()
+        .collect::<Vec<_>>()
+        .into_iter();
+    while let Some(c) = chars.next() {
+        match c {
+            '\u{1b}' => match chars.next() {
+                Some('[') => {
+                    let mut params = String::new();
+                    let command = chars.by_ref().find(|p| {
+                        let end = ('\u{40}'..='\u{7e}').contains(p);
+                        if !end {
+                            params.push(*p);
+                        }
+                        end
+                    });
+                    let count = params
+                        .split(';')
+                        .next()
+                        .and_then(|value| value.parse::<usize>().ok())
+                        .unwrap_or(1)
+                        .max(1);
+                    match command {
+                        Some('H' | 'f') => row = count,
+                        Some('A' | 'F') => row = row.saturating_sub(count).max(1),
+                        Some('B' | 'E') => row += count,
+                        Some('C') => rows.entry(row).or_default().push(' '),
+                        _ => {}
+                    }
+                }
+                // Operating system commands end at BEL or ST.
+                Some(']') => {
+                    while let Some(p) = chars.next() {
+                        if p == '\u{7}' || (p == '\u{1b}' && chars.next() == Some('\\')) {
+                            break;
+                        }
+                    }
+                }
+                _ => {}
+            },
+            '\n' => row += 1,
+            '\u{276f}' | '>' => {
+                pointer_row = Some(row);
+                rows.entry(row).or_default().push(c);
+            }
+            c if !c.is_control() => rows.entry(row).or_default().push(c),
+            _ => {}
+        }
+    }
+    let row_of = |label: &str| {
+        rows.iter()
+            .find(|(_, text)| text.contains(label))
+            .map(|(row, _)| *row)
+    };
+    let pointer_row = pointer_row?;
+    if row_of("Yes, I trust this folder") == Some(pointer_row) {
+        Some(TrustOption::Yes)
+    } else if row_of("No, exit") == Some(pointer_row) {
+        Some(TrustOption::No)
+    } else {
+        None
+    }
 }
 fn normalize(bytes: &[u8]) -> String {
     let mut output = Vec::new();
@@ -179,6 +265,14 @@ mod tests {
             &format!("{}-foreign", cwd.path().display()),
         );
         assert!(poll_screen(ProviderKind::ClaudeCode, cwd.path(), foreign.as_bytes()).is_err());
+        // A long task worktree path wraps onto the next row of the 120-column terminal.
+        let shown = cwd.path().display().to_string();
+        let (head, tail) = shown.split_at(shown.len() / 2);
+        let wrapped = raw.replace(&shown, &format!("{head}\x1b[6;2H{tail}"));
+        assert!(matches!(
+            poll_screen(ProviderKind::ClaudeCode, cwd.path(), wrapped.as_bytes()).unwrap(),
+            StartupState::TrustPrompt { .. }
+        ));
         let heavy_pointer = raw.replace("\x1b[14;2H>", "\x1b[14;2H\u{276f}");
         assert_eq!(
             poll_screen(
@@ -201,6 +295,35 @@ mod tests {
             .unwrap(),
             StartupState::Unknown
         );
+        // Claude 2.1.316 redraws only the two option rows after Down; the latest pointer wins,
+        // and only a screen showing Yes selected is confirmed.
+        let moved = format!(
+            "{heavy_pointer}\x1b[14;2H \x1b[1CNo,\x1b[1Cexit\x1b[15;2H\u{276f}\x1b[1CYes,\x1b[1CI\x1b[1Ctrust\x1b[1Cthis\x1b[1Cfolder"
+        );
+        assert_eq!(
+            poll_screen(ProviderKind::ClaudeCode, cwd.path(), moved.as_bytes()).unwrap(),
+            StartupState::TrustSelected
+        );
+        let back = format!(
+            "{moved}\x1b[14;2H\u{276f}\x1b[1CNo,\x1b[1Cexit\x1b[15;2H \x1b[1CYes,\x1b[1CI\x1b[1Ctrust\x1b[1Cthis\x1b[1Cfolder"
+        );
+        assert!(matches!(
+            poll_screen(ProviderKind::ClaudeCode, cwd.path(), back.as_bytes()).unwrap(),
+            StartupState::TrustPrompt { .. }
+        ));
+        // What Claude Code 2.1.316 actually writes after Down: bare glyphs at absolute rows.
+        let bare_yes = format!(
+            "{heavy_pointer}\x1b[?2026h\x1b[?2026l\x1b[14;2H \x1b[15;2H\u{276f}\x1b[?2026h\x1b[?2026l"
+        );
+        assert_eq!(
+            poll_screen(ProviderKind::ClaudeCode, cwd.path(), bare_yes.as_bytes()).unwrap(),
+            StartupState::TrustSelected
+        );
+        let bare_no = format!("{bare_yes}\x1b[14;2H\u{276f}\x1b[15;2H ");
+        assert!(matches!(
+            poll_screen(ProviderKind::ClaudeCode, cwd.path(), bare_no.as_bytes()).unwrap(),
+            StartupState::TrustPrompt { .. }
+        ));
         let mut parser = NativeStartupScreen::default();
         for (index, byte) in raw.bytes().enumerate() {
             let state = parser

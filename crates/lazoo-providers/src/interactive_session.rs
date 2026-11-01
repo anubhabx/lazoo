@@ -40,6 +40,14 @@ const COLS: u16 = 120;
 const ROWS: u16 = 40;
 const MAX_PROMPT: usize = 12 * 1024;
 const MAX_PRE_TOOL_IDS: usize = 4096;
+/// How long to wait for a trust selection redraw before repeating the selection key.
+const TRUST_SELECTION_RETRY: Duration = Duration::from_millis(750);
+/// How long the native startup screen must stay unchanged before a trust key is sent.
+const TRUST_SETTLE: Duration = Duration::from_millis(500);
+/// How long Claude Code's screen must stay unchanged before a turn prompt is typed.
+const CLAUDE_INPUT_SETTLE: Duration = Duration::from_millis(1500);
+/// The longest wait for that quiet screen; a busy screen gets the prompt after this.
+const CLAUDE_INPUT_SETTLE_LIMIT: Duration = Duration::from_secs(5);
 
 struct GeneratedFile {
     path: PathBuf,
@@ -445,6 +453,17 @@ impl NativeInteractiveSession {
         {
             transcript.begin_turn()?;
         }
+        if self.provider == ProviderKind::ClaudeCode {
+            // Right after Stop, Claude Code is still closing the previous prompt: input typed
+            // then joins that prompt without a UserPromptSubmit, and its next hooks carry the
+            // old prompt identity. Type only once its screen has settled.
+            await_quiet_screen(
+                &self.terminal,
+                CLAUDE_INPUT_SETTLE,
+                CLAUDE_INPUT_SETTLE_LIMIT,
+            )
+            .await?;
+        }
         write_prompt(&self.terminal, &request.prompt).await?;
         let started = Instant::now();
         let turn_id = request.correlation_id.to_string();
@@ -525,6 +544,7 @@ impl NativeInteractiveSession {
         }
     }
 
+    #[allow(clippy::too_many_lines)] // One startup loop, read top to bottom.
     async fn await_native_start(
         &self,
         events: &mut Vec<ProviderEvent>,
@@ -534,6 +554,8 @@ impl NativeInteractiveSession {
         let mut screen = startup::NativeStartupScreen::default();
         let mut after = 0;
         let mut trust_sent = false;
+        let mut trust_selected_at: Option<Instant> = None;
+        let mut last_output = Instant::now();
         let queued = loop {
             if started.elapsed() >= self.request.startup_timeout() {
                 return Err(ProviderError::Timeout {
@@ -548,17 +570,53 @@ impl NativeInteractiveSession {
                 .read_output(after, 64 * 1024)
                 .map_err(|e| ProviderError::Protocol(format!("native startup read failed: {e}")))?;
             after = output.end;
-            match screen.consume(self.provider, &self.request.cwd, &output)? {
-                startup::StartupState::TrustPrompt { input } if !trust_sent => {
-                    if !self.request.native_workspace_trust_approved {
-                        return Err(ProviderError::Protocol(
-                            "native workspace trust requires user confirmation".to_owned(),
-                        ));
-                    }
-                    self.terminal.write_input(input).map_err(|e| {
+            if !output.bytes.is_empty() {
+                last_output = Instant::now();
+            }
+            let state = screen.consume(self.provider, &self.request.cwd, &output)?;
+            if !trust_sent
+                && matches!(
+                    state,
+                    startup::StartupState::TrustPrompt { .. }
+                        | startup::StartupState::TrustSelected
+                )
+                && !self.request.native_workspace_trust_approved
+            {
+                return Err(ProviderError::Protocol(
+                    "native workspace trust requires user confirmation".to_owned(),
+                ));
+            }
+            match state {
+                startup::StartupState::TrustPrompt { input }
+                    if !trust_sent && self.provider == ProviderKind::Antigravity =>
+                {
+                    self.terminal.write_input(&input).map_err(|e| {
                         ProviderError::Protocol(format!("native trust input failed: {e}"))
                     })?;
                     tokio::time::sleep(Duration::from_millis(150)).await;
+                    self.terminal.write_input(b"\r").map_err(|e| {
+                        ProviderError::Protocol(format!("native trust confirmation failed: {e}"))
+                    })?;
+                    trust_sent = true;
+                }
+                // Claude Code draws its trust dialog before it reads keys and can redraw it
+                // with No selected again, so an early Down is lost and Enter would choose
+                // "No, exit". Act only on a settled screen: repeat the selection until Yes
+                // shows, and confirm only once that has stayed on screen.
+                startup::StartupState::TrustPrompt { input }
+                    if !trust_sent
+                        && last_output.elapsed() >= TRUST_SETTLE
+                        && trust_selected_at
+                            .is_none_or(|at| at.elapsed() >= TRUST_SELECTION_RETRY) =>
+                {
+                    self.terminal.write_input(&input).map_err(|e| {
+                        ProviderError::Protocol(format!("native trust input failed: {e}"))
+                    })?;
+                    trust_selected_at = Some(Instant::now());
+                }
+                startup::StartupState::TrustSelected
+                    if !trust_sent && last_output.elapsed() >= TRUST_SETTLE =>
+                {
                     self.terminal.write_input(b"\r").map_err(|e| {
                         ProviderError::Protocol(format!("native trust confirmation failed: {e}"))
                     })?;
@@ -716,7 +774,12 @@ impl NativeInteractiveSession {
                         ..ClaudeBinding::default()
                     };
                 }
-                if payload.get("prompt").and_then(Value::as_str) != Some(turn.prompt.as_str()) {
+                let reported = payload.get("prompt").and_then(Value::as_str);
+                if !reported.is_some_and(|reported| {
+                    reported == turn.prompt
+                        || (self.provider == ProviderKind::ClaudeCode
+                            && claude_pasted_prompt(reported) == Some(turn.prompt.as_str()))
+                }) {
                     let _ = queued.reply.send(
                         json!({"decision":"block","reason":"Lazoo canonical prompt mismatch"}),
                     );
@@ -1376,6 +1439,43 @@ fn sibling_lazooctl(_executable: &Path) -> Result<PathBuf, ProviderError> {
         )))
     }
 }
+/// The prompt inside Claude Code's paste wrapper. Claude Code 2.1.316 reports a bracketed
+/// paste (every multi-line prompt) to `UserPromptSubmit` as
+/// `\n\n<pasted_content id="N">\n{prompt}\n</pasted_content id="N">\n`, where N is a short hex
+/// id (seen: `2864`, `78ea`); nothing looser matches.
+fn claude_pasted_prompt(reported: &str) -> Option<&str> {
+    let rest = reported.strip_prefix("\n\n<pasted_content id=\"")?;
+    let (id, rest) = rest.split_once("\">\n")?;
+    if id.is_empty() || id.len() > 32 || !id.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return None;
+    }
+    rest.strip_suffix(&format!("\n</pasted_content id=\"{id}\">\n"))
+}
+/// Waits until the native screen has written nothing for `quiet`, or until `limit` passes.
+async fn await_quiet_screen(
+    terminal: &TerminalSession,
+    quiet: Duration,
+    limit: Duration,
+) -> Result<(), ProviderError> {
+    let screen_end = || {
+        terminal
+            .read_output(u64::MAX, 0)
+            .map(|output| output.end)
+            .map_err(|e| ProviderError::Protocol(format!("native screen read failed: {e}")))
+    };
+    let started = Instant::now();
+    let mut end = screen_end()?;
+    let mut quiet_since = Instant::now();
+    while quiet_since.elapsed() < quiet && started.elapsed() < limit {
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        let current = screen_end()?;
+        if current != end {
+            end = current;
+            quiet_since = Instant::now();
+        }
+    }
+    Ok(())
+}
 async fn write_prompt(terminal: &TerminalSession, prompt: &str) -> Result<(), ProviderError> {
     validate_prompt(prompt)?;
     let mut bytes = Vec::new();
@@ -1750,6 +1850,28 @@ mod tests {
         hooks.close();
         bridge.close();
         cleanup(&generated);
+    }
+
+    #[test]
+    fn claude_paste_wrapper_unwraps_only_the_exact_form() {
+        let prompt = "[Lazoo notices] first\n\nsecond \">\n line";
+        let wrapped =
+            format!("\n\n<pasted_content id=\"2864\">\n{prompt}\n</pasted_content id=\"2864\">\n");
+        assert_eq!(super::claude_pasted_prompt(&wrapped), Some(prompt));
+        let hex = wrapped.replace("2864", "78ea");
+        assert_eq!(super::claude_pasted_prompt(&hex), Some(prompt));
+        let other_id = wrapped.replace(
+            "</pasted_content id=\"2864\">",
+            "</pasted_content id=\"1\">",
+        );
+        assert_eq!(super::claude_pasted_prompt(&other_id), None);
+        let named = wrapped.replace("2864", "x");
+        assert_eq!(super::claude_pasted_prompt(&named), None);
+        assert_eq!(
+            super::claude_pasted_prompt(&format!("{wrapped} extra")),
+            None
+        );
+        assert_eq!(super::claude_pasted_prompt(prompt), None);
     }
 
     #[test]
