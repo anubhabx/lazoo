@@ -67,6 +67,19 @@ The dev-mode React numbers taken first (slower by design) are not used for concl
 
 After these changes the frontend check (38 tests), the debug desktop build, and the real-window `desktop-shell.ps1` were run again: PASS in 16.8 s with the same gates.
 
+### In the real desktop
+
+The same sampler ran inside the real Tauri window. WebView2 exposed DevTools through `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS=--remote-debugging-port=9333` on a debug build of this branch, against a real keeper and daemon on a disposable data root with two registered projects (`orchestrator`, `website`), three employees created through `lazooctl` (atlas on Claude Code, forge and sentinel on Codex), and six conversations. A small Node script drove it over CDP: element clicks for the sidebar rows, panes, and Settings; real key events for `Ctrl+K`, the arrow keys, `Escape`, and `Ctrl+B`.
+
+The pass: open the `orchestrator` project, toggle `website`, open a project conversation, Transcript and Native, the palette with arrows, collapse and restore the sidebar, open a Home conversation, Transcript and Native again, Settings (Employees, Harnesses), Inbox, New work, and the setup dialog opened and closed.
+
+| Pass in the real window | Frames | p50 | p95 | p99 | Worst | Over 33 ms | Long animation frames |
+|---|---|---|---|---|---|---|---|
+| First pass in this launch | 2,179 | 8.3 ms | 8.5 ms | 8.6 ms | 16.8 ms | 0 | 0 |
+| Second pass, every step confirmed | 4,249 | 8.3 ms | 8.5 ms | 8.6 ms | 16.8 ms | 0 | 0 |
+
+These conversations had no live sessions, so no terminal was created; the terminal-open path is covered by the production-bundle measurements above. The stack was stopped and its data root removed afterwards, and the main checkout's debug desktop binary was rebuilt from its own sources.
+
 ## Owner sign-off
 
 On 2026-11-01, after the screenshots and the one-minute recording, the owner approved the look and feel as is and kept the shipped agent defaults (Claude Code Opus lead, Codex GPT-6.1 Sol builder, Claude Code Sonnet frontend, Codex GPT-6 Astra read-only reviewer, Antigravity researcher and OpenCode quick fixes when installed).
