@@ -85,3 +85,9 @@ These conversations had no live sessions, so no terminal was created; the termin
 On 2026-11-01, after the screenshots and the one-minute recording, the owner approved the look and feel as is and kept the shipped agent defaults (Claude Code Opus lead, Codex GPT-6.1 Sol builder, Claude Code Sonnet frontend, Codex GPT-6 Astra read-only reviewer, Antigravity researcher and OpenCode quick fixes when installed).
 
 The owner then ran this branch's desktop build against their own data root and confirmed the real app feels smooth and alive (opening it, moving between projects and conversations, the palette, `Ctrl+B`, and the start page).
+
+Asked explicitly afterwards, the owner confirmed that the sidebar is the ChatGPT/Claude behaviour they meant (New work, Search, and Inbox; projects that open their home and expand to their newest conversations; Recents for projectless work) and that the start page no longer feels empty or dead.
+
+## Stack
+
+Codex's PR #42 (GitHub Copilot and multi-account routing) is stacked on this branch. It had been rebased before this branch's last four commits and conflicted only in the generated `ui/dist`. At the owner's request it was restacked onto `8eded6f`, its bundle regenerated, `npm run check` passed on the combined tree (46 tests), and it was force-pushed with a lease. GitHub reports #42 mergeable and clean. Merge order: #40, #41, #42.
