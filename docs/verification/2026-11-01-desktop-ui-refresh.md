@@ -66,3 +66,7 @@ What the cold stalls were, from long-animation-frame attribution and a DevTools 
 The dev-mode React numbers taken first (slower by design) are not used for conclusions. A one-minute recording of the first-run setup and the pass above was shared with the owner (`lazoo-interactions.webm`, not committed).
 
 After these changes the frontend check (38 tests), the debug desktop build, and the real-window `desktop-shell.ps1` were run again: PASS in 16.8 s with the same gates.
+
+## Owner sign-off
+
+On 2026-11-01, after the screenshots and the one-minute recording, the owner approved the look and feel as is and kept the shipped agent defaults (Claude Code Opus lead, Codex GPT-6.1 Sol builder, Claude Code Sonnet frontend, Codex GPT-6 Astra read-only reviewer, Antigravity researcher and OpenCode quick fixes when installed).
