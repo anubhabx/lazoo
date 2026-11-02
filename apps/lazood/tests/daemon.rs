@@ -9526,6 +9526,56 @@ async fn resilience_events_list_pages_fit_the_ipc_frame_without_sequence_gaps() 
     assert!(serde_json::to_vec(&snapshot).unwrap().len() <= lazoo_protocol::MAX_FRAME_BYTES);
 }
 
+/// Live regression (2026-11-03): the delivery pass, woken by the queued first turn, took the
+/// dormant lead's delivery gate, could not activate, and the submission parked its turn as
+/// queued with nothing left to start the session. The pass must leave that turn alone.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn resilience_background_delivery_never_strands_a_dormant_leads_first_turn() {
+    // The race is timing-dependent; twenty fresh daemons make a regression near-certain to
+    // show while a correct implementation can never fail.
+    for attempt in 0..20 {
+        let (_temporary, harness) = tool_harness_idle(
+            AuthorityMode::FullAutonomy,
+            lazoo_protocol::ActivationPolicy::Manual,
+            900,
+        );
+        let (_, conversation_id) = claude_lead(&harness, 900);
+        let stop = Arc::new(AtomicBool::new(false));
+        // Several concurrent delivery passes keep the recipient's gate contended.
+        let spinning: Vec<_> = (0..3)
+            .map(|_| {
+                let app = harness.app.clone();
+                let stop = Arc::clone(&stop);
+                tokio::spawn(async move {
+                    while !stop.load(Ordering::SeqCst) {
+                        let _ = app.deliver_pending_notices_once().await;
+                        tokio::task::yield_now().await;
+                    }
+                })
+            })
+            .collect();
+        let response = timeout(
+            Duration::from_secs(10),
+            harness
+                .app
+                .handle(user_turn_request(conversation_id, "dormant-first")),
+        )
+        .await
+        .expect("the first turn must activate the lead, not wait for a delivery pass");
+        stop.store(true, Ordering::SeqCst);
+        for task in spinning {
+            task.await.unwrap();
+        }
+        assert!(response.error.is_none(), "attempt {attempt}: {response:?}");
+        let result = response.result.unwrap();
+        assert_ne!(
+            result["message"]["delivery"]["state"], "queued",
+            "attempt {attempt}: {result}"
+        );
+        assert_eq!(harness.backend.turns.load(Ordering::SeqCst), 1);
+    }
+}
+
 #[tokio::test]
 async fn resilience_busy_user_turns_are_durable_fifo_without_provider_writes() {
     let (_temporary, harness) = tool_harness_idle(

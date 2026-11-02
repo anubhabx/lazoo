@@ -470,7 +470,14 @@ impl App {
                 params: Value::Null,
             };
             // A queued turn never auto-activates a replacement session. After host loss or a
-            // daemon restart it waits for an explicit warm/user activation.
+            // daemon restart it waits for an explicit warm/user activation. Because this pass
+            // cannot activate, it must not take the delivery gate of a recipient without an
+            // idle session: the submission that activates it would find the gate taken, park
+            // its turn as queued, and nothing would ever start the session.
+            if matches!(self.delivery_target(&recorded.turn), Ok(target) if target.session_id.is_none())
+            {
+                continue;
+            }
             if let Err(error) =
                 Box::pin(self.deliver_recorded_turn(&request, recorded.clone(), false)).await
             {
