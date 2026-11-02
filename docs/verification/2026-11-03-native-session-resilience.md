@@ -81,3 +81,20 @@ git add -- PR-BODY.md apps/lazood/src/app.rs apps/lazood/src/app/delivery.rs app
 
 Suggested title: `Fix native session resilience and queue busy user turns`.
 PR base: `feat/desktop-ui-native-first` (PR #46). Body: root `PR-BODY.md`.
+
+
+## Real-desktop replay (Claude, 2026-11-03)
+
+Debug build of this branch, disposable data roots, the real desktop driven over CDP, Claude Code lead (claude-sonnet-5-5, notice-turns) delegating to a Codex worker (gpt-6-luna, Codex 0.166.0-alpha.5.1).
+
+| Replay | What happened | Outcome |
+|---|---|---|
+| e (Codex's commit alone) | The lead's first turn stayed `recorded`, `delivery: queued`, no session: the delivery pass, woken by the queued turn, took the dormant lead's delivery gate, could not activate, and the submission parked the turn | **Regression, fixed** in `ad85211`: the pass leaves a recipient without an idle session to the submission that activates it. Daemon test `resilience_background_delivery_never_strands_a_dormant_leads_first_turn` (twenty fresh daemons, three concurrent passes) fails 3 of 4 runs without the guard and passes every run with it |
+| f (with the fix) | Activation, delegation, accept; forge's view opened 0.7 s into its turn; forge worked for 12 s (rollout ends 21:26:37.5 after the test command) and ended 3 s later with `LZ-PROCESS-EXIT`, task uncertain | **Issue 1 still reproduces** |
+| g (same build, forge's view never opened) | Forge completed; the Claude lead's turn then ended uncertain with "Claude display sequence exceeds bounds" | View confirmed as the trigger for issue 1; a second bug in the lead found |
+| — | Claude's `MessageDisplay` hooks arrive concurrently; a new message's batch 1 landed before batch 0 | **Fixed** in `d5c3098`: per-message reorder buffer, replays and post-final batches ignored, held text flushed at Stop, bounded; unit test covers the live order |
+| h (all fixes) | Forge's view opened 1 s into its turn; forge completed; the lead's turn completed after the result notice; a message sent to the busy lead showed "Queued for atlas" | Pass |
+
+Issue 1 is therefore intermittent with this branch (one failure, one pass with the view open; pass without it), not fixed. The daemon logs nothing that says why it ended the provider process (`lazood` fixes its filter at `info` and the exit path records only the incident), so the next step is a warn-level record of every path that terminates a Codex child (broker overflow, viewer disconnect, job object) and the child's real exit status, then one more replay.
+
+Desktop follow-up in the same branch: the composer and Activity say "queued" again (`11a3f74`), and approval deadlines read forward ("expires in 14m"; the past-only formatter made every pending approval say "expires now").
