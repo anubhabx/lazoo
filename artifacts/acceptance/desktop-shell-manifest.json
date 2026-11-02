@@ -1,32 +1,32 @@
 {
   "schemaVersion": 1,
   "status": "PASS",
-  "startedAt": "2026-10-31T20:51:38.0995920Z",
-  "completedAt": "2026-10-31T20:51:54.9000950Z",
-  "durationMs": 16797,
+  "startedAt": "2026-11-02T20:12:59.7167828Z",
+  "completedAt": "2026-11-02T20:13:13.5436514Z",
+  "durationMs": 13824,
   "platform": "Microsoft Windows NT 10.0.26200.0",
   "rustcVersion": "rustc 1.98.0 (88d9e12ae 2026-08-18)",
   "cargoVersion": "cargo 1.98.0 (797e8a9bc 2026-08-05)",
-  "repositoryRoot": "C:\\workspace\\Orchestrator-ui-refresh",
-  "isolatedDataRoot": "C:\\Users\\anubhab\\AppData\\Local\\Temp\\lazoo-desktop-acceptance-dbd94d0941bc4f2f908641ff374e6b41\\data",
-  "temporaryProject": "C:\\Users\\anubhab\\AppData\\Local\\Temp\\lazoo-desktop-acceptance-dbd94d0941bc4f2f908641ff374e6b41\\repository",
+  "repositoryRoot": "C:\\workspace\\Orchestrator",
+  "isolatedDataRoot": "C:\\Users\\anubhab\\AppData\\Local\\Temp\\lazoo-desktop-acceptance-ce341c6462bd4529b316e9e20ae4c045\\data",
+  "temporaryProject": "C:\\Users\\anubhab\\AppData\\Local\\Temp\\lazoo-desktop-acceptance-ce341c6462bd4529b316e9e20ae4c045\\repository",
   "environment": {
     "windowsTextScalePercent": 100
   },
   "artifacts": {
-    "manifest": "C:\\workspace\\Orchestrator-ui-refresh\\artifacts\\acceptance\\desktop-shell-manifest.json",
-    "runRoot": "C:\\Users\\anubhab\\AppData\\Local\\Temp\\lazoo-desktop-acceptance-dbd94d0941bc4f2f908641ff374e6b41",
-    "defaultScreenshot": "C:\\Users\\anubhab\\AppData\\Local\\Temp\\lazoo-desktop-acceptance-dbd94d0941bc4f2f908641ff374e6b41\\desktop-default.png",
-    "narrowScreenshot": "C:\\Users\\anubhab\\AppData\\Local\\Temp\\lazoo-desktop-acceptance-dbd94d0941bc4f2f908641ff374e6b41\\desktop-narrow.png",
-    "commandPaletteScreenshot": "C:\\Users\\anubhab\\AppData\\Local\\Temp\\lazoo-desktop-acceptance-dbd94d0941bc4f2f908641ff374e6b41\\desktop-command-palette.png",
-    "settingsScreenshot": "C:\\Users\\anubhab\\AppData\\Local\\Temp\\lazoo-desktop-acceptance-dbd94d0941bc4f2f908641ff374e6b41\\desktop-settings.png",
+    "manifest": "C:\\workspace\\Orchestrator\\artifacts\\acceptance\\desktop-shell-manifest.json",
+    "runRoot": "C:\\Users\\anubhab\\AppData\\Local\\Temp\\lazoo-desktop-acceptance-ce341c6462bd4529b316e9e20ae4c045",
+    "defaultScreenshot": "C:\\Users\\anubhab\\AppData\\Local\\Temp\\lazoo-desktop-acceptance-ce341c6462bd4529b316e9e20ae4c045\\desktop-default.png",
+    "narrowScreenshot": "C:\\Users\\anubhab\\AppData\\Local\\Temp\\lazoo-desktop-acceptance-ce341c6462bd4529b316e9e20ae4c045\\desktop-narrow.png",
+    "commandPaletteScreenshot": "C:\\Users\\anubhab\\AppData\\Local\\Temp\\lazoo-desktop-acceptance-ce341c6462bd4529b316e9e20ae4c045\\desktop-command-palette.png",
+    "settingsScreenshot": "C:\\Users\\anubhab\\AppData\\Local\\Temp\\lazoo-desktop-acceptance-ce341c6462bd4529b316e9e20ae4c045\\desktop-settings.png",
     "highDpiScreenshot": null,
     "runtimeAssets": [
-      "C:\\workspace\\Orchestrator-ui-refresh\\apps\\lazoo-desktop\\ui\\dist\\assets\\index-BrwBlpen.js",
-      "C:\\workspace\\Orchestrator-ui-refresh\\apps\\lazoo-desktop\\ui\\dist\\assets\\index-CYcouI9X.css",
-      "C:\\workspace\\Orchestrator-ui-refresh\\apps\\lazoo-desktop\\ui\\dist\\assets\\inter-latin-wght-normal-Dx4kXJAl.woff2",
-      "C:\\workspace\\Orchestrator-ui-refresh\\apps\\lazoo-desktop\\ui\\dist\\assets\\ibm-plex-mono-latin-400-normal-DMJ8VG8y.woff2",
-      "C:\\workspace\\Orchestrator-ui-refresh\\apps\\lazoo-desktop\\ui\\dist\\assets\\ibm-plex-mono-latin-500-normal-DSY6xOcd.woff2"
+      "C:\\workspace\\Orchestrator\\apps\\lazoo-desktop\\ui\\dist\\assets\\index-D0fYAW1j.js",
+      "C:\\workspace\\Orchestrator\\apps\\lazoo-desktop\\ui\\dist\\assets\\index-BSH7s-ZH.css",
+      "C:\\workspace\\Orchestrator\\apps\\lazoo-desktop\\ui\\dist\\assets\\inter-latin-wght-normal-Dx4kXJAl.woff2",
+      "C:\\workspace\\Orchestrator\\apps\\lazoo-desktop\\ui\\dist\\assets\\ibm-plex-mono-latin-400-normal-DMJ8VG8y.woff2",
+      "C:\\workspace\\Orchestrator\\apps\\lazoo-desktop\\ui\\dist\\assets\\ibm-plex-mono-latin-500-normal-DSY6xOcd.woff2"
     ]
   },
   "keeper": {
@@ -42,17 +42,17 @@
     {
       "command": "lazooctl --json status",
       "exitCode": 0,
-      "durationMs": 460
+      "durationMs": 225
     },
     {
-      "command": "lazooctl --json project register C:\\Users\\anubhab\\AppData\\Local\\Temp\\lazoo-desktop-acceptance-dbd94d0941bc4f2f908641ff374e6b41\\repository --name Desktop acceptance --idempotency-key desktop-dbd94d0941bc4f2f908641ff374e6b41",
+      "command": "lazooctl --json project register C:\\Users\\anubhab\\AppData\\Local\\Temp\\lazoo-desktop-acceptance-ce341c6462bd4529b316e9e20ae4c045\\repository --name Desktop acceptance --idempotency-key desktop-ce341c6462bd4529b316e9e20ae4c045",
       "exitCode": 0,
-      "durationMs": 99
+      "durationMs": 98
     },
     {
       "command": "lazooctl --json system shutdown",
       "exitCode": 0,
-      "durationMs": 38
+      "durationMs": 27
     }
   ],
   "gates": {
