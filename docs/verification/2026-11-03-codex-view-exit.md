@@ -90,3 +90,15 @@ git add -- Cargo.lock PR-BODY.md apps/lazood/src/app.rs apps/lazood/src/app/idle
 
 Suggested title: `Preserve Codex completion bursts and trace native child exits`.
 PR body: root `PR-BODY.md`.
+
+
+## Real-desktop replay (Claude, 2026-11-03)
+
+Debug build of this branch, fresh data root, daemon launched directly with `RUST_LOG=info,lazood=debug,lazoo_providers=debug,lazoo_runtime=debug`, the real desktop over CDP; Claude Code lead (claude-sonnet-5-5, notice-turns), Codex worker forge (gpt-6-luna, Codex 0.166.0-alpha.5.1). In both conversations forge's native view was opened about 2 s into its turn, the step that ended forge in replay f.
+
+| Conversation | Forge | Lead | Incidents |
+|---|---|---|---|
+| Fix `add()`, run the tests | completed, suspended 22:06:07 | completed after the result notice | 0 |
+| Add `test_mul_float`, run the tests | completed (test added, run reported 2 passed, 1 failed because the isolated worktree still has the unfixed `add`), suspended 22:07:04 | completed, reported the exact result and why | 0 |
+
+The new lifecycle records show the normal end-of-task path: `controller-stop`, then "closing Codex viewer lease only" with `canonical_termination: false`, then the stop-deadline job termination and the observed exit. Nothing on the viewer path reached the canonical child.
