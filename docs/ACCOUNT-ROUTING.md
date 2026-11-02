@@ -6,8 +6,16 @@ keep their current provider configuration until the owner changes a routing poli
 
 ## Setup
 
-Open **Settings → Accounts**. Add a native profile or an API credential, then choose
-the provider's routing policy. Native profiles get their own configuration directory
+Open **Settings → Accounts** (or "Accounts and usage" in the command palette). Pick the
+harness tab, then **New account** to add a native profile or an API credential, and choose
+the harness's routing under **New sessions**. With **Use in order**, the list is the routing
+order and each row moves up or down. A row shows the account's state (ready, cooling down,
+exhausted until a time, key needed, disabled), its observed usage windows with the reserve
+marked, and a reserve selector, which is disabled with the daemon's reason when the harness
+reports no usage window for that account. The usage table below sums sessions, turns,
+failures, requests and tokens per account over 7 days or 24 hours; tokens a harness does not
+report read "not reported". The conversation's agent bar names the account a session uses.
+Native profiles get their own configuration directory
 below Lazoo's data root. **Sign in** opens that provider's own login command in a
 writable terminal. Complete sign-in there before enabling pooled native sessions.
 Use **Verify routing** after choosing the policy. It sends one short model prompt,
