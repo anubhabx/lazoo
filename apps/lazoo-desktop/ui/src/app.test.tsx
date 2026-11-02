@@ -266,6 +266,32 @@ function accountRecord(overrides: Record<string, unknown> = {}) {
   };
 }
 
+describe("settings", () => {
+  test("a new employee is created from a dialog, not an always-open form", async () => {
+    const bridge = scripted();
+    bridge.on("employee.list", []);
+    bridge.on("employee.create", { employee: { id: "e1" } });
+    const user = userEvent.setup();
+    const { store } = mount(bridge);
+    store.navigate({ kind: "settings", section: "employees" });
+    await screen.findByRole("heading", { name: "Employees" });
+    expect(screen.queryByLabelText("Name")).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "New employee" }));
+    await user.type(await screen.findByLabelText("Name"), "nova");
+    await user.click(screen.getByRole("button", { name: "Create employee" }));
+    await waitFor(() =>
+      expect(bridge.callsTo("employee.create")[0]).toMatchObject({
+        name: "nova",
+        provider: "codex",
+        authorityMode: "ask",
+      }),
+    );
+    await waitFor(() =>
+      expect(screen.queryByLabelText("Name")).not.toBeInTheDocument(),
+    );
+  });
+});
+
 describe("provider accounts", () => {
   test("priority routing lists accounts in order and moves one with the policy revision", async () => {
     const bridge = scripted();

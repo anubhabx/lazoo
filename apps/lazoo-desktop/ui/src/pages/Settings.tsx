@@ -1,10 +1,10 @@
-import { Sparkles } from "lucide-react";
 import { Fragment, useState, type FormEvent } from "react";
 
 import {
   Avatar,
   Badge,
   Button,
+  Dialog,
   Field,
   Kbd,
   ProjectGlyph,
@@ -19,6 +19,7 @@ import type {
 } from "../lib/protocol";
 import { asFailure } from "../lib/bridge";
 import { Failure, useRead } from "../lib/useRead";
+import { AddProjectDialog } from "../components/Rail";
 import { AccountsPage } from "./Accounts";
 import type { SettingsSection } from "../lib/store";
 import {
@@ -201,6 +202,7 @@ function Employees() {
     authorityMode: "ask" as AuthorityMode,
     checkoutPolicy: "isolated" as "isolated" | "read-only",
   });
+  const [adding, setAdding] = useState(false);
 
   async function create(event: FormEvent) {
     event.preventDefault();
@@ -232,6 +234,7 @@ function Employees() {
         reasoningEffort: "",
       }));
       employees.reload();
+      setAdding(false);
       store.toast({
         tone: "info",
         title: "Employee created",
@@ -254,22 +257,22 @@ function Employees() {
 
   return (
     <>
-      <h2>Employees</h2>
+      <div className="settings__title-row">
+        <h2>Employees</h2>
+        <span className="settings__title-actions">
+          <Button variant="ghost" size="sm" onClick={() => store.openSetup()}>
+            Set up agents
+          </Button>
+          <Button variant="primary" size="sm" onClick={() => setAdding(true)}>
+            New employee
+          </Button>
+        </span>
+      </div>
       <p className="settings__lede">
         Named identities on a harness. Creating one runs a bounded readiness
-        probe, never a model.
+        probe, never a model. Set up agents offers the recommended team for the
+        harnesses on this machine.
       </p>
-      <div className="settings__callout">
-        <Sparkles size={16} aria-hidden="true" />
-        <span>
-          Lazoo ships a recommended team for the harnesses on this machine: a
-          lead, builders, and a reviewer, each on the model developers prefer
-          for that work.
-        </span>
-        <Button variant="accent" size="sm" onClick={() => store.openSetup()}>
-          Set up agents
-        </Button>
-      </div>
       <Failure error={employees.error} />
       {list.length ? (
         <div className="table-wrap">
@@ -332,130 +335,145 @@ function Employees() {
       ) : employees.data ? (
         <p className="meta">No employees yet.</p>
       ) : null}
-      <form className="card" onSubmit={(event) => void create(event)}>
-        <h3>New employee</h3>
-        <div className="form-grid">
-          <Field label="Name" htmlFor="emp-name">
-            <input
-              id="emp-name"
-              className="input"
-              required
-              value={form.name}
-              onChange={(event) =>
-                setForm({ ...form, name: event.target.value })
-              }
-            />
-          </Field>
-          <Field
-            label="Harness"
-            htmlFor="emp-provider"
-            hint={
-              detected.length
-                ? undefined
-                : "No harness detected on this machine yet."
-            }
-          >
-            <select
-              id="emp-provider"
-              className="select"
-              value={form.provider}
-              onChange={(event) =>
-                setForm({ ...form, provider: event.target.value })
-              }
-            >
-              {[
-                "codex",
-                "claude-code",
-                "github-copilot",
-                "opencode",
-                "antigravity",
-              ].map((provider) => (
-                <option key={provider} value={provider}>
-                  {providerLabel(provider)}
-                  {detected.some((entry) => entry.provider === provider)
-                    ? ""
-                    : " (not detected)"}
-                </option>
-              ))}
-            </select>
-          </Field>
-          <Field label="Role" htmlFor="emp-role">
-            <input
-              id="emp-role"
-              className="input"
-              placeholder="e.g. backend"
-              value={form.role}
-              onChange={(event) =>
-                setForm({ ...form, role: event.target.value })
-              }
-            />
-          </Field>
-          <Field
-            label="Model"
-            htmlFor="emp-model"
-            hint="Leave empty for the harness default."
-          >
-            <input
-              id="emp-model"
-              className="input"
-              value={form.model}
-              onChange={(event) =>
-                setForm({ ...form, model: event.target.value })
-              }
-            />
-          </Field>
-          <Field label="Reasoning effort" htmlFor="emp-effort">
-            <input
-              id="emp-effort"
-              className="input"
-              placeholder="e.g. high"
-              value={form.reasoningEffort}
-              onChange={(event) =>
-                setForm({ ...form, reasoningEffort: event.target.value })
-              }
-            />
-          </Field>
-          <Field label="Authority ceiling" htmlFor="emp-authority">
-            <select
-              id="emp-authority"
-              className="select"
-              value={form.authorityMode}
-              onChange={(event) =>
-                setForm({
-                  ...form,
-                  authorityMode: event.target.value as AuthorityMode,
-                })
+      <Dialog
+        open={adding}
+        onClose={() => setAdding(false)}
+        title="New employee"
+        description="A named identity on one harness. Lazoo probes the harness once; it does not start a model."
+        width={560}
+      >
+        <form className="stack" onSubmit={(event) => void create(event)}>
+          <div className="form-grid">
+            <Field label="Name" htmlFor="emp-name">
+              <input
+                id="emp-name"
+                className="input"
+                data-autofocus
+                required
+                value={form.name}
+                onChange={(event) =>
+                  setForm({ ...form, name: event.target.value })
+                }
+              />
+            </Field>
+            <Field
+              label="Harness"
+              htmlFor="emp-provider"
+              hint={
+                detected.length
+                  ? undefined
+                  : "No harness detected on this machine yet."
               }
             >
-              <option value="ask">Ask</option>
-              <option value="self-decision">Self-decision</option>
-              <option value="full-autonomy">Full autonomy</option>
-            </select>
-          </Field>
-          <Field label="Checkout policy" htmlFor="emp-checkout">
-            <select
-              id="emp-checkout"
-              className="select"
-              value={form.checkoutPolicy}
-              onChange={(event) =>
-                setForm({
-                  ...form,
-                  checkoutPolicy: event.target.value as
-                    "isolated" | "read-only",
-                })
-              }
+              <select
+                id="emp-provider"
+                className="select"
+                value={form.provider}
+                onChange={(event) =>
+                  setForm({ ...form, provider: event.target.value })
+                }
+              >
+                {[
+                  "codex",
+                  "claude-code",
+                  "github-copilot",
+                  "opencode",
+                  "antigravity",
+                ].map((provider) => (
+                  <option key={provider} value={provider}>
+                    {providerLabel(provider)}
+                    {detected.some((entry) => entry.provider === provider)
+                      ? ""
+                      : " (not detected)"}
+                  </option>
+                ))}
+              </select>
+            </Field>
+            <Field label="Role" htmlFor="emp-role">
+              <input
+                id="emp-role"
+                className="input"
+                placeholder="e.g. backend"
+                value={form.role}
+                onChange={(event) =>
+                  setForm({ ...form, role: event.target.value })
+                }
+              />
+            </Field>
+            <Field
+              label="Model"
+              htmlFor="emp-model"
+              hint="Leave empty for the harness default."
             >
-              <option value="isolated">Isolated worktree</option>
-              <option value="read-only">Read-only</option>
-            </select>
-          </Field>
-        </div>
-        <div className="form-actions">
-          <Button type="submit" variant="primary" disabled={!form.name.trim()}>
-            Create employee
-          </Button>
-        </div>
-      </form>
+              <input
+                id="emp-model"
+                className="input"
+                value={form.model}
+                onChange={(event) =>
+                  setForm({ ...form, model: event.target.value })
+                }
+              />
+            </Field>
+            <Field label="Reasoning effort" htmlFor="emp-effort">
+              <input
+                id="emp-effort"
+                className="input"
+                placeholder="e.g. high"
+                value={form.reasoningEffort}
+                onChange={(event) =>
+                  setForm({ ...form, reasoningEffort: event.target.value })
+                }
+              />
+            </Field>
+            <Field label="Authority ceiling" htmlFor="emp-authority">
+              <select
+                id="emp-authority"
+                className="select"
+                value={form.authorityMode}
+                onChange={(event) =>
+                  setForm({
+                    ...form,
+                    authorityMode: event.target.value as AuthorityMode,
+                  })
+                }
+              >
+                <option value="ask">Ask</option>
+                <option value="self-decision">Self-decision</option>
+                <option value="full-autonomy">Full autonomy</option>
+              </select>
+            </Field>
+            <Field label="Checkout policy" htmlFor="emp-checkout">
+              <select
+                id="emp-checkout"
+                className="select"
+                value={form.checkoutPolicy}
+                onChange={(event) =>
+                  setForm({
+                    ...form,
+                    checkoutPolicy: event.target.value as
+                      "isolated" | "read-only",
+                  })
+                }
+              >
+                <option value="isolated">Isolated worktree</option>
+                <option value="read-only">Read-only</option>
+              </select>
+            </Field>
+          </div>
+          <div className="form-actions">
+            <Button variant="ghost" onClick={() => setAdding(false)}>
+              Cancel
+            </Button>
+            <Button
+              type="submit"
+              variant="primary"
+              disabled={!form.name.trim()}
+            >
+              Create employee
+            </Button>
+          </div>
+        </form>
+      </Dialog>
     </>
   );
 }
@@ -564,35 +582,17 @@ function TrustPolicy({ provider }: { provider: string }) {
 }
 
 function Projects() {
-  const store = useStore();
   const { projects } = useAppState();
-  const [form, setForm] = useState({
-    path: "",
-    name: "",
-    checkoutMode: "isolated" as "isolated" | "lead-main",
-  });
-
-  async function register(event: FormEvent) {
-    event.preventDefault();
-    if (!form.path.trim()) return;
-    const result = await store.mutate(
-      "project.register",
-      {
-        path: form.path.trim(),
-        displayName: form.name.trim() || null,
-        checkoutMode: form.checkoutMode,
-      },
-      `project.register:${form.path.trim().toLowerCase()}`,
-    );
-    if (result) {
-      setForm({ path: "", name: "", checkoutMode: "isolated" });
-      store.toast({ tone: "info", title: "Project registered" });
-    }
-  }
+  const [adding, setAdding] = useState(false);
 
   return (
     <>
-      <h2>Projects</h2>
+      <div className="settings__title-row">
+        <h2>Projects</h2>
+        <Button variant="primary" size="sm" onClick={() => setAdding(true)}>
+          Register a project
+        </Button>
+      </div>
       <p className="settings__lede">
         Registered local repositories. Each is a space with its own
         conversations.
@@ -630,58 +630,7 @@ function Projects() {
           No projects registered. Home holds projectless conversations.
         </p>
       )}
-      <form className="card" onSubmit={(event) => void register(event)}>
-        <h3>Register a project</h3>
-        <div className="form-grid">
-          <Field
-            label="Path"
-            htmlFor="proj-path"
-            hint="A local Git repository."
-          >
-            <input
-              id="proj-path"
-              className="input"
-              required
-              placeholder="C:\\workspace\\my-repo"
-              value={form.path}
-              onChange={(event) =>
-                setForm({ ...form, path: event.target.value })
-              }
-            />
-          </Field>
-          <Field label="Display name" htmlFor="proj-name">
-            <input
-              id="proj-name"
-              className="input"
-              value={form.name}
-              onChange={(event) =>
-                setForm({ ...form, name: event.target.value })
-              }
-            />
-          </Field>
-          <Field label="Checkout mode" htmlFor="proj-checkout">
-            <select
-              id="proj-checkout"
-              className="select"
-              value={form.checkoutMode}
-              onChange={(event) =>
-                setForm({
-                  ...form,
-                  checkoutMode: event.target.value as "isolated" | "lead-main",
-                })
-              }
-            >
-              <option value="isolated">Isolated worktrees</option>
-              <option value="lead-main">Lead on main</option>
-            </select>
-          </Field>
-        </div>
-        <div className="form-actions">
-          <Button type="submit" variant="primary" disabled={!form.path.trim()}>
-            Register
-          </Button>
-        </div>
-      </form>
+      <AddProjectDialog open={adding} onClose={() => setAdding(false)} />
     </>
   );
 }

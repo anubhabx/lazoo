@@ -370,7 +370,7 @@ function ConversationEntry({
   );
 }
 
-function AddProjectDialog({
+export function AddProjectDialog({
   open,
   onClose,
 }: {

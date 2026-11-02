@@ -1380,6 +1380,12 @@ kbd,
   margin: 0;
 }
 
+.settings__title-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
 .settings__group {
   margin-bottom: 32px;
 }
@@ -2033,27 +2039,6 @@ kbd,
 .settings__lede {
   margin: 0 0 22px;
   color: var(--lz-color-text-muted);
-}
-
-.settings__callout {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  margin-bottom: 16px;
-  padding: 12px 14px;
-  border: 1px solid var(--lz-color-accent-border);
-  border-radius: var(--lz-radius-lg);
-  background: var(--lz-color-accent-wash);
-  color: var(--lz-color-text-secondary);
-}
-
-.settings__callout svg {
-  flex: none;
-  color: var(--lz-iris-300);
-}
-
-.settings__callout span {
-  flex: 1;
 }
 
 .row__icon {
