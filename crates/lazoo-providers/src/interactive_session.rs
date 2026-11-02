@@ -58,8 +58,21 @@ struct GeneratedFile {
 struct ClaudeBinding {
     prompt_id: Option<String>,
     turn_id: Option<String>,
-    message_indexes: HashMap<String, (u64, bool)>,
+    messages: HashMap<String, DisplayBuffer>,
 }
+
+/// One Claude message's display batches. Claude fires `MessageDisplay` hooks concurrently, so
+/// batches can arrive out of order; they are released in index order and never fail a turn
+/// (the turn completes on Stop, display text is only the record of it).
+#[derive(Default)]
+struct DisplayBuffer {
+    next: u64,
+    pending: std::collections::BTreeMap<u64, String>,
+    final_index: Option<u64>,
+}
+
+/// How far ahead of the next expected batch Lazoo buffers before calling the stream broken.
+const DISPLAY_REORDER_WINDOW: u64 = 256;
 
 #[derive(Default)]
 struct AntigravityBinding {
@@ -127,7 +140,13 @@ impl ClaudeBinding {
         Ok(())
     }
 
-    fn accept_message(&mut self, payload: &Value) -> Result<(), ProviderError> {
+    /// Accept one display batch and return the text now releasable in order. A replayed batch
+    /// or one after the message's final batch is ignored.
+    fn accept_message(
+        &mut self,
+        payload: &Value,
+        delta: &str,
+    ) -> Result<Vec<String>, ProviderError> {
         self.require_prompt(payload)?;
         let turn = native_uuid(payload, "turn_id")?;
         if self.turn_id.as_ref().is_some_and(|active| active != &turn) {
@@ -146,20 +165,42 @@ impl ClaudeBinding {
             .ok_or_else(|| {
                 ProviderError::Protocol("Claude display final marker missing".to_owned())
             })?;
-        if let Some((previous, finalized)) = self.message_indexes.get(&message) {
-            if *finalized || previous.checked_add(1) != Some(index) {
-                return Err(ProviderError::Protocol(
-                    "replayed or out-of-order Claude display batch".to_owned(),
-                ));
-            }
-        } else if index != 0 || self.message_indexes.len() >= 1024 {
+        if !self.messages.contains_key(&message) && self.messages.len() >= 1024 {
             return Err(ProviderError::Protocol(
                 "Claude display sequence exceeds bounds".to_owned(),
             ));
         }
         self.turn_id = Some(turn);
-        self.message_indexes.insert(message, (index, final_batch));
-        Ok(())
+        let buffer = self.messages.entry(message).or_default();
+        if index < buffer.next
+            || buffer.pending.contains_key(&index)
+            || buffer.final_index.is_some_and(|last| index > last)
+        {
+            return Ok(Vec::new());
+        }
+        if index - buffer.next > DISPLAY_REORDER_WINDOW {
+            return Err(ProviderError::Protocol(
+                "Claude display sequence exceeds bounds".to_owned(),
+            ));
+        }
+        buffer.pending.insert(index, delta.to_owned());
+        if final_batch {
+            buffer.final_index = Some(index);
+        }
+        let mut released = Vec::new();
+        while let Some(text) = buffer.pending.remove(&buffer.next) {
+            released.push(text);
+            buffer.next += 1;
+        }
+        Ok(released)
+    }
+
+    /// Text still waiting on a batch that never came, in index order, once the turn stops.
+    fn flush_display(&mut self) -> Vec<String> {
+        self.messages
+            .values_mut()
+            .flat_map(|buffer| std::mem::take(&mut buffer.pending).into_values())
+            .collect()
     }
 }
 
@@ -853,20 +894,23 @@ impl NativeInteractiveSession {
                             "Claude MessageDisplay omitted bounded delta".to_owned(),
                         )
                     })?;
-                self.claude_binding
+                let released = self
+                    .claude_binding
                     .lock()
                     .map_err(|_| {
                         ProviderError::Protocol("Claude binding state is poisoned".to_owned())
                     })?
-                    .accept_message(&payload)?;
+                    .accept_message(&payload, delta)?;
                 *final_text |= payload.get("final").and_then(Value::as_bool) == Some(true);
-                events.push(ProviderEvent::TextDelta {
-                    provider: self.provider,
-                    session_id: native_id,
-                    turn_id: Some(turn_id.to_owned()),
-                    text: delta.to_owned(),
-                    raw: None,
-                });
+                for text in released {
+                    events.push(ProviderEvent::TextDelta {
+                        provider: self.provider,
+                        session_id: native_id.clone(),
+                        turn_id: Some(turn_id.to_owned()),
+                        text,
+                        raw: None,
+                    });
+                }
                 let _ = queued.reply.send(json!({}));
             }
             "PreToolUse" => {
@@ -1041,6 +1085,24 @@ impl NativeInteractiveSession {
                     }
                 }
                 *saw_stop = true;
+                if self.provider == ProviderKind::ClaudeCode {
+                    let held = self
+                        .claude_binding
+                        .lock()
+                        .map_err(|_| {
+                            ProviderError::Protocol("Claude binding state is poisoned".to_owned())
+                        })?
+                        .flush_display();
+                    for text in held {
+                        events.push(ProviderEvent::TextDelta {
+                            provider: self.provider,
+                            session_id: self.id_locked(),
+                            turn_id: Some(turn_id.to_owned()),
+                            text,
+                            raw: None,
+                        });
+                    }
+                }
                 if self.provider == ProviderKind::Antigravity
                     && let Some(text) = self.antigravity_transcript_text(&payload, &turn.prompt)?
                 {
@@ -2019,17 +2081,68 @@ mod tests {
                     .is_err()
             );
         }
-        let mut message = json!({"prompt_id":prompt,"turn_id":uuid::Uuid::new_v4(),"message_id":uuid::Uuid::new_v4(),"index":0,"final":false});
-        binding.accept_message(&message).unwrap();
-        assert!(binding.accept_message(&message).is_err());
-        message["index"] = json!(1);
-        message["final"] = json!(true);
-        binding.accept_message(&message).unwrap();
-        message["index"] = json!(2);
-        assert!(binding.accept_message(&message).is_err());
-        message["message_id"] = json!(uuid::Uuid::new_v4());
-        message["turn_id"] = json!(uuid::Uuid::new_v4());
-        message["index"] = json!(0);
-        assert!(binding.accept_message(&message).is_err());
+        let turn = uuid::Uuid::new_v4();
+        let batch = |message: &str, index: u64, last: bool| json!({"prompt_id":prompt,"turn_id":turn,"message_id":message,"index":index,"final":last});
+        // In order: each batch is released at once.
+        let first = uuid::Uuid::new_v4().to_string();
+        assert_eq!(
+            binding
+                .accept_message(&batch(&first, 0, false), "a")
+                .unwrap(),
+            ["a"]
+        );
+        // A replay is ignored, never a turn failure.
+        assert!(
+            binding
+                .accept_message(&batch(&first, 0, false), "a")
+                .unwrap()
+                .is_empty()
+        );
+        assert_eq!(
+            binding
+                .accept_message(&batch(&first, 1, true), "b")
+                .unwrap(),
+            ["b"]
+        );
+        assert!(
+            binding
+                .accept_message(&batch(&first, 2, false), "late")
+                .unwrap()
+                .is_empty()
+        );
+        // Out of order (the live failure): a new message whose batch 1 lands before batch 0
+        // is held, then released in order.
+        let second = uuid::Uuid::new_v4().to_string();
+        assert!(
+            binding
+                .accept_message(&batch(&second, 1, false), "y")
+                .unwrap()
+                .is_empty()
+        );
+        assert_eq!(
+            binding
+                .accept_message(&batch(&second, 0, false), "x")
+                .unwrap(),
+            ["x", "y"]
+        );
+        // A gap that never fills is flushed when the turn stops.
+        assert!(
+            binding
+                .accept_message(&batch(&second, 3, true), "w")
+                .unwrap()
+                .is_empty()
+        );
+        assert_eq!(binding.flush_display(), ["w"]);
+        // Far beyond the reorder window is a broken stream.
+        let third = uuid::Uuid::new_v4().to_string();
+        assert!(
+            binding
+                .accept_message(&batch(&third, 10_000, false), "z")
+                .is_err()
+        );
+        // Another turn's batch is still refused.
+        let mut stale = batch(&first, 0, false);
+        stale["turn_id"] = json!(uuid::Uuid::new_v4());
+        assert!(binding.accept_message(&stale, "s").is_err());
     }
 }

@@ -96,3 +96,14 @@ describe("activity folding", () => {
     expect(stateWord("recorded")).toBe("queued");
   });
 });
+
+describe("deadlines", () => {
+  test("a future deadline reads forward, a past one as passed", async () => {
+    const { deadlineIn } = await import("./util");
+    const now = Date.parse("2026-11-03T10:00:00Z");
+    expect(deadlineIn("2026-11-03T10:04:00Z", now)).toBe("in 4m");
+    expect(deadlineIn("2026-11-03T12:00:00Z", now)).toBe("in 2h");
+    expect(deadlineIn("2026-11-03T10:00:20Z", now)).toBe("in under a minute");
+    expect(deadlineIn("2026-11-03T09:59:00Z", now)).toBe("passed");
+  });
+});
