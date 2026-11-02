@@ -1,10 +1,14 @@
 /*
- * Lazoo Desktop Design System v0.2 (Slate)
+ * Lazoo Desktop Design System v0.3 (Slate, sharp)
  *
  * The single source of truth for colour, type, space, radius, elevation and
  * motion. Components consume the semantic roles (--lz-color-*, --lz-status-*,
  * --lz-provider-*), never the primitives. tokens.json is generated from this
  * file: `node design-system/build-tokens.mjs`.
+ *
+ * v0.3 (2026-11-03): sharp and flat. Hairlines separate regions, radii are
+ * 2 to 6 px, raised surfaces carry no shadow, motion is 60 to 200 ms. Ordered
+ * dithering (lib/dither.ts) is the only decoration.
  */
 
 :root,
@@ -45,14 +49,15 @@
   --lz-teal-400: #66c3c8;
   --lz-peach-400: #e9a990;
 
-  /* Surfaces: the sidebar sits a step below the stage, cards a step above. */
+  /* Surfaces: the stage is the terminal's own background, so a native TUI sits
+     edge to edge; the sidebar is a step below, inputs and menus a step above. */
   --lz-color-canvas: var(--lz-slate-000);
-  --lz-color-window: var(--lz-slate-100);
-  --lz-color-background: var(--lz-slate-150);
-  --lz-color-surface: var(--lz-slate-200);
+  --lz-color-window: var(--lz-slate-050);
+  --lz-color-background: var(--lz-slate-100);
+  --lz-color-surface: var(--lz-slate-150);
   --lz-color-editor-surface: var(--lz-slate-100);
-  --lz-color-surface-raised: var(--lz-slate-250);
-  --lz-color-surface-overlay: var(--lz-slate-250);
+  --lz-color-surface-raised: var(--lz-slate-200);
+  --lz-color-surface-overlay: var(--lz-slate-200);
   --lz-color-surface-hover: rgb(211 217 225 / 5%);
   --lz-color-surface-active: rgb(211 217 225 / 8.5%);
   --lz-color-surface-selected: rgb(211 217 225 / 8.5%);
@@ -109,7 +114,8 @@
   --lz-provider-codex: var(--lz-teal-400);
   --lz-provider-opencode: var(--lz-sky-400);
   --lz-provider-antigravity: var(--lz-mint-400);
-  --lz-provider-grok-build: var(--lz-peach-400);
+  --lz-provider-github-copilot: var(--lz-peach-400);
+  --lz-provider-grok-build: var(--lz-sand-400);
 
   /* Typography: Inter with its modern alternates, Windows-safe fallbacks */
   --lz-font-ui:
@@ -155,15 +161,15 @@
   --lz-space-40: 40px;
   --lz-space-48: 48px;
 
-  /* Radius: soft, never pill-heavy */
+  /* Radius: sharp. Controls 3 to 4 px, floating layers 6 px. */
   --lz-radius-none: 0px;
-  --lz-radius-xs: 4px;
-  --lz-radius-sm: 6px;
-  --lz-radius-md: 8px;
-  --lz-radius-lg: 10px;
-  --lz-radius-xl: 14px;
-  --lz-radius-2xl: 18px;
-  --lz-radius-3xl: 24px;
+  --lz-radius-xs: 2px;
+  --lz-radius-sm: 3px;
+  --lz-radius-md: 4px;
+  --lz-radius-lg: 4px;
+  --lz-radius-xl: 6px;
+  --lz-radius-2xl: 6px;
+  --lz-radius-3xl: 8px;
   --lz-radius-full: 9999px;
 
   --lz-border-hairline: 1px;
@@ -178,47 +184,47 @@
   --lz-icon-lg: 20px;
   --lz-icon-display: 40px;
   --lz-control-h-xs: 20px;
-  --lz-control-h-sm: 26px;
-  --lz-control-h-md: 30px;
-  --lz-control-h-lg: 36px;
+  --lz-control-h-sm: 24px;
+  --lz-control-h-md: 28px;
+  --lz-control-h-lg: 32px;
   --lz-row-h-compact: 28px;
-  --lz-row-h-default: 30px;
-  --lz-row-h-comfortable: 36px;
-  --lz-row-h-command: 40px;
+  --lz-row-h-default: 28px;
+  --lz-row-h-comfortable: 32px;
+  --lz-row-h-command: 36px;
 
   /* Shell geometry */
-  --lz-titlebar-h: 44px;
-  --lz-navigation-w: 256px;
+  --lz-titlebar-h: 40px;
+  --lz-navigation-w: 248px;
+  --lz-gutter: 24px;
   --lz-inspector-w: 320px;
   --lz-command-palette-w: 640px;
   --lz-command-palette-max-h: 520px;
 
-  /* Elevation: a top highlight plus a soft, low shadow reads as depth on slate */
-  --lz-highlight: inset 0 1px 0 rgb(255 255 255 / 3.5%);
-  --lz-shadow-raised:
-    inset 0 1px 0 rgb(255 255 255 / 3.5%), 0 1px 2px rgb(6 9 14 / 28%);
+  /* Elevation: flat in the page; only floating layers cast a shadow. */
+  --lz-highlight: none;
+  --lz-shadow-raised: none;
   --lz-shadow-overlay:
-    inset 0 1px 0 rgb(255 255 255 / 5%), 0 0 0 1px rgb(6 9 14 / 35%),
-    0 18px 40px -14px rgb(6 9 14 / 65%), 0 6px 14px -8px rgb(6 9 14 / 45%);
+    0 0 0 1px rgb(6 9 14 / 40%), 0 12px 32px -12px rgb(6 9 14 / 70%);
   --lz-shadow-modal:
-    inset 0 1px 0 rgb(255 255 255 / 5%), 0 0 0 1px rgb(6 9 14 / 40%),
-    0 32px 80px -24px rgb(6 9 14 / 75%), 0 12px 24px -12px rgb(6 9 14 / 50%);
-  --lz-shadow-focus: 0 0 0 3px rgb(141 154 244 / 28%);
-  --lz-glow-accent:
-    0 0 0 1px rgb(141 154 244 / 30%), 0 6px 24px -8px rgb(141 154 244 / 45%);
+    0 0 0 1px rgb(6 9 14 / 45%), 0 24px 64px -20px rgb(6 9 14 / 80%);
+  --lz-shadow-focus: 0 0 0 2px rgb(141 154 244 / 45%);
+  --lz-glow-accent: none;
 
-  /* Motion: quick to respond, slow to settle, never bouncy */
-  --lz-duration-instant: 80ms;
-  --lz-duration-fast: 140ms;
-  --lz-duration-moderate: 220ms;
-  --lz-duration-slow: 320ms;
+  /* Dither: the cell size of every dithered field, in CSS pixels. */
+  --lz-dither-cell: 2px;
+
+  /* Motion: crisp. Nothing a keyboard triggers animates. */
+  --lz-duration-instant: 60ms;
+  --lz-duration-fast: 120ms;
+  --lz-duration-moderate: 160ms;
+  --lz-duration-slow: 200ms;
   --lz-ease-out: cubic-bezier(0.22, 1, 0.36, 1);
   --lz-ease-in-out: cubic-bezier(0.65, 0, 0.35, 1);
   --lz-ease-standard: cubic-bezier(0.2, 0, 0, 1);
   --lz-ease-in: cubic-bezier(0.4, 0, 1, 1);
   --lz-motion-micro: 4px;
   --lz-motion-panel: 8px;
-  --lz-press-scale: 0.97;
+  --lz-press-scale: 0.98;
 }
 
 @media (prefers-reduced-motion: reduce) {

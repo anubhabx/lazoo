@@ -1,14 +1,4 @@
-import { motion } from "motion/react";
-import {
-  ArrowUp,
-  Bug,
-  Map as MapIcon,
-  MessageSquare,
-  ScanSearch,
-  Sparkles,
-  UserPlus,
-  Users,
-} from "lucide-react";
+import { ArrowUp } from "lucide-react";
 import {
   useEffect,
   useMemo,
@@ -20,11 +10,8 @@ import {
 import { markerTone } from "../components/Rail";
 import {
   Avatar,
-  Badge,
   Button,
   Dot,
-  EASE,
-  ProjectGlyph,
   Skeleton,
   StatusWord,
 } from "../components/primitives";
@@ -54,37 +41,6 @@ export function availabilityTone(candidate: LeadCandidate): string {
     default:
       return "waiting";
   }
-}
-
-const SUGGESTIONS = [
-  {
-    icon: Bug,
-    label: "Fix failing tests",
-    text: "Find out why the tests are failing, fix the root cause, and explain what was wrong.",
-  },
-  {
-    icon: ScanSearch,
-    label: "Review recent changes",
-    text: "Review the latest changes for bugs, regressions, and missing tests. Report findings by severity.",
-  },
-  {
-    icon: MapIcon,
-    label: "Map the codebase",
-    text: "Map how this codebase is organised: the main modules, how they talk to each other, and where to start reading.",
-  },
-  {
-    icon: Sparkles,
-    label: "Plan a feature",
-    text: "Plan and build: ",
-  },
-];
-
-function greeting(now = new Date()): string {
-  const hour = now.getHours();
-  if (hour < 5) return "Working late";
-  if (hour < 12) return "Good morning";
-  if (hour < 18) return "Good afternoon";
-  return "Good evening";
 }
 
 export function LauncherPage() {
@@ -170,17 +126,6 @@ export function LauncherPage() {
     }
   }
 
-  function suggest(value: string) {
-    setText(value);
-    setValidation(null);
-    requestAnimationFrame(() => {
-      const element = textarea.current;
-      if (!element) return;
-      element.focus();
-      element.setSelectionRange(value.length, value.length);
-    });
-  }
-
   const recent = space
     ? (state.conversations?.conversations ?? []).slice(0, 6)
     : [];
@@ -188,31 +133,14 @@ export function LauncherPage() {
 
   return (
     <section className="launcher" aria-label="New work">
-      <div className="launcher__glow" aria-hidden="true" />
-      <motion.div
-        className="launcher__card"
-        initial="hidden"
-        animate="shown"
-        variants={{ shown: { transition: { staggerChildren: 0.05 } } }}
-      >
-        <motion.div className="launcher__intro" variants={item}>
-          <span className="launcher__eyebrow">
-            {space ? (
-              <>
-                <ProjectGlyph name={space.displayName} size={16} />
-                {space.displayName}
-              </>
-            ) : (
-              <>{greeting()}</>
-            )}
-          </span>
+      <div className="launcher__column">
+        <header className="launcher__intro">
           <h1 className="launcher__title">What should the team work on?</h1>
-        </motion.div>
+        </header>
 
-        <motion.div
+        <div
           className="prompt"
           data-ready={ready}
-          variants={item}
           onMouseDown={(event) => {
             if (event.target === event.currentTarget) textarea.current?.focus();
           }}
@@ -222,8 +150,8 @@ export function LauncherPage() {
             aria-label="What should the team work on?"
             placeholder={
               space
-                ? `Describe the outcome in ${space.displayName}. The lead plans, delegates, and reports back.`
-                : "Describe the outcome. The lead plans, delegates, and reports back here."
+                ? `Describe the outcome in ${space.displayName}. The lead plans, delegates and reports back.`
+                : "Describe the outcome. The lead plans, delegates and reports back."
             }
             value={text}
             onChange={(event) => {
@@ -240,7 +168,7 @@ export function LauncherPage() {
             />
             {selected && selected.authorityModes.length > 0 ? (
               <select
-                className="select select--pill"
+                className="select select--bare"
                 aria-label="Authority"
                 value={authority ?? ""}
                 onChange={(event) =>
@@ -255,57 +183,50 @@ export function LauncherPage() {
               </select>
             ) : null}
             <span className="spacer" />
-            <span className="prompt__hint" aria-hidden="true">
-              Enter to start
-            </span>
             <Button
               variant="primary"
+              size="sm"
               className="prompt__send"
               loading={busy}
               disabled={!launcher}
               onClick={() => void start()}
               aria-label="Start"
             >
-              {busy ? null : <ArrowUp size={14} aria-hidden="true" />}
+              {busy ? null : <ArrowUp size={13} aria-hidden="true" />}
               Start
             </Button>
           </div>
-        </motion.div>
+        </div>
 
-        <motion.div
-          className="launcher__truth"
-          aria-live="polite"
-          variants={item}
-        >
+        <p className="launcher__truth" aria-live="polite">
           {validation ? <span className="warn">{validation}</span> : null}
           {state.composerError ? (
             <span className="warn">
               {state.composerError.code}: {state.composerError.message}
             </span>
           ) : null}
-          {selected ? (
-            <span>
-              <strong>{selected.name}</strong>
-              {remembered === selected.employeeId
-                ? " led your last conversation here"
-                : " will lead"}{" "}
-              ·{" "}
-              {!selected.startable ? (
-                <span className="warn">
-                  {selected.blockingReason ?? "Not startable right now"}
-                </span>
-              ) : authority === "ask" ? (
-                "commands, file changes, and delegation wait for you in the Inbox."
-              ) : authority === "self-decision" ? (
-                "in-scope work proceeds; scope expansions wait for you."
-              ) : (
-                "the lead and its workers proceed without approvals."
-              )}
-              {!selected.collaborationToolsAvailable
-                ? " This lead cannot delegate to workers."
-                : ""}
-            </span>
-          ) : launcher && leads.length > 0 ? (
+          {selected && !validation && !state.composerError ? (
+            !selected.startable ? (
+              <span className="warn">
+                {selected.blockingReason ?? "This lead cannot start right now."}
+              </span>
+            ) : (
+              <span>
+                <strong>{selected.name}</strong>
+                {remembered === selected.employeeId
+                  ? " led your last conversation here. "
+                  : " will lead. "}
+                {authority === "ask"
+                  ? "Commands, file changes and delegation wait for you."
+                  : authority === "self-decision"
+                    ? "In-scope work proceeds; scope expansions wait for you."
+                    : "The lead and its workers proceed without approvals."}
+                {!selected.collaborationToolsAvailable
+                  ? " This lead cannot delegate."
+                  : ""}
+              </span>
+            )
+          ) : launcher && leads.length > 0 && !selected ? (
             <span>Choose who leads this conversation.</span>
           ) : !launcher &&
             (state.connection === "offline" ||
@@ -314,52 +235,27 @@ export function LauncherPage() {
               {state.connectionError?.message ?? "The daemon is not reachable."}
             </span>
           ) : null}
-        </motion.div>
+        </p>
 
-        <motion.div className="suggestions" variants={item}>
-          {SUGGESTIONS.map((suggestion) => (
-            <button
-              key={suggestion.label}
-              type="button"
-              className="suggestion"
-              onClick={() => suggest(suggestion.text)}
-            >
-              <suggestion.icon size={14} aria-hidden="true" />
-              {suggestion.label}
-            </button>
-          ))}
-        </motion.div>
-
-        <motion.section
-          className="launcher__section"
-          variants={item}
-          aria-label="Team"
-        >
-          <div className="launcher__section-head">
-            <h2>
-              <Users size={14} aria-hidden="true" />
-              Team
-            </h2>
+        <section className="launcher__section" aria-label="Team">
+          <header className="launcher__section-head">
+            <h2>Team</h2>
             {leads.length > 0 ? (
               <Button
                 variant="ghost"
                 size="sm"
                 onClick={() => store.openSetup()}
               >
-                <UserPlus size={13} aria-hidden="true" />
                 Add agents
               </Button>
             ) : null}
-          </div>
+          </header>
           {!launcher ? (
             <div className="team">
               {[0, 1, 2].map((index) => (
                 <div key={index} className="member member--loading">
-                  <Skeleton width={30} height={30} radius={9} />
-                  <span className="member__main">
-                    <Skeleton width="60%" height={11} />
-                    <Skeleton width="85%" height={9} />
-                  </span>
+                  <Skeleton width={20} height={20} />
+                  <Skeleton width="40%" height={10} />
                 </div>
               ))}
             </div>
@@ -381,19 +277,15 @@ export function LauncherPage() {
                   <Avatar
                     name={lead.name}
                     provider={lead.provider}
-                    size={30}
+                    size={20}
                     status={availabilityTone(lead)}
                   />
-                  <span className="member__main">
-                    <span className="member__name">
-                      <strong>{lead.name}</strong>
-                      {lead.role ? <Badge>{lead.role}</Badge> : null}
-                    </span>
-                    <span className="member__meta">
-                      {providerLabel(lead.provider)}
-                      {lead.model ? ` · ${lead.model}` : ""}
-                      {lead.reasoningEffort ? ` · ${lead.reasoningEffort}` : ""}
-                    </span>
+                  <span className="member__name">{lead.name}</span>
+                  <span className="member__role">{lead.role ?? ""}</span>
+                  <span className="member__meta">
+                    {providerLabel(lead.provider)}
+                    {lead.model ? ` · ${lead.model}` : ""}
+                    {lead.reasoningEffort ? ` · ${lead.reasoningEffort}` : ""}
                   </span>
                   <span className="member__state">
                     {lead.startable
@@ -405,37 +297,32 @@ export function LauncherPage() {
             </div>
           ) : (
             <div className="team-empty">
-              <span className="team-empty__icon">
-                <Users size={18} aria-hidden="true" />
-              </span>
               <span className="team-empty__text">
                 <strong>No employees yet.</strong>
                 <span>
                   Lazoo ships a recommended team for the harnesses on this
-                  machine. Review it, change anything, and create it in one
-                  step.
+                  machine. Review it and create it in one step.
                 </span>
               </span>
-              <Button variant="accent" onClick={() => store.openSetup()}>
-                <Sparkles size={13} aria-hidden="true" />
+              <Button
+                variant="primary"
+                size="sm"
+                onClick={() => store.openSetup()}
+              >
                 Set up your team
               </Button>
             </div>
           )}
-        </motion.section>
+        </section>
 
         {recent.length > 0 ? (
-          <motion.section
+          <section
             className="launcher__section"
-            variants={item}
             aria-label="Recent conversations"
           >
-            <div className="launcher__section-head">
-              <h2>
-                <MessageSquare size={14} aria-hidden="true" />
-                Recent in {space?.displayName}
-              </h2>
-            </div>
+            <header className="launcher__section-head">
+              <h2>Recent in {space?.displayName}</h2>
+            </header>
             <div className="recent">
               {recent.map((row) => {
                 const marker = markerTone(row, state.seen);
@@ -463,9 +350,9 @@ export function LauncherPage() {
                 );
               })}
             </div>
-          </motion.section>
+          </section>
         ) : null}
-      </motion.div>
+      </div>
     </section>
   );
 }
@@ -474,22 +361,17 @@ export function LauncherPage() {
 function readiness(availability: LeadCandidate["availability"]): string {
   switch (availability) {
     case "dormant":
-      return "Ready · wakes on first message";
+      return "Ready";
     case "idle":
-      return "Idle · session warm";
+      return "Warm";
     case "starting":
-      return "Starting…";
+      return "Starting";
     case "suspended":
-      return "Suspended · resumes on demand";
+      return "Suspended";
     default:
       return words(availability);
   }
 }
-
-const item = {
-  hidden: { opacity: 0, y: 8 },
-  shown: { opacity: 1, y: 0, transition: { duration: 0.32, ease: EASE } },
-};
 
 function LeadPicker({
   leads,
@@ -504,10 +386,15 @@ function LeadPicker({
   return (
     <span className="lead-pill">
       {selected ? (
-        <Avatar name={selected.name} provider={selected.provider} size={18} />
+        <Avatar
+          name={selected.name}
+          provider={selected.provider}
+          size={20}
+          status={availabilityTone(selected)}
+        />
       ) : null}
       <select
-        className="select select--pill"
+        className="select select--bare"
         aria-label="Lead"
         value={selected?.employeeId ?? ""}
         onChange={(event) => onSelect(event.target.value)}

@@ -1,4 +1,6 @@
-// Lazoo's own rendering of a turn: blocks derived from durable turn records.
+// Activity: Lazoo's own record of a turn, derived from durable turn records.
+// Harnesses do not report commands, diffs or tool arguments uniformly, so a
+// turn is its request, the agent's reply, counts of what happened, and errors.
 
 import type {
   ConversationTurnEvent,
@@ -6,16 +8,6 @@ import type {
   ConversationTurnSummary,
   TurnState,
 } from "./protocol";
-
-export type EventTone =
-  "text" | "thought" | "tool" | "terminal" | "state" | "error";
-
-export interface TranscriptEvent {
-  key: string;
-  tone: EventTone;
-  text: string;
-  at: string;
-}
 
 export interface TranscriptBlock {
   id: string;
@@ -25,8 +17,13 @@ export interface TranscriptBlock {
   state: TurnState;
   text: string;
   assistantText: string;
-  thoughts: string[];
-  events: TranscriptEvent[];
+  /** Tool calls that finished (completed, failed or declined). */
+  toolRuns: number;
+  /** Lazoo collaboration calls (delegate, message, report) that finished. */
+  collaboration: number;
+  /** The harness streamed reasoning for this turn. */
+  reasoned: boolean;
+  errors: string[];
   failureCode: string | null;
   failureMessage: string | null;
   createdAt: string;
@@ -90,20 +87,26 @@ function stringField(payload: Record<string, unknown>, keys: string[]): string {
   return "";
 }
 
-/** Fold raw provider events into a readable sequence. Nothing is invented. */
+const FINISHED = /complet|fail|declin|reject|error|cancel/;
+/** Codex names Lazoo's dynamic tools `lazoo:*`; MCP clients use `mcp__lazoo__*`. */
+const COLLABORATION = /^lazoo:|^mcp__lazoo/;
+
+/** Fold provider events into a reply, counts and errors. Nothing is invented. */
 export function foldEvents(events: ConversationTurnEvent[]): {
   assistantText: string;
-  thoughts: string[];
-  rows: TranscriptEvent[];
+  toolRuns: number;
+  collaboration: number;
+  reasoned: boolean;
+  errors: string[];
 } {
   let assistantText = "";
-  let thought = "";
-  const thoughts: string[] = [];
-  const rows: TranscriptEvent[] = [];
+  let toolRuns = 0;
+  let collaboration = 0;
+  let reasoned = false;
+  const errors: string[] = [];
   for (const event of events) {
     const kind = event.kind.toLowerCase();
     const payload = event.payload ?? {};
-    const key = `${event.sequence}`;
     if (kind.includes("text")) {
       assistantText += stringField(payload, [
         "text",
@@ -111,62 +114,25 @@ export function foldEvents(events: ConversationTurnEvent[]): {
         "output",
         "message",
       ]);
-      continue;
-    }
-    if (kind.includes("thought") || kind.includes("reasoning")) {
-      thought += stringField(payload, ["text", "delta"]);
-      continue;
-    }
-    if (thought) {
-      thoughts.push(thought);
-      thought = "";
-    }
-    if (kind.includes("tool")) {
-      const name = stringField(payload, ["toolName", "tool", "name"]) || "tool";
-      const status = stringField(payload, ["status", "state"]);
-      rows.push({
-        key,
-        tone: "tool",
-        text: status ? `${name} · ${status}` : name,
-        at: event.createdAt,
-      });
-      continue;
-    }
-    if (kind.includes("terminal")) {
-      const output = stringField(payload, ["output", "text"]);
-      if (output.trim()) {
-        rows.push({
-          key,
-          tone: "terminal",
-          text: output.trimEnd(),
-          at: event.createdAt,
-        });
-      }
-      continue;
-    }
-    if (
+    } else if (kind.includes("thought") || kind.includes("reasoning")) {
+      reasoned = true;
+    } else if (kind.includes("tool")) {
+      const name = stringField(payload, ["toolName", "tool", "name"]);
+      const status = stringField(payload, ["status", "state"]).toLowerCase();
+      if (!FINISHED.test(status)) continue;
+      if (COLLABORATION.test(name)) collaboration += 1;
+      else toolRuns += 1;
+    } else if (
       kind.includes("fail") ||
       kind.includes("error") ||
       kind.includes("reject")
     ) {
-      rows.push({
-        key,
-        tone: "error",
-        text:
-          stringField(payload, ["message", "reason", "error"]) || event.kind,
-        at: event.createdAt,
-      });
-      continue;
+      errors.push(
+        stringField(payload, ["message", "reason", "error"]) || event.kind,
+      );
     }
-    rows.push({
-      key,
-      tone: "state",
-      text: event.kind.replace(/[-_.]/g, " "),
-      at: event.createdAt,
-    });
   }
-  if (thought) thoughts.push(thought);
-  return { assistantText, thoughts, rows };
+  return { assistantText, toolRuns, collaboration, reasoned, errors };
 }
 
 export function blockFromSummary(
@@ -181,8 +147,10 @@ export function blockFromSummary(
     state: turn.state,
     text: "",
     assistantText: "",
-    thoughts: [],
-    events: [],
+    toolRuns: 0,
+    collaboration: 0,
+    reasoned: false,
+    errors: [],
     failureCode: null,
     failureMessage: null,
     createdAt: turn.createdAt,
@@ -197,9 +165,7 @@ export function blockFromRecord(turn: ConversationTurnRecord): TranscriptBlock {
   return {
     ...base,
     text: turn.text,
-    assistantText: folded.assistantText,
-    thoughts: folded.thoughts,
-    events: folded.rows,
+    ...folded,
     failureCode: turn.failureCode,
     failureMessage: turn.failureMessage,
     completedAt: turn.completedAt ?? turn.terminalAt,

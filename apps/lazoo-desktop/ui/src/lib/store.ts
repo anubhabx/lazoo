@@ -43,7 +43,6 @@ export type Route =
   | { kind: "inbox"; filter: InboxFilter }
   | { kind: "settings"; section: SettingsSection };
 
-export type PaneMode = "native" | "transcript";
 export type Connection = "connecting" | "connected" | "uncertain" | "offline";
 
 export interface Toast {
@@ -82,8 +81,6 @@ export interface AppState {
   sessions: EmployeeSessionRecord[];
   /** Local "seen" marks against `lastResultAt`, per conversation. */
   seen: Record<Uuid, string>;
-  paneModes: Record<Uuid, PaneMode>;
-  defaultPaneMode: PaneMode;
   detailsOpen: boolean;
   paletteOpen: boolean;
   busy: Record<string, true>;
@@ -124,8 +121,6 @@ const EXPANDED_KEY = "lazoo.expanded-projects";
 const SIDEBAR_KEY = "lazoo.sidebar-collapsed";
 /** `offered` once the setup dialog has been shown; it opens by itself only once. */
 export const SETUP_KEY = "lazoo.setup";
-const PANE_KEY = "lazoo.pane-modes";
-const DEFAULT_PANE_KEY = "lazoo.default-pane";
 const PENDING_KEY = "lazoo.pending-keys";
 const DEBOUNCE_MS = 250;
 const STATUS_POLL_MS = 30_000;
@@ -200,8 +195,6 @@ function initialState(): AppState {
     preferredLeadId: null,
     sessions: [],
     seen: readStorage<Record<Uuid, string>>(SEEN_KEY, {}),
-    paneModes: readStorage<Record<Uuid, PaneMode>>(PANE_KEY, {}),
-    defaultPaneMode: readStorage<PaneMode>(DEFAULT_PANE_KEY, "native"),
     detailsOpen: false,
     paletteOpen: false,
     busy: {},
@@ -685,21 +678,6 @@ export class Store {
     const seen = { ...this.state.seen, [conversationId]: mark };
     writeStorage(SEEN_KEY, seen);
     this.set({ seen });
-  }
-
-  paneMode(conversationId: Uuid): PaneMode {
-    return this.state.paneModes[conversationId] ?? this.state.defaultPaneMode;
-  }
-
-  setPaneMode(conversationId: Uuid, mode: PaneMode) {
-    const paneModes = { ...this.state.paneModes, [conversationId]: mode };
-    writeStorage(PANE_KEY, paneModes);
-    this.set({ paneModes });
-  }
-
-  setDefaultPaneMode(mode: PaneMode) {
-    writeStorage(DEFAULT_PANE_KEY, mode);
-    this.set({ defaultPaneMode: mode });
   }
 
   // ---- toasts ---------------------------------------------------------

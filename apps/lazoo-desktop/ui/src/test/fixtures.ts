@@ -236,7 +236,11 @@ export function workerCard(overrides: Partial<WorkerCard> = {}): WorkerCard {
     stateReason: "the worker's turn is accepted",
     taskState: "running",
     effectiveAuthority: "ask",
-    session: { id: "99999999-9999-4999-8999-999999999999", state: "idle" },
+    session: {
+      id: "99999999-9999-4999-8999-999999999999",
+      state: "idle",
+      account: null,
+    },
     activeTurnId: null,
     workspace: {
       kind: "git-worktree",
@@ -348,6 +352,7 @@ export function conversation(
       availabilityReason: null,
       authority: "ask",
       session: {
+        account: null,
         id: SESSION_ID,
         state: "idle",
         nativeHostPid: 4242,

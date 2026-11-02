@@ -129,7 +129,6 @@ export function CommandPalette() {
     }
     const conversation = state.conversation;
     if (conversation && state.route.kind === "conversation") {
-      const id = conversation.conversation.id;
       list.push({
         id: "focus-lead",
         group: "Terminals",
@@ -148,19 +147,10 @@ export function CommandPalette() {
           run: () => store.focusTab(worker.taskId),
         });
       }
-      const mode = store.paneMode(id);
-      list.push({
-        id: "toggle-mode",
-        group: "Terminals",
-        label: mode === "native" ? "Show transcript" : "Show native terminal",
-        icon: <SquareTerminal size={14} aria-hidden="true" />,
-        run: () =>
-          store.setPaneMode(id, mode === "native" ? "transcript" : "native"),
-      });
       list.push({
         id: "toggle-details",
         group: "Actions",
-        label: state.detailsOpen ? "Close details" : "Open details",
+        label: state.detailsOpen ? "Hide activity" : "Show activity",
         hint: "Ctrl I",
         icon: <PanelRight size={14} aria-hidden="true" />,
         run: () => store.toggleDetails(),
