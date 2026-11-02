@@ -93,5 +93,6 @@ describe("activity folding", () => {
     expect(turnTone("uncertain")).toBe("failed");
     expect(turnTone("completed")).toBe("done");
     expect(stateWord("retryable-failed")).toBe("failed, retryable");
+    expect(stateWord("recorded")).toBe("queued");
   });
 });

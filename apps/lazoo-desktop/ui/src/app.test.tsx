@@ -812,6 +812,24 @@ describe("conversation", () => {
     expect(sent.activateIfNeeded).toBe(true);
   });
 
+  test("a message to a busy lead is confirmed as queued", async () => {
+    const bridge = scripted();
+    bridge.on("turn.submit", {
+      turn: { id: "t3", state: "recorded" },
+      message: { delivery: { state: "queued" } },
+    });
+    const user = userEvent.setup();
+    mount(bridge);
+    await user.click(await screen.findByText("fix flaky daemon test"));
+    const box = await screen.findByLabelText("Message to the lead");
+    expect(box).toHaveAttribute(
+      "placeholder",
+      expect.stringContaining("your message queues"),
+    );
+    await user.type(box, "also check the WAL{Enter}");
+    expect(await screen.findByText("Queued for mira")).toBeInTheDocument();
+  });
+
   test("destructive worker actions ask for confirmation before sending", async () => {
     const bridge = scripted();
     bridge.on(

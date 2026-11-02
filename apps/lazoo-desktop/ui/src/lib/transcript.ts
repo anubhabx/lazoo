@@ -59,7 +59,7 @@ export function turnTone(
 export function stateWord(state: TurnState): string {
   switch (state) {
     case "recorded":
-      return "recorded";
+      return "queued";
     case "submitting":
       return "sending";
     case "accepted":

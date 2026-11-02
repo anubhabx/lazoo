@@ -486,7 +486,7 @@ function Composer() {
     lifecycle === "dormant"
       ? `Send the first request to ${lead?.name ?? "the lead"}`
       : lifecycle === "busy"
-        ? `${lead?.name} is working · send when it finishes, or cancel the turn`
+        ? `${lead?.name} is working · your message queues`
         : `Message ${lead?.name ?? "the lead"}`;
 
   return (

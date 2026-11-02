@@ -831,7 +831,9 @@ export class Store {
     this.set({ composerError: null });
     const operation = `turn:${conversation.conversation.id}:${hashText(trimmed)}:${conversation.turns.length}`;
     try {
-      await this.bridge.call("turn.submit", {
+      const result = await this.bridge.call<{
+        message?: { delivery?: { state?: string } };
+      }>("turn.submit", {
         conversationId: conversation.conversation.id,
         author: { kind: "user" },
         recipient: null,
@@ -843,6 +845,13 @@ export class Store {
         idempotencyKey: this.keyFor(operation),
       });
       this.settle(operation);
+      // A busy recipient holds the turn and takes it when it is idle.
+      if (result?.message?.delivery?.state === "queued")
+        this.toast({
+          tone: "info",
+          title: `Queued for ${conversation.lead.name}`,
+          detail: "It is delivered when the current turn finishes.",
+        });
       return true;
     } catch (error) {
       const failure = asFailure(error);
