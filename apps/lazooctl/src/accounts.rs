@@ -9,6 +9,29 @@ use crate::{CliError, RpcError};
 #[derive(Debug, Subcommand)]
 pub enum AccountCommand {
     List,
+    /// Query locally observed account usage; omitted account filter includes all accounts.
+    Usage {
+        #[arg(long)]
+        from: Option<String>,
+        #[arg(long)]
+        to: Option<String>,
+        #[arg(long, default_value = "day", value_parser = ["hour", "day"])]
+        bucket: String,
+        #[arg(long)]
+        provider: Option<String>,
+        #[arg(long, conflicts_with = "personal")]
+        account_id: Option<Uuid>,
+        #[arg(long)]
+        personal: bool,
+    },
+    /// Set a reserve percentage, or clear it by omitting --reserve-percent.
+    Preferences {
+        id: Uuid,
+        #[arg(long)]
+        expected_revision: u64,
+        #[arg(long, value_parser = clap::value_parser!(u8).range(0..=90))]
+        reserve_percent: Option<u8>,
+    },
     /// Add or update account metadata. API credentials are read from stdin, never argv.
     Put {
         #[arg(long)]
@@ -46,8 +69,10 @@ pub enum AccountCommand {
     /// Routing changes apply to new sessions; existing sessions retain their account.
     Policy {
         provider: String,
-        #[arg(value_parser = ["inherited", "balanced", "pinned", "api-pool"])]
+        #[arg(value_parser = ["inherited", "balanced", "priority", "pinned", "api-pool"])]
         mode: String,
+        #[arg(long, value_delimiter = ',')]
+        order: Vec<Uuid>,
         #[arg(long)]
         account_id: Option<Uuid>,
         #[arg(long)]
@@ -64,6 +89,29 @@ pub enum AccountCommand {
 pub(super) fn command_request(command: &AccountCommand) -> (&'static str, Value, bool) {
     match command {
         AccountCommand::List => ("provider.accounts.list", json!({}), false),
+        AccountCommand::Usage {
+            from,
+            to,
+            bucket,
+            provider,
+            account_id,
+            personal,
+        } => {
+            let mut params = json!({"from":from,"to":to,"bucket":bucket,"provider":provider});
+            if *personal || account_id.is_some() {
+                params["accountId"] = json!(account_id);
+            }
+            ("provider.accounts.usage", params, false)
+        }
+        AccountCommand::Preferences {
+            id,
+            expected_revision,
+            reserve_percent,
+        } => (
+            "provider.accounts.preferences",
+            json!({"id":id,"expectedRevision":expected_revision,"reservePercent":reserve_percent}),
+            false,
+        ),
         AccountCommand::Put {
             provider,
             label,
@@ -100,11 +148,12 @@ pub(super) fn command_request(command: &AccountCommand) -> (&'static str, Value,
         AccountCommand::Policy {
             provider,
             mode,
+            order,
             account_id,
             expected_revision,
         } => (
             "provider.accounts.policy",
-            json!({"provider":provider,"mode":mode,"accountId":account_id,"revision":expected_revision}),
+            json!({"provider":provider,"mode":mode,"accountId":account_id,"revision":expected_revision,"order":order}),
             false,
         ),
         AccountCommand::Login {
@@ -156,6 +205,83 @@ mod tests {
     use super::*;
     use crate::{Cli, Command};
     use clap::Parser;
+
+    #[test]
+    fn usage_priority_and_reserve_commands_preserve_wire_filters_and_revisions() {
+        let id = Uuid::new_v4().to_string();
+        let request = |args: Vec<&str>| {
+            let Command::Account(command) = Cli::try_parse_from(args).unwrap().command else {
+                panic!("account command expected")
+            };
+            let (method, params, _) = command_request(&command);
+            (method, params)
+        };
+        let (method, all) = request(vec!["lazooctl", "account", "usage"]);
+        assert_eq!(method, "provider.accounts.usage");
+        assert_eq!(all["bucket"], "day");
+        assert!(all.get("accountId").is_none());
+        let (_, personal) = request(vec!["lazooctl", "account", "usage", "--personal"]);
+        assert!(personal.get("accountId").unwrap().is_null());
+        let (_, named) = request(vec![
+            "lazooctl",
+            "account",
+            "usage",
+            "--account-id",
+            &id,
+            "--bucket",
+            "hour",
+        ]);
+        assert_eq!(named["accountId"], id);
+        let (method, policy) = request(vec![
+            "lazooctl",
+            "account",
+            "policy",
+            "codex",
+            "priority",
+            "--order",
+            &id,
+            "--expected-revision",
+            "3",
+        ]);
+        assert_eq!(method, "provider.accounts.policy");
+        assert_eq!(policy["order"], json!([id]));
+        assert_eq!(policy["revision"], 3);
+        let (method, reserve) = request(vec![
+            "lazooctl",
+            "account",
+            "preferences",
+            &id,
+            "--expected-revision",
+            "4",
+            "--reserve-percent",
+            "25",
+        ]);
+        assert_eq!(method, "provider.accounts.preferences");
+        assert_eq!(reserve["reservePercent"], 25);
+        assert_eq!(reserve["expectedRevision"], 4);
+        let (_, cleared) = request(vec![
+            "lazooctl",
+            "account",
+            "preferences",
+            &id,
+            "--expected-revision",
+            "5",
+        ]);
+        assert!(cleared["reservePercent"].is_null());
+        assert!(
+            Cli::try_parse_from([
+                "lazooctl",
+                "account",
+                "preferences",
+                &id,
+                "--expected-revision",
+                "5",
+                "--reserve-percent",
+                "91"
+            ])
+            .is_err()
+        );
+    }
 
     #[test]
     fn account_cli_keeps_keys_out_of_arguments_and_routes_metadata() {

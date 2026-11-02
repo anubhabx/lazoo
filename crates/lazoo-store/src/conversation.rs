@@ -583,6 +583,7 @@ impl Store {
         .and_then(|result| commit_turn_result(transaction, result))
     }
 
+    #[allow(clippy::too_many_lines)] // The usage projection commits atomically with event and task state.
     pub fn observe_turn(&self, input: &ObserveTurnInput) -> Result<TurnMutationResult, StoreError> {
         validate_conversation_command_key(&input.idempotency_key)?;
         validate_turn_event_payload(&input.payload)?;
@@ -647,6 +648,17 @@ impl Store {
         }
 
         let now = Utc::now().to_rfc3339();
+        crate::account_usage::observe_turn(
+            &transaction,
+            current.id,
+            &input.provider,
+            input
+                .native_session_id
+                .as_deref()
+                .or(current.native_session_id.as_deref()),
+            &input.payload,
+            input.transition,
+        )?;
         let appended = append_turn_event(
             &transaction,
             &current,
@@ -759,6 +771,16 @@ impl Store {
                 (target == TurnState::TerminalFailed).then_some(now.clone()),
             ],
         )?;
+        if let Some(provider) = current.provider.as_deref() {
+            crate::account_usage::observe_turn(
+                &transaction,
+                current.id,
+                provider,
+                current.native_session_id.as_deref(),
+                &serde_json::json!({}),
+                Some(target),
+            )?;
+        }
         task::project_turn_tx(&transaction, input.turn_id, "turn-failed", &now)?;
         effective_turn_result(
             &transaction,

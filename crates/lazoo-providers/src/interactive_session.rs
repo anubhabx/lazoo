@@ -494,6 +494,9 @@ impl NativeInteractiveSession {
             };
             if let Ok(Some(queued)) = queued {
                 let event_start = events.len();
+                if let Some(quota) = self.hooks.take_quota(&self.id_locked()) {
+                    events.push(quota);
+                }
                 self.handle_hook(
                     queued,
                     observer,
@@ -512,6 +515,10 @@ impl NativeInteractiveSession {
                     for event in &events[event_start..] {
                         observer.observe(event)?;
                     }
+                }
+                if matches!(events.last(), Some(ProviderEvent::TurnCompleted { status, .. }) if status == "failed")
+                {
+                    return Ok(events);
                 }
                 if saw_stop
                     && prompt_accepted
@@ -1055,9 +1062,23 @@ impl NativeInteractiveSession {
             }
             "StopFailure" if self.provider == ProviderKind::ClaudeCode => {
                 let _ = queued.reply.send(json!({}));
-                return Err(ProviderError::Protocol(
-                    "Claude native StopFailure observed".to_owned(),
-                ));
+                if payload.get("error").and_then(Value::as_str) == Some("rate_limit") {
+                    events.push(ProviderEvent::Quota {
+                        provider: self.provider,
+                        session_id: self.id_locked(),
+                        windows: Vec::new(),
+                        exhausted: true,
+                        raw: None,
+                    });
+                }
+                events.push(ProviderEvent::TurnCompleted {
+                    provider: self.provider,
+                    session_id: self.id_locked(),
+                    turn_id: Some(turn_id.to_owned()),
+                    status: "failed".into(),
+                    output: None,
+                    raw: None,
+                });
             }
             _ => {
                 let _ = queued.reply.send(json!({}));
@@ -1153,6 +1174,12 @@ impl NativeInteractiveSession {
 }
 
 impl ProviderSession for NativeInteractiveSession {
+    fn take_usage_windows(&self) -> Vec<lazoo_protocol::UsageWindow> {
+        match self.hooks.take_quota(&self.id_locked()) {
+            Some(ProviderEvent::Quota { windows, .. }) => windows,
+            _ => Vec::new(),
+        }
+    }
     fn id(&self) -> String {
         self.id_locked()
     }
@@ -1318,6 +1345,8 @@ fn prepare_generated_config(
             let hook = |event: &str| json!({"type":"command","command":format!("{command} {event}"),"timeout":600,"onFailure":"block"});
             let hooks_json = json!({"hooks":{"SessionStart":[{"hooks":[hook("SessionStart")] }],"UserPromptSubmit":[{"hooks":[hook("UserPromptSubmit")] }],"MessageDisplay":[{"hooks":[hook("MessageDisplay")] }],"PreToolUse":[{"matcher":"*","hooks":[hook("PreToolUse")] }],"PostToolUse":[{"matcher":"*","hooks":[hook("PostToolUse")] }],"Stop":[{"hooks":[hook("Stop")] }],"StopFailure":[{"hooks":[hook("StopFailure")] }]}});
             let mut hooks_json = hooks_json;
+            hooks_json["statusLine"] =
+                json!({"type":"command","command":format!("{command} StatusLine")});
             hooks_json["disableRemoteControl"] = json!(true);
             hooks_json["remoteControlAtStartup"] = json!(false);
             fs::write(&settings, serde_json::to_vec(&hooks_json)?)?;

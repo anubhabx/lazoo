@@ -467,6 +467,13 @@ pub enum ProviderEvent {
         message: Option<String>,
         raw: Option<Value>,
     },
+    Quota {
+        provider: ProviderKind,
+        session_id: String,
+        windows: Vec<lazoo_protocol::UsageWindow>,
+        exhausted: bool,
+        raw: Option<Value>,
+    },
     Usage {
         provider: ProviderKind,
         session_id: String,
@@ -474,6 +481,11 @@ pub enum ProviderEvent {
         output_tokens: Option<u64>,
         total_tokens: Option<u64>,
         cost_usd: Option<f64>,
+        /// Known history before the first observed report (e.g. a resumed Codex thread).
+        #[serde(default)]
+        input_tokens_before: Option<u64>,
+        #[serde(default)]
+        output_tokens_before: Option<u64>,
         raw: Option<Value>,
     },
     TurnCompleted {
@@ -601,6 +613,10 @@ pub trait TurnEventObserver: Send + Sync {
 }
 
 pub trait ProviderSession: Send + Sync {
+    /// Drain passive observations already received locally; never calls the provider.
+    fn take_usage_windows(&self) -> Vec<lazoo_protocol::UsageWindow> {
+        Vec::new()
+    }
     fn id(&self) -> String;
     fn native_host_pid(&self) -> Option<u32>;
     /// A native read-only view of this exact running session, without another controller.

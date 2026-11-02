@@ -21,6 +21,7 @@ mod opencode;
 mod opencode_http;
 mod opencode_view;
 mod preview;
+mod quota;
 mod redaction;
 mod registry;
 

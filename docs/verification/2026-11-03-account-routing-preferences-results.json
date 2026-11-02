@@ -1,0 +1,35 @@
+{
+  "verifiedAt": "2026-11-02T20:13:03.485Z",
+  "schemaVersion": 22,
+  "branch": "feat/account-routing-preferences",
+  "cargoBuildJobs": 2,
+  "gates": {
+    "fmt": "PASS",
+    "clippyWorkspaceAllTargetsDenyWarnings": "PASS",
+    "workspaceTests": "PASS",
+    "workspaceTestExitCode": 0,
+    "daemonTestsPassed": 153,
+    "codexFocusedTestsPassed": 21,
+    "liveProviderTests": "EXISTING_IGNORES_RETAINED",
+    "fullGate": "NOT_RUN",
+    "unexpectedInitialNestedReleaseBuild": "COMPLETED_BEFORE_DISCOVERY_NOT_A_FULL_RELEASE_GATE"
+  },
+  "logs": {
+    "artifacts/account-preferences-clippy-final.log": {
+      "sha256": "a3720a5d3f55d0f15f6a724357ef4fc5b1172be25708f45fd467844939112f9d",
+      "bytes": 177
+    },
+    "artifacts/account-preferences-codex-final.log": {
+      "sha256": "f6fa98e4f51fb1880027b5d29c3ff04f5beefa71b9454c72eb1fddd43e350068",
+      "bytes": 2584
+    },
+    "artifacts/account-preferences-workspace-complete.log": {
+      "sha256": "36c4f49a68ee540cc9e41c1c6f55316c7d527802710c618cc0dd677f710004f3",
+      "bytes": 80331
+    },
+    "artifacts/account-preferences-task-graph-debug.json": {
+      "sha256": "db3beab2ba1fb65853ec58c71e4c8d2a426545839f927673a5780e9b88120c1c",
+      "bytes": 31708
+    }
+  }
+}

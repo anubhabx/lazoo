@@ -20,11 +20,16 @@ pub struct ProviderAccountVerificationGuard {
 
 impl Store {
     pub fn provider_accounts(&self) -> Result<Vec<ProviderAccountRecord>, StoreError> {
-        records(&*self.lock()?)
+        let connection = self.lock()?;
+        records(&connection)?
+            .into_iter()
+            .map(|record| enrich(&connection, record))
+            .collect()
     }
 
     pub fn provider_account(&self, id: Uuid) -> Result<ProviderAccountRecord, StoreError> {
-        account(&*self.lock()?, id)
+        let connection = self.lock()?;
+        enrich(&connection, account(&connection, id)?)
     }
 
     /// A new account uses revision zero. Existing secrets are retained unless replaced.
@@ -98,6 +103,12 @@ impl Store {
             last_status: None,
             last_latency_millis: None,
             updated_at: now.clone(),
+            created_at: now.clone(),
+            reserve_percent: None,
+            exhausted_until: None,
+            reserve_enforceable: false,
+            reserve_reason: None,
+            windows: Vec::new(),
         });
         record.spec.clone_from(spec);
         record.revision += 1;
@@ -123,6 +134,40 @@ impl Store {
         }
         transaction.commit()?;
         Ok(record)
+    }
+
+    pub fn set_provider_account_preferences(
+        &self,
+        input: &lazoo_protocol::AccountPreferencesParams,
+    ) -> Result<ProviderAccountRecord, StoreError> {
+        if input.reserve_percent.is_some_and(|reserve| reserve > 90) {
+            return Err(StoreError::AccountValidation(
+                "reservePercent must be null or 0 through 90",
+            ));
+        }
+        let mut connection = self.lock()?;
+        let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let mut record = account(&tx, input.id)?;
+        if record.revision != input.expected_revision {
+            return Err(StoreError::AccountStale);
+        }
+        if record.deleted {
+            return Err(StoreError::AccountUnavailable);
+        }
+        record.reserve_percent = input.reserve_percent;
+        record.revision += 1;
+        record.updated_at = Utc::now().to_rfc3339();
+        save_record(&tx, &record)?;
+        employee::insert_event(
+            &tx,
+            "provider.account.preferences",
+            &json!({"id":input.id,"reservePercent":input.reserve_percent,"revision":record.revision}),
+            &record.updated_at,
+        )?;
+        invalidate_provider_observation(&tx, &record.spec.provider, &record.updated_at)?;
+        let result = enrich(&tx, record)?;
+        tx.commit()?;
+        Ok(result)
     }
 
     /// Preserve a tombstone for historical ownership while forgetting the protected credential.
@@ -232,6 +277,18 @@ impl Store {
         if previous.revision != desired.revision {
             return Err(StoreError::AccountStale);
         }
+        if desired.order.len() > 128 {
+            return Err(StoreError::AccountValidation("account order is too large"));
+        }
+        let mut seen = std::collections::HashSet::new();
+        for id in &desired.order {
+            let record = account(&transaction, *id)?;
+            if !seen.insert(*id) || record.deleted || record.spec.provider != desired.provider {
+                return Err(StoreError::AccountValidation(
+                    "order must contain distinct live accounts of this provider",
+                ));
+            }
+        }
         if desired.mode == AccountRoutingMode::Pinned {
             let record = account(
                 &transaction,
@@ -257,7 +314,10 @@ impl Store {
             &json!({"policy": &updated}),
             &Utc::now().to_rfc3339(),
         )?;
-        if previous.mode != updated.mode || previous.account_id != updated.account_id {
+        if previous.mode != updated.mode
+            || previous.account_id != updated.account_id
+            || previous.order != updated.order
+        {
             let now = Utc::now().to_rfc3339();
             invalidate_provider_observation(&transaction, &updated.provider, &now)?;
         }
@@ -307,9 +367,17 @@ impl Store {
             match routing.mode {
                 AccountRoutingMode::Inherited => None,
                 AccountRoutingMode::Pinned => {
-                    bound_account(&transaction, routing.account_id, model)?
+                    let selected = bound_account(&transaction, routing.account_id, model)?;
+                    if let Some(record) = &selected
+                        && !quota_eligible(&transaction, record)?
+                    {
+                        return Err(StoreError::AccountUnavailable);
+                    }
+                    selected
                 }
-                AccountRoutingMode::Balanced | AccountRoutingMode::ApiPool => Some(select_account(
+                AccountRoutingMode::Balanced
+                | AccountRoutingMode::Priority
+                | AccountRoutingMode::ApiPool => Some(select_account(
                     &transaction,
                     provider,
                     model,
@@ -365,6 +433,7 @@ impl Store {
             || new.deleted
             || !new.spec.enabled
             || new.cooldown_until > Utc::now().timestamp()
+            || !quota_eligible(&transaction, &new)?
         {
             return Err(StoreError::AccountUnavailable);
         }
@@ -373,6 +442,13 @@ impl Store {
         if changed != 1 {
             return Err(StoreError::AccountStale);
         }
+        crate::account_usage::rebind_session(
+            &transaction,
+            session_id,
+            &new.spec.provider,
+            expected,
+            next,
+        )?;
         transaction.commit()?;
         Ok(())
     }
@@ -422,6 +498,17 @@ impl Store {
         latency_millis: u64,
         retry_after_seconds: u64,
     ) -> Result<(), StoreError> {
+        self.observe_provider_account_windows(id, status, latency_millis, retry_after_seconds, &[])
+    }
+
+    pub fn observe_provider_account_windows(
+        &self,
+        id: Uuid,
+        status: u16,
+        latency_millis: u64,
+        retry_after_seconds: u64,
+        windows: &[lazoo_protocol::UsageWindow],
+    ) -> Result<(), StoreError> {
         let mut connection = self.lock()?;
         let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let mut record = account(&transaction, id)?;
@@ -439,6 +526,27 @@ impl Store {
             record.cooldown_until =
                 Utc::now().timestamp() + i64::try_from(seconds).unwrap_or(86_400);
         }
+        if status == 429 {
+            record.exhausted_until = chrono::DateTime::from_timestamp(record.cooldown_until, 0)
+                .map(|time| time.to_rfc3339());
+        }
+        crate::account_usage::write_windows(
+            &transaction,
+            &record.spec.provider,
+            Some(id),
+            windows,
+        )?;
+        crate::account_usage::add_delta(
+            &transaction,
+            &record.spec.provider,
+            Some(id),
+            Utc::now().timestamp(),
+            &crate::account_usage::UsageDelta {
+                requests: 1,
+                failures: u64::from(status >= 400),
+                ..Default::default()
+            },
+        )?;
         save_record(&transaction, &record)?;
         transaction.commit()?;
         Ok(())
@@ -565,7 +673,10 @@ fn maybe_account(
     raw.map(|raw| serde_json::from_str(&raw).map_err(StoreError::from))
         .transpose()
 }
-fn account(connection: &Connection, id: Uuid) -> Result<ProviderAccountRecord, StoreError> {
+pub(crate) fn account(
+    connection: &Connection,
+    id: Uuid,
+) -> Result<ProviderAccountRecord, StoreError> {
     maybe_account(connection, id)?.ok_or(StoreError::AccountNotFound(id))
 }
 fn policy(connection: &Connection, provider: &str) -> Result<ProviderAccountPolicy, StoreError> {
@@ -581,7 +692,7 @@ fn policy(connection: &Connection, provider: &str) -> Result<ProviderAccountPoli
         |raw| Ok(serde_json::from_str(&raw)?),
     )
 }
-fn binding(
+pub(crate) fn binding(
     connection: &Connection,
     session_id: Uuid,
 ) -> Result<Option<ProviderAccountBinding>, StoreError> {
@@ -664,8 +775,28 @@ fn select_account(
                         && record.spec.api_protocol.is_some()))
         })
         .collect::<Vec<_>>();
-    candidates.sort_by_key(|record| (record.selections, record.spec.id));
-    let mut selected = candidates
+    let routing = policy(connection, provider)?;
+    let mut eligible_candidates = Vec::new();
+    for record in candidates.drain(..) {
+        if quota_eligible(connection, &record)? {
+            eligible_candidates.push(record);
+        }
+    }
+    let priority =
+        routing.mode == AccountRoutingMode::Priority || (api_only && !routing.order.is_empty());
+    eligible_candidates.sort_by_key(|record| {
+        (
+            if priority { 0 } else { record.selections },
+            routing
+                .order
+                .iter()
+                .position(|id| *id == record.spec.id)
+                .unwrap_or(usize::MAX),
+            chrono::DateTime::parse_from_rfc3339(&record.created_at).ok(),
+            record.spec.id,
+        )
+    });
+    let mut selected = eligible_candidates
         .into_iter()
         .next()
         .ok_or(StoreError::AccountUnavailable)?;
@@ -673,10 +804,64 @@ fn select_account(
     save_record(connection, &selected)?;
     Ok(selected)
 }
-fn save_record(connection: &Connection, record: &ProviderAccountRecord) -> Result<(), StoreError> {
+pub(crate) fn save_record(
+    connection: &Connection,
+    record: &ProviderAccountRecord,
+) -> Result<(), StoreError> {
     connection.execute(
         "UPDATE provider_accounts SET record_json = ?2 WHERE id = ?1",
         params![record.spec.id.to_string(), serde_json::to_string(record)?],
     )?;
     Ok(())
+}
+
+fn quota_eligible(
+    connection: &Connection,
+    record: &ProviderAccountRecord,
+) -> Result<bool, StoreError> {
+    let now = Utc::now();
+    if record
+        .exhausted_until
+        .as_deref()
+        .and_then(|value| chrono::DateTime::parse_from_rfc3339(value).ok())
+        .is_some_and(|until| until > now)
+    {
+        return Ok(false);
+    }
+    let threshold = f64::from(100 - record.reserve_percent.unwrap_or(0));
+    Ok(
+        !crate::account_usage::windows_for(
+            connection,
+            &record.spec.provider,
+            Some(record.spec.id),
+        )?
+        .iter()
+        .any(|window| {
+            crate::account_usage::current_window(window, now)
+                && window.used_percent.is_some_and(|used| used >= threshold)
+        }),
+    )
+}
+
+fn enrich(
+    connection: &Connection,
+    mut record: ProviderAccountRecord,
+) -> Result<ProviderAccountRecord, StoreError> {
+    record.windows =
+        crate::account_usage::windows_for(connection, &record.spec.provider, Some(record.spec.id))?;
+    record.reserve_enforceable = record.windows.iter().any(|window| {
+        crate::account_usage::current_window(window, Utc::now()) && window.used_percent.is_some()
+    });
+    record.reserve_reason = (!record.reserve_enforceable).then(|| {
+        "No current provider-reported percentage window with a future reset is available".into()
+    });
+    if record
+        .exhausted_until
+        .as_deref()
+        .and_then(|value| chrono::DateTime::parse_from_rfc3339(value).ok())
+        .is_some_and(|until| until <= Utc::now())
+    {
+        record.exhausted_until = None;
+    }
+    Ok(record)
 }

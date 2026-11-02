@@ -79,6 +79,10 @@ const MIGRATIONS: &[(u32, &str)] = &[
         21,
         include_str!("../../../migrations/0021_provider_accounts.sql"),
     ),
+    (
+        22,
+        include_str!("../../../migrations/0022_account_usage.sql"),
+    ),
 ];
 
 pub fn apply_migrations(connection: &mut Connection) -> Result<(), StoreError> {

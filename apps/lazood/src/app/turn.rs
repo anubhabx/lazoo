@@ -1108,6 +1108,11 @@ fn event_identity(
             session_id,
             ..
         }
+        | ProviderEvent::Quota {
+            provider,
+            session_id,
+            ..
+        }
         | ProviderEvent::Usage {
             provider,
             session_id,

@@ -239,7 +239,12 @@ async fn observed_codex_turn_emits_response_acceptance_before_stream_without_dup
             ..
         } if session_id == "thread-1" && turn_id.as_deref() == Some("turn-1")
     ));
-    assert!(matches!(captured[1], ProviderEvent::TextDelta { .. }));
+    assert!(
+        matches!(&captured[1], ProviderEvent::Quota { windows, raw: None, .. }
+        if windows.len() == 1 && windows[0].used_percent == Some(25.0)
+            && windows[0].source == "codex-app-server")
+    );
+    assert!(matches!(captured[2], ProviderEvent::TextDelta { .. }));
     assert_eq!(
         captured
             .iter()

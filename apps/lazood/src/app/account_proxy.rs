@@ -314,17 +314,19 @@ impl ProxyState {
                 );
             };
             let status = response.status();
-            let retry_after = response
-                .headers()
-                .get("retry-after")
-                .and_then(|value| value.to_str().ok())
-                .and_then(|value| value.parse().ok())
-                .unwrap_or(60);
-            let _ = self.store.observe_provider_account(
+            let windows = super::account_headers::windows(
+                response.headers(),
+                self.protocol,
+                &account.spec.provider,
+                account.spec.id,
+            );
+            let retry_after = super::account_headers::retry_after(response.headers(), &windows);
+            let _ = self.store.observe_provider_account_windows(
                 account.spec.id,
                 status.as_u16(),
                 elapsed_millis(started),
                 retry_after,
+                &windows,
             );
             let continuation = contains_account_state(&payload) || route == "responses/compact";
             if matches!(status.as_u16(), 401 | 403 | 429)

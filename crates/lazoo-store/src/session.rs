@@ -209,6 +209,7 @@ impl Store {
                 now,
             ],
         )?;
+        crate::account_usage::session_started(&transaction, current.id, &current.provider)?;
         transition_with_roster_event(&transaction, current.id, "session.ready", &now).and_then(
             |result| {
                 transaction.commit()?;
@@ -308,7 +309,7 @@ impl Store {
         )?;
         let idle = statement
             .query_map([owner_boot_id.to_string()], raw_session)?
-            .map(|row| session_from_raw(row?))
+            .map(|row| session_from_raw(&connection, row?))
             .collect::<Result<Vec<_>, StoreError>>()?;
         let mut due = Vec::new();
         for session in idle {
@@ -642,7 +643,7 @@ pub(crate) fn latest_session_for_employee(
             raw_session,
         )
         .optional()?
-        .map(session_from_raw)
+        .map(|row| session_from_raw(connection, row))
         .transpose()
 }
 
@@ -825,7 +826,7 @@ fn active_session_for_employee(
             raw_session,
         )
         .optional()?
-        .map(session_from_raw)
+        .map(|row| session_from_raw(connection, row))
         .transpose()
 }
 
@@ -837,7 +838,7 @@ fn query_sessions(connection: &Connection) -> Result<Vec<EmployeeSessionRecord>,
          FROM employee_sessions ORDER BY created_at, id",
     )?;
     let rows = statement.query_map([], raw_session)?;
-    rows.map(|row| session_from_raw(row?)).collect()
+    rows.map(|row| session_from_raw(connection, row?)).collect()
 }
 
 pub(crate) fn query_session(
@@ -854,7 +855,7 @@ pub(crate) fn query_session(
             raw_session,
         )
         .optional()?
-        .map(session_from_raw)
+        .map(|row| session_from_raw(connection, row))
         .transpose()
 }
 
@@ -952,8 +953,15 @@ fn raw_session(row: &rusqlite::Row<'_>) -> rusqlite::Result<RawSession> {
     ))
 }
 
-fn session_from_raw(row: RawSession) -> Result<EmployeeSessionRecord, StoreError> {
+fn session_from_raw(
+    connection: &Connection,
+    row: RawSession,
+) -> Result<EmployeeSessionRecord, StoreError> {
     Ok(EmployeeSessionRecord {
+        account: crate::account_usage::session_account(
+            connection,
+            employee::parse_uuid(&row.0, "employee_sessions.id")?,
+        )?,
         id: employee::parse_uuid(&row.0, "employee_sessions.id")?,
         employee_id: employee::parse_uuid(&row.1, "employee_sessions.employee_id")?,
         employee_configuration_revision: u64::try_from(row.2)

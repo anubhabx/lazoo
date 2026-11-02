@@ -26,10 +26,15 @@ plaintext credentials are not saved in browser storage or placed in process argu
 | --- | --- |
 | Use existing behavior | Use the provider's preexisting environment and login. |
 | Balance accounts | Select the least-selected eligible account for a new native session. |
+| Use accounts in order (`priority`) | Drain the first eligible account in `order`, then move to the next for new sessions. |
 | Pin an account | Select the specified account for new sessions. |
 | Pool API credentials | Start a session-scoped loopback proxy and select an eligible API credential. |
 
-Eligibility checks enabled/deleted state, model restrictions and known API cooldowns.
+Eligibility checks enabled/deleted state, model restrictions, cooldowns, structured
+exhaustion and observed reserve thresholds. Explicit order breaks balanced selection
+ties; unlisted accounts follow by creation timestamp, then UUID. Migrated accounts
+recover creation from their earliest retained account audit event, falling back to
+their last saved metadata timestamp if that event has expired.
 A configured pool with no eligible member fails with `LZ-ACCOUNT`; it does not fall
 back to a personal login. Native profile eligibility does not prove that its login or
 subscription is ready: authentication remains the native CLI's responsibility.
@@ -77,7 +82,9 @@ HTTPS is required for configured upstreams; HTTP is allowed only for loopback fi
 or a deliberately configured local gateway. Redirects are disabled. Request bodies
 are capped at 8 MiB; responses stream without full-response buffering.
 
-New sessions balance across eligible credentials. Before a session's first accepted
+New API sessions balance across eligible credentials when policy `order` is empty.
+A nonempty `order` makes `api-pool` select in priority order, including early failover.
+Before a session's first accepted
 model request, an explicit 401, 403 or 429 can try one compatible replacement. Protocol,
 backend, credential type and model eligibility must match. Transport failures are
 not replayed because delivery is uncertain. Accepted sessions, resumed sessions,
@@ -86,11 +93,11 @@ silently to a different credential. Partial streams and client cancellation do n
 trigger a replay. The native profile owner and the upstream API owner are persisted
 separately so early failover does not lose native transcript history.
 
-Authentication failures cool down an API credential for one hour. Quota responses use
-numeric `Retry-After`, bounded to 1–86,400 seconds (60 seconds if missing). Server
-errors have a short bounded cooldown. Replacing a secret clears its cooldown. Metrics
-are request count, failures, last HTTP status, and time to response headers; they are
-not remaining subscription quota or billable-token accounting.
+Authentication failures cool down an API credential for one hour. HTTP 429 sets both
+cooldown and `exhaustedUntil`, using numeric or HTTP-date `Retry-After`, then an
+exhausted response-header window's reset, bounded to 1–86,400 seconds (60 seconds
+without either). Server errors have a short bounded cooldown. Replacing a secret
+clears its authentication cooldown but does not manufacture a quota reset.
 
 Use an API URL prefix such as `https://gateway.example/v1` for custom endpoints.
 Anthropic also accepts a server root; Lazoo normalizes the `/v1` difference between
@@ -138,6 +145,145 @@ endpoint, API protocol and backend) unchanged. Label, model restrictions, enable
 and secret can change. `account remove <id> --expected-revision <revision>` clears the
 protected key and preserves an ownership tombstone. Native profile files remain on
 disk so removing an account does not delete provider history.
+
+## Reserves and observed usage
+
+```powershell
+lazooctl account policy codex priority --order <first-id>,<second-id> --expected-revision 1
+lazooctl account preferences <second-id> --reserve-percent 25 --expected-revision 1
+lazooctl account usage
+lazooctl account usage --provider codex --account-id <second-id> --bucket hour
+lazooctl account usage --personal --bucket day
+```
+
+Omit `--reserve-percent` on `account preferences` to clear the reserve. Its RPC field
+is `reservePercent: null`. Reserve changes use the account revision, not the policy
+revision. Identity fields remain immutable.
+
+`reservePercent` accepts 0–90. A new session is excluded when any current observed
+window reaches `usedPercent >= 100 - reservePercent`. Without a configured reserve,
+an observed 100% window still excludes new routing. A usable observation needs a
+percentage and a future reset. Missing, expired, or incomplete observations report
+`reserveEnforceable: false` and `reserveReason`; Lazoo cannot guarantee a reserve
+without provider evidence. Existing sessions are never interrupted to enforce a
+reserve, and another application can consume the same quota between observations.
+
+Codex's typed `usageLimitExceeded`/`rateLimitExceeded` errors and Claude's structured
+rate-limit failures set `exhaustedUntil`. An exhausted window's reported future reset
+is used, bounded to 30 days; absent reset evidence uses 15 minutes. Expiry is checked
+at admission and read time, without a timer job or policy revision change. No
+free-form terminal or error-message matching is used. Resumes keep their original
+account; existing disabled/deleted/cooldown refusals remain in force. A reserve does
+not move or exclude an existing native binding.
+
+| Provider / transport | Quota windows | Token ledger | Exhaustion evidence |
+| --- | --- | --- | --- |
+| Codex app-server | `primary`, `secondary`; percent, minutes, reset, optional plan | Reported thread input/output totals, differenced; first report uses `last` to exclude prior history where supplied | `codexErrorInfo` on error or failed turn |
+| Claude native TUI | Supported statusline `rate_limits.five_hour` / `seven_day` in Lazoo-owned sessions | Not reported by these native hooks; context occupancy is excluded | `StopFailure.error == "rate_limit"` |
+| Claude stream adapter | Structured `rate_limit_event`, when emitted | `result.usage` input/output, when emitted | Typed `rejected` state, accounting for allowed overage |
+| API pool (Codex, Claude, OpenCode) | OpenAI `x-ratelimit-*` or Anthropic `anthropic-ratelimit-*` response headers, per serving credential | Provider events above; proxy counts requests/failures, not response-body token estimates | HTTP 429 and retry/reset headers |
+| OpenCode owned HTTP | No native subscription windows; API pool headers when configured | Owned assistant `message.updated` input/output counts, summed across messages and differenced within a turn | No verified native subscription exhaustion code |
+| GitHub Copilot ACP | No verified structured subscription windows | Directional `turn_completed.usage` only when supplied; context `usage_update.used` is excluded | No verified quota-specific ACP error schema; generic errors never imply exhaustion |
+| Antigravity | No verified subscription windows | Legacy result token fields if emitted; governed native hooks do not report them | Not observable |
+| Grok Build | Not observable | Not observable | Existing adapter limitations apply |
+
+`observableProviders` describes adapter capability, not a promise that a particular
+account has supplied data. Read the reason and actual nullable totals/windows.
+For Claude/Antigravity, `tokens: true` refers only to the legacy machine adapter;
+the governed native path remains unreported. OpenCode's input/output fields retain
+their provider definitions; separate cache/reasoning counts are not invented or
+folded into those directions.
+
+Account reads never launch a model or scrape a subscription endpoint. Codex reads
+quota through the already-owned app-server when running a requested turn and consumes
+its notifications. Claude's generated session-only settings install a statusline
+callback; personal settings files stay untouched. The callback retains only numeric
+quota windows in a bounded in-memory slot, replies immediately, and never acts as a
+control/permission hook. Active hook processing, account reads and new account
+selection flush pending local observations. No `context_window` percentage is quota.
+Copilot documents an informational `/usage` command, but its text output is not a
+verified structured quota schema; Lazoo does not invoke it automatically. The installed
+Copilot package also declares `account.getQuota` on its separate SDK transport; that
+transport is not Lazoo's ACP session and is not integrated here. No cross-transport
+account attribution or exhaustion behavior is assumed.
+
+## Owner RPC and desktop contract
+
+All methods below are owner control-plane RPCs; they are not worker MCP tools.
+Desktop reads use `Kind::Read`, preferences and policy use `Kind::Mutation`.
+Optional desktop mutation `idempotencyKey` is accepted; durable revisions fence writes.
+
+```typescript
+// provider.accounts.policy (revision is the expected policy revision)
+{ provider: string, mode: "inherited" | "balanced" | "priority" | "pinned" | "api-pool",
+  accountId?: string | null, revision: number, order?: string[] }
+// -> ProviderAccountPolicy { provider, mode, accountId, revision, order }
+
+// provider.accounts.preferences
+{ id: string, expectedRevision: number, reservePercent: number | null }
+// -> ProviderAccountRecord
+
+// provider.accounts.list {}
+// -> { version: 1, accounts: ProviderAccountRecord[], policies: ProviderAccountPolicy[] }
+// Record additions:
+{ createdAt: string, reservePercent: number | null, exhaustedUntil: string | null,
+  reserveEnforceable: boolean, reserveReason: string | null, windows: UsageWindow[] }
+
+// provider.accounts.usage
+{ from?: string, to?: string, bucket?: "hour" | "day", provider?: string,
+  accountId?: string | null }
+// ->
+{ buckets: Array<{ start: string, provider: string, accountId: string | null,
+    sessions: number, turnsCompleted: number, turnsFailed: number,
+    requests: number, failures: number, inputTokens: number | null,
+    outputTokens: number | null, tokensReported: number }>,
+  windows: UsageWindow[],
+  observableProviders: Record<string, { windows: boolean, tokens: boolean, reason: string | null }> }
+
+type UsageWindow = {
+  provider: string; accountId: string | null; kind: string;
+  usedPercent: number | null; remaining: number | null; limit: number | null;
+  windowMinutes: number | null; resetsAt: string | null; observedAt: string;
+  source: string; planType: string | null;
+};
+
+// EmployeeSessionRecord, LeadSessionSummary and WorkerSessionSummary add:
+{ account: { id: string, label: string } | null }
+```
+
+Timestamps are RFC3339. `accountId` omitted queries all accounts; explicit null selects
+unmanaged personal login. Defaults are the last seven days and UTC day buckets. The
+range must be within the last 90 days, at most 90 days long. Hourly storage means
+partial-hour endpoints include their intersecting hour. Results exceeding 10,000
+buckets or windows fail with an input error instead of silently truncating. Windows
+are the latest observed values independently of the selected analytics interval.
+No historical usage is backfilled from old transcripts.
+
+Sessions count successful start/resume activations. Completed/failed turns count
+durable outcomes (failed submission attempts included), not repeated error messages.
+The API owner before acceptance can change only through the existing explicit
+rejection flow; the start count moves with that binding CAS. Proxy attempts stay
+attributed to the credential actually attempted. Token counters only include provider
+reports. `null` means no report for that direction; reported zero stays zero, and
+`tokensReported` counts observed directional reports. Codex thread totals and other
+per-turn snapshots use durable high-water marks to avoid summing cumulative usage.
+
+Migration 0022 retains 90 days of hourly counters and token watermarks. Aggregation
+runs inside existing session/turn/proxy transactions, with no additional ledger
+fsync. Latest quota observations contain only allowlisted kinds/sources, numeric
+values, timestamps and optional public plan enums. They never include upstream
+account IDs, raw headers, credentials, error text or screen contents.
+
+Evidence: installed Codex `0.153.4` schema generation; Claude Code `2.1.316` binary
+surface check plus [statusline reference](https://code.claude.com/docs/en/statusline),
+[StopFailure hook reference](https://code.claude.com/docs/en/hooks#stopfailure), and
+[structured stream reference](https://code.claude.com/docs/en/agent-sdk/typescript#sdkratelimitevent).
+Header formats follow [OpenAI](https://developers.openai.com/api/docs/guides/rate-limits)
+and [Anthropic](https://platform.claude.com/docs/en/api/rate-limits).
+See also [Copilot ACP](https://docs.github.com/en/copilot/reference/copilot-cli-reference/acp-server)
+and [OpenCode token schema](https://github.com/anomalyco/opencode/blob/dev/packages/schema/src/token-usage.ts).
+
+Current-slice checks and limits are recorded in the [routing preferences verification](verification/2026-11-03-account-routing-preferences.md).
 
 ## Performance and research
 

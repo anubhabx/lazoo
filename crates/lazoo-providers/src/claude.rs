@@ -766,6 +766,7 @@ fn claude_event_session_id(event: &ProviderEvent) -> Option<&str> {
         | ProviderEvent::ThoughtDelta { session_id, .. }
         | ProviderEvent::ToolUpdate { session_id, .. }
         | ProviderEvent::TerminalUpdate { session_id, .. }
+        | ProviderEvent::Quota { session_id, .. }
         | ProviderEvent::Usage { session_id, .. }
         | ProviderEvent::PermissionRequested { session_id, .. }
         | ProviderEvent::Progress { session_id, .. }
@@ -837,6 +838,10 @@ pub fn normalize_claude_message(message: &Value) -> Result<Vec<ProviderEvent>, P
         .and_then(Value::as_str)
         .ok_or_else(|| ProviderError::InvalidEvent("Claude Code record omitted type".to_owned()))?;
     match record_type {
+        "rate_limit_event" => Ok(vec![crate::quota::claude(
+            message,
+            required_session_id(message, "rate limit event")?,
+        )]),
         "system" if message.get("subtype").and_then(Value::as_str) == Some("init") => {
             Ok(vec![ProviderEvent::SessionStarted {
                 provider: ProviderKind::ClaudeCode,
@@ -990,6 +995,8 @@ fn normalize_result(message: &Value) -> Result<Vec<ProviderEvent>, ProviderError
                     )
                 }),
             cost_usd: message.get("total_cost_usd").and_then(Value::as_f64),
+            input_tokens_before: None,
+            output_tokens_before: None,
             raw: raw.clone(),
         });
     }

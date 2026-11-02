@@ -5,6 +5,311 @@ use lazoo_protocol::{
 use lazoo_store::{RefreshProviderObservationsInput, Store};
 use uuid::Uuid;
 
+fn quota(id: Uuid, used: f64, seconds: i64) -> lazoo_protocol::UsageWindow {
+    lazoo_protocol::UsageWindow {
+        provider: "codex".into(),
+        account_id: Some(id),
+        kind: "primary".into(),
+        used_percent: Some(used),
+        remaining: None,
+        limit: None,
+        window_minutes: Some(300),
+        resets_at: Some((chrono::Utc::now() + chrono::Duration::seconds(seconds)).to_rfc3339()),
+        observed_at: chrono::Utc::now().to_rfc3339(),
+        source: "codex-app-server".into(),
+        plan_type: Some("pro".into()),
+    }
+}
+
+#[test]
+#[allow(clippy::too_many_lines)] // Exercise transitions on one durable binding, including resume.
+fn priority_reserves_exhaustion_and_resume_keep_ownership() {
+    use lazoo_protocol::AccountPreferencesParams;
+    let directory = tempfile::tempdir().unwrap();
+    let store = Store::open_path(directory.path().join("accounts.db")).unwrap();
+    let first = profile(directory.path(), "first");
+    let second = profile(directory.path(), "second");
+    store.put_provider_account(&first, 0, None).unwrap();
+    store.put_provider_account(&second, 0, None).unwrap();
+    let mut policy = store
+        .set_provider_account_policy(&ProviderAccountPolicy {
+            provider: "codex".into(),
+            mode: AccountRoutingMode::Priority,
+            account_id: None,
+            revision: 0,
+            order: vec![second.id, first.id],
+        })
+        .unwrap();
+    let session = Uuid::new_v4();
+    assert_eq!(
+        store
+            .bind_provider_account(session, "codex", None, None)
+            .unwrap()
+            .unwrap()
+            .spec
+            .id,
+        second.id
+    );
+    store
+        .bind_provider_native_identity(session, "owned-thread")
+        .unwrap();
+    assert_eq!(
+        store
+            .bind_provider_account(Uuid::new_v4(), "codex", None, None)
+            .unwrap()
+            .unwrap()
+            .spec
+            .id,
+        second.id
+    );
+    let preference = AccountPreferencesParams {
+        id: second.id,
+        expected_revision: 1,
+        reserve_percent: Some(20),
+    };
+    let record = store.set_provider_account_preferences(&preference).unwrap();
+    assert!(!record.reserve_enforceable);
+    assert!(record.reserve_reason.is_some());
+    assert!(store.set_provider_account_preferences(&preference).is_err());
+    assert!(
+        store
+            .set_provider_account_preferences(&AccountPreferencesParams {
+                id: second.id,
+                expected_revision: 2,
+                reserve_percent: Some(91)
+            })
+            .is_err()
+    );
+    // No observed window: report unknown; do not fabricate a reserve block.
+    assert_eq!(
+        store
+            .bind_provider_account(Uuid::new_v4(), "codex", None, None)
+            .unwrap()
+            .unwrap()
+            .spec
+            .id,
+        second.id
+    );
+    store
+        .observe_provider_account_windows(second.id, 200, 1, 0, &[quota(second.id, 79.9, 600)])
+        .unwrap();
+    assert!(
+        store
+            .provider_account(second.id)
+            .unwrap()
+            .reserve_enforceable
+    );
+    assert_eq!(
+        store
+            .bind_provider_account(Uuid::new_v4(), "codex", None, None)
+            .unwrap()
+            .unwrap()
+            .spec
+            .id,
+        second.id
+    );
+    store
+        .observe_provider_account_windows(second.id, 200, 1, 0, &[quota(second.id, 80.0, 600)])
+        .unwrap();
+    assert_eq!(
+        store
+            .bind_provider_account(Uuid::new_v4(), "codex", None, None)
+            .unwrap()
+            .unwrap()
+            .spec
+            .id,
+        first.id
+    );
+    // Reserve admission never silently switches an accepted or resumed native thread.
+    assert_eq!(
+        store
+            .bind_provider_account(session, "codex", None, None)
+            .unwrap()
+            .unwrap()
+            .spec
+            .id,
+        second.id
+    );
+    assert_eq!(
+        store
+            .bind_provider_account(Uuid::new_v4(), "codex", None, Some("owned-thread"))
+            .unwrap()
+            .unwrap()
+            .spec
+            .id,
+        second.id
+    );
+    policy.mode = AccountRoutingMode::Pinned;
+    policy.account_id = Some(second.id);
+    policy = store.set_provider_account_policy(&policy).unwrap();
+    assert!(
+        store
+            .bind_provider_account(Uuid::new_v4(), "codex", None, None)
+            .is_err()
+    );
+    store
+        .observe_provider_account_windows(second.id, 200, 1, 0, &[quota(second.id, 100.0, -1)])
+        .unwrap();
+    assert!(
+        !store
+            .provider_account(second.id)
+            .unwrap()
+            .reserve_enforceable
+    );
+    assert_eq!(
+        store
+            .bind_provider_account(Uuid::new_v4(), "codex", None, None)
+            .unwrap()
+            .unwrap()
+            .spec
+            .id,
+        second.id
+    );
+    policy.mode = AccountRoutingMode::Priority;
+    policy.account_id = None;
+    store.set_provider_account_policy(&policy).unwrap();
+    store
+        .observe_provider_account(second.id, 429, 1, 60)
+        .unwrap();
+    assert!(
+        store
+            .provider_account(second.id)
+            .unwrap()
+            .exhausted_until
+            .is_some()
+    );
+    assert_eq!(
+        store
+            .bind_provider_account(Uuid::new_v4(), "codex", None, None)
+            .unwrap()
+            .unwrap()
+            .spec
+            .id,
+        first.id
+    );
+    store
+        .observe_provider_account(first.id, 429, 1, 60)
+        .unwrap();
+    assert!(matches!(
+        store.bind_provider_account(Uuid::new_v4(), "codex", None, None),
+        Err(lazoo_store::StoreError::AccountUnavailable)
+    ));
+}
+
+#[test]
+fn unlisted_accounts_follow_creation_order_and_balanced_ties_use_order() {
+    let directory = tempfile::tempdir().unwrap();
+    let store = Store::open_path(directory.path().join("accounts.db")).unwrap();
+    let first = profile(directory.path(), "first");
+    let second = profile(directory.path(), "second");
+    store.put_provider_account(&first, 0, None).unwrap();
+    store.put_provider_account(&second, 0, None).unwrap();
+    let mut policy = store
+        .set_provider_account_policy(&ProviderAccountPolicy {
+            provider: "codex".into(),
+            mode: AccountRoutingMode::Priority,
+            account_id: None,
+            revision: 0,
+            order: vec![],
+        })
+        .unwrap();
+    assert_eq!(
+        store
+            .bind_provider_account(Uuid::new_v4(), "codex", None, None)
+            .unwrap()
+            .unwrap()
+            .spec
+            .id,
+        first.id
+    );
+    policy.mode = AccountRoutingMode::Balanced;
+    policy.order = vec![first.id, second.id];
+    policy = store.set_provider_account_policy(&policy).unwrap();
+    assert_eq!(
+        store
+            .bind_provider_account(Uuid::new_v4(), "codex", None, None)
+            .unwrap()
+            .unwrap()
+            .spec
+            .id,
+        second.id
+    );
+    assert_eq!(
+        store
+            .bind_provider_account(Uuid::new_v4(), "codex", None, None)
+            .unwrap()
+            .unwrap()
+            .spec
+            .id,
+        first.id
+    );
+    policy.order = vec![first.id, first.id];
+    assert!(store.set_provider_account_policy(&policy).is_err());
+    policy.order = vec![Uuid::new_v4()];
+    assert!(store.set_provider_account_policy(&policy).is_err());
+}
+
+#[test]
+fn api_pool_uses_explicit_priority_and_returns_the_serving_label() {
+    let directory = tempfile::tempdir().unwrap();
+    let store = Store::open_path(directory.path().join("accounts.db")).unwrap();
+    let mut first = profile(directory.path(), "first");
+    first.credential_kind = AccountCredentialKind::ApiKey;
+    first.credential_environment = Some("OPENAI_API_KEY".into());
+    first.api_protocol = Some(lazoo_protocol::AccountApiProtocol::Responses);
+    let mut second = first.clone();
+    second.id = Uuid::new_v4();
+    second.label = "second".into();
+    second.profile_directory = directory
+        .path()
+        .join("second")
+        .to_string_lossy()
+        .into_owned();
+    store
+        .put_provider_account(&first, 0, Some(b"protected-fixture"))
+        .unwrap();
+    store
+        .put_provider_account(&second, 0, Some(b"protected-fixture"))
+        .unwrap();
+    store
+        .set_provider_account_policy(&ProviderAccountPolicy {
+            provider: "codex".into(),
+            mode: AccountRoutingMode::ApiPool,
+            account_id: None,
+            revision: 0,
+            order: vec![second.id, first.id],
+        })
+        .unwrap();
+    for _ in 0..3 {
+        assert_eq!(
+            store
+                .select_pool_account(&first, None, &[])
+                .unwrap()
+                .spec
+                .id,
+            second.id
+        );
+    }
+    let session = Uuid::new_v4();
+    store
+        .bind_provider_account(session, "codex", None, None)
+        .unwrap();
+    let owner = store.provider_session_account(session).unwrap().unwrap();
+    assert_eq!(owner.id, second.id);
+    assert_eq!(owner.label, "second");
+    store
+        .observe_provider_account(second.id, 429, 1, 60)
+        .unwrap();
+    assert_eq!(
+        store
+            .select_pool_account(&first, None, &[])
+            .unwrap()
+            .spec
+            .id,
+        first.id
+    );
+}
+
 #[test]
 fn migration_creates_durable_account_policy_and_binding_tables() {
     let directory = tempfile::tempdir().unwrap();
@@ -48,6 +353,7 @@ fn balance_and_native_resume_ownership_survive_restart_and_policy_changes() {
     store.put_provider_account(&second, 0, None).unwrap();
     store
         .set_provider_account_policy(&ProviderAccountPolicy {
+            order: Vec::new(),
             provider: "codex".into(),
             mode: AccountRoutingMode::Balanced,
             account_id: None,
@@ -69,6 +375,7 @@ fn balance_and_native_resume_ownership_survive_restart_and_policy_changes() {
         .unwrap();
     store
         .set_provider_account_policy(&ProviderAccountPolicy {
+            order: Vec::new(),
             provider: "codex".into(),
             mode: AccountRoutingMode::Pinned,
             account_id: Some(other.spec.id),
@@ -116,6 +423,7 @@ fn unavailable_pool_cannot_fall_back_to_ambient_credentials() {
     );
     store
         .set_provider_account_policy(&ProviderAccountPolicy {
+            order: Vec::new(),
             provider: "codex".into(),
             mode: AccountRoutingMode::Balanced,
             account_id: None,
@@ -189,6 +497,7 @@ fn simultaneous_session_selection_is_balanced_and_idempotent() {
     }
     store
         .set_provider_account_policy(&ProviderAccountPolicy {
+            order: Vec::new(),
             provider: "codex".into(),
             mode: AccountRoutingMode::Balanced,
             account_id: None,
@@ -270,6 +579,7 @@ fn pool_failover_filters_protocol_and_backend_before_selecting_and_normalizes_mo
     );
     store
         .set_provider_account_policy(&ProviderAccountPolicy {
+            order: Vec::new(),
             provider: "opencode".into(),
             mode: AccountRoutingMode::Pinned,
             account_id: Some(route.id),
@@ -329,6 +639,7 @@ fn account_routing_changes_revoke_global_readiness_but_label_edits_do_not() {
     let before = store.roster_snapshot().unwrap().revision;
     store
         .set_provider_account_policy(&ProviderAccountPolicy {
+            order: Vec::new(),
             provider: "codex".into(),
             mode: AccountRoutingMode::Balanced,
             account_id: None,
@@ -393,6 +704,7 @@ fn stale_account_verification_guard_cannot_restore_readiness_after_key_rotation(
         .unwrap();
     store
         .set_provider_account_policy(&ProviderAccountPolicy {
+            order: Vec::new(),
             provider: "codex".into(),
             mode: AccountRoutingMode::Pinned,
             account_id: Some(account.spec.id),

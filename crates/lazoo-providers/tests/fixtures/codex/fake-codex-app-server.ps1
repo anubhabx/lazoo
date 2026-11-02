@@ -41,6 +41,9 @@ while ($null -ne ($line = [Console]::In.ReadLine())) {
         'thread/items/list' {
             Write-Message @{ id = $message.id; error = @{ code = -32044; message = 'fixture history unavailable' } }
         }
+        'account/rateLimits/read' {
+            Write-Message @{ id = $message.id; result = @{ rateLimits = @{ primary = @{ usedPercent = 25; windowDurationMins = 300; resetsAt = 2000000000 }; planType = 'pro' } } }
+        }
         'account/read' {
             Write-Message @{ id = $message.id; result = @{ account = @{ id = 'fixture' } } }
         }

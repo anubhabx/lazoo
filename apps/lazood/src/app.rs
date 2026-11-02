@@ -1,3 +1,4 @@
+mod account_headers;
 mod account_proxy;
 mod accounts;
 mod approval;
@@ -76,6 +77,9 @@ pub type SessionBackendFuture<'a> =
     Pin<Box<dyn Future<Output = Result<Box<dyn ManagedSession>, ProviderError>> + Send + 'a>>;
 
 pub trait ManagedSession: Send + Sync {
+    fn take_usage_windows(&self) -> Vec<lazoo_protocol::UsageWindow> {
+        Vec::new()
+    }
     fn id(&self) -> String;
     fn native_host_pid(&self) -> Option<u32>;
     fn native_view_available(&self) -> bool {
@@ -181,6 +185,9 @@ struct ProviderSessionBackend {
 }
 
 impl ManagedSession for ProviderSessionHandle {
+    fn take_usage_windows(&self) -> Vec<lazoo_protocol::UsageWindow> {
+        ProviderSession::take_usage_windows(self)
+    }
     fn native_view_available(&self) -> bool {
         ProviderSession::native_view_available(self)
     }
@@ -416,7 +423,9 @@ impl App {
             "events.list" => self.list_events(request.params),
             "desktop.snapshot" => self.desktop_snapshot(&request.params),
             "provider.list" => self.provider_list(&request.params),
-            "provider.accounts.list" => self.account_list(&request.params),
+            "provider.accounts.list" => self.account_list(&request.params).await,
+            "provider.accounts.usage" => self.account_usage(request.params).await,
+            "provider.accounts.preferences" => self.account_preferences(request.params),
             "provider.accounts.put" => self.account_put(request.params),
             "provider.accounts.remove" => self.account_remove(request.params),
             "provider.accounts.policy" => self.account_policy_set(request.params),
