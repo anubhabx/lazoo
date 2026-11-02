@@ -1,3 +1,4 @@
+mod accounts;
 mod approval;
 mod configuration;
 mod conversation;
@@ -29,6 +30,7 @@ use serde_json::Value;
 use thiserror::Error;
 use uuid::Uuid;
 
+pub use accounts::ProviderAccountVerificationGuard;
 pub use approval::{
     CloseApprovalInput, DecideApprovalInput, ListApprovalsInput, RequestApprovalInput,
 };
@@ -112,6 +114,14 @@ pub struct StoreStatus {
 
 #[derive(Debug, Error)]
 pub enum StoreError {
+    #[error("invalid account configuration: {0}")]
+    AccountValidation(&'static str),
+    #[error("account {0} was not found")]
+    AccountNotFound(Uuid),
+    #[error("account or routing policy changed; reload before editing")]
+    AccountStale,
+    #[error("no eligible account is available for this route")]
+    AccountUnavailable,
     #[error("configuration operation {id} was not found")]
     ConfigurationNotFound { id: Uuid },
     #[error("configuration operation {id} changed; current revision is {current_revision}")]

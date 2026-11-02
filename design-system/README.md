@@ -1,32 +1,20 @@
-# Lazoo desktop design-system starter
+# Lazoo desktop design system
 
-Status: **Implemented in the current read-only desktop shell.**
-
-This directory is the implementation-neutral starter for Lazoo's dark desktop interface. It combines:
-
-- Zed's density-aware spacing, compact type hierarchy, semantic surface model, component sizing, restrained elevation, and short animation timing;
-- Raycast's near-black color restraint, search-first workflow, contextual action model, keyboard teaching, and polished desktop behavior;
-- Lazoo's own ember accent, provider truth states, agent states, and orchestration components.
+Status: **v0.2 (Slate), implemented in the desktop** (`apps/lazoo-desktop/ui`). Rationale and the interaction inventory: `docs/superpowers/specs/2026-11-01-desktop-ui-refresh-design.md`.
 
 ## Files
 
-- `tokens.json` is the canonical, tool-readable source.
-- `tokens.css` is the canonical CSS-variable source imported by the desktop frontend.
-- `../docs/superpowers/specs/2026-08-29-lazoo-desktop-design-system.md` contains the evidence, rationale, component contracts, and usage rules.
-
-`apps/lazoo-desktop/ui/src/main.tsx` imports `tokens.css` once. The document root declares `data-theme="lazoo-dark"` and `data-density="default"`; component CSS consumes semantic variables from that contract.
+- `tokens.css` is the single source of truth: slate and accent primitives, then the semantic roles components use (`--lz-color-*`, `--lz-status-*`, `--lz-provider-*`), type, space, radius, elevation, and motion. The desktop entry point imports it once.
+- `tokens.json` is generated from `tokens.css` for tools. Never edit it by hand; run `node design-system/build-tokens.mjs` after changing the CSS.
+- `apps/lazoo-desktop/ui/src/styles/components.css` and `apps/lazoo-desktop/ui/src/components/primitives.tsx` are the base components and their states; pages compose them and add layout only (`styles/app.css`).
 
 ## Usage rules
 
-1. Components consume semantic variables such as `--lz-color-surface` and `--lz-color-text-secondary`. They do not consume graphite primitives directly unless defining a new semantic token.
-2. Ember is reserved for focus, current location, primary action, and Lazoo identity. It is not a generic decoration color.
-3. Operational states use the dedicated `--lz-status-*` variables and always include a text label or icon; color is never the only signal.
-4. Default density is the initial product density. Compact and comfortable values are already defined but should not become user settings until the default system is stable.
-5. Use 4px and 6px radii for normal rows and controls. Use 12px or 16px only for overlays, command surfaces, and substantial floating panels.
-6. Use shadows only for raised surfaces and modals. Panel separation comes from background roles and one-pixel borders.
-7. Motion uses opacity and 4–8px translation. Layout must remain understandable with motion disabled.
+1. Components consume semantic roles, never slate or iris primitives, except when defining a new role.
+2. Iris is the only accent: focus, current selection, "needs you", and progress. The primary action is quiet ink on slate, not a colour. No amber or ember anywhere.
+3. Operational states use `--lz-status-*` and always travel with a word or icon; colour is never the only signal.
+4. Each harness keeps one hue (`--lz-provider-*`) everywhere it appears: avatars, chips.
+5. Radii: 6 to 10 px for controls, rows, and cards; 14 to 18 px for the composer, dialogs, and the command surface.
+6. Depth: a 1 px top highlight plus a low shadow on raised surfaces (`--lz-shadow-raised`); overlays use `--lz-shadow-overlay` or `--lz-shadow-modal` with a backdrop blur. Panels separate by background role and one-pixel borders.
+7. Motion: quick to respond, slow to settle, never bouncy. Opacity and transform only; selections move as shared-layout springs; presses scale to `--lz-press-scale`. Reduced motion removes ambient motion and press scale and keeps layout readable.
 8. Buttons and selectable rows keep the desktop arrow cursor. Pointer cursors are reserved for links.
-
-## Active import
-
-The frontend entrypoint imports `tokens.css` once, and `apps/lazoo-desktop/ui/index.html` places `data-theme="lazoo-dark"` and `data-density="default"` on the document root. Keep that single-import boundary when adding later desktop surfaces.

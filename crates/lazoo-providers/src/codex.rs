@@ -55,13 +55,27 @@ impl CodexAdapter {
             .arg("stdio://")
     }
 
+    fn command_for_request(executable: &Path, request: &SessionRequest) -> CommandSpec {
+        let mut command = account_provider_overrides(
+            CommandSpec::new(executable, &request.cwd),
+            &request.launch_environment,
+        );
+        command = command.arg("app-server").arg("--listen").arg("stdio://");
+        command.apply_environment(&request.launch_environment);
+        command
+    }
+
     #[must_use]
     pub fn fallback_command(
         executable: &Path,
         request: &SessionRequest,
         prompt: &str,
     ) -> CommandSpec {
-        let mut command = CommandSpec::new(executable, &request.cwd)
+        let mut command = account_provider_overrides(
+            CommandSpec::new(executable, &request.cwd),
+            &request.launch_environment,
+        );
+        command = command
             .arg("exec")
             .arg("--json")
             .arg("--cd")
@@ -69,6 +83,7 @@ impl CodexAdapter {
         if let Some(model) = &request.model {
             command = command.arg("--model").arg(model);
         }
+        command.apply_environment(&request.launch_environment);
         command.arg(prompt)
     }
 
@@ -207,7 +222,7 @@ impl CodexAdapter {
             .into_iter()
             .next()
             .ok_or(ProviderError::NotDetected(ProviderKind::Codex))?;
-        let process = CodexBroker::spawn(&Self::command(&candidate.path, &request.cwd))?;
+        let process = CodexBroker::spawn(&Self::command_for_request(&candidate.path, request))?;
         // Dynamic tools are an experimental app-server field; opt in only when Lazoo declares them.
         let initialize_result = initialize_broker(
             &process,
@@ -265,6 +280,62 @@ impl CodexAdapter {
             new_empty_thread,
         })
     }
+}
+
+pub(crate) fn account_provider_overrides(
+    mut command: CommandSpec,
+    environment: &lazoo_runtime::LaunchEnvironment,
+) -> CommandSpec {
+    let value = |name: &str| {
+        environment
+            .values()
+            .get(std::ffi::OsStr::new(name))
+            .filter(|value| !value.is_empty())
+    };
+    let quoted = |value: &str| toml::Value::String(value.to_owned()).to_string();
+    if value("OPENAI_API_KEY").is_some() {
+        let endpoint = value("OPENAI_BASE_URL").map_or_else(
+            || "https://api.openai.com/v1".to_owned(),
+            |value| value.to_string_lossy().into_owned(),
+        );
+        for (key, value) in [
+            ("model_provider", quoted("lazoo-account")),
+            ("model_providers.lazoo-account.name", quoted("openai")),
+            ("model_providers.lazoo-account.base_url", quoted(&endpoint)),
+            (
+                "model_providers.lazoo-account.env_key",
+                quoted("OPENAI_API_KEY"),
+            ),
+            (
+                "model_providers.lazoo-account.wire_api",
+                quoted("responses"),
+            ),
+            (
+                "model_providers.lazoo-account.requires_openai_auth",
+                "false".to_owned(),
+            ),
+            (
+                "model_providers.lazoo-account.supports_websockets",
+                "false".to_owned(),
+            ),
+            (
+                "model_providers.lazoo-account.request_max_retries",
+                "0".to_owned(),
+            ),
+            (
+                "model_providers.lazoo-account.stream_max_retries",
+                "0".to_owned(),
+            ),
+        ] {
+            command = command.arg("-c").arg(format!("{key}={value}"));
+        }
+    } else if let Some(base_url) = value("OPENAI_BASE_URL") {
+        command = command.arg("-c").arg(format!(
+            "openai_base_url={}",
+            quoted(&base_url.to_string_lossy()),
+        ));
+    }
+    command
 }
 
 impl ProviderAdapter for CodexAdapter {
@@ -514,12 +585,21 @@ impl CodexSession {
 
     /// Internal native-view data. The cloned handle is read-only and cannot answer server calls.
     #[must_use]
-    pub(crate) fn live_view_bootstrap(&self) -> (CodexBrokerReadHandle, Value, PathBuf, PathBuf) {
+    pub(crate) fn live_view_bootstrap(
+        &self,
+    ) -> (
+        CodexBrokerReadHandle,
+        Value,
+        PathBuf,
+        PathBuf,
+        lazoo_runtime::LaunchEnvironment,
+    ) {
         (
             self.live_view.clone(),
             self.live_bootstrap.clone(),
             self.executable.clone(),
             self.request.cwd.clone(),
+            self.request.launch_environment.clone(),
         )
     }
 }

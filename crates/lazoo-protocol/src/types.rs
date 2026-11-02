@@ -415,6 +415,7 @@ pub struct ProviderProbeParams {
 pub struct ProviderSmokeParams {
     pub provider: String,
     pub prompt: String,
+    pub model: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
@@ -425,4 +426,6 @@ pub struct ProviderSmokeResult {
     pub events: Vec<Value>,
     pub transcript_truncated: bool,
     pub checked_at: String,
+    pub model_answered: bool,
+    pub route_verified: bool,
 }

@@ -99,12 +99,19 @@ fn response(directory: &Path, name: &str) -> serde_json::Value {
 
 #[test]
 fn opencode_launches_acp_for_the_requested_workspace() {
-    let request = SessionRequest::new(r"C:\repo");
+    let mut request = SessionRequest::new(r"C:\repo");
+    request
+        .launch_environment
+        .set("XDG_CONFIG_HOME", r"C:\profiles\opencode\config");
     let command = OpenCodeAdapter::command(Path::new(r"C:\Tools\opencode.exe"), &request);
 
     assert_eq!(command.executable, PathBuf::from(r"C:\Tools\opencode.exe"));
     assert_eq!(command.args, vec![OsString::from("acp")]);
     assert_eq!(command.cwd, PathBuf::from(r"C:\repo"));
+    assert_eq!(
+        command.env[&OsString::from("XDG_CONFIG_HOME")],
+        OsString::from(r"C:\profiles\opencode\config")
+    );
     assert_eq!(
         command.env.get(&OsString::from("OPENCODE_PERMISSION")),
         Some(&OsString::from(GOVERNED_BLOCK)),

@@ -23,7 +23,7 @@ fn cli_deadlines_acceptance_contract_is_deterministic_and_backend_only() {
         "uiChangesAbsent",
         "diff --quiet -- apps/lazoo-desktop",
         "deterministic-fake-transport",
-        "schemaVersion = 20",
+        "schemaVersion = 21",
         "eventsFollow = 'UNBOUNDED_BY_DESIGN'",
         "cliStressTimeoutCause = 'NOT_ESTABLISHED'",
         "heapCorruptionExit = 'NOT_FIXED_NO_FIRST_PARTY_DEFECT_FOUND'",

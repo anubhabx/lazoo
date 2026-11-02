@@ -115,6 +115,7 @@ impl ClaudeAdapter {
         if let Some(effort) = &request.effort {
             command = command.arg("--effort").arg(effort);
         }
+        command.apply_environment(&request.launch_environment);
         command
     }
 

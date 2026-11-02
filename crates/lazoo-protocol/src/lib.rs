@@ -1,3 +1,4 @@
+mod accounts;
 mod approval;
 mod conversation;
 mod inbox;
@@ -12,6 +13,7 @@ mod terminal_stream;
 mod types;
 mod workspace;
 
+pub use accounts::*;
 pub use approval::{
     APPROVAL_CONTRACT_V1, ApprovalDecider, ApprovalDecision, ApprovalKind, ApprovalListParams,
     ApprovalMutationResult, ApprovalReconcileResult, ApprovalRecord, ApprovalShowParams,

@@ -1,5 +1,6 @@
 param(
-    [switch]$SkipBuild
+    [switch]$SkipBuild,
+    [string]$Configuration = 'release'
 )
 
 $ErrorActionPreference = 'Stop'
@@ -248,6 +249,74 @@ function Wait-AutomationElement(
     throw "desktop UI did not expose automation element '$Name'"
 }
 
+function Wait-InvokableElement(
+    [IntPtr]$WindowHandle,
+    [string]$Name,
+    [bool]$StartsWith = $false,
+    [int]$TimeoutSeconds = 20
+) {
+    $deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSeconds)
+    while ([DateTime]::UtcNow -lt $deadline) {
+        try {
+            $root = [System.Windows.Automation.AutomationElement]::FromHandle($WindowHandle)
+            $elements = $root.FindAll(
+                [System.Windows.Automation.TreeScope]::Descendants,
+                [System.Windows.Automation.Condition]::TrueCondition
+            )
+            foreach ($item in $elements) {
+                try {
+                    $candidateName = $item.Current.Name
+                    $isMatch = if ($StartsWith) {
+                        $candidateName.StartsWith($Name, [StringComparison]::Ordinal)
+                    } else {
+                        $candidateName -eq $Name
+                    }
+                    if (-not $isMatch) { continue }
+                    $pattern = $null
+                    if ($item.TryGetCurrentPattern(
+                        [System.Windows.Automation.InvokePattern]::Pattern,
+                        [ref]$pattern
+                    )) {
+                        return $item
+                    }
+                } catch { }
+            }
+        } catch { }
+        Start-Sleep -Milliseconds 100
+    }
+    throw "desktop UI did not expose an invokable automation element '$Name'"
+}
+
+function Invoke-AutomationOption([System.Windows.Automation.AutomationElement]$Element) {
+    # Listbox options usually expose SelectionItemPattern instead of InvokePattern.
+    $walker = [System.Windows.Automation.TreeWalker]::ControlViewWalker
+    $candidate = $Element
+    for ($depth = 0; $depth -lt 4 -and $null -ne $candidate; $depth++) {
+        $pattern = $null
+        if ($candidate.TryGetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern, [ref]$pattern)) {
+            ([System.Windows.Automation.InvokePattern]$pattern).Invoke()
+            return
+        }
+        $pattern = $null
+        if ($candidate.TryGetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern, [ref]$pattern)) {
+            ([System.Windows.Automation.SelectionItemPattern]$pattern).Select()
+            return
+        }
+        $pattern = $null
+        if ($candidate.TryGetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern, [ref]$pattern)) {
+            ([System.Windows.Automation.ExpandCollapsePattern]$pattern).Expand()
+            return
+        }
+        $pattern = $null
+        if ($candidate.TryGetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern, [ref]$pattern)) {
+            ([System.Windows.Automation.TogglePattern]$pattern).Toggle()
+            return
+        }
+        $candidate = $walker.GetParent($candidate)
+    }
+    throw "automation element '$($Element.Current.Name)' exposes no Invoke, SelectionItem, ExpandCollapse, or Toggle pattern"
+}
+
 function Send-WindowKeys(
     [IntPtr]$WindowHandle,
     [string]$Keys,
@@ -452,7 +521,7 @@ public static class WindowNative {
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
 $cargoExe = (Get-Command cargo -CommandType Application -ErrorAction Stop).Source
 $npmExe = (Get-Command npm.cmd -CommandType Application -ErrorAction Stop).Source
-$releaseDir = Join-Path $repoRoot 'target\release'
+$releaseDir = Join-Path $repoRoot "target\$Configuration"
 $script:keeperExe = Join-Path $releaseDir 'lazoo-keeper.exe'
 $script:daemonExe = Join-Path $releaseDir 'lazood.exe'
 $script:ctlExe = Join-Path $releaseDir 'lazooctl.exe'
@@ -469,7 +538,7 @@ $cleanupUnrelatedRoot = Join-Path $runRoot 'cleanup-unrelated'
 $defaultScreenshot = Join-Path $runRoot 'desktop-default.png'
 $narrowScreenshot = Join-Path $runRoot 'desktop-narrow.png'
 $commandPaletteScreenshot = Join-Path $runRoot 'desktop-command-palette.png'
-$inspectorScreenshot = Join-Path $runRoot 'desktop-inspector.png'
+$settingsScreenshot = Join-Path $runRoot 'desktop-settings.png'
 $highDpiScreenshot = Join-Path $runRoot 'desktop-text-scale-200.png'
 $textScalePercent = 100
 $textScaleSettings = Get-ItemProperty -LiteralPath 'HKCU:\Software\Microsoft\Accessibility' -ErrorAction SilentlyContinue
@@ -530,15 +599,17 @@ try {
         $gates.frontendBuild = 'PASS'
 
         $timer = [Diagnostics.Stopwatch]::StartNew()
-        & $cargoExe build --workspace --release --locked
+        $cargoArguments = @('build', '--workspace', '--locked')
+        if ($Configuration -eq 'release') { $cargoArguments = @('build', '--workspace', '--release', '--locked') }
+        & $cargoExe @cargoArguments
         $buildExit = $LASTEXITCODE
         $timer.Stop()
         $script:commands.Add([ordered]@{
-            command = 'cargo build --workspace --release --locked'
+            command = "cargo $($cargoArguments -join ' ')"
             exitCode = $buildExit
             durationMs = $timer.ElapsedMilliseconds
         })
-        Assert-Equal $buildExit 0 'locked release build'
+        Assert-Equal $buildExit 0 "locked $Configuration build"
     } else {
         $gates.frontendBuild = 'SKIPPED: prebuilt frontend requested'
     }
@@ -604,69 +675,99 @@ try {
     Assert-Equal $desktop.MainWindowTitle $expectedTitle 'desktop window title'
     $gates.desktopWindow = 'PASS'
 
-    $uiNames = Wait-UiText $windowHandle @(
-        'Control plane steady',
+    Wait-UiText $windowHandle @(
         'Open command palette',
         'Minimize window',
         'Maximize or restore window',
         'Close window'
-    )
-    $projectElement = Wait-AutomationElement $windowHandle 'Desktop acceptance' $true
-    $eventElement = Wait-AutomationElement $windowHandle 'Project registered' $true
-    Assert-True $eventElement.Current.Name.StartsWith(
-        'Project registered',
-        [StringComparison]::Ordinal
-    ) 'desktop recent event label'
-    $gates.snapshotRpc = 'PASS'
+    ) | Out-Null
     $gates.customTitlebar = 'PASS'
+
+    # The quick-setup dialog opens by itself once per WebView profile when a
+    # harness is detected; dismiss it so the launcher underneath is reachable.
+    # The launcher's empty-team button is also named 'Set up your team', so the
+    # dialog is recognised by its own 'Not now' button. The store decides
+    # whether to offer it before it reports the connection, so wait for that.
+    Wait-UiText $windowHandle @('connected') 20 | Out-Null
+    $setupNames = @(Get-AutomationNames $windowHandle)
+    if ('Set up your team' -in $setupNames -and 'Not now' -in $setupNames) {
+        $notNow = Wait-InvokableElement $windowHandle 'Not now'
+        Invoke-AutomationElement $notNow
+        Wait-UiTextAbsent $windowHandle @('Not now')
+        $gates.setupDialog = 'PASS: offered and dismissed'
+    } else {
+        $gates.setupDialog = 'PASS: already offered in this WebView profile'
+    }
+    if ('Show sidebar' -in @(Get-AutomationNames $windowHandle)) {
+        Invoke-AutomationElement (Wait-InvokableElement $windowHandle 'Show sidebar')
+    }
+
+    Wait-UiText $windowHandle @(
+        'New work',
+        'Inbox',
+        'Settings',
+        'What should the team work on?',
+        'Start'
+    ) | Out-Null
+    Wait-UiText $windowHandle @('No employees yet.') | Out-Null
+    $gates.launcher = 'PASS'
+
+    Wait-UiText $windowHandle @('connected') 20 | Out-Null
+    $gates.connection = 'PASS'
+
+    # Projects live in the sidebar: selecting one opens its home and expands it.
+    Wait-UiText $windowHandle @('Projects', 'Recents') | Out-Null
+    $projectRow = Wait-InvokableElement $windowHandle 'Desktop acceptance'
+    Invoke-AutomationElement $projectRow
+    Wait-AutomationElement $windowHandle 'Collapse Desktop acceptance' | Out-Null
+    Wait-UiText $windowHandle @('Start the first conversation') | Out-Null
+    $gates.projectSidebar = 'PASS'
 
     $commandTrigger = Wait-AutomationElement $windowHandle 'Open command palette'
     Send-WindowKeys $windowHandle '^k' $commandTrigger
-    Wait-UiText $windowHandle @('Command palette', 'Search commands') | Out-Null
-    Wait-AutomationElement $windowHandle 'Refresh snapshot' $true | Out-Null
-    Wait-AutomationElement $windowHandle 'Open projects' $true | Out-Null
+    Wait-UiText $windowHandle @('Search commands') | Out-Null
+    Wait-AutomationElement $windowHandle 'Inbox' | Out-Null
+    Wait-AutomationElement $windowHandle 'New work' | Out-Null
     Capture-Window $windowHandle $commandPaletteScreenshot | Out-Null
-    $gates.commandPaletteScreenshot = 'PASS'
 
     $searchBox = Wait-AutomationElement $windowHandle 'Search commands'
-    Send-WindowKeys $windowHandle 'open{DOWN}{ENTER}' $searchBox
+    Send-WindowKeys $windowHandle 'inbox{ENTER}' $searchBox
     Wait-UiTextAbsent $windowHandle @('Search commands')
-    Wait-UiText $windowHandle @('Projects') | Out-Null
-
-    $commandTrigger = Wait-AutomationElement $windowHandle 'Open command palette'
-    Invoke-AutomationElement $commandTrigger
-    $searchBox = Wait-AutomationElement $windowHandle 'Search commands'
-    Send-WindowKeys $windowHandle 'control{ENTER}' $searchBox
-    Wait-UiTextAbsent $windowHandle @('Search commands')
-    Wait-UiText $windowHandle @('Control room') | Out-Null
+    Wait-UiText $windowHandle @('Inbox', 'Nothing needs you') | Out-Null
 
     $commandTrigger = Wait-AutomationElement $windowHandle 'Open command palette'
     Invoke-AutomationElement $commandTrigger
     Wait-AutomationElement $windowHandle 'Search commands' | Out-Null
     Send-WindowKeys $windowHandle '{ESC}'
     Wait-UiTextAbsent $windowHandle @('Search commands')
+
+    Send-WindowKeys $windowHandle '^n'
+    Wait-UiText $windowHandle @('What should the team work on?') | Out-Null
     $gates.commandPaletteKeyboard = 'PASS'
 
-    $projectElement = Wait-AutomationElement $windowHandle 'Desktop acceptance' $true
-    $projectElement.SetFocus()
-    Send-WindowKeys $windowHandle '{ENTER}'
-    Wait-UiText $windowHandle @('Inspector', 'Close inspector', 'Desktop acceptance') | Out-Null
-    Capture-Window $windowHandle $inspectorScreenshot | Out-Null
-    $gates.inspectorScreenshot = 'PASS'
+    $inboxButton = Wait-InvokableElement $windowHandle 'Inbox'
+    Invoke-AutomationElement $inboxButton
+    Wait-UiText $windowHandle @(
+        'All',
+        'Approvals',
+        'Incidents',
+        'Resolved',
+        'Nothing needs you'
+    ) | Out-Null
+    $gates.inboxPage = 'PASS'
 
-    $commandTrigger = Wait-AutomationElement $windowHandle 'Open command palette'
-    Invoke-AutomationElement $commandTrigger
-    Wait-AutomationElement $windowHandle 'Inspect selected project' $true | Out-Null
-    $searchBox = Wait-AutomationElement $windowHandle 'Search commands'
-    Send-WindowKeys $windowHandle '^~' $searchBox
-    Wait-UiTextAbsent $windowHandle @('Search commands')
-    Assert-FocusedAutomationName 'Close inspector' 'secondary inspect moved focus into inspector'
-
-    $closeInspector = Wait-AutomationElement $windowHandle 'Close inspector'
-    Invoke-AutomationElement $closeInspector
-    Wait-UiTextAbsent $windowHandle @('Inspector', 'Close inspector')
-    Assert-FocusedAutomationName 'Desktop acceptance' 'focus returned to project row'
-    $gates.inspectorFocusRoundTrip = 'PASS'
+    $settingsButton = Wait-InvokableElement $windowHandle 'Settings'
+    Invoke-AutomationElement $settingsButton
+    Wait-UiText $windowHandle @('General', 'Projects', 'Daemon') | Out-Null
+    $projectsSection = Wait-InvokableElement $windowHandle 'Projects'
+    Invoke-AutomationElement $projectsSection
+    Wait-UiText $windowHandle @('Register a project', 'Desktop acceptance') | Out-Null
+    Capture-Window $windowHandle $settingsScreenshot | Out-Null
+    $daemonSection = Wait-InvokableElement $windowHandle 'Daemon'
+    Invoke-AutomationElement $daemonSection
+    # The schema version is a Daemon fact now that the status bar is gone.
+    Wait-AutomationElement $windowHandle 'Schema' | Out-Null
+    $gates.settingsProjects = 'PASS'
 
     Assert-True ([WindowNative]::MoveWindow($windowHandle, 40, 40, 1180, 760, $true)) 'default window resize'
     Start-Sleep -Milliseconds 500
@@ -680,9 +781,7 @@ try {
     $narrowBounds = Capture-Window $windowHandle $narrowScreenshot
     Assert-Equal $narrowBounds.Width 860 'narrow window width'
     Assert-Equal $narrowBounds.Height 620 'narrow window height'
-    $systemNavigation = Wait-AutomationElement $windowHandle 'System'
-    Invoke-AutomationElement $systemNavigation
-    Wait-UiText $windowHandle @('System pulse') | Out-Null
+    Wait-UiText $windowHandle @('New work') | Out-Null
     $gates.narrowScreenshot = 'PASS'
 
     if ($textScalePercent -eq 200) {
@@ -760,7 +859,7 @@ try {
             defaultScreenshot = $defaultScreenshot
             narrowScreenshot = $narrowScreenshot
             commandPaletteScreenshot = $commandPaletteScreenshot
-            inspectorScreenshot = $inspectorScreenshot
+            settingsScreenshot = $settingsScreenshot
             highDpiScreenshot = if (Test-Path -LiteralPath $highDpiScreenshot) {
                 $highDpiScreenshot
             } else {
@@ -784,7 +883,7 @@ if ($manifestStatus -ne 'PASS') {
 Write-Output "DESKTOP SHELL ACCEPTANCE: PASS"
 Write-Output "PASS manifest: $manifestPath"
 Write-Output "Visual QA screenshots: $defaultScreenshot and $narrowScreenshot"
-Write-Output "Interaction screenshots: $commandPaletteScreenshot and $inspectorScreenshot"
+Write-Output "Interaction screenshots: $commandPaletteScreenshot and $settingsScreenshot"
 if (Test-Path -LiteralPath $highDpiScreenshot) {
     Write-Output "High-DPI visual QA screenshot: $highDpiScreenshot"
 } else {

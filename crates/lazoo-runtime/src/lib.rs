@@ -2,6 +2,7 @@ mod atomic_file;
 mod data_root;
 mod governor;
 mod installation;
+mod launch_environment;
 mod notification;
 mod process_job;
 mod security;
@@ -17,12 +18,13 @@ pub use governor::{
     WindowState,
 };
 pub use installation::Installation;
+pub use launch_environment::LaunchEnvironment;
 pub use notification::NativeNotifier;
 pub use process_job::{
     JobAccounting, JobChild, JobCommand, JobObject, LaunchGate, ProcessAccounting,
     current_process_accounting, session_host_path, wait_for_launch_gate,
 };
-pub use security::OwnerSecurity;
+pub use security::{OwnerSecurity, protect_for_current_user, unprotect_for_current_user};
 pub use single_instance::SingleInstance;
 pub use task_worktree::{PreparedGitTaskWorktree, prepare_git_task_worktree};
 pub use terminal::{

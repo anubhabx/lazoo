@@ -184,6 +184,23 @@ impl DiscoveryEnvironment {
                     );
             }
         }
+        // The Windows npm package contains a platform-native executable. Prefer it over the
+        // JavaScript shim when present so ACP runs as a directly contained child process.
+        if let Some(node_root) = env::var_os("NVM_SYMLINK").map(PathBuf::from) {
+            self.known_locations
+                .entry(ProviderKind::GitHubCopilot)
+                .or_default()
+                .push(
+                    node_root
+                        .join("node_modules")
+                        .join("@github")
+                        .join("copilot")
+                        .join("node_modules")
+                        .join("@github")
+                        .join("copilot-win32-x64")
+                        .join("copilot.exe"),
+                );
+        }
     }
 }
 

@@ -27,15 +27,22 @@ fn agy_discovery_reads_a_persisted_or_known_executable() {
 
 #[test]
 fn agy_launch_uses_long_lived_stream_json_without_bypassing_permissions() {
-    let request = SessionRequest::new(r"C:\repo")
+    let mut request = SessionRequest::new(r"C:\repo")
         .resume("conversation-1")
         .with_model("gemini-3.1-pro-high")
         .with_effort("high")
         .with_permission_mode("plan");
+    request
+        .launch_environment
+        .set("USERPROFILE", r"C:\profiles\agy");
     let command = AntigravityAdapter::command(Path::new(r"C:\Tools\agy.exe"), &request);
 
     assert_eq!(command.executable, PathBuf::from(r"C:\Tools\agy.exe"));
     assert_eq!(command.cwd, PathBuf::from(r"C:\repo"));
+    assert_eq!(
+        command.env[&OsString::from("USERPROFILE")],
+        OsString::from(r"C:\profiles\agy")
+    );
     assert!(command.args.windows(2).any(|pair| {
         pair == [
             OsString::from("--input-format"),

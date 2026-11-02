@@ -9,6 +9,7 @@ rust-version.workspace = true
 lazoo-ipc = { path = "../../crates/lazoo-ipc" }
 lazoo-protocol = { path = "../../crates/lazoo-protocol" }
 lazoo-runtime = { path = "../../crates/lazoo-runtime" }
+base64.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 tauri.workspace = true

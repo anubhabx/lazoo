@@ -33,6 +33,10 @@ fn attach_args_name_only_the_documented_resume_shapes_and_refuse_placeholders() 
         Some(vec!["--conversation".to_owned(), "native-1".to_owned()])
     );
     assert_eq!(attach_args(ProviderKind::GrokBuild, "session-1"), None);
+    assert_eq!(
+        attach_args(ProviderKind::GitHubCopilot, "0b8e4c2a-session"),
+        Some(vec!["--resume=0b8e4c2a-session".to_owned()])
+    );
     for provider in ProviderKind::ALL {
         assert_eq!(attach_args(provider, ""), None, "{provider} empty id");
         assert_eq!(
@@ -48,6 +52,7 @@ fn provider_kinds_are_stable_and_parseable() {
     let cases = [
         (ProviderKind::Codex, "codex"),
         (ProviderKind::OpenCode, "opencode"),
+        (ProviderKind::GitHubCopilot, "github-copilot"),
         (ProviderKind::GrokBuild, "grok-build"),
         (ProviderKind::Antigravity, "antigravity"),
         (ProviderKind::ClaudeCode, "claude-code"),
@@ -61,6 +66,18 @@ fn provider_kinds_are_stable_and_parseable() {
             format!(r#""{expected}""#)
         );
     }
+}
+
+#[test]
+fn github_copilot_alias_is_canonicalized() {
+    assert_eq!(
+        "copilot".parse::<ProviderKind>().unwrap(),
+        ProviderKind::GitHubCopilot
+    );
+    assert_eq!(
+        "github-copilot".parse::<ProviderKind>().unwrap(),
+        ProviderKind::GitHubCopilot
+    );
 }
 
 #[test]

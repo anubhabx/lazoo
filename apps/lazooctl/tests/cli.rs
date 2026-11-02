@@ -486,6 +486,25 @@ fn provider_cli_maps_list_probe_and_explicit_smoke_commands() {
             false
         )
     );
+    let selected_model = Cli::try_parse_from([
+        "lazooctl",
+        "provider",
+        "smoke",
+        "opencode",
+        "--prompt",
+        "Reply OK",
+        "--model",
+        "anthropic/claude-sonnet-4-6",
+    ])
+    .unwrap();
+    assert_eq!(
+        command_request(&selected_model.command),
+        (
+            "provider.smoke",
+            json!({"provider":"opencode","prompt":"Reply OK","model":"anthropic/claude-sonnet-4-6"}),
+            false,
+        )
+    );
 }
 
 #[test]

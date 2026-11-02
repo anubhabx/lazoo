@@ -210,7 +210,7 @@ fn missing_and_malformed_configuration_is_reported_without_quoting_it_or_failing
     let report = discover_provider_configuration(&empty);
     assert!(report.files.is_empty());
     assert!(report.integrations.is_empty());
-    assert_eq!(report.unsupported.len(), 5, "{:?}", report.unsupported);
+    assert_eq!(report.unsupported.len(), 6, "{:?}", report.unsupported);
 
     let home = home_with(
         Some(

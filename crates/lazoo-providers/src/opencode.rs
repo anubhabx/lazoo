@@ -6,6 +6,7 @@ use std::{
 };
 
 use agent_client_protocol::schema::v1::{HttpHeader, McpServer, McpServerHttp};
+use serde_json::{Value, json};
 use tokio::{process::Command, time::timeout};
 use uuid::Uuid;
 
@@ -43,6 +44,7 @@ const CONFIG_ENVIRONMENT: [&str; 3] = [
     "OPENCODE_CONFIG_CONTENT",
     "OPENCODE_CONFIG_DIR",
 ];
+pub(crate) const LAZOO_PROVIDER_CONFIG_ENV: &str = "LAZOO_OPENCODE_PROVIDER_CONFIG";
 /// Configuration keys that can grant or change permissions (`tools` and `mode` are the legacy
 /// spellings). Matched as quoted keys, so a false positive only refuses.
 const PERMISSION_CONFIG_KEYS: [&str; 5] = ["permission", "agent", "agents", "mode", "tools"];
@@ -107,7 +109,7 @@ impl OpenCodeAdapter {
         executable: &Path,
         request: &SessionRequest,
         server: &OpenCodeServer,
-    ) -> CommandSpec {
+    ) -> Result<CommandSpec, ProviderError> {
         let block = if request.permission_mode.as_deref() == Some(FULL_AUTONOMY_PERMISSION_MODE) {
             ALLOW_ALL_PERMISSION
         } else {
@@ -121,16 +123,18 @@ impl OpenCodeAdapter {
             .arg(server.port.to_string())
             .arg("--cwd")
             .arg(request.cwd.as_os_str());
+        apply_private_provider_config(&mut command, &request.launch_environment)?;
         command.env.insert(
             OsString::from(SERVER_PASSWORD_ENV),
             OsString::from(&server.password),
         );
-        command
+        Ok(command)
     }
 
     // The inline block is the only permission source Lazoo sets; no config file is written.
     fn launch(executable: &Path, request: &SessionRequest, block: Option<&str>) -> CommandSpec {
         let mut command = CommandSpec::new(executable, &request.cwd).arg("acp");
+        command.apply_environment(&request.launch_environment);
         if let Some(block) = block {
             command
                 .env
@@ -221,9 +225,9 @@ impl OpenCodeAdapter {
         if request.permission_mode.as_deref() != Some(FULL_AUTONOMY_PERMISSION_MODE)
             && let Some(detail) = governed_config_conflict(
                 &request.cwd,
-                &|name| std::env::var_os(name).is_some(),
-                home_directory().as_deref(),
-                config_home().as_deref(),
+                &|name| selected_environment_has(request, name),
+                selected_home_directory(request).as_deref(),
+                selected_config_home(request).as_deref(),
             )
         {
             // The live precedence probes (2026-10-17) showed a project or global agent-scoped
@@ -236,17 +240,13 @@ impl OpenCodeAdapter {
             });
         }
         let server = OpenCodeServer::reserve()?;
+        let command = Self::command_with_server(&candidate.path, request, &server)?;
         let bridge = SessionMcpBridge::open(ProviderKind::OpenCode, request.tools.clone()).await?;
         let mcp = McpServer::Http(McpServerHttp::new("lazoo", bridge.endpoint()).headers(vec![
             HttpHeader::new("Authorization", bridge.authorization()),
         ]));
-        let started = start_acp_session_with_mcp(
-            ProviderKind::OpenCode,
-            Self::command_with_server(&candidate.path, request, &server),
-            request,
-            vec![mcp],
-        )
-        .await;
+        let started =
+            start_acp_session_with_mcp(ProviderKind::OpenCode, command, request, vec![mcp]).await;
         match started {
             Ok((session, _)) => Ok(OpenCodeSession { session, bridge }),
             Err(error) => {
@@ -254,6 +254,96 @@ impl OpenCodeAdapter {
                 Err(error)
             }
         }
+    }
+}
+
+pub(crate) fn private_provider_config(
+    environment: &lazoo_runtime::LaunchEnvironment,
+) -> Result<Option<Value>, ProviderError> {
+    let Some(raw) = environment
+        .values()
+        .get(std::ffi::OsStr::new(LAZOO_PROVIDER_CONFIG_ENV))
+    else {
+        return Ok(None);
+    };
+    let provider: Value = serde_json::from_str(&raw.to_string_lossy()).map_err(|_| {
+        ProviderError::Protocol("invalid selected OpenCode provider configuration".to_owned())
+    })?;
+    validate_provider_config(&provider, 0)?;
+    let enabled_providers = provider
+        .as_object()
+        .map_or_else(Vec::new, |providers| providers.keys().cloned().collect());
+    Ok(Some(json!({
+        "provider": provider,
+        "enabled_providers": enabled_providers,
+    })))
+}
+
+fn apply_private_provider_config(
+    command: &mut CommandSpec,
+    environment: &lazoo_runtime::LaunchEnvironment,
+) -> Result<(), ProviderError> {
+    let Some(config) = private_provider_config(environment)? else {
+        return Ok(());
+    };
+    let marker = OsString::from(LAZOO_PROVIDER_CONFIG_ENV);
+    command.env.remove(&marker);
+    command.env_remove.push(marker);
+    command.env.insert(
+        OsString::from(CONFIG_CONTENT_ENV),
+        OsString::from(config.to_string()),
+    );
+    Ok(())
+}
+
+fn validate_provider_config(value: &Value, depth: usize) -> Result<(), ProviderError> {
+    if depth > 8 {
+        return Err(ProviderError::Protocol(
+            "selected OpenCode provider configuration is too deeply nested".to_owned(),
+        ));
+    }
+    let object = value.as_object().ok_or_else(|| {
+        ProviderError::Protocol(
+            "selected OpenCode provider configuration must be an object".to_owned(),
+        )
+    })?;
+    if object.is_empty()
+        || object.keys().any(|key| {
+            key.is_empty()
+                || key.len() > 128
+                || !key
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-' | b'.'))
+        })
+    {
+        return Err(ProviderError::Protocol(
+            "selected OpenCode provider configuration has an invalid provider name".to_owned(),
+        ));
+    }
+    for value in object.values() {
+        validate_provider_value(value, depth + 1)?;
+    }
+    Ok(())
+}
+
+fn validate_provider_value(value: &Value, depth: usize) -> Result<(), ProviderError> {
+    match value {
+        Value::Object(object) if depth <= 8 => {
+            if object.keys().any(|key| key.is_empty() || key.len() > 128) {
+                return Err(ProviderError::Protocol(
+                    "selected OpenCode provider configuration has an invalid key".to_owned(),
+                ));
+            }
+            for value in object.values() {
+                validate_provider_value(value, depth + 1)?;
+            }
+            Ok(())
+        }
+        Value::String(text) if text.len() <= 4096 => Ok(()),
+        Value::Bool(_) | Value::Number(_) => Ok(()),
+        _ => Err(ProviderError::Protocol(
+            "selected OpenCode provider configuration has an invalid value".to_owned(),
+        )),
     }
 }
 
@@ -454,19 +544,36 @@ fn degraded_probe(
     }
 }
 
-pub(crate) fn home_directory() -> Option<PathBuf> {
-    ["USERPROFILE", "HOME"]
-        .iter()
-        .find_map(|name| std::env::var_os(name).filter(|value| !value.is_empty()))
+pub(crate) fn selected_environment_has(request: &SessionRequest, name: &str) -> bool {
+    let key = std::ffi::OsStr::new(name);
+    request.launch_environment.values().contains_key(key)
+        || (!request.launch_environment.removals().contains(&key.into())
+            && std::env::var_os(name).is_some())
+}
+
+pub(crate) fn selected_home_directory(request: &SessionRequest) -> Option<PathBuf> {
+    selected_environment_value(request, "USERPROFILE")
+        .or_else(|| selected_environment_value(request, "HOME"))
         .map(PathBuf::from)
 }
 
-/// The owner's XDG configuration root as `OpenCode` reads it (`XDG_CONFIG_HOME || ~/.config`): the
-/// variable when it is set and non-empty, else none.
-pub(crate) fn config_home() -> Option<PathBuf> {
-    std::env::var_os("XDG_CONFIG_HOME")
+pub(crate) fn selected_config_home(request: &SessionRequest) -> Option<PathBuf> {
+    selected_environment_value(request, "XDG_CONFIG_HOME").map(PathBuf::from)
+}
+
+fn selected_environment_value(request: &SessionRequest, name: &str) -> Option<std::ffi::OsString> {
+    let key = std::ffi::OsStr::new(name);
+    request
+        .launch_environment
+        .values()
+        .get(key)
+        .cloned()
+        .or_else(|| {
+            (!request.launch_environment.removals().contains(&key.into()))
+                .then(|| std::env::var_os(name))
+                .flatten()
+        })
         .filter(|value| !value.is_empty())
-        .map(PathBuf::from)
 }
 
 /// Why a governed session must not start, or `None` when nothing the scan knows can outrank the

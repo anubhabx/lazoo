@@ -19,15 +19,18 @@ pub enum ProviderKind {
     Codex,
     #[serde(rename = "opencode")]
     OpenCode,
+    #[serde(rename = "github-copilot")]
+    GitHubCopilot,
     GrokBuild,
     Antigravity,
     ClaudeCode,
 }
 
 impl ProviderKind {
-    pub const ALL: [Self; 5] = [
+    pub const ALL: [Self; 6] = [
         Self::Codex,
         Self::OpenCode,
+        Self::GitHubCopilot,
         Self::GrokBuild,
         Self::Antigravity,
         Self::ClaudeCode,
@@ -38,6 +41,7 @@ impl ProviderKind {
         match self {
             Self::Codex => "codex",
             Self::OpenCode => "opencode",
+            Self::GitHubCopilot => "github-copilot",
             Self::GrokBuild => "grok-build",
             Self::Antigravity => "antigravity",
             Self::ClaudeCode => "claude-code",
@@ -58,6 +62,7 @@ impl FromStr for ProviderKind {
         match value {
             "codex" => Ok(Self::Codex),
             "opencode" => Ok(Self::OpenCode),
+            "github-copilot" | "copilot" => Ok(Self::GitHubCopilot),
             "grok-build" | "grok" => Ok(Self::GrokBuild),
             "antigravity" | "agy" => Ok(Self::Antigravity),
             "claude-code" | "claude" => Ok(Self::ClaudeCode),
@@ -81,6 +86,7 @@ pub fn attach_args(provider: ProviderKind, native_session_id: &str) -> Option<Ve
         ProviderKind::ClaudeCode => Some(vec!["--resume".to_owned(), id]),
         ProviderKind::Codex => Some(vec!["resume".to_owned(), id]),
         ProviderKind::OpenCode => Some(vec!["--session".to_owned(), id]),
+        ProviderKind::GitHubCopilot => Some(vec![format!("--resume={id}")]),
         ProviderKind::Antigravity => Some(vec!["--conversation".to_owned(), id]),
         ProviderKind::GrokBuild => None,
     }
@@ -204,6 +210,7 @@ pub struct CommandSpec {
     pub args: Vec<OsString>,
     pub cwd: PathBuf,
     pub env: BTreeMap<OsString, OsString>,
+    pub env_remove: Vec<OsString>,
 }
 
 impl fmt::Debug for CommandSpec {
@@ -213,6 +220,7 @@ impl fmt::Debug for CommandSpec {
             .field("executable", &self.executable)
             .field("args", &self.args)
             .field("cwd", &self.cwd)
+            .field("env_remove", &self.env_remove)
             .field(
                 "env",
                 &self
@@ -233,6 +241,7 @@ impl CommandSpec {
             args: Vec::new(),
             cwd: cwd.into(),
             env: BTreeMap::new(),
+            env_remove: Vec::new(),
         }
     }
 
@@ -240,6 +249,11 @@ impl CommandSpec {
     pub fn arg(mut self, value: impl Into<OsString>) -> Self {
         self.args.push(value.into());
         self
+    }
+
+    pub fn apply_environment(&mut self, environment: &lazoo_runtime::LaunchEnvironment) {
+        self.env_remove.extend_from_slice(environment.removals());
+        self.env.extend(environment.values().clone());
     }
 }
 
@@ -256,6 +270,9 @@ pub struct ToolSpec {
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct SessionRequest {
+    /// Credentials and profile selection supplied only by the trusted caller. Never on the wire.
+    #[serde(skip)]
+    pub launch_environment: lazoo_runtime::LaunchEnvironment,
     pub cwd: PathBuf,
     pub session_id: Option<String>,
     pub model: Option<String>,
@@ -281,6 +298,7 @@ impl SessionRequest {
     #[must_use]
     pub fn new(cwd: impl Into<PathBuf>) -> Self {
         Self {
+            launch_environment: lazoo_runtime::LaunchEnvironment::default(),
             cwd: cwd.into(),
             session_id: None,
             model: None,

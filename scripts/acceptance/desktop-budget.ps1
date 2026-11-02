@@ -586,7 +586,7 @@ try {
     $keeper = Start-Keeper $script:dataRoot
     $script:keeperPid = $keeper.Id
     $status = Wait-Status
-    Assert-Equal $status.schemaVersion 20 'schema version'
+    Assert-Equal $status.schemaVersion 21 'schema version'
     $gates.schemaVersion = 'PASS'
     $registration = Invoke-Json @('project', 'register', $projectRoot, '--name', 'Desktop budget', '--idempotency-key', "desktop-budget-$runId")
     Assert-True ($null -ne $registration.project.id) 'project registered before the desktop starts'
@@ -604,7 +604,7 @@ try {
     Assert-Equal $desktop.MainWindowTitle $expectedTitle 'desktop window title'
     # Same readiness evidence as desktop-shell.ps1: the UI reports a steady control plane and
     # shows the registered project, so it has fetched a snapshot from the connected daemon.
-    $null = Wait-UiText $windowHandle @('Control plane steady', 'Open command palette')
+    $null = Wait-UiText $windowHandle @('What should the team work on?', 'Open command palette')
     $gates.desktopConnectedToDaemon = 'PASS'
 
     # Let WebView2 start-up and first render finish before the first window.
@@ -762,7 +762,7 @@ try {
     }
     $manifest = [ordered]@{
         status = $manifestStatus
-        schemaVersion = 20
+        schemaVersion = 21
         mode = 'real-binaries-with-desktop'
         memoryBasis = 'private-working-set'
         startedAt = $startedAt.ToString('o')

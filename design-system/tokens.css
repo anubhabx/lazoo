@@ -1,116 +1,144 @@
 /*
- * Lazoo Desktop Design System v0.1
- * Proposed starter tokens only. This file is intentionally not imported by the app yet.
+ * Lazoo Desktop Design System v0.2 (Slate)
+ *
+ * The single source of truth for colour, type, space, radius, elevation and
+ * motion. Components consume the semantic roles (--lz-color-*, --lz-status-*,
+ * --lz-provider-*), never the primitives. tokens.json is generated from this
+ * file: `node design-system/build-tokens.mjs`.
  */
 
 :root,
 [data-theme="lazoo-dark"] {
   color-scheme: dark;
 
-  /* Graphite primitives */
-  --lz-graphite-000: #08090b;
-  --lz-graphite-050: #0b0d10;
-  --lz-graphite-100: #0f1115;
-  --lz-graphite-150: #13151a;
-  --lz-graphite-200: #17191e;
-  --lz-graphite-250: #1c1e24;
-  --lz-graphite-300: #22252b;
-  --lz-graphite-350: #292c33;
-  --lz-graphite-400: #323640;
-  --lz-graphite-500: #454a55;
-  --lz-graphite-600: #575c66;
-  --lz-graphite-700: #7e838e;
-  --lz-graphite-800: #a9adb7;
-  --lz-graphite-900: #d6d8de;
-  --lz-graphite-950: #f4f5f7;
+  /* Slate primitives: a cool blue-grey lifted off black, so long sessions stay
+     easy on the eyes. Steps are perceptually even on a dark screen. */
+  --lz-slate-000: #0f1218;
+  --lz-slate-050: #13171e;
+  --lz-slate-100: #171c24;
+  --lz-slate-150: #1b2029;
+  --lz-slate-200: #20262f;
+  --lz-slate-250: #262d38;
+  --lz-slate-300: #2d3542;
+  --lz-slate-350: #36404d;
+  --lz-slate-400: #424c5c;
+  --lz-slate-500: #5a6576;
+  --lz-slate-600: #717d8f;
+  --lz-slate-700: #8b96a7;
+  --lz-slate-800: #afb8c5;
+  --lz-slate-900: #d3d9e1;
+  --lz-slate-950: #e8ecf1;
 
-  /* Accent and semantic primitives */
-  --lz-ember-400: #ff805f;
-  --lz-ember-500: #ff6b45;
-  --lz-ember-600: #e85332;
-  --lz-blue-500: #5ba8ff;
-  --lz-green-500: #43d17c;
-  --lz-yellow-500: #f2c94c;
-  --lz-red-500: #ff5d64;
-  --lz-violet-500: #a78bfa;
-  --lz-cyan-500: #40c4d8;
+  /* Iris: the one accent. Focus, selection, "needs you", and progress. */
+  --lz-iris-300: #c6cdfb;
+  --lz-iris-400: #a8b3f9;
+  --lz-iris-500: #8d9af4;
+  --lz-iris-600: #7383ea;
+  --lz-iris-700: #5a69d6;
 
-  /* Zed-style semantic surface roles, rendered in a Raycast-like neutral range */
-  --lz-color-canvas: var(--lz-graphite-000);
-  --lz-color-window: var(--lz-graphite-050);
-  --lz-color-background: var(--lz-graphite-100);
-  --lz-color-surface: var(--lz-graphite-150);
-  --lz-color-editor-surface: var(--lz-graphite-100);
-  --lz-color-surface-raised: var(--lz-graphite-200);
-  --lz-color-surface-overlay: var(--lz-graphite-250);
-  --lz-color-surface-hover: var(--lz-graphite-300);
-  --lz-color-surface-active: var(--lz-graphite-350);
-  --lz-color-surface-selected: var(--lz-graphite-350);
-  --lz-color-surface-disabled: var(--lz-graphite-200);
+  /* Soft semantic hues, tuned to sit on slate without glowing. */
+  --lz-sky-400: #7db8f2;
+  --lz-mint-400: #6dc9a1;
+  --lz-sand-400: #d6b97d;
+  --lz-rose-400: #ec8b91;
+  --lz-lilac-400: #b7a2f0;
+  --lz-teal-400: #66c3c8;
+  --lz-peach-400: #e9a990;
 
-  --lz-color-border-subtle: var(--lz-graphite-300);
-  --lz-color-border: var(--lz-graphite-400);
-  --lz-color-border-strong: var(--lz-graphite-500);
-  --lz-color-border-focus: var(--lz-ember-500);
-  --lz-color-border-selected: var(--lz-ember-400);
+  /* Surfaces: the sidebar sits a step below the stage, cards a step above. */
+  --lz-color-canvas: var(--lz-slate-000);
+  --lz-color-window: var(--lz-slate-100);
+  --lz-color-background: var(--lz-slate-150);
+  --lz-color-surface: var(--lz-slate-200);
+  --lz-color-editor-surface: var(--lz-slate-100);
+  --lz-color-surface-raised: var(--lz-slate-250);
+  --lz-color-surface-overlay: var(--lz-slate-250);
+  --lz-color-surface-hover: rgb(211 217 225 / 5%);
+  --lz-color-surface-active: rgb(211 217 225 / 8.5%);
+  --lz-color-surface-selected: rgb(211 217 225 / 8.5%);
+  --lz-color-surface-disabled: var(--lz-slate-200);
 
-  --lz-color-text-primary: var(--lz-graphite-950);
-  --lz-color-text-secondary: var(--lz-graphite-800);
-  --lz-color-text-muted: var(--lz-graphite-700);
-  --lz-color-text-disabled: var(--lz-graphite-600);
-  --lz-color-text-inverse: var(--lz-graphite-050);
-  --lz-color-text-accent: var(--lz-ember-400);
-  --lz-color-icon-primary: var(--lz-graphite-900);
-  --lz-color-icon-muted: var(--lz-graphite-700);
-  --lz-color-icon-disabled: var(--lz-graphite-600);
-  --lz-color-icon-accent: var(--lz-ember-400);
+  --lz-color-border-subtle: rgb(175 184 197 / 7%);
+  --lz-color-border: rgb(175 184 197 / 11%);
+  --lz-color-border-strong: rgb(175 184 197 / 18%);
+  --lz-color-border-focus: var(--lz-iris-500);
+  --lz-color-border-selected: var(--lz-iris-400);
 
-  --lz-color-selection: var(--lz-graphite-350);
-  --lz-color-selection-strong: var(--lz-graphite-400);
-  --lz-color-focus-wash: rgb(255 107 69 / 12%);
-  --lz-color-accent-wash: rgb(255 107 69 / 16%);
-  --lz-color-scrim: rgb(0 0 0 / 58%);
+  --lz-color-text-primary: var(--lz-slate-950);
+  --lz-color-text-secondary: var(--lz-slate-800);
+  --lz-color-text-muted: var(--lz-slate-700);
+  --lz-color-text-disabled: var(--lz-slate-600);
+  --lz-color-text-inverse: var(--lz-slate-050);
+  --lz-color-text-accent: var(--lz-iris-400);
+  --lz-color-icon-primary: var(--lz-slate-900);
+  --lz-color-icon-muted: var(--lz-slate-700);
+  --lz-color-icon-disabled: var(--lz-slate-600);
+  --lz-color-icon-accent: var(--lz-iris-400);
 
-  --lz-status-running: var(--lz-blue-500);
-  --lz-status-healthy: var(--lz-green-500);
-  --lz-status-completed: var(--lz-green-500);
-  --lz-status-attention: var(--lz-yellow-500);
-  --lz-status-waiting: var(--lz-yellow-500);
-  --lz-status-needs-input: var(--lz-yellow-500);
-  --lz-status-blocked: var(--lz-red-500);
-  --lz-status-failed: var(--lz-red-500);
-  --lz-status-paused: var(--lz-violet-500);
-  --lz-status-detected: var(--lz-graphite-800);
-  --lz-status-unverified: var(--lz-graphite-700);
-  --lz-status-degraded: var(--lz-yellow-500);
-  --lz-status-configured: var(--lz-cyan-500);
+  --lz-color-accent: var(--lz-iris-500);
+  --lz-color-accent-strong: var(--lz-iris-400);
+  --lz-color-accent-wash: rgb(141 154 244 / 14%);
+  --lz-color-accent-border: rgb(141 154 244 / 38%);
+  --lz-color-focus-wash: rgb(141 154 244 / 12%);
+  --lz-color-selection: rgb(141 154 244 / 22%);
+  --lz-color-selection-strong: rgb(141 154 244 / 32%);
+  --lz-color-scrim: rgb(9 12 17 / 55%);
 
-  /* Typography: Zed-sized, Raycast-clean, Windows-safe fallbacks */
+  /* The primary action is quiet ink on slate, not a colour. */
+  --lz-color-primary: var(--lz-slate-950);
+  --lz-color-primary-hover: #f6f8fa;
+  --lz-color-on-primary: var(--lz-slate-100);
+
+  --lz-status-running: var(--lz-sky-400);
+  --lz-status-healthy: var(--lz-mint-400);
+  --lz-status-completed: var(--lz-mint-400);
+  --lz-status-attention: var(--lz-iris-500);
+  --lz-status-waiting: var(--lz-slate-700);
+  --lz-status-needs-input: var(--lz-iris-500);
+  --lz-status-blocked: var(--lz-sand-400);
+  --lz-status-failed: var(--lz-rose-400);
+  --lz-status-paused: var(--lz-lilac-400);
+  --lz-status-dormant: var(--lz-slate-600);
+  --lz-status-detected: var(--lz-slate-800);
+  --lz-status-unverified: var(--lz-slate-700);
+  --lz-status-degraded: var(--lz-sand-400);
+  --lz-status-configured: var(--lz-teal-400);
+
+  /* Each harness keeps one hue everywhere it appears (avatars, chips). */
+  --lz-provider-claude-code: var(--lz-lilac-400);
+  --lz-provider-codex: var(--lz-teal-400);
+  --lz-provider-opencode: var(--lz-sky-400);
+  --lz-provider-antigravity: var(--lz-mint-400);
+  --lz-provider-grok-build: var(--lz-peach-400);
+
+  /* Typography: Inter with its modern alternates, Windows-safe fallbacks */
   --lz-font-ui:
     "Inter Variable", Inter, "Segoe UI Variable", "Segoe UI", sans-serif;
   --lz-font-technical: "IBM Plex Mono", "Cascadia Mono", Consolas, monospace;
-  --lz-text-xs: 10px;
+  --lz-font-features: "cv02", "cv03", "cv04", "cv11", "calt";
+  --lz-text-xs: 11px;
   --lz-text-sm: 12px;
-  --lz-text-md: 14px;
-  --lz-text-lg: 16px;
-  --lz-headline-sm: 18px;
-  --lz-headline-md: 20px;
-  --lz-headline-lg: 23px;
+  --lz-text-md: 13px;
+  --lz-text-lg: 15px;
+  --lz-headline-sm: 17px;
+  --lz-headline-md: 22px;
+  --lz-headline-lg: 28px;
   --lz-leading-xs: 14px;
   --lz-leading-sm: 16px;
-  --lz-leading-md: 20px;
+  --lz-leading-md: 19px;
   --lz-leading-lg: 22px;
   --lz-leading-headline-sm: 24px;
   --lz-leading-headline-md: 28px;
-  --lz-leading-headline-lg: 32px;
+  --lz-leading-headline-lg: 34px;
   --lz-weight-regular: 400;
   --lz-weight-medium: 500;
   --lz-weight-semibold: 600;
-  --lz-tracking-tight: -0.015em;
+  --lz-tracking-tight: -0.011em;
+  --lz-tracking-headline: -0.022em;
   --lz-tracking-normal: 0;
-  --lz-tracking-label: 0.01em;
+  --lz-tracking-label: 0.02em;
 
-  /* Zed default-density spacing */
+  /* Spacing */
   --lz-space-00: 0px;
   --lz-space-01: 1px;
   --lz-space-02: 2px;
@@ -118,6 +146,7 @@
   --lz-space-04: 4px;
   --lz-space-06: 6px;
   --lz-space-08: 8px;
+  --lz-space-10: 10px;
   --lz-space-12: 12px;
   --lz-space-16: 16px;
   --lz-space-20: 20px;
@@ -126,14 +155,14 @@
   --lz-space-40: 40px;
   --lz-space-48: 48px;
 
-  /* Radius scale from Zed; Lazoo defaults to sm/md rather than pill-heavy chrome */
+  /* Radius: soft, never pill-heavy */
   --lz-radius-none: 0px;
-  --lz-radius-xs: 2px;
-  --lz-radius-sm: 4px;
-  --lz-radius-md: 6px;
-  --lz-radius-lg: 8px;
-  --lz-radius-xl: 12px;
-  --lz-radius-2xl: 16px;
+  --lz-radius-xs: 4px;
+  --lz-radius-sm: 6px;
+  --lz-radius-md: 8px;
+  --lz-radius-lg: 10px;
+  --lz-radius-xl: 14px;
+  --lz-radius-2xl: 18px;
   --lz-radius-3xl: 24px;
   --lz-radius-full: 9999px;
 
@@ -142,83 +171,54 @@
   --lz-border-selection-marker: 2px;
 
   /* Icons and controls */
-  --lz-icon-indicator: 10px;
+  --lz-icon-indicator: 8px;
   --lz-icon-xs: 12px;
   --lz-icon-sm: 14px;
   --lz-icon-md: 16px;
   --lz-icon-lg: 20px;
-  --lz-icon-display: 48px;
-  --lz-control-h-xs: 18px;
-  --lz-control-h-sm: 22px;
-  --lz-control-h-md: 28px;
-  --lz-control-h-lg: 32px;
-  --lz-control-h-search: 44px;
+  --lz-icon-display: 40px;
+  --lz-control-h-xs: 20px;
+  --lz-control-h-sm: 26px;
+  --lz-control-h-md: 30px;
+  --lz-control-h-lg: 36px;
   --lz-row-h-compact: 28px;
-  --lz-row-h-default: 32px;
+  --lz-row-h-default: 30px;
   --lz-row-h-comfortable: 36px;
   --lz-row-h-command: 40px;
 
   /* Shell geometry */
-  --lz-titlebar-h: 40px;
-  --lz-toolbar-h: 36px;
-  --lz-actionbar-h: 36px;
-  --lz-statusbar-h: 28px;
-  --lz-navigation-w: 208px;
+  --lz-titlebar-h: 44px;
+  --lz-navigation-w: 256px;
   --lz-inspector-w: 320px;
-  --lz-command-palette-w: 720px;
-  --lz-command-palette-max-h: 560px;
+  --lz-command-palette-w: 640px;
+  --lz-command-palette-max-h: 520px;
 
-  /* Zed-derived elevation with restrained Raycast-like surface contrast */
-  --lz-shadow-raised: 0 2px 3px rgb(0 0 0 / 12%), 0 1px 0 rgb(0 0 0 / 8%);
+  /* Elevation: a top highlight plus a soft, low shadow reads as depth on slate */
+  --lz-highlight: inset 0 1px 0 rgb(255 255 255 / 3.5%);
+  --lz-shadow-raised:
+    inset 0 1px 0 rgb(255 255 255 / 3.5%), 0 1px 2px rgb(6 9 14 / 28%);
+  --lz-shadow-overlay:
+    inset 0 1px 0 rgb(255 255 255 / 5%), 0 0 0 1px rgb(6 9 14 / 35%),
+    0 18px 40px -14px rgb(6 9 14 / 65%), 0 6px 14px -8px rgb(6 9 14 / 45%);
   --lz-shadow-modal:
-    0 2px 3px rgb(0 0 0 / 12%), 0 3px 6px rgb(0 0 0 / 8%),
-    0 6px 12px rgb(0 0 0 / 8%), 0 1px 0 rgb(0 0 0 / 12%);
-  --lz-shadow-focus: 0 0 0 3px rgb(255 107 69 / 18%);
+    inset 0 1px 0 rgb(255 255 255 / 5%), 0 0 0 1px rgb(6 9 14 / 40%),
+    0 32px 80px -24px rgb(6 9 14 / 75%), 0 12px 24px -12px rgb(6 9 14 / 50%);
+  --lz-shadow-focus: 0 0 0 3px rgb(141 154 244 / 28%);
+  --lz-glow-accent:
+    0 0 0 1px rgb(141 154 244 / 30%), 0 6px 24px -8px rgb(141 154 244 / 45%);
 
-  /* Motion: Zed timing anchors, tuned for quiet Raycast-like transitions */
-  --lz-duration-instant: 50ms;
-  --lz-duration-fast: 150ms;
+  /* Motion: quick to respond, slow to settle, never bouncy */
+  --lz-duration-instant: 80ms;
+  --lz-duration-fast: 140ms;
   --lz-duration-moderate: 220ms;
-  --lz-duration-slow: 300ms;
+  --lz-duration-slow: 320ms;
+  --lz-ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+  --lz-ease-in-out: cubic-bezier(0.65, 0, 0.35, 1);
   --lz-ease-standard: cubic-bezier(0.2, 0, 0, 1);
-  --lz-ease-out-quint: cubic-bezier(0.22, 1, 0.36, 1);
   --lz-ease-in: cubic-bezier(0.4, 0, 1, 1);
   --lz-motion-micro: 4px;
   --lz-motion-panel: 8px;
-}
-
-[data-density="compact"] {
-  --lz-space-00: 0px;
-  --lz-space-01: 1px;
-  --lz-space-02: 1px;
-  --lz-space-03: 2px;
-  --lz-space-04: 2px;
-  --lz-space-06: 3px;
-  --lz-space-08: 4px;
-  --lz-space-12: 10px;
-  --lz-space-16: 14px;
-  --lz-space-20: 18px;
-  --lz-space-24: 20px;
-  --lz-space-32: 28px;
-  --lz-space-40: 36px;
-  --lz-space-48: 44px;
-}
-
-[data-density="comfortable"] {
-  --lz-space-00: 0px;
-  --lz-space-01: 2px;
-  --lz-space-02: 4px;
-  --lz-space-03: 4px;
-  --lz-space-04: 6px;
-  --lz-space-06: 8px;
-  --lz-space-08: 10px;
-  --lz-space-12: 14px;
-  --lz-space-16: 18px;
-  --lz-space-20: 22px;
-  --lz-space-24: 28px;
-  --lz-space-32: 36px;
-  --lz-space-40: 44px;
-  --lz-space-48: 52px;
+  --lz-press-scale: 0.97;
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -229,5 +229,6 @@
     --lz-duration-slow: 0ms;
     --lz-motion-micro: 0px;
     --lz-motion-panel: 0px;
+    --lz-press-scale: 1;
   }
 }

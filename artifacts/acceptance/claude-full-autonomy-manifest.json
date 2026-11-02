@@ -1,24 +1,24 @@
 {
   "status": "PASS",
-  "schemaVersion": 19,
+  "schemaVersion": 21,
   "mode": "deterministic-fake-transport",
-  "startedAt": "2026-10-17T11:58:59.6071338Z",
-  "durationMs": 1599,
+  "startedAt": "2026-10-31T20:32:40.6464970Z",
+  "durationMs": 2439,
   "commands": [
     {
-      "command": "cargo test -p lazood --test daemon claude_code_runs_turns_and_tasks_only_under_full_autonomy --locked -- --exact",
+      "command": "cargo test -p lazood --test daemon claude_and_antigravity_deliver_governed_turns_and_tasks --locked -- --exact",
       "exitCode": 0,
-      "durationMs": 624
+      "durationMs": 1059
     },
     {
       "command": "cargo test -p lazood --test daemon task_turn_rejects_a_provider_without_authority_override_support_before_io --locked -- --exact",
       "exitCode": 0,
-      "durationMs": 511
+      "durationMs": 728
     },
     {
       "command": "cargo test -p lazoo-store --test store store_enables_wal_foreign_keys_and_schema_version --locked -- --exact",
       "exitCode": 0,
-      "durationMs": 402
+      "durationMs": 555
     },
     {
       "command": "git diff --quiet and git diff --cached --quiet -- apps/lazoo-desktop",
@@ -27,12 +27,12 @@
     }
   ],
   "evidence": {
-    "fullAutonomyDelivered": true,
-    "askAndSelfDecisionRefused": true,
-    "otherProvidersRefused": true,
+    "governedParityDelivered": true,
+    "askAuthorityDelivered": true,
+    "antigravityDelivered": true,
     "refusalsFailClosedBeforeIo": true,
     "noSupportClaimed": true,
-    "schemaFifteen": true,
+    "schemaTwenty": true,
     "providerSmokeAbsent": true,
     "externalModelUseAbsent": true,
     "uiChangesAbsent": true
@@ -41,10 +41,10 @@
     "providerSmoke": "NOT_RUN",
     "externalModelUse": "NOT_RUN",
     "desktopUi": "UNCHANGED",
-    "schemaMigration": "NONE",
-    "unlocked": "CLAUDE_CODE_FULL_AUTONOMY_ONLY",
-    "stillRefused": "CLAUDE_CODE_ASK_AND_SELF_DECISION_ANTIGRAVITY_OPENCODE_GROK_BUILD",
+    "schemaMigration": "CURRENT_20_NATIVE_WORKSPACE_TRUST",
+    "unlocked": "CLAUDE_CODE_AND_ANTIGRAVITY_GOVERNED_AUTHORITY",
+    "stillRefused": "GROK_BUILD_EXCLUDED",
     "liveGate": "NOT_RUN_NO_SUPPORT_CLAIMED",
-    "toolAccess": "CODEX_SESSIONS_ONLY"
+    "toolAccess": "GOVERNED_FOUR_PROVIDERS"
   }
 }

@@ -1,9 +1,9 @@
 use crate::{
     AdapterFuture, AntigravityAdapter, AntigravitySession, ClaudeAdapter, ClaudeSession,
-    CodexAdapter, CodexSession, DiscoveryEnvironment, ExecutableCandidate, GrokAdapter,
-    GrokSession, NativeInteractiveSession, OpenCodeAdapter, OpenCodeHttpSession, OpenCodeSession,
-    ProviderAdapter, ProviderError, ProviderEvent, ProviderKind, ProviderProbe, ProviderSession,
-    SessionRequest, TurnEventObserver, TurnRequest,
+    CodexAdapter, CodexSession, CopilotAdapter, CopilotSession, DiscoveryEnvironment,
+    ExecutableCandidate, GrokAdapter, GrokSession, NativeInteractiveSession, OpenCodeAdapter,
+    OpenCodeHttpSession, OpenCodeSession, ProviderAdapter, ProviderError, ProviderEvent,
+    ProviderKind, ProviderProbe, ProviderSession, SessionRequest, TurnEventObserver, TurnRequest,
 };
 
 #[derive(Clone, Debug)]
@@ -16,6 +16,7 @@ pub struct ProviderDiscovery {
 pub struct ProviderRegistry {
     codex: CodexAdapter,
     opencode: OpenCodeAdapter,
+    copilot: CopilotAdapter,
     grok: GrokAdapter,
     antigravity: AntigravityAdapter,
     claude: ClaudeAdapter,
@@ -44,6 +45,7 @@ impl ProviderRegistry {
         let mut probe = match provider {
             ProviderKind::Codex => self.codex.probe(environment).await,
             ProviderKind::OpenCode => self.opencode.probe(environment).await,
+            ProviderKind::GitHubCopilot => self.copilot.probe(environment).await,
             ProviderKind::GrokBuild => self.grok.probe(environment).await,
             ProviderKind::Antigravity => self.antigravity.probe(environment).await,
             ProviderKind::ClaudeCode => self.claude.probe(environment).await,
@@ -84,6 +86,11 @@ impl ProviderRegistry {
                     .await
                     .map(ProviderSessionHandle::OpenCodeHttp)
             }
+            ProviderKind::GitHubCopilot => self
+                .copilot
+                .start(request)
+                .await
+                .map(ProviderSessionHandle::GitHubCopilot),
             ProviderKind::GrokBuild => self
                 .grok
                 .start(request)
@@ -110,6 +117,7 @@ impl ProviderRegistry {
         match provider {
             ProviderKind::Codex => self.codex.discover(environment),
             ProviderKind::OpenCode => self.opencode.discover(environment),
+            ProviderKind::GitHubCopilot => self.copilot.discover(environment),
             ProviderKind::GrokBuild => self.grok.discover(environment),
             ProviderKind::Antigravity => self.antigravity.discover(environment),
             ProviderKind::ClaudeCode => self.claude.discover(environment),
@@ -122,6 +130,7 @@ pub enum ProviderSessionHandle {
     Codex(CodexSession),
     OpenCode(OpenCodeSession),
     OpenCodeHttp(OpenCodeHttpSession),
+    GitHubCopilot(CopilotSession),
     GrokBuild(GrokSession),
     Antigravity(AntigravitySession),
     ClaudeCode(ClaudeSession),
@@ -134,6 +143,7 @@ impl ProviderSession for ProviderSessionHandle {
             Self::Codex(session) => session.native_view_available(),
             Self::OpenCode(session) => session.native_view_available(),
             Self::OpenCodeHttp(session) => session.native_view_available(),
+            Self::GitHubCopilot(session) => session.native_view_available(),
             Self::Interactive(session) => session.native_view_available(),
             _ => false,
         }
@@ -144,6 +154,7 @@ impl ProviderSession for ProviderSessionHandle {
             Self::Codex(session) => session.open_native_view(),
             Self::OpenCode(session) => session.open_native_view(),
             Self::OpenCodeHttp(session) => session.open_native_view(),
+            Self::GitHubCopilot(session) => session.open_native_view(),
             Self::Interactive(session) => session.open_native_view(),
             _ => Box::pin(async { Ok(None) }),
         }
@@ -154,6 +165,7 @@ impl ProviderSession for ProviderSessionHandle {
             Self::Codex(session) => session.id(),
             Self::OpenCode(session) => session.id(),
             Self::OpenCodeHttp(session) => session.id(),
+            Self::GitHubCopilot(session) => session.id(),
             Self::GrokBuild(session) => session.id(),
             Self::Antigravity(session) => session.id(),
             Self::ClaudeCode(session) => session.id(),
@@ -166,6 +178,7 @@ impl ProviderSession for ProviderSessionHandle {
             Self::Codex(session) => session.native_host_pid(),
             Self::OpenCode(session) => session.native_host_pid(),
             Self::OpenCodeHttp(session) => session.native_host_pid(),
+            Self::GitHubCopilot(session) => session.native_host_pid(),
             Self::GrokBuild(session) => session.native_host_pid(),
             Self::Antigravity(session) => session.native_host_pid(),
             Self::ClaudeCode(session) => session.native_host_pid(),
@@ -178,6 +191,7 @@ impl ProviderSession for ProviderSessionHandle {
             Self::Codex(session) => session.resources(),
             Self::OpenCode(session) => session.resources(),
             Self::OpenCodeHttp(session) => session.resources(),
+            Self::GitHubCopilot(session) => session.resources(),
             Self::GrokBuild(session) => session.resources(),
             Self::Antigravity(session) => session.resources(),
             Self::ClaudeCode(session) => session.resources(),
@@ -190,6 +204,7 @@ impl ProviderSession for ProviderSessionHandle {
             Self::Codex(session) => session.turn(request),
             Self::OpenCode(session) => session.turn(request),
             Self::OpenCodeHttp(session) => session.turn(request),
+            Self::GitHubCopilot(session) => session.turn(request),
             Self::GrokBuild(session) => session.turn(request),
             Self::Antigravity(session) => session.turn(request),
             Self::ClaudeCode(session) => session.turn(request),
@@ -206,6 +221,7 @@ impl ProviderSession for ProviderSessionHandle {
             Self::Codex(session) => session.turn_observed(request, observer),
             Self::OpenCode(session) => session.turn_observed(request, observer),
             Self::OpenCodeHttp(session) => session.turn_observed(request, observer),
+            Self::GitHubCopilot(session) => session.turn_observed(request, observer),
             Self::GrokBuild(session) => session.turn_observed(request, observer),
             Self::Antigravity(session) => session.turn_observed(request, observer),
             Self::ClaudeCode(session) => session.turn_observed(request, observer),
@@ -218,6 +234,7 @@ impl ProviderSession for ProviderSessionHandle {
             Self::Codex(session) => session.cancel(),
             Self::OpenCode(session) => session.cancel(),
             Self::OpenCodeHttp(session) => session.cancel(),
+            Self::GitHubCopilot(session) => session.cancel(),
             Self::GrokBuild(session) => session.cancel(),
             Self::Antigravity(session) => session.cancel(),
             Self::ClaudeCode(session) => session.cancel(),
@@ -230,6 +247,7 @@ impl ProviderSession for ProviderSessionHandle {
             Self::Codex(session) => session.stop(),
             Self::OpenCode(session) => session.stop(),
             Self::OpenCodeHttp(session) => session.stop(),
+            Self::GitHubCopilot(session) => session.stop(),
             Self::GrokBuild(session) => session.stop(),
             Self::Antigravity(session) => session.stop(),
             Self::ClaudeCode(session) => session.stop(),

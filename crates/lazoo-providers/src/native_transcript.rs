@@ -1,6 +1,7 @@
 //! Bounded, turn-scoped Antigravity transcript reads. Native screen bytes are not model text.
 
 use crate::ProviderError;
+use lazoo_runtime::LaunchEnvironment;
 use serde_json::Value;
 use std::{
     fs,
@@ -19,10 +20,29 @@ pub(super) struct TranscriptBinding {
 }
 
 impl TranscriptBinding {
-    pub(super) fn from_native_id(id: &str) -> Result<Self, ProviderError> {
+    pub(super) fn from_native_id(
+        id: &str,
+        environment: &LaunchEnvironment,
+    ) -> Result<Self, ProviderError> {
         uuid::Uuid::parse_str(id).map_err(|_| protocol("invalid Antigravity conversation id"))?;
-        let home = std::env::var_os("USERPROFILE")
-            .or_else(|| std::env::var_os("HOME"))
+        let configured_home = environment
+            .values()
+            .get(std::ffi::OsStr::new("USERPROFILE"))
+            .or_else(|| environment.values().get(std::ffi::OsStr::new("HOME")))
+            .filter(|value| !value.is_empty());
+        let home = configured_home
+            .cloned()
+            .or_else(|| {
+                let profile_removed = environment
+                    .removals()
+                    .contains(&std::ffi::OsString::from("USERPROFILE"));
+                let home_removed = environment
+                    .removals()
+                    .contains(&std::ffi::OsString::from("HOME"));
+                (!profile_removed && !home_removed)
+                    .then(|| std::env::var_os("USERPROFILE").or_else(|| std::env::var_os("HOME")))
+                    .flatten()
+            })
             .ok_or_else(|| protocol("native home is unavailable"))?;
         let root = fs::canonicalize(PathBuf::from(home).join(".gemini/antigravity-cli/brain"))?;
         let artifact = fs::canonicalize(root.join(id))?;

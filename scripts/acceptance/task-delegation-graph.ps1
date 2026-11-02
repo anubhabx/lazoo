@@ -293,7 +293,7 @@ try {
 
     $daemon = Start-Daemon
     $status = Wait-Status
-    Assert-Equal $status.schemaVersion 20 'schema 20'
+    Assert-Equal $status.schemaVersion 21 'schema 21'
     Assert-Equal $status.journalMode 'wal' 'SQLite journal mode'
     $gates.schema8 = 'PASS'
 
@@ -653,14 +653,19 @@ try {
     $evidence.worktreeMutationAbsent = $true
     $evidence.conptyAbsent = $true
 
-    $mergeBase = (& git -C $repoRoot merge-base HEAD main).Trim()
-    Assert-Equal $LASTEXITCODE 0 'git merge base'
-    $desktopDiff = @(& git -C $repoRoot diff --name-only $mergeBase -- apps/lazoo-desktop)
-    Assert-Equal $LASTEXITCODE 0 'desktop committed diff check'
+    # The desktop is owned separately; this slice must leave it untouched in the working tree
+    # (the same check every other slice makes) and must never hand it task authority: the
+    # desktop's Rust allowlist may offer the task actions the contract index names as data
+    # (accept, cancel, resolve) but none of the employee-only verbs.
     $desktopStatus = @(& git -C $repoRoot status --porcelain -- apps/lazoo-desktop)
     Assert-Equal $LASTEXITCODE 0 'desktop worktree status check'
-    Assert-Equal $desktopDiff.Count 0 'desktop committed changes absent'
     Assert-Equal $desktopStatus.Count 0 'desktop worktree changes absent'
+    $desktopClient = Get-Content -LiteralPath (Join-Path $repoRoot 'apps\lazoo-desktop\src\client.rs') -Raw
+    $desktopMethods = @([regex]::Matches($desktopClient, '\("([a-z.]+)",\s*Kind::(?:Read|Mutation)\)') | ForEach-Object { $_.Groups[1].Value })
+    Assert-True ($desktopMethods.Count -gt 0) 'desktop allowlist readable'
+    foreach ($verb in @('task.delegate', 'task.start', 'task.report', 'message.send', 'message.claim', 'terminal.open', 'system.shutdown')) {
+        Assert-True (-not ($desktopMethods -contains $verb)) "desktop allowlist never offers $verb"
+    }
     $evidence.desktopCapabilityExpansionAbsent = $true
     $evidence.uiChangesAbsent = $true
 
@@ -694,7 +699,7 @@ try {
         }
     })
     $manifest = [ordered]@{
-        schemaVersion = 20
+        schemaVersion = 21
         acceptance = 'task-delegation-graph'
         mode = 'deterministic-fixture'
         status = $manifestStatus

@@ -24,12 +24,17 @@ while ($null -ne ($line = [Console]::In.ReadLine())) {
     $message = $line | ConvertFrom-Json
     switch ($message.method) {
         'initialize' {
+            $agentCapabilities = @{ loadSession = $false; sessionCapabilities = @{}; mcpCapabilities = @{ http = $true } }
+            if ($env:FAKE_ACP_NO_HTTP_MCP -eq '1') {
+                $agentCapabilities.mcpCapabilities = @{}
+            }
             Write-Message @{ jsonrpc = '2.0'; id = $message.id; result = @{
                 protocolVersion = 1
-                agentCapabilities = @{ loadSession = $false; sessionCapabilities = @{} }
+                agentCapabilities = $agentCapabilities
             } }
         }
         'session/new' {
+            $message.params | ConvertTo-Json -Depth 20 -Compress | Set-Content -LiteralPath (Join-Path (Get-Location) 'fake-acp-session-new.json') -Encoding utf8
             Write-Message @{ jsonrpc = '2.0'; method = 'session/update'; params = @{ sessionId = 'session-1'; update = @{ sessionUpdate = 'agent_message_chunk'; content = @{ type = 'text'; text = 'stale-before-turn' } } } }
             Write-Message @{ jsonrpc = '2.0'; id = $message.id; result = @{ sessionId = 'session-1' } }
         }

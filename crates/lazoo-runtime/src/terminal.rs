@@ -65,6 +65,7 @@ pub struct TerminalCommand {
     cols: u16,
     rows: u16,
     environment: Vec<(OsString, OsString)>,
+    environment_remove: Vec<OsString>,
 }
 
 impl fmt::Debug for TerminalCommand {
@@ -76,6 +77,7 @@ impl fmt::Debug for TerminalCommand {
             .field("cwd", &self.cwd)
             .field("cols", &self.cols)
             .field("rows", &self.rows)
+            .field("environment_remove", &self.environment_remove)
             .field(
                 "environment",
                 &self
@@ -102,6 +104,7 @@ impl TerminalCommand {
             cols,
             rows,
             environment: Vec::new(),
+            environment_remove: Vec::new(),
         }
     }
     #[must_use]
@@ -119,6 +122,12 @@ impl TerminalCommand {
     #[must_use]
     pub fn env(mut self, name: impl Into<OsString>, value: impl Into<OsString>) -> Self {
         self.environment.push((name.into(), value.into()));
+        self
+    }
+
+    #[must_use]
+    pub fn env_remove(mut self, name: impl Into<OsString>) -> Self {
+        self.environment_remove.push(name.into());
         self
     }
     #[must_use]
@@ -244,9 +253,10 @@ impl TerminalSession {
             cols,
             rows,
             environment,
+            environment_remove,
         } = command;
         validate_dimensions(cols, rows)?;
-        let environment = environment_block(&environment)?;
+        let environment = environment_block(&environment, &environment_remove)?;
         // These are the application-facing ends.  ConPTY owns the opposite ends after creation.
         let (input_read, input_write) = pipe()?;
         let (output_read, output_write) = pipe()?;
@@ -476,8 +486,23 @@ fn validate_dimensions(cols: u16, rows: u16) -> Result<(), TerminalError> {
     }
 }
 
-fn environment_block(overrides: &[(OsString, OsString)]) -> Result<Vec<u16>, TerminalError> {
+fn environment_block(
+    overrides: &[(OsString, OsString)],
+    removals: &[OsString],
+) -> Result<Vec<u16>, TerminalError> {
     let mut environment = inherited_environment()?;
+    for name in removals {
+        let name = name.encode_wide().collect::<Vec<_>>();
+        if name.is_empty()
+            || name
+                .iter()
+                .any(|unit| *unit == 0 || *unit == u16::from(b'='))
+        {
+            return Err(TerminalError::InvalidEnvironment);
+        }
+        environment
+            .retain(|(existing, _)| environment_name_cmp(existing, &name) != Ordering::Equal);
+    }
     for (name, value) in overrides {
         let name = name.encode_wide().collect::<Vec<_>>();
         let value = value.encode_wide().collect::<Vec<_>>();
@@ -875,6 +900,23 @@ mod tests {
                 "value".encode_utf16().collect(),
             )]),
             "NAME=value\0\0".encode_utf16().collect::<Vec<_>>(),
+        );
+    }
+
+    #[test]
+    fn account_environment_removes_inherited_names_case_insensitively() {
+        let block = environment_block(&[], &[OsString::from("pAtH")]).unwrap();
+        let text = String::from_utf16_lossy(&block).to_lowercase();
+        assert!(!text.split('\0').any(|entry| entry.starts_with("path=")));
+        let block = environment_block(
+            &[("PATH".into(), "selected-profile-path".into())],
+            &["path".into()],
+        )
+        .unwrap();
+        let text = String::from_utf16_lossy(&block);
+        assert!(
+            text.split('\0')
+                .any(|entry| entry == "PATH=selected-profile-path")
         );
     }
 }

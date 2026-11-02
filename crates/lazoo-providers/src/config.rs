@@ -158,7 +158,7 @@ fn known_configuration(
                 .join("opencode.json"),
             ConfigurationFormat::Json,
         )),
-        ProviderKind::GrokBuild | ProviderKind::Antigravity => None,
+        ProviderKind::GitHubCopilot | ProviderKind::GrokBuild | ProviderKind::Antigravity => None,
     }
 }
 
@@ -228,6 +228,7 @@ fn parse(
             let value: Value = serde_json::from_str(text).map_err(|_| ())?;
             Ok(opencode_servers(&value, path))
         }
+        (ProviderKind::GitHubCopilot, _) => Err(()),
         _ => Ok(Vec::new()),
     }
 }

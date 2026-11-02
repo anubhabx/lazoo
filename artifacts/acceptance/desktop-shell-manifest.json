@@ -1,76 +1,78 @@
-﻿{
-    "schemaVersion":  1,
-    "status":  "PASS",
-    "startedAt":  "2026-08-29T16:02:31.0509945Z",
-    "completedAt":  "2026-08-29T16:02:44.3560280Z",
-    "durationMs":  13301,
-    "platform":  "Microsoft Windows NT 10.0.26200.0",
-    "rustcVersion":  "rustc 1.98.0 (88d9e12ae 2026-08-18)",
-    "cargoVersion":  "cargo 1.98.0 (797e8a9bc 2026-08-05)",
-    "repositoryRoot":  "C:\\workspace\\Orchestrator\\.worktrees\\desktop-shell",
-    "isolatedDataRoot":  "C:\\Users\\anubhab\\AppData\\Local\\Temp\\lazoo-desktop-acceptance-3a30c022ea7f43fcb8ea7f792fecc38c\\data",
-    "temporaryProject":  "C:\\Users\\anubhab\\AppData\\Local\\Temp\\lazoo-desktop-acceptance-3a30c022ea7f43fcb8ea7f792fecc38c\\repository",
-    "environment":  {
-                        "windowsTextScalePercent":  100
-                    },
-    "artifacts":  {
-                      "manifest":  "C:\\workspace\\Orchestrator\\.worktrees\\desktop-shell\\artifacts\\acceptance\\desktop-shell-manifest.json",
-                      "runRoot":  "C:\\Users\\anubhab\\AppData\\Local\\Temp\\lazoo-desktop-acceptance-3a30c022ea7f43fcb8ea7f792fecc38c",
-                      "defaultScreenshot":  "C:\\Users\\anubhab\\AppData\\Local\\Temp\\lazoo-desktop-acceptance-3a30c022ea7f43fcb8ea7f792fecc38c\\desktop-default.png",
-                      "narrowScreenshot":  "C:\\Users\\anubhab\\AppData\\Local\\Temp\\lazoo-desktop-acceptance-3a30c022ea7f43fcb8ea7f792fecc38c\\desktop-narrow.png",
-                      "commandPaletteScreenshot":  "C:\\Users\\anubhab\\AppData\\Local\\Temp\\lazoo-desktop-acceptance-3a30c022ea7f43fcb8ea7f792fecc38c\\desktop-command-palette.png",
-                      "inspectorScreenshot":  "C:\\Users\\anubhab\\AppData\\Local\\Temp\\lazoo-desktop-acceptance-3a30c022ea7f43fcb8ea7f792fecc38c\\desktop-inspector.png",
-                      "highDpiScreenshot":  null,
-                      "runtimeAssets":  [
-                                            "C:\\workspace\\Orchestrator\\.worktrees\\desktop-shell\\apps\\lazoo-desktop\\ui\\dist\\assets\\index-BKzsj1Ba.js",
-                                            "C:\\workspace\\Orchestrator\\.worktrees\\desktop-shell\\apps\\lazoo-desktop\\ui\\dist\\assets\\index-Bjt0GKvM.css",
-                                            "C:\\workspace\\Orchestrator\\.worktrees\\desktop-shell\\apps\\lazoo-desktop\\ui\\dist\\assets\\inter-latin-wght-normal-Dx4kXJAl.woff2",
-                                            "C:\\workspace\\Orchestrator\\.worktrees\\desktop-shell\\apps\\lazoo-desktop\\ui\\dist\\assets\\ibm-plex-mono-latin-400-normal-DMJ8VG8y.woff2",
-                                            "C:\\workspace\\Orchestrator\\.worktrees\\desktop-shell\\apps\\lazoo-desktop\\ui\\dist\\assets\\ibm-plex-mono-latin-500-normal-DSY6xOcd.woff2"
-                                        ]
-                  },
-    "keeper":  {
-                   "stdout":  "",
-                   "stderr":  ""
-               },
-    "commands":  [
-                     {
-                         "command":  "git init --quiet \u003ctemporary-project\u003e",
-                         "exitCode":  0,
-                         "durationMs":  null
-                     },
-                     {
-                         "command":  "lazooctl --json status",
-                         "exitCode":  0,
-                         "durationMs":  88
-                     },
-                     {
-                         "command":  "lazooctl --json project register C:\\Users\\anubhab\\AppData\\Local\\Temp\\lazoo-desktop-acceptance-3a30c022ea7f43fcb8ea7f792fecc38c\\repository --name Desktop acceptance --idempotency-key desktop-3a30c022ea7f43fcb8ea7f792fecc38c",
-                         "exitCode":  0,
-                         "durationMs":  81
-                     },
-                     {
-                         "command":  "lazooctl --json system shutdown",
-                         "exitCode":  0,
-                         "durationMs":  23
-                     }
-                 ],
-    "gates":  {
-                  "frontendBuild":  "SKIPPED: prebuilt frontend requested",
-                  "runtimeAssets":  "PASS",
-                  "releaseBuild":  "PASS",
-                  "cleanupIsolation":  "PASS",
-                  "daemonReady":  "PASS",
-                  "desktopWindow":  "PASS",
-                  "snapshotRpc":  "PASS",
-                  "customTitlebar":  "PASS",
-                  "commandPaletteScreenshot":  "PASS",
-                  "commandPaletteKeyboard":  "PASS",
-                  "inspectorScreenshot":  "PASS",
-                  "inspectorFocusRoundTrip":  "PASS",
-                  "defaultScreenshot":  "PASS",
-                  "narrowScreenshot":  "PASS",
-                  "highDpiEvidence":  "BLOCKED: Windows text scaling is 100%; 200% is required for this capture",
-                  "processIsolation":  "PASS"
-              }
+{
+  "schemaVersion": 1,
+  "status": "PASS",
+  "startedAt": "2026-10-31T20:51:38.0995920Z",
+  "completedAt": "2026-10-31T20:51:54.9000950Z",
+  "durationMs": 16797,
+  "platform": "Microsoft Windows NT 10.0.26200.0",
+  "rustcVersion": "rustc 1.98.0 (88d9e12ae 2026-08-18)",
+  "cargoVersion": "cargo 1.98.0 (797e8a9bc 2026-08-05)",
+  "repositoryRoot": "C:\\workspace\\Orchestrator-ui-refresh",
+  "isolatedDataRoot": "C:\\Users\\anubhab\\AppData\\Local\\Temp\\lazoo-desktop-acceptance-dbd94d0941bc4f2f908641ff374e6b41\\data",
+  "temporaryProject": "C:\\Users\\anubhab\\AppData\\Local\\Temp\\lazoo-desktop-acceptance-dbd94d0941bc4f2f908641ff374e6b41\\repository",
+  "environment": {
+    "windowsTextScalePercent": 100
+  },
+  "artifacts": {
+    "manifest": "C:\\workspace\\Orchestrator-ui-refresh\\artifacts\\acceptance\\desktop-shell-manifest.json",
+    "runRoot": "C:\\Users\\anubhab\\AppData\\Local\\Temp\\lazoo-desktop-acceptance-dbd94d0941bc4f2f908641ff374e6b41",
+    "defaultScreenshot": "C:\\Users\\anubhab\\AppData\\Local\\Temp\\lazoo-desktop-acceptance-dbd94d0941bc4f2f908641ff374e6b41\\desktop-default.png",
+    "narrowScreenshot": "C:\\Users\\anubhab\\AppData\\Local\\Temp\\lazoo-desktop-acceptance-dbd94d0941bc4f2f908641ff374e6b41\\desktop-narrow.png",
+    "commandPaletteScreenshot": "C:\\Users\\anubhab\\AppData\\Local\\Temp\\lazoo-desktop-acceptance-dbd94d0941bc4f2f908641ff374e6b41\\desktop-command-palette.png",
+    "settingsScreenshot": "C:\\Users\\anubhab\\AppData\\Local\\Temp\\lazoo-desktop-acceptance-dbd94d0941bc4f2f908641ff374e6b41\\desktop-settings.png",
+    "highDpiScreenshot": null,
+    "runtimeAssets": [
+      "C:\\workspace\\Orchestrator-ui-refresh\\apps\\lazoo-desktop\\ui\\dist\\assets\\index-BrwBlpen.js",
+      "C:\\workspace\\Orchestrator-ui-refresh\\apps\\lazoo-desktop\\ui\\dist\\assets\\index-CYcouI9X.css",
+      "C:\\workspace\\Orchestrator-ui-refresh\\apps\\lazoo-desktop\\ui\\dist\\assets\\inter-latin-wght-normal-Dx4kXJAl.woff2",
+      "C:\\workspace\\Orchestrator-ui-refresh\\apps\\lazoo-desktop\\ui\\dist\\assets\\ibm-plex-mono-latin-400-normal-DMJ8VG8y.woff2",
+      "C:\\workspace\\Orchestrator-ui-refresh\\apps\\lazoo-desktop\\ui\\dist\\assets\\ibm-plex-mono-latin-500-normal-DSY6xOcd.woff2"
+    ]
+  },
+  "keeper": {
+    "stdout": "",
+    "stderr": ""
+  },
+  "commands": [
+    {
+      "command": "git init --quiet <temporary-project>",
+      "exitCode": 0,
+      "durationMs": null
+    },
+    {
+      "command": "lazooctl --json status",
+      "exitCode": 0,
+      "durationMs": 460
+    },
+    {
+      "command": "lazooctl --json project register C:\\Users\\anubhab\\AppData\\Local\\Temp\\lazoo-desktop-acceptance-dbd94d0941bc4f2f908641ff374e6b41\\repository --name Desktop acceptance --idempotency-key desktop-dbd94d0941bc4f2f908641ff374e6b41",
+      "exitCode": 0,
+      "durationMs": 99
+    },
+    {
+      "command": "lazooctl --json system shutdown",
+      "exitCode": 0,
+      "durationMs": 38
+    }
+  ],
+  "gates": {
+    "frontendBuild": "SKIPPED: prebuilt frontend requested",
+    "runtimeAssets": "PASS",
+    "releaseBuild": "PASS",
+    "cleanupIsolation": "PASS",
+    "daemonReady": "PASS",
+    "desktopWindow": "PASS",
+    "customTitlebar": "PASS",
+    "setupDialog": "PASS: already offered in this WebView profile",
+    "launcher": "PASS",
+    "connection": "PASS",
+    "projectSidebar": "PASS",
+    "commandPaletteKeyboard": "PASS",
+    "inboxPage": "PASS",
+    "settingsProjects": "PASS",
+    "defaultScreenshot": "PASS",
+    "narrowScreenshot": "PASS",
+    "highDpiEvidence": "BLOCKED: Windows text scaling is 100%; 200% is required for this capture",
+    "processIsolation": "PASS"
+  }
 }
