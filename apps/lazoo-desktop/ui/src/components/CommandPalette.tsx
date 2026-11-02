@@ -1,11 +1,12 @@
 import {
+  Gauge,
   Home,
   Inbox,
   MessageSquare,
+  PanelLeft,
   PanelRight,
   Plus,
   Search,
-  PanelLeft,
   Settings,
   Sparkles,
   SquareTerminal,
@@ -90,6 +91,14 @@ export function CommandPalette() {
         label: "Employees",
         icon: <Users size={14} aria-hidden="true" />,
         run: () => store.navigate({ kind: "settings", section: "employees" }),
+      },
+      {
+        id: "go-accounts",
+        group: "Go to",
+        label: "Accounts and usage",
+        keywords: "routing quota limits reserve",
+        icon: <Gauge size={14} aria-hidden="true" />,
+        run: () => store.navigate({ kind: "settings", section: "accounts" }),
       },
       {
         id: "new-work",
