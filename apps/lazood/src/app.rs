@@ -4,6 +4,7 @@ mod accounts;
 mod approval;
 mod configuration;
 mod delivery;
+mod event_wire;
 mod idle;
 mod inbox;
 mod incident;
@@ -256,6 +257,8 @@ pub struct App {
     live_sessions: Arc<Mutex<BTreeMap<Uuid, Arc<dyn ManagedSession>>>>,
     account_routes: Arc<Mutex<BTreeMap<Uuid, account_proxy::AccountProxy>>>,
     live_turns: Arc<Mutex<BTreeMap<Uuid, Arc<LiveTurn>>>>,
+    delivery_gates: Arc<Mutex<BTreeMap<Uuid, Arc<Mutex<()>>>>>,
+    delivery_notify: Arc<Notify>,
     task_dispatch_notify: Arc<Notify>,
     approval_notify: Arc<Notify>,
     native_trust_notify: Arc<Notify>,
@@ -353,6 +356,8 @@ impl App {
             live_sessions: Arc::new(Mutex::new(BTreeMap::new())),
             account_routes: Arc::new(Mutex::new(BTreeMap::new())),
             live_turns: Arc::new(Mutex::new(BTreeMap::new())),
+            delivery_gates: Arc::new(Mutex::new(BTreeMap::new())),
+            delivery_notify: Arc::new(Notify::new()),
             task_dispatch_notify: Arc::new(Notify::new()),
             approval_notify: Arc::new(Notify::new()),
             native_trust_notify: Arc::new(Notify::new()),
@@ -507,10 +512,19 @@ impl App {
                 data: Some(json!({"method": method})),
             }),
         };
-        match result {
+        let response = match result {
             Ok(value) => JsonRpcResponse::success(request.id, value),
             Err(error) => JsonRpcResponse::failure(request.id, error),
+        };
+        if serde_json::to_vec(&response)
+            .is_ok_and(|bytes| bytes.len() > lazoo_protocol::MAX_FRAME_BYTES)
+        {
+            return JsonRpcResponse::failure(response.id, RpcError {
+                code: "LZ-RESPONSE-TOO-LARGE".to_owned(),
+                message: "response exceeds the IPC frame limit; request a smaller page or narrower detail".to_owned(), data: None,
+            });
         }
+        response
     }
 
     /// Retain a live receiver before fixing the durable replay interval. Callers drain with
@@ -542,6 +556,7 @@ impl App {
             .list_events(after, 1024)?
             .into_iter()
             .take_while(|event| event.sequence <= replay_high_water)
+            .map(event_wire::bounded_event)
             .collect())
     }
 
@@ -620,7 +635,7 @@ impl App {
         }
         self.store
             .list_events(params.after, params.limit)
-            .map(to_value)
+            .map(|events| to_value(event_wire::bounded_page(events)))
             .map_err(store_error)
     }
 
@@ -637,7 +652,7 @@ impl App {
             captured_at: Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true),
             status: self.system_status(store_status),
             projects,
-            events,
+            events: event_wire::bounded_page(events),
         }))
     }
 
@@ -1128,10 +1143,10 @@ impl App {
         if managed_workspace {
             session_request = session_request.with_managed_workspace();
         }
-        if let Some(model) = employee.model {
+        if let Some(model) = employee.model.clone() {
             session_request = session_request.with_model(model);
         }
-        if let Some(effort) = employee.reasoning_effort {
+        if let Some(effort) = employee.reasoning_effort.clone() {
             session_request = session_request.with_effort(effort);
         }
         if matches!(
@@ -1175,6 +1190,20 @@ impl App {
                     "LZ-SESSION-START-FAILED",
                     "provider session did not become ready",
                 )?;
+                if let resume::ResumeDecision::Resume {
+                    prior_session_id, ..
+                } = resume
+                    && matches!(error, ProviderError::ProcessExited { .. })
+                {
+                    drop(account_proxy);
+                    return Box::pin(self.retry_failed_resume(
+                        employee,
+                        provider,
+                        session_id,
+                        prior_session_id,
+                    ))
+                    .await;
+                }
                 return Err(session_failure(
                     "LZ-SESSION-START-FAILED",
                     "provider session did not become ready",

@@ -339,8 +339,13 @@ impl App {
             return Ok(to_value(recorded));
         }
         require_task_delivery_available(&recorded)?;
-        match self
-            .deliver_recorded_turn(request, recorded.clone(), activate_if_needed)
+        if activate_if_needed || recorded.turn.recipient.session_id.is_some() {
+            self.store
+                .queue_user_turn(recorded.turn.id)
+                .map_err(turn_store_error)?;
+            self.publish_events()?;
+        }
+        match Box::pin(self.deliver_recorded_turn(request, recorded.clone(), activate_if_needed))
             .await
         {
             Err(error) if error.code == "LZ-TASK-AUTHORITY-UNSUPPORTED" => {
@@ -386,11 +391,31 @@ impl App {
         recorded: TurnMutationResult,
         activate_if_needed: bool,
     ) -> Result<Value, RpcError> {
+        let gate = self
+            .delivery_gate(recorded.turn.recipient.employee_id)
+            .await;
+        let Ok(guard) = gate.try_lock_owned() else {
+            return self.hold_recorded_turn(recorded.turn.id);
+        };
+        let current = self
+            .store
+            .get_turn(recorded.turn.id)
+            .map_err(turn_store_error)?;
+        if current.state != TurnState::Recorded {
+            return self.turn_result(current, None);
+        }
         let turn = &recorded.turn;
         let target = self.delivery_target(turn)?;
-        let (session_id, session) = self
-            .resolve_delivery_session(&request.id, turn, target, activate_if_needed)
-            .await?;
+        let (session_id, session) =
+            Box::pin(self.resolve_delivery_session(&request.id, turn, target, activate_if_needed))
+                .await?;
+        if self
+            .store
+            .turn_recipient_is_busy(current.id)
+            .map_err(turn_store_error)?
+        {
+            return self.hold_recorded_turn(current.id);
+        }
         let submitting = self
             .store
             .begin_turn_submission(&BeginTurnSubmissionInput {
@@ -403,8 +428,65 @@ impl App {
             })
             .map_err(turn_store_error)?;
         self.publish_events()?;
-        self.deliver_submitting_turn(&request.id, submitting, session)
-            .await
+        if submitting.event_sequence.is_none() {
+            return Ok(to_value(submitting));
+        }
+        let result = self.deliver_submitting_turn(&request.id, submitting, session);
+        let result = Box::pin(result).await;
+        drop(guard);
+        self.delivery_notify.notify_one();
+        result
+    }
+
+    pub(super) async fn delivery_gate(&self, employee_id: Uuid) -> Arc<tokio::sync::Mutex<()>> {
+        Arc::clone(
+            self.delivery_gates
+                .lock()
+                .await
+                .entry(employee_id)
+                .or_default(),
+        )
+    }
+
+    fn hold_recorded_turn(&self, turn_id: Uuid) -> Result<Value, RpcError> {
+        let result = self
+            .store
+            .queue_user_turn(turn_id)
+            .map_err(turn_store_error)?;
+        self.publish_events()?;
+        Ok(to_value(result))
+    }
+
+    pub(super) async fn deliver_pending_user_turns_once(&self) -> Result<(), RpcError> {
+        for recorded in self
+            .store
+            .pending_user_turns(128)
+            .map_err(turn_store_error)?
+        {
+            let request = JsonRpcRequest {
+                jsonrpc: "2.0".to_owned(),
+                id: format!("queued-user-turn:{}", recorded.turn.id),
+                method: "turn.deliver".to_owned(),
+                params: Value::Null,
+            };
+            // A queued turn never auto-activates a replacement session. After host loss or a
+            // daemon restart it waits for an explicit warm/user activation.
+            if let Err(error) =
+                Box::pin(self.deliver_recorded_turn(&request, recorded.clone(), false)).await
+            {
+                if matches!(
+                    error.code.as_str(),
+                    "LZ-TURN-EMPLOYEE-STALE"
+                        | "LZ-TURN-EMPLOYEE-DISABLED"
+                        | "LZ-TASK-AUTHORITY-UNSUPPORTED"
+                ) {
+                    self.settle_permanently_refused_recorded_root(&request, &recorded, &error)?;
+                } else {
+                    tracing::debug!(turn_id = %recorded.turn.id, code = %error.code, "queued user turn delivery deferred or settled");
+                }
+            }
+        }
+        Ok(())
     }
 
     fn delivery_target(
@@ -835,6 +917,14 @@ impl App {
         let params: RetryTurnParams = serde_json::from_value(request.params.clone())
             .map_err(|error| turn_invalid(error.to_string()))?;
         let current = self.store.get_turn(params.id).map_err(turn_store_error)?;
+        let gate = self.delivery_gate(current.recipient.employee_id).await;
+        let guard = gate.try_lock_owned().map_err(|_| {
+            turn_failure(
+                "LZ-TURN-RECIPIENT-BUSY",
+                "recipient is still running another turn",
+                current.id,
+            )
+        })?;
         let target = self.delivery_target(&current)?;
         let session_id = target.session_id.ok_or_else(|| {
             turn_failure(
@@ -871,8 +961,12 @@ impl App {
         if submitting.event_sequence.is_none() {
             return Ok(to_value(submitting));
         }
-        self.deliver_submitting_turn(&request.id, submitting, session)
-            .await
+        let result = self
+            .deliver_submitting_turn(&request.id, submitting, session)
+            .await;
+        drop(guard);
+        self.delivery_notify.notify_one();
+        result
     }
 
     pub(super) async fn cancel_turn(&self, request: &JsonRpcRequest) -> Result<Value, RpcError> {
@@ -1279,6 +1373,11 @@ fn conversation_store_error(error: StoreError) -> RpcError {
 #[allow(clippy::needless_pass_by_value)]
 pub(super) fn turn_store_error(error: StoreError) -> RpcError {
     let (code, data, public_message) = match &error {
+        StoreError::TurnRecipientBusy { employee_id } => (
+            "LZ-TURN-RECIPIENT-BUSY",
+            Some(json!({"employeeId": employee_id})),
+            error.to_string(),
+        ),
         StoreError::TurnNotFound { turn_id } => (
             "LZ-TURN-NOT-FOUND",
             Some(json!({"turnId": turn_id})),

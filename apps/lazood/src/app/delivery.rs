@@ -46,6 +46,7 @@ impl App {
                 tracing::warn!(code = %error.code, message = %error.message, "lead notice delivery failed");
             }
             tokio::select! {
+                () = self.delivery_notify.notified() => {},
                 received = events.recv() => {
                     if matches!(received, Err(RecvError::Closed)) {
                         return;
@@ -66,6 +67,7 @@ impl App {
     /// is busy, or dormant under a `manual` activation policy, is skipped without error.
     #[doc(hidden)]
     pub async fn deliver_pending_notices_once(&self) -> Result<(), RpcError> {
+        self.deliver_pending_user_turns_once().await?;
         let mut first_error = None;
         for child_task_id in self
             .store

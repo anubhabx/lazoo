@@ -3,6 +3,7 @@ mod antigravity;
 mod claude;
 mod codex;
 mod codex_broker;
+mod codex_frame;
 mod codex_view;
 mod config;
 mod config_apply;

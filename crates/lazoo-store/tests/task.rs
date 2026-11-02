@@ -1492,7 +1492,7 @@ fn task_restart_reconciliation_marks_only_inflight_work_uncertain_once() {
         let (session_id, old_boot_id) = ready_session(&store, "restart-lead", lead.id);
         let conversation_id = create_conversation(&store, "restart", lead.id);
 
-        let start_root = |key: &str| {
+        let start_root = |key: &str, conversation_id, (session_id, old_boot_id)| {
             let recorded = store
                 .record_turn(&record_input(key, conversation_id, user(), None, key))
                 .unwrap();
@@ -1523,8 +1523,13 @@ fn task_restart_reconciliation_marks_only_inflight_work_uncertain_once() {
             recorded.turn.id
         };
 
-        let running_id = start_root("running");
-        let cancel_requested_id = start_root("cancel-requested");
+        let running_id = start_root("running", conversation_id, (session_id, old_boot_id));
+        // Each employee can have only one in-flight turn. Exercise both restart states
+        // with separate recipients while preserving the same reconciliation assertions.
+        let other_lead = store.create_employee(&employee("Sora")).unwrap().employee;
+        let other_session = ready_session(&store, "restart-other-lead", other_lead.id);
+        let other_conversation = create_conversation(&store, "restart-other", other_lead.id);
+        let cancel_requested_id = start_root("cancel-requested", other_conversation, other_session);
         let cancel_requested = store.get_task(cancel_requested_id).unwrap().task;
         store
             .cancel_task(&CancelTaskInput {

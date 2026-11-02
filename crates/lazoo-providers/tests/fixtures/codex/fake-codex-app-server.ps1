@@ -36,6 +36,15 @@ while ($null -ne ($line = [Console]::In.ReadLine())) {
             Write-Message @{ id = $message.id; result = @{ thread = @{ id = 'thread-1'; cwd = (Get-Location).Path; canAcceptDirectInput = $true } } }
         }
         'thread/turns/list' {
+            if (Test-Path -LiteralPath 'oversized-view-history') {
+                Write-Message @{ id = $message.id; result = @{ data = @(@{ text = ('x' * (600 * 1024)) }); nextCursor = $null } }
+                continue
+            }
+            if (Test-Path -LiteralPath 'flood-view-history') {
+                for ($index = 0; $index -lt 128; $index++) {
+                    Write-Message @{ method = 'thread/status/changed'; params = @{ threadId = 'thread-1' } }
+                }
+            }
             Write-Message @{ id = $message.id; error = @{ code = -32044; message = 'fixture history unavailable' } }
         }
         'thread/items/list' {
@@ -90,6 +99,11 @@ while ($null -ne ($line = [Console]::In.ReadLine())) {
             $prompt = ''
             if ($null -ne $message.params.input) {
                 $prompt = [string]$message.params.input[0].text
+            }
+            if ($prompt -like '*VIEW_DURING_TURN*') {
+                Set-Content -LiteralPath 'fake-codex-wait-view' -Value 'ready'
+                $viewRead = [Console]::In.ReadLine() | ConvertFrom-Json
+                Write-Message @{ id = $viewRead.id; result = @{ data = @(@{ text = ('x' * (600 * 1024)) }); nextCursor = $null } }
             }
             if ($prompt -like '*REQUEST_APPROVAL*') {
                 Write-Message @{

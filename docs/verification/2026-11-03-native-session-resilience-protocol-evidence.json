@@ -1,0 +1,72 @@
+{
+  "binary": "C:\\Users\\anubhab\\AppData\\Local\\OpenAI\\Codex\\bin\\22cfb1d302613eae\\codex.exe",
+  "version": "codex-cli 0.166.0-alpha.5.1",
+  "sha256": "3097C909FB6D5CD63510D44ACEB1D42DF9F6E85722A3E447E477DEF1ECF60E16",
+  "modelTurns": 0,
+  "ephemeral": true,
+  "aliveAfterReads": true,
+  "methods": [
+    {
+      "method": "initialize",
+      "bytes": 247,
+      "success": true,
+      "error": null
+    },
+    {
+      "method": "thread/start",
+      "bytes": 1735,
+      "success": true,
+      "error": null
+    },
+    {
+      "method": "thread/read",
+      "bytes": 1168,
+      "success": true,
+      "error": null
+    },
+    {
+      "method": "thread/turns/list",
+      "bytes": 97,
+      "success": false,
+      "error": {
+        "code": -32600,
+        "message": "ephemeral threads do not support thread/turns/list"
+      }
+    },
+    {
+      "method": "thread/items/list",
+      "bytes": 85,
+      "success": false,
+      "error": {
+        "code": -32601,
+        "message": "thread/items/list is not supported yet"
+      }
+    },
+    {
+      "method": "configRequirements/read",
+      "bytes": 78,
+      "success": true,
+      "error": null
+    },
+    {
+      "method": "hooks/list",
+      "bytes": 196,
+      "success": true,
+      "error": null
+    },
+    {
+      "method": "skills/list",
+      "bytes": 5129,
+      "success": true,
+      "error": null
+    },
+    {
+      "method": "model/list",
+      "bytes": 10882,
+      "success": true,
+      "error": null
+    }
+  ],
+  "schemaSha256": "D2A8058C74FC69326FCC11C97130DACBCE1B7099ED2727C75CB21FC146C6BEB7",
+  "pathShimVersion": "codex-cli 0.153.4"
+}

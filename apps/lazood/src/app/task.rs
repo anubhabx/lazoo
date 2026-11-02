@@ -304,6 +304,8 @@ impl App {
                     task_id,
                 )
             })?;
+        let gate = self.delivery_gate(ready.session.employee_id).await;
+        let guard = gate.lock_owned().await;
         let live_turn = std::sync::Arc::new(LiveTurn::new(session));
         self.live_turns
             .lock()
@@ -331,6 +333,8 @@ impl App {
                 live_turn,
             )
             .await;
+        drop(guard);
+        self.delivery_notify.notify_one();
         delivery.map(|_| ())
     }
 

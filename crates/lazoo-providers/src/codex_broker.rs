@@ -88,7 +88,7 @@ mod tests {
         for index in 0..=super::MAX_VIEW_NOTIFICATIONS {
             assert_eq!(
                 queues
-                    .route(json!({"method": "progress", "params": {"index": index}}))
+                    .route(json!({"method": "turn/started", "params": {"index": index}}))
                     .await,
                 QueueRoute::Delivered
             );
@@ -99,7 +99,7 @@ mod tests {
         );
         assert_eq!(
             controller.recv().await.unwrap().payload.unwrap()["method"],
-            "progress"
+            "turn/started"
         );
     }
 
@@ -234,9 +234,12 @@ use tokio::{
     time::timeout,
 };
 
-use crate::{CommandSpec, ProviderError, json_rpc::response_id};
+use crate::{
+    CommandSpec, ProviderError,
+    codex_frame::{BrokerLine, MAX_LINE_BYTES, read_broker_line},
+    json_rpc::response_id,
+};
 
-const MAX_LINE_BYTES: usize = 512 * 1024;
 const MAX_PENDING_REQUESTS: usize = 128;
 const MAX_CONTROLLER_MESSAGES: usize = 32;
 const MAX_CONTROLLER_QUEUE_BYTES: usize = 8 * 1024 * 1024;
@@ -381,6 +384,13 @@ impl BrokerQueues {
             BrokerMessageClass::ControllerOnly => self.enqueue_controller(Ok(message)),
             BrokerMessageClass::Notification => {
                 let _ = self.notifications.send(message.clone());
+                // Viewer/sidebar notifications unknown to the turn driver cannot fill its
+                // queue while it is idle or awaiting a tool/approval decision.
+                if crate::codex::normalize_codex_message(&message)
+                    .is_ok_and(|event| event.is_none())
+                {
+                    return QueueRoute::Delivered;
+                }
                 self.enqueue_controller(Ok(message))
             }
         }
@@ -425,6 +435,7 @@ fn conservative_value_bytes(value: &Value) -> usize {
 
 #[derive(Debug)]
 struct BrokerInner {
+    view_request: Arc<tokio::sync::Semaphore>,
     stdin: Arc<Mutex<ChildStdin>>,
     child: Mutex<JobChild>,
     queues: BrokerQueues,
@@ -497,6 +508,7 @@ impl CodexBroker {
         let (queues, controller_rx) = BrokerQueues::new();
         let (closed_tx, _) = watch::channel(false);
         let inner = Arc::new(BrokerInner {
+            view_request: Arc::new(tokio::sync::Semaphore::new(1)),
             stdin: Arc::new(Mutex::new(stdin)),
             child: Mutex::new(child),
             queues,
@@ -685,7 +697,7 @@ impl CodexBrokerReadHandle {
         wait: Duration,
         phase: &'static str,
     ) -> Result<Value, ProviderError> {
-        request(&self.inner, method, params, wait, phase).await
+        request_view(&self.inner, method, params, wait, phase).await
     }
 
     #[must_use]
@@ -845,11 +857,85 @@ async fn request(
     }
 }
 
+/// A viewer has one small, non-cancellable write in flight at most. Timing out or dropping
+/// its caller never cancels a partially written NDJSON frame or closes the canonical host.
+async fn request_view(
+    inner: &Arc<BrokerInner>,
+    method: &str,
+    params: Value,
+    wait: Duration,
+    phase: &'static str,
+) -> Result<Value, ProviderError> {
+    let permit = Arc::clone(&inner.view_request)
+        .try_acquire_owned()
+        .map_err(|_| {
+            ProviderError::Protocol(
+                "Codex viewer read already in flight; resync required".to_owned(),
+            )
+        })?;
+    if inner.closed.load(Ordering::Acquire) {
+        return Err(ProviderError::ProcessExited { code: None });
+    }
+    let id = format!("view:{}", inner.next_id.fetch_add(1, Ordering::Relaxed));
+    let mut bytes = serde_json::to_vec(&json!({"id": id, "method": method, "params": params}))?;
+    if bytes.len() > 4096 {
+        return Err(ProviderError::Protocol(
+            "Codex viewer request exceeded its byte budget".to_owned(),
+        ));
+    }
+    bytes.push(b'\n');
+    let (sender, receiver) = oneshot::channel();
+    inner.queues.insert_pending(id.clone(), sender).await?;
+    let inner = Arc::clone(inner);
+    let task = tokio::spawn(async move {
+        let _permit = permit;
+        let _cleanup = PendingCleanup {
+            pending: Arc::downgrade(&inner.queues.pending),
+            id,
+        };
+        // Only waiting for the writer can time out. Once started, finish the frame even if
+        // the viewer disconnects. No viewer path calls fail_closed or terminate_tree.
+        let mut writer = timeout(WRITE_DEADLINE, inner.stdin.lock())
+            .await
+            .map_err(|_| ProviderError::Timeout { phase })?;
+        writer.write_all(&bytes).await?;
+        writer.flush().await?;
+        drop(writer);
+        match timeout(wait, receiver)
+            .await
+            .map_err(|_| ProviderError::Timeout { phase })?
+        {
+            Ok(Ok(value)) => Ok(value),
+            Ok(Err(error)) => Err(ProviderError::Protocol(error)),
+            Err(_) => Err(ProviderError::ProcessExited { code: None }),
+        }
+    });
+    timeout(wait, task)
+        .await
+        .map_err(|_| ProviderError::Timeout { phase })?
+        .map_err(|_| ProviderError::Protocol("Codex viewer read task ended".to_owned()))?
+}
+
 async fn read_stdout(inner: Arc<BrokerInner>, stdout: ChildStdout) {
     let mut stdout = BufReader::new(stdout);
     loop {
-        let line = match read_line(&mut stdout).await {
-            Ok(Some(line)) => line,
+        let line = match read_broker_line(&mut stdout).await {
+            Ok(Some(BrokerLine::Message(line))) => line,
+            Ok(Some(BrokerLine::Oversized {
+                id: Some(id),
+                has_method: false,
+            })) if id.starts_with("view:") => {
+                if let Some(waiter) = inner.queues.pending.lock().await.remove(&id) {
+                    let _ = waiter.send(Err(
+                        "Codex viewer response exceeded the line limit; resync required".to_owned(),
+                    ));
+                }
+                continue;
+            }
+            Ok(Some(BrokerLine::Oversized { .. })) => {
+                fail_closed(&inner, "Codex controller output exceeded the line limit").await;
+                return;
+            }
             Ok(None) => {
                 inner.close().await;
                 return;

@@ -49,6 +49,9 @@ pub struct SessionTurnEvidence {
 /// What the daemon decided about continuing a suspended predecessor's native conversation.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum SessionResumeOutcome<'a> {
+    Failed {
+        fresh_session_id: Uuid,
+    },
     /// `working_directory` is where the native conversation was begun: Claude Code files its
     /// transcript under the directory it ran in, so every later resume must run there too.
     Resumed {
@@ -591,6 +594,11 @@ impl Store {
         let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let now = Utc::now().to_rfc3339();
         let (event_type, payload) = match outcome {
+            SessionResumeOutcome::Failed { fresh_session_id } => (
+                "session.resume.failed",
+                json!({"sessionId": session_id, "priorSessionId": prior_session_id,
+                    "freshSessionId": fresh_session_id, "reason": "provider-exited-during-resume"}),
+            ),
             SessionResumeOutcome::Resumed {
                 native_session_id,
                 working_directory,
