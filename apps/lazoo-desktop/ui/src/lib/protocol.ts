@@ -175,7 +175,10 @@ export interface ProviderAccountsSnapshot {
   policies: ProviderAccountPolicy[];
 }
 
-export interface SessionAccount { id: Uuid; label: string }
+export interface SessionAccount {
+  id: Uuid;
+  label: string;
+}
 export interface WorkerSessionSummary {
   id: Uuid;
   state: SessionLifecycleState;
@@ -223,7 +226,10 @@ export interface AccountUsageBucket {
 export interface AccountUsageResult {
   buckets: AccountUsageBucket[];
   windows: UsageWindow[];
-  observableProviders: Record<string, { windows: boolean; tokens: boolean; reason: string | null }>;
+  observableProviders: Record<
+    string,
+    { windows: boolean; tokens: boolean; reason: string | null }
+  >;
 }
 
 // ---- Inbox --------------------------------------------------------------
