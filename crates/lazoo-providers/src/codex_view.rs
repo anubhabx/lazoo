@@ -57,6 +57,7 @@ pub(crate) struct CodexNativeViewConfig {
 }
 #[derive(Debug)]
 struct LeaseState {
+    host_pid: Option<u32>,
     closed: AtomicBool,
     viewer_connected: AtomicBool,
     handshakes: AtomicUsize,
@@ -84,6 +85,7 @@ impl CodexViewBackend {
         let token = format!("{}{}", Uuid::new_v4().simple(), Uuid::new_v4().simple());
         let (closed_tx, closed_rx) = watch::channel(false);
         let state = Arc::new(LeaseState {
+            host_pid: config.broker.native_host_pid(),
             closed: AtomicBool::new(false),
             viewer_connected: AtomicBool::new(false),
             handshakes: AtomicUsize::new(0),
@@ -135,6 +137,12 @@ impl CodexViewBackend {
 
 impl NativeViewBackend for CodexViewBackend {
     fn close(&self) {
+        tracing::warn!(
+            host_pid = self.state.host_pid,
+            reason = "view-lease-close",
+            canonical_termination = false,
+            "closing Codex viewer lease only"
+        );
         if self.state.close()
             && let Some(task) = self.listener_task.lock().unwrap().take()
         {
@@ -234,7 +242,9 @@ async fn accept_loop(listener: TcpListener, server: ViewServer, mut closed: watc
                 let task = tokio::spawn(async move {
                     tokio::task::yield_now().await;
                     let state = Arc::clone(&server.state);
-                    let _ = serve_connection(stream, server, connection_closed).await;
+                    let result = serve_connection(stream, server, connection_closed).await;
+                    tracing::warn!(host_pid = state.host_pid, reason = "view-connection-ended", failed = result.is_err(),
+                        canonical_termination = false, "Codex viewer disconnected");
                     state.handshakes.fetch_sub(1, Ordering::AcqRel);
                     let task_id = tokio::task::id();
                     state.connection_tasks.lock().unwrap().retain(|task| task.id() != task_id);

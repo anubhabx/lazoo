@@ -2,6 +2,7 @@ use std::{
     collections::BTreeMap,
     ffi::{OsStr, OsString, c_void},
     os::windows::io::{AsRawHandle, RawHandle},
+    os::windows::process::ExitStatusExt,
     path::{Path, PathBuf},
     process::{ExitStatus, Stdio},
     sync::Arc,
@@ -11,7 +12,9 @@ use tokio::process::{Child, ChildStderr, ChildStdin, ChildStdout, Command};
 use uuid::Uuid;
 use windows::{
     Win32::{
-        Foundation::{CloseHandle, FILETIME, HANDLE, WAIT_OBJECT_0},
+        Foundation::{
+            CloseHandle, DUPLICATE_SAME_ACCESS, DuplicateHandle, FILETIME, HANDLE, WAIT_OBJECT_0,
+        },
         System::{
             JobObjects::{
                 AssignProcessToJobObject, CreateJobObjectW, IsProcessInJob,
@@ -22,9 +25,10 @@ use windows::{
             },
             ProcessStatus::{K32GetProcessMemoryInfo, PROCESS_MEMORY_COUNTERS},
             Threading::{
-                CreateEventW, GetCurrentProcess, GetProcessHandleCount, GetProcessTimes, INFINITE,
-                OpenEventW, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
-                SYNCHRONIZATION_SYNCHRONIZE, SetEvent, WaitForSingleObject,
+                CreateEventW, GetCurrentProcess, GetExitCodeProcess, GetProcessHandleCount,
+                GetProcessTimes, INFINITE, OpenEventW, OpenProcess,
+                PROCESS_QUERY_LIMITED_INFORMATION, SYNCHRONIZATION_SYNCHRONIZE, SetEvent,
+                WaitForSingleObject,
             },
         },
     },
@@ -36,12 +40,16 @@ use crate::RuntimeError;
 #[derive(Debug)]
 pub struct JobObject {
     handle: HANDLE,
+    id: Uuid,
 }
 
 impl JobObject {
     pub fn kill_on_close() -> Result<Self, RuntimeError> {
         let handle = unsafe { CreateJobObjectW(None, None) }?;
-        let job = Self { handle };
+        let job = Self {
+            handle,
+            id: Uuid::new_v4(),
+        };
         let mut limits = JOBOBJECT_EXTENDED_LIMIT_INFORMATION::default();
         limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
         unsafe {
@@ -91,8 +99,14 @@ impl JobObject {
     }
 
     pub fn terminate(&self, exit_code: u32) -> Result<(), RuntimeError> {
+        tracing::warn!(job_id = %self.id, reason = "job-object-termination", requested_exit_code = exit_code, "terminating process job");
         unsafe { TerminateJobObject(self.handle, exit_code) }?;
         Ok(())
+    }
+
+    #[must_use]
+    pub fn id(&self) -> Uuid {
+        self.id
     }
 }
 
@@ -200,6 +214,7 @@ fn bytes(value: usize) -> u64 {
 
 impl Drop for JobObject {
     fn drop(&mut self) {
+        tracing::warn!(job_id = %self.id, reason = "job-object-close", active_processes = ?self.active_processes().ok(), "closing kill-on-close process job");
         unsafe {
             let _ = CloseHandle(self.handle);
         }
@@ -272,6 +287,9 @@ impl Drop for ProcessHandle {
         }
     }
 }
+
+// This owned process handle is used only to wait/query exit status, never to mutate the process.
+unsafe impl Send for ProcessHandle {}
 
 #[derive(Clone, Eq, PartialEq)]
 pub struct JobCommand {
@@ -439,12 +457,58 @@ impl JobChild {
         self.child.try_wait()
     }
 
+    /// Observe the real host exit even after the controller or Tokio runtime drops. The host
+    /// propagates the native child's status. The duplicate process handle owns no job handle.
+    pub fn observe_exit(
+        &self,
+        observer: impl FnOnce(std::io::Result<ExitStatus>) + Send + 'static,
+    ) -> Result<(), RuntimeError> {
+        let mut duplicate = HANDLE::default();
+        let raw = self.child.raw_handle().ok_or_else(|| RuntimeError::Io {
+            path: PathBuf::from("session host"),
+            source: std::io::Error::other("process handle unavailable"),
+        })?;
+        unsafe {
+            DuplicateHandle(
+                GetCurrentProcess(),
+                HANDLE(raw),
+                GetCurrentProcess(),
+                &raw mut duplicate,
+                0,
+                false,
+                DUPLICATE_SAME_ACCESS,
+            )
+        }?;
+        let handle = ProcessHandle(duplicate);
+        std::thread::Builder::new()
+            .name("lazoo-child-exit".to_owned())
+            .spawn(move || {
+                observer(handle.wait_for_exit());
+            })
+            .map_err(|source| RuntimeError::Io {
+                path: PathBuf::from("exit observer"),
+                source,
+            })?;
+        Ok(())
+    }
+
     pub async fn wait(&mut self) -> Result<ExitStatus, std::io::Error> {
         self.child.wait().await
     }
 
     pub fn terminate_tree(&self, exit_code: u32) -> Result<(), RuntimeError> {
         self.job.terminate(exit_code)
+    }
+}
+
+impl ProcessHandle {
+    fn wait_for_exit(&self) -> std::io::Result<ExitStatus> {
+        if unsafe { WaitForSingleObject(self.0, INFINITE) } != WAIT_OBJECT_0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        let mut code = 0;
+        unsafe { GetExitCodeProcess(self.0, &raw mut code) }.map_err(std::io::Error::other)?;
+        Ok(ExitStatus::from_raw(code))
     }
 }
 

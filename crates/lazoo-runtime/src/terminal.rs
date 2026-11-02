@@ -10,6 +10,7 @@ use std::{
     path::PathBuf,
     sync::{
         Arc, Mutex, Weak,
+        atomic::{AtomicBool, Ordering as AtomicOrdering},
         mpsc::{self, SyncSender, TrySendError},
     },
     thread::{self, JoinHandle},
@@ -196,6 +197,7 @@ struct Inner {
     output: Arc<Mutex<OutputRing>>,
     writer_thread: OwnedHandle,
     workers: Mutex<Vec<JoinHandle<()>>>,
+    exit_recorded: AtomicBool,
 }
 // Windows handles can be used from multiple threads. Mutable pseudo-console state is locked.
 unsafe impl Send for Inner {}
@@ -203,6 +205,9 @@ unsafe impl Sync for Inner {}
 
 impl Inner {
     fn shutdown(&self) -> Result<(), TerminalError> {
+        tracing::warn!(terminal_id = %self.id, pid = self.pid,
+            reason = "terminal-job-stop-or-drop", requested_exit_code = 1,
+            "terminating terminal process job");
         self.input
             .lock()
             .expect("terminal input mutex poisoned")
@@ -218,6 +223,13 @@ impl Inner {
         if wait != WAIT_OBJECT_0 {
             return Err(TerminalError::Windows(windows::core::Error::from_thread()));
         }
+        let mut code = 0;
+        match unsafe { GetExitCodeProcess(self.process, &raw mut code) } {
+            Ok(()) => self.record_exit(code),
+            Err(error) => tracing::warn!(terminal_id = %self.id, pid = self.pid,
+                reason = "terminal-exit-status-query-failed", os_error = error.code().0,
+                "terminal exit status unavailable"),
+        }
         // Closing ConPTY after termination closes its pipe ends; the reader keeps draining until EOF.
         if let Some(pty) = self.pty.lock().expect("terminal pty mutex poisoned").take() {
             drop(pty);
@@ -231,6 +243,14 @@ impl Inner {
             let _ = worker.join();
         }
         Ok(())
+    }
+
+    fn record_exit(&self, code: u32) {
+        if !self.exit_recorded.swap(true, AtomicOrdering::AcqRel) {
+            tracing::warn!(terminal_id = %self.id, pid = self.pid,
+                reason = "terminal-process-exit", exit_code = code,
+                "terminal child exit observed");
+        }
     }
 }
 
@@ -331,6 +351,7 @@ impl TerminalSession {
         let writer_thread = writer_thread.recv().map_err(|_| TerminalError::Stopped)?;
         Ok(Self {
             inner: Arc::new(Inner {
+                exit_recorded: AtomicBool::new(false),
                 id: Uuid::new_v4(),
                 pid: process_info.dwProcessId,
                 process: process.into_raw(),
@@ -413,6 +434,9 @@ impl TerminalSession {
             GetExitCodeProcess(self.inner.process, &raw mut code)?;
         }
         let active = STILL_ACTIVE.0 as u32;
+        if code != active {
+            self.inner.record_exit(code);
+        }
         Ok(TerminalExitStatus {
             live: code == active,
             exit_code: (code != active).then_some(code),

@@ -79,7 +79,9 @@ impl App {
                     continue;
                 }
             };
-            tracing::info!(
+            tracing::warn!(
+                reason = "idle-stop",
+                host_pid = ?session.native_host_pid,
                 session_id = %session.id,
                 employee_id = %session.employee_id,
                 "idle session suspended by its employee's idle timeout"

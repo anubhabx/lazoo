@@ -1341,6 +1341,8 @@ impl App {
         }
 
         let session_id = stopping.session.id;
+        tracing::warn!(session_id = %session_id, host_pid = ?stopping.session.native_host_pid,
+            reason = "session-stop-or-replace", "stopping canonical provider session");
         self.close_native_view_for_session(session_id).await;
         let session = self.live_sessions.lock().await.remove(&session_id);
         self.account_routes.lock().await.remove(&session_id);
@@ -1550,6 +1552,10 @@ impl App {
     }
 
     pub async fn shutdown_live_sessions(&self) {
+        tracing::warn!(
+            reason = "daemon-shutdown",
+            "stopping owned provider sessions"
+        );
         self.live_turns.lock().await.clear();
         self.account_routes.lock().await.clear();
         let session_ids = self

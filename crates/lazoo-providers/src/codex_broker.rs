@@ -37,6 +37,78 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn finite_controller_burst_waits_for_a_slot_without_losing_events() {
+        let (queues, mut controller) = BrokerQueues::fixture();
+        for index in 0..super::MAX_CONTROLLER_MESSAGES {
+            assert_eq!(
+                queues
+                    .route(json!({"method":"turn/started", "params":{"index":index}}))
+                    .await,
+                QueueRoute::Delivered
+            );
+        }
+        let burst = queues.route(json!({"method":"turn/completed", "params":{}}));
+        tokio::pin!(burst);
+        assert!(
+            tokio::time::timeout(Duration::from_millis(20), &mut burst)
+                .await
+                .is_err()
+        );
+        let first = controller.recv().await.unwrap();
+        queues.release_controller_bytes(first.reserved_bytes);
+        assert_eq!(burst.await, QueueRoute::Delivered);
+        for _ in 0..super::MAX_CONTROLLER_MESSAGES - 1 {
+            let message = controller.recv().await.unwrap();
+            queues.release_controller_bytes(message.reserved_bytes);
+            assert_eq!(message.payload.unwrap()["method"], "turn/started");
+        }
+        let last = controller.recv().await.unwrap();
+        queues.release_controller_bytes(last.reserved_bytes);
+        assert_eq!(last.payload.unwrap()["method"], "turn/completed");
+        assert_eq!(
+            queues
+                .controller_bytes
+                .load(std::sync::atomic::Ordering::Acquire),
+            0
+        );
+    }
+
+    #[tokio::test]
+    async fn stalled_and_closed_controllers_remain_bounded() {
+        let (queues, controller) = BrokerQueues::fixture();
+        for _ in 0..super::MAX_CONTROLLER_MESSAGES {
+            assert_eq!(
+                queues
+                    .route(json!({"method":"turn/started", "params":{}}))
+                    .await,
+                QueueRoute::Delivered
+            );
+        }
+        let before = queues
+            .controller_bytes
+            .load(std::sync::atomic::Ordering::Acquire);
+        assert_eq!(
+            queues
+                .route(json!({"method":"turn/completed", "params":{}}))
+                .await,
+            QueueRoute::ControllerOverflow
+        );
+        assert_eq!(
+            queues
+                .controller_bytes
+                .load(std::sync::atomic::Ordering::Acquire),
+            before
+        );
+        drop(controller);
+        assert_eq!(
+            queues
+                .route(json!({"method":"turn/completed", "params":{}}))
+                .await,
+            QueueRoute::ControllerClosed
+        );
+    }
+
+    #[tokio::test]
     async fn interleaves_correlated_view_read_notification_and_server_request() {
         let (queues, mut controller) = BrokerQueues::fixture();
         let (reply_tx, reply_rx) = oneshot::channel();
@@ -246,6 +318,7 @@ const MAX_CONTROLLER_QUEUE_BYTES: usize = 8 * 1024 * 1024;
 /// Broadcast retains a single shared message per slot, so 16 accepted 512 KiB frames stay <= 8 MiB.
 const MAX_VIEW_NOTIFICATIONS: usize = 16;
 const WRITE_DEADLINE: Duration = Duration::from_secs(2);
+const CONTROLLER_DRAIN_DEADLINE: Duration = Duration::from_secs(2);
 
 type PendingResult = Result<Value, String>;
 
@@ -287,6 +360,7 @@ enum QueueRoute {
     Delivered,
     DroppedResponse,
     ControllerOverflow,
+    ControllerClosed,
     InvalidResponse,
 }
 
@@ -381,7 +455,7 @@ impl BrokerQueues {
                     QueueRoute::DroppedResponse
                 }
             }
-            BrokerMessageClass::ControllerOnly => self.enqueue_controller(Ok(message)),
+            BrokerMessageClass::ControllerOnly => self.enqueue_controller(Ok(message)).await,
             BrokerMessageClass::Notification => {
                 let _ = self.notifications.send(message.clone());
                 // Viewer/sidebar notifications unknown to the turn driver cannot fill its
@@ -391,12 +465,12 @@ impl BrokerQueues {
                 {
                     return QueueRoute::Delivered;
                 }
-                self.enqueue_controller(Ok(message))
+                self.enqueue_controller(Ok(message)).await
             }
         }
     }
 
-    fn enqueue_controller(&self, payload: Result<Value, String>) -> QueueRoute {
+    async fn enqueue_controller(&self, payload: Result<Value, String>) -> QueueRoute {
         let reserved_bytes = payload.as_ref().map_or(0, conservative_value_bytes);
         if reserved_bytes > MAX_CONTROLLER_QUEUE_BYTES
             || self
@@ -413,12 +487,21 @@ impl BrokerQueues {
             payload,
             reserved_bytes,
         };
-        if self.controller_tx.try_send(message).is_err() {
-            self.controller_bytes
-                .fetch_sub(reserved_bytes, Ordering::AcqRel);
-            QueueRoute::ControllerOverflow
-        } else {
-            QueueRoute::Delivered
+        // A finite stdout burst can outrun the durable turn observer (especially while a
+        // view bootstraps). A full channel is backpressure, not proof that the child failed.
+        // Keep the byte reservation and one pending frame bounded, with a deadline for a
+        // controller which has actually stopped consuming. Never drop meaningful events.
+        match timeout(CONTROLLER_DRAIN_DEADLINE, self.controller_tx.send(message)).await {
+            Ok(Ok(())) => QueueRoute::Delivered,
+            result => {
+                self.controller_bytes
+                    .fetch_sub(reserved_bytes, Ordering::AcqRel);
+                if result.is_err() {
+                    QueueRoute::ControllerOverflow
+                } else {
+                    QueueRoute::ControllerClosed
+                }
+            }
         }
     }
 
@@ -435,6 +518,7 @@ fn conservative_value_bytes(value: &Value) -> usize {
 
 #[derive(Debug)]
 struct BrokerInner {
+    diagnostic: Arc<ExitDiagnostic>,
     view_request: Arc<tokio::sync::Semaphore>,
     stdin: Arc<Mutex<ChildStdin>>,
     child: Mutex<JobChild>,
@@ -442,6 +526,46 @@ struct BrokerInner {
     next_id: AtomicU64,
     closed: AtomicBool,
     closed_tx: watch::Sender<bool>,
+}
+
+/// Only fixed reason labels and numeric process facts enter diagnostics, never RPC payloads.
+#[derive(Debug)]
+struct ExitDiagnostic {
+    host_pid: Option<u32>,
+    job_id: uuid::Uuid,
+    reason: std::sync::Mutex<Option<&'static str>>,
+    status: std::sync::Mutex<Option<std::process::ExitStatus>>,
+}
+
+impl ExitDiagnostic {
+    fn record(&self, reason: &'static str) {
+        let mut first = self.reason.lock().unwrap();
+        let status = *self.status.lock().unwrap();
+        let first_reason = *first.get_or_insert(if status.is_some() {
+            "native-process-exit"
+        } else {
+            reason
+        });
+        tracing::warn!(host_pid = self.host_pid, job_id = %self.job_id, reason, first_reason,
+            exit_code = ?status.and_then(|status| status.code()),
+            status_observed = status.is_some(), "Codex child lifecycle");
+    }
+
+    fn exited(&self, status: std::io::Result<std::process::ExitStatus>) {
+        match status {
+            Ok(status) => {
+                *self.status.lock().unwrap() = Some(status);
+                // EOF is a transport fact, not evidence that Lazoo killed the child.
+                let reason = self.reason.lock().unwrap().unwrap_or("native-process-exit");
+                tracing::warn!(host_pid = self.host_pid, job_id = %self.job_id, reason,
+                    exit_code = ?status.code(), success = status.success(),
+                    "Codex child exit observed");
+            }
+            Err(error) => tracing::warn!(host_pid = self.host_pid, job_id = %self.job_id,
+                reason = "exit-status-query-failed", os_error = ?error.raw_os_error(),
+                "Codex child exit status unavailable"),
+        }
+    }
 }
 
 /// Controller-owned app-server transport. It has exactly one stdout reader.
@@ -505,9 +629,22 @@ impl CodexBroker {
             .ok_or_else(|| ProviderError::Protocol("Codex stderr was not piped".to_owned()))?;
         let native_host_pid = child.id();
         let job = child.job();
+        let diagnostic = Arc::new(ExitDiagnostic {
+            host_pid: native_host_pid,
+            job_id: job.id(),
+            reason: std::sync::Mutex::new(None),
+            status: std::sync::Mutex::new(None),
+        });
+        let exit_diagnostic = Arc::clone(&diagnostic);
+        let dispatch = tracing::dispatcher::get_default(Clone::clone);
+        child.observe_exit(move |status| {
+            tracing::dispatcher::with_default(&dispatch, || exit_diagnostic.exited(status));
+        })?;
+        tracing::debug!(host_pid = native_host_pid, job_id = %job.id(), "Codex child started");
         let (queues, controller_rx) = BrokerQueues::new();
         let (closed_tx, _) = watch::channel(false);
         let inner = Arc::new(BrokerInner {
+            diagnostic,
             view_request: Arc::new(tokio::sync::Semaphore::new(1)),
             stdin: Arc::new(Mutex::new(stdin)),
             child: Mutex::new(child),
@@ -559,7 +696,18 @@ impl CodexBroker {
     ) -> Result<Value, ProviderError> {
         let mut receiver = self.controller_rx.lock().await;
         let mut closed = self.inner.closed_tx.subscribe();
-        next_controller_message(&mut receiver, &self.inner.queues, &mut closed, wait, phase).await
+        let result =
+            next_controller_message(&mut receiver, &self.inner.queues, &mut closed, wait, phase)
+                .await;
+        if matches!(result, Err(ProviderError::ProcessExited { .. })) {
+            let mut child = self.inner.child.lock().await;
+            let code = match timeout(Duration::from_millis(250), child.wait()).await {
+                Ok(Ok(status)) => status.code(),
+                _ => None,
+            };
+            return Err(ProviderError::ProcessExited { code });
+        }
+        result
     }
 
     pub(crate) fn read_handle(
@@ -577,9 +725,12 @@ impl CodexBroker {
     }
 
     pub(crate) async fn stop(&self, wait: Duration) -> Result<(), ProviderError> {
-        self.inner.close().await;
+        self.inner.close("controller-stop").await;
         let mut child = self.inner.child.lock().await;
         if timeout(wait, child.wait()).await.is_err() {
+            self.inner
+                .diagnostic
+                .record("stop-deadline-job-termination");
             child.terminate_tree(1)?;
             let _ = timeout(wait, child.wait()).await;
         }
@@ -632,13 +783,13 @@ async fn next_controller_message(
 
 impl Drop for CodexBroker {
     fn drop(&mut self) {
+        self.inner.diagnostic.record("controller-drop");
         self.reader_task.abort();
         self.stderr_task.abort();
         self.inner.closed.store(true, Ordering::Release);
         self.inner.closed_tx.send_replace(true);
-        if let Ok(child) = self.inner.child.try_lock() {
-            let _ = child.terminate_tree(1);
-        }
+        // Never let a concurrently held child mutex suppress process-tree cleanup.
+        let _ = self.job.terminate(1);
     }
 }
 
@@ -690,6 +841,10 @@ impl CodexBrokerControl {
 }
 
 impl CodexBrokerReadHandle {
+    pub(crate) fn native_host_pid(&self) -> Option<u32> {
+        self.inner.diagnostic.host_pid
+    }
+
     pub(crate) async fn request(
         &self,
         method: &str,
@@ -772,13 +927,15 @@ impl BrokerInner {
         {
             return Ok(());
         }
-        self.fail_closed().await;
+        self.fail_closed("controller-write-failed-or-timed-out")
+            .await;
         Err(ProviderError::Protocol(
             "Codex broker stdin write exceeded its deadline or failed; transport closed".to_owned(),
         ))
     }
 
-    async fn close(&self) {
+    async fn close(&self, reason: &'static str) {
+        self.diagnostic.record(reason);
         if self.closed.swap(true, Ordering::AcqRel) {
             return;
         }
@@ -798,11 +955,10 @@ impl BrokerInner {
         });
     }
 
-    async fn fail_closed(&self) {
-        self.close().await;
-        if let Ok(child) = self.child.try_lock() {
-            let _ = child.terminate_tree(1);
-        }
+    async fn fail_closed(&self, reason: &'static str) {
+        self.close(reason).await;
+        let child = self.child.lock().await;
+        let _ = child.terminate_tree(1);
     }
 }
 
@@ -866,6 +1022,11 @@ async fn request_view(
     wait: Duration,
     phase: &'static str,
 ) -> Result<Value, ProviderError> {
+    tracing::debug!(
+        host_pid = inner.diagnostic.host_pid,
+        phase,
+        "Codex viewer read"
+    );
     let permit = Arc::clone(&inner.view_request)
         .try_acquire_owned()
         .map_err(|_| {
@@ -933,18 +1094,19 @@ async fn read_stdout(inner: Arc<BrokerInner>, stdout: ChildStdout) {
                 continue;
             }
             Ok(Some(BrokerLine::Oversized { .. })) => {
-                fail_closed(&inner, "Codex controller output exceeded the line limit").await;
+                fail_closed(&inner, "controller-frame-overflow").await;
                 return;
             }
             Ok(None) => {
-                inner.close().await;
+                inner.close("reader-eof").await;
                 return;
             }
             Err(error) => {
-                inner.close().await;
+                inner.close("reader-io-error").await;
                 let _ = inner
                     .queues
-                    .enqueue_controller(Err(format!("Codex broker stdout failed: {error}")));
+                    .enqueue_controller(Err(format!("Codex broker stdout failed: {error}")))
+                    .await;
                 return;
             }
         };
@@ -954,29 +1116,64 @@ async fn read_stdout(inner: Arc<BrokerInner>, stdout: ChildStdout) {
         let message: Value = match serde_json::from_slice(&line) {
             Ok(message) => message,
             Err(error) => {
-                inner.close().await;
-                let _ = inner.queues.enqueue_controller(Err(format!(
-                    "Codex broker received invalid JSON: {error}"
-                )));
+                inner.close("reader-invalid-json").await;
+                let _ = inner
+                    .queues
+                    .enqueue_controller(Err(format!("Codex broker received invalid JSON: {error}")))
+                    .await;
                 return;
             }
         };
-        if !matches!(
-            inner.queues.route(message).await,
-            QueueRoute::Delivered | QueueRoute::DroppedResponse
-        ) {
-            fail_closed(
-                &inner,
-                "Codex controller queue overflow or invalid response",
-            )
-            .await;
-            return;
+        let method = diagnostic_method(&message);
+        tracing::debug!(host_pid = inner.diagnostic.host_pid, method,
+            frame_bytes = line.len(), class = ?classify_message(&message),
+            "Codex stdout frame");
+        match inner.queues.route(message).await {
+            QueueRoute::Delivered | QueueRoute::DroppedResponse => {}
+            route => {
+                let reason = match route {
+                    QueueRoute::ControllerOverflow => "controller-queue-overflow",
+                    QueueRoute::ControllerClosed => "controller-receiver-closed",
+                    _ => "invalid-response-envelope",
+                };
+                tracing::warn!(
+                    host_pid = inner.diagnostic.host_pid,
+                    method,
+                    reason,
+                    controller_messages =
+                        MAX_CONTROLLER_MESSAGES - inner.queues.controller_tx.capacity(),
+                    controller_bytes = inner.queues.controller_bytes.load(Ordering::Acquire),
+                    "Codex controller delivery failed"
+                );
+                fail_closed(&inner, reason).await;
+                return;
+            }
         }
     }
 }
 
-async fn fail_closed(inner: &Arc<BrokerInner>, _reason: &str) {
-    inner.fail_closed().await;
+fn diagnostic_method(message: &Value) -> &'static str {
+    // Match to literals rather than logging provider-controlled strings or response ids.
+    match message.get("method").and_then(Value::as_str) {
+        Some("turn/started") => "turn/started",
+        Some("turn/completed") => "turn/completed",
+        Some("item/started") => "item/started",
+        Some("item/completed") => "item/completed",
+        Some("item/agentMessage/delta") => "item/agentMessage/delta",
+        Some("item/commandExecution/outputDelta") => "item/commandExecution/outputDelta",
+        Some("thread/tokenUsage/updated") => "thread/tokenUsage/updated",
+        Some("account/rateLimits/updated") => "account/rateLimits/updated",
+        Some("item/tool/call") => "item/tool/call",
+        Some("item/commandExecution/requestApproval") => "item/commandExecution/requestApproval",
+        Some("error") => "error",
+        Some("process/exited") => "process/exited",
+        None => "response",
+        _ => "other",
+    }
+}
+
+async fn fail_closed(inner: &Arc<BrokerInner>, reason: &'static str) {
+    inner.fail_closed(reason).await;
 }
 
 async fn drain_stderr(stderr: ChildStderr) {
