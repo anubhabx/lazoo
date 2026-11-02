@@ -798,10 +798,15 @@ describe("conversation", () => {
     await user.click(await screen.findByText("fix flaky daemon test"));
     await screen.findByRole("tablist", { name: "Agents" });
     act(() => store.focusTab(TASK_ID));
-    const cancel = await screen.findByRole("button", { name: "Cancel" });
-    await user.click(cancel);
+    // Destructive actions never take the inline slot; they sit in the agent's menu.
+    expect(
+      screen.queryByRole("button", { name: "Cancel" }),
+    ).not.toBeInTheDocument();
+    await user.click(await screen.findByRole("button", { name: /^More for / }));
+    await user.click(screen.getByRole("menuitem", { name: "Cancel" }));
     expect(bridge.callsTo("task.cancel")).toHaveLength(0);
-    await user.click(screen.getByRole("button", { name: "Confirm: Cancel" }));
+    const confirm = await screen.findByRole("dialog");
+    await user.click(within(confirm).getByRole("button", { name: "Cancel" }));
     await waitFor(() => expect(bridge.callsTo("task.cancel")).toHaveLength(1));
   });
 });

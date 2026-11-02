@@ -19,6 +19,8 @@ interface Props {
   isLead: boolean;
   /** The worker's task reached a terminal state; its session is gone or suspended. */
   finished?: boolean;
+  /** The agent's session is starting (trust, warm-up); the view opens once it is ready. */
+  starting?: boolean;
   onShowActivity: () => void;
 }
 
@@ -34,6 +36,7 @@ export function TerminalPane({
   agentName,
   isLead,
   finished = false,
+  starting = false,
   onShowActivity,
 }: Props) {
   const terminals = useTerminals();
@@ -84,6 +87,16 @@ export function TerminalPane({
   const status = entry?.status ?? null;
   const live = Boolean(entry?.record && entry.live);
   const exited = Boolean(entry?.record && !entry.live);
+
+  // A refused keystroke is worth one quiet note, not a permanent badge.
+  const refused = Boolean(entry?.inputRefused);
+  const [showRefused, setShowRefused] = useState(false);
+  useEffect(() => {
+    if (!refused) return;
+    setShowRefused(true);
+    const timer = setTimeout(() => setShowRefused(false), 4000);
+    return () => clearTimeout(timer);
+  }, [refused]);
 
   // Native first: open the view once per session whenever the daemon allows it.
   useEffect(() => {
@@ -143,6 +156,14 @@ export function TerminalPane({
       );
     } else if (entry?.opening || status?.viewOpening || status?.opening) {
       field = <Field title="Opening the native view…" busy />;
+    } else if (starting && status && !status.viewable) {
+      field = (
+        <Field
+          title={`Starting ${agentName}…`}
+          detail="The native view opens as soon as the session is ready."
+          busy
+        />
+      );
     } else if (entry?.error) {
       field = (
         <Field
@@ -211,10 +232,10 @@ export function TerminalPane({
         aria-label={`${agentName} terminal`}
         role="region"
       />
-      {live && (entry?.inputRefused || entry?.gap) ? (
+      {live && (showRefused || entry?.gap) ? (
         <div className="terminal-note" role="status">
-          {entry?.inputRefused
-            ? "Input refused by the provider"
+          {showRefused
+            ? "Read-only view · type in the composer below"
             : "Earlier output was lost"}
         </div>
       ) : null}

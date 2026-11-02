@@ -105,7 +105,10 @@ function TrustItem({ request }: { request: NativeTrustRequestRecord }) {
       <span className="attention__text">
         <strong>{providerLabel(request.provider)}</strong> asks to trust{" "}
         <span className="mono">
-          {middleTruncate(request.canonicalWorkspacePath, 56)}
+          {middleTruncate(
+            request.canonicalWorkspacePath.replace(/^\\\\\?\\/, ""),
+            56,
+          )}
         </span>
         <span className="meta">
           {request.managedWorkspace

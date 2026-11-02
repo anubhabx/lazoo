@@ -225,6 +225,7 @@ export function ConversationPage() {
               agentName={tab.name}
               isLead={tab.key === "lead"}
               finished={tab.done || tab.worker?.state === "failed"}
+              starting={tab.tone === "starting"}
               onShowActivity={() => store.toggleDetails(true)}
             />
           </PaneSlot>
@@ -295,7 +296,13 @@ function AgentFacts({ tab }: { tab: Tab | null }) {
   const authority = tab.worker
     ? tab.worker.effectiveAuthority
     : (lead.authority ?? "ask");
-  const [inline, ...rest] = actions;
+  // One inline action at most, and never a destructive one: cancelling a turn
+  // is the exception because it is what a busy agent most often needs.
+  const inline = actions.find(
+    (action) =>
+      action.action === "cancel-turn" || !DESTRUCTIVE.includes(action.action),
+  );
+  const rest = actions.filter((action) => action !== inline);
   const view = tab.sessionId ? terminals.get(tab.sessionId) : undefined;
   const items: MenuItem[] = rest.map((action) => ({
     label: action.label,
@@ -317,12 +324,17 @@ function AgentFacts({ tab }: { tab: Tab | null }) {
     onSelect: () => store.toggleDetails(),
   });
   const readOnly = Boolean(view?.record && view.live && view.kind !== "attach");
+  // Which account this session burns (absent when the harness's own login is used).
+  const account = tab.worker
+    ? (tab.worker.session?.account ?? null)
+    : (lead.session?.account ?? null);
 
   return (
     <div className="agentbar__end">
       <span className="agentbar__facts">
         {providerLabel(tab.provider)}
         {model ? ` · ${model}` : ""} · {authorityLabel(authority)}
+        {account ? ` · ${account.label}` : ""}
         {readOnly ? " · read-only" : ""}
       </span>
       {inline ? <ActionButton action={inline} /> : null}

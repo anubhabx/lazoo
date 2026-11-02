@@ -1275,6 +1275,24 @@ fn validate_request(provider: ProviderKind, request: &SessionRequest) -> Result<
     }
     Ok(())
 }
+/// Variables a running Claude Code sets for its own subprocesses. None is user configuration
+/// (`CLAUDE_CONFIG_DIR`, `CLAUDE_CODE_USE_*`, `CLAUDE_CODE_OAUTH_TOKEN` and `ANTHROPIC_*` stay).
+const CLAUDE_PARENT_SESSION_ENVIRONMENT: &[&str] = &[
+    "CLAUDECODE",
+    "CLAUDE_CODE_CHILD_SESSION",
+    "CLAUDE_CODE_SESSION_ID",
+    "CLAUDE_CODE_BRIDGE_SESSION_ID",
+    "CLAUDE_CODE_MESSAGING_SOCKET",
+    "CLAUDE_CODE_MESSAGING_TOKEN",
+    "CLAUDE_CODE_SESSION_ATTENDED",
+    "CLAUDE_CODE_ENTRYPOINT",
+    "CLAUDE_CODE_EXECPATH",
+    "CLAUDE_PID",
+    "CLAUDE_EFFORT",
+    "CLAUDE_PLUGIN_DATA",
+    "CLAUDE_PLUGIN_ROOT",
+];
+
 fn interactive_command(
     provider: ProviderKind,
     mut command: TerminalCommand,
@@ -1283,6 +1301,14 @@ fn interactive_command(
 ) -> TerminalCommand {
     match provider {
         ProviderKind::ClaudeCode => {
+            // A Lazoo session is a top-level Claude Code session, even when the daemon was
+            // started from inside one (a terminal in Claude Code, or an agent driving Lazoo).
+            // The parent's session context must not leak in: its child marker turns transcript
+            // saving off (resume then finds no conversation), and its session id and messaging
+            // socket make the new process act as the parent and never become ready.
+            for name in CLAUDE_PARENT_SESSION_ENVIRONMENT {
+                command = command.env_remove(*name);
+            }
             command = command
                 .env("DISABLE_AUTOUPDATER", "1")
                 .env("CLAUDE_CODE_DISABLE_BACKGROUND_TASKS", "1")
@@ -1750,6 +1776,32 @@ mod tests {
     };
     use crate::PermissionKind;
     use serde_json::json;
+
+    #[test]
+    fn claude_sessions_drop_an_inherited_parent_session_marker() {
+        let directory = tempfile::tempdir().unwrap();
+        let generated = [
+            super::GeneratedFile {
+                path: directory.path().join("settings.json"),
+                digest: String::new(),
+            },
+            super::GeneratedFile {
+                path: directory.path().join("mcp.json"),
+                digest: String::new(),
+            },
+        ];
+        let command = super::interactive_command(
+            crate::ProviderKind::ClaudeCode,
+            lazoo_runtime::TerminalCommand::new("claude", directory.path(), 80, 24),
+            &crate::SessionRequest::new(directory.path()),
+            &generated,
+        );
+        let debug = format!("{command:?}");
+        for name in super::CLAUDE_PARENT_SESSION_ENVIRONMENT {
+            assert!(debug.contains(name), "{name} is not removed: {debug}");
+        }
+        assert!(!debug.contains("CLAUDE_CONFIG_DIR"), "{debug}");
+    }
 
     #[test]
     fn antigravity_repeated_prompt_cannot_replay_prior_invocation_or_tool() {

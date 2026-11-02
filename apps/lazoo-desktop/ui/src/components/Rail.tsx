@@ -84,7 +84,7 @@ export function Rail() {
             size="sm"
             icon
             tip="Hide sidebar  Ctrl B"
-            tipSide="right"
+            tipSide="bottom"
             aria-label="Hide sidebar"
             onClick={() => store.toggleSidebar(true)}
           >
@@ -134,7 +134,7 @@ export function Rail() {
                 size="sm"
                 icon
                 tip="Add a project"
-                tipSide="right"
+                tipSide="left"
                 aria-label="Add a project"
                 onClick={() => setAdding(true)}
               >
