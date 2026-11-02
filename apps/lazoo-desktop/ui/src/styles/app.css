@@ -809,10 +809,9 @@ kbd,
 
 .member {
   display: grid;
-  grid-template-columns: 20px minmax(80px, 140px) minmax(64px, 100px) minmax(
-      0,
-      1fr
-    ) auto;
+  grid-template-columns:
+    20px minmax(80px, 140px) minmax(64px, 100px) minmax(0, 1fr)
+    auto;
   align-items: center;
   gap: 12px;
   height: 40px;
@@ -1454,10 +1453,9 @@ kbd,
 
 .account {
   display: grid;
-  grid-template-columns: 76px minmax(120px, 1.1fr) 132px minmax(
-      220px,
-      2fr
-    ) 110px auto;
+  grid-template-columns:
+    76px minmax(120px, 1.1fr) 132px minmax(220px, 2fr)
+    110px auto;
   align-items: center;
   gap: 12px;
   min-height: 52px;
@@ -1642,16 +1640,16 @@ kbd,
   align-items: center;
   gap: 5px;
   height: 24px;
-  padding: 0 9px;
-  border-radius: var(--lz-radius-full);
-  background: rgb(211 217 225 / 4%);
+  padding: 0 8px;
+  border: 1px solid var(--lz-color-border-subtle);
+  border-radius: var(--lz-radius-sm);
   color: var(--lz-color-text-disabled);
   font-size: var(--text-micro);
   font-weight: var(--lz-weight-medium);
 }
 
 .harness-chip[data-found="true"] {
-  background: rgb(109 201 161 / 11%);
+  border-color: rgb(109 201 161 / 35%);
   color: var(--lz-mint-400);
 }
 
@@ -2137,10 +2135,9 @@ kbd,
   }
 
   .account {
-    grid-template-columns: 60px minmax(110px, 1fr) 120px minmax(
-        180px,
-        1.6fr
-      ) auto;
+    grid-template-columns:
+      60px minmax(110px, 1fr) 120px minmax(180px, 1.6fr)
+      auto;
   }
 
   .account__reserve {
