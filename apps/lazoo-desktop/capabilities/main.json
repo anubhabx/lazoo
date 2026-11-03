@@ -18,6 +18,18 @@
     "allow-terminal-stream-start",
     "allow-terminal-stream-stop",
     "allow-terminal-stream-focus",
-    "allow-terminal-write"
+    "allow-terminal-write",
+    "allow-voice-state",
+    "allow-voice-settings-set",
+    "allow-voice-key-set",
+    "allow-voice-key-clear",
+    "allow-voice-whisper-install",
+    "allow-voice-whisper-remove",
+    "allow-voice-transcribe",
+    "allow-voice-speak",
+    "allow-voice-insert-text",
+    "allow-voice-copy-text",
+    "allow-voice-overlay",
+    "allow-voice-open-microphone-settings"
   ]
 }

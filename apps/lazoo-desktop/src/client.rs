@@ -68,7 +68,7 @@ impl From<&DesktopClientError> for DesktopFailure {
         match error {
             DesktopClientError::Timeout | DesktopClientError::Ipc(IpcError::Io(_)) => Self::new(
                 "LZ-DESKTOP-DAEMON-OFFLINE",
-                "Lazoo cannot reach the local daemon. Start lazoo-keeper and retry.",
+                "Lazoo cannot reach its local service. It starts with the app; if this persists, run lazoo-keeper and retry.",
             ),
             DesktopClientError::Ipc(IpcError::Authentication) => Self::new(
                 "LZ-IPC-AUTH",

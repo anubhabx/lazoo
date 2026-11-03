@@ -21,6 +21,18 @@ fn main() {
                 "terminal_stream_stop",
                 "terminal_stream_focus",
                 "terminal_write",
+                "voice_state",
+                "voice_settings_set",
+                "voice_key_set",
+                "voice_key_clear",
+                "voice_whisper_install",
+                "voice_whisper_remove",
+                "voice_transcribe",
+                "voice_speak",
+                "voice_insert_text",
+                "voice_copy_text",
+                "voice_overlay",
+                "voice_open_microphone_settings",
             ])),
     )
     .expect("Tauri build configuration must be valid");

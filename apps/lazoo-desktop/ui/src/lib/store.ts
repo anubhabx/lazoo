@@ -30,6 +30,7 @@ import { newKey, readStorage, writeStorage } from "./util";
 export type SettingsSection =
   | "general"
   | "accounts"
+  | "voice"
   | "employees"
   | "harnesses"
   | "projects"

@@ -9,6 +9,12 @@ import {
 } from "react";
 
 import { AttentionStrip } from "../components/AttentionStrip";
+import {
+  MicButton,
+  RecordingStrip,
+  useDictation,
+} from "../components/Dictation";
+import { ReadAloud, ReadAloudControls } from "../components/ReadAloud";
 import { TerminalPane } from "../components/TerminalPane";
 import {
   Avatar,
@@ -185,6 +191,7 @@ export function ConversationPage() {
 
   return (
     <div className="conv">
+      <ReadAloud />
       <div className="agentbar">
         <div className="agentbar__tabs" role="tablist" aria-label="Agents">
           {tabs.map((tab) => (
@@ -338,6 +345,7 @@ function AgentFacts({ tab }: { tab: Tab | null }) {
         {readOnly ? " · read-only" : ""}
       </span>
       {inline ? <ActionButton action={inline} /> : null}
+      <ReadAloudControls />
       <Menu label={`More for ${tab.name}`} items={items}>
         <Ellipsis size={15} aria-hidden="true" />
       </Menu>
@@ -435,7 +443,7 @@ export function ActionButton({
   );
 }
 
-function Composer() {
+export function Composer() {
   const store = useStore();
   const state = useAppState();
   const conversation = state.conversation;
@@ -474,6 +482,12 @@ function Composer() {
     if (ok) setText("");
   }
 
+  const dictation = useDictation({
+    textarea,
+    setText,
+    send: (transcript) => store.submitTurn(transcript, authority),
+  });
+
   function onKey(event: KeyboardEvent<HTMLTextAreaElement>) {
     if (event.key === "Enter" && !event.shiftKey) {
       event.preventDefault();
@@ -497,6 +511,7 @@ function Composer() {
         void send();
       }}
     >
+      <RecordingStrip dictation={dictation} />
       <div className="composer__box">
         <textarea
           ref={textarea}
@@ -527,6 +542,7 @@ function Composer() {
             {authorityLabel(authority)}
           </span>
         )}
+        <MicButton dictation={dictation} />
         <Button
           type="submit"
           variant="primary"
@@ -544,6 +560,12 @@ function Composer() {
         <p className="composer__error" role="alert">
           <span className="mono">{state.composerError.code}</span>{" "}
           {state.composerError.message}
+        </p>
+      ) : null}
+      {dictation.error ? (
+        <p className="composer__error" role="alert">
+          <span className="mono">{dictation.error.code}</span>{" "}
+          {dictation.error.message}
         </p>
       ) : null}
     </form>

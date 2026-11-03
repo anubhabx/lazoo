@@ -73,9 +73,37 @@ fn main_capability_allows_only_core_window_and_desktop_bridge_commands() {
             "allow-terminal-stream-start",
             "allow-terminal-stream-stop",
             "allow-terminal-stream-focus",
-            "allow-terminal-write"
+            "allow-terminal-write",
+            "allow-voice-state",
+            "allow-voice-settings-set",
+            "allow-voice-key-set",
+            "allow-voice-key-clear",
+            "allow-voice-whisper-install",
+            "allow-voice-whisper-remove",
+            "allow-voice-transcribe",
+            "allow-voice-speak",
+            "allow-voice-insert-text",
+            "allow-voice-copy-text",
+            "allow-voice-overlay",
+            "allow-voice-open-microphone-settings"
         ])
     );
+}
+
+#[test]
+fn voice_overlay_capability_only_listens_and_media_is_allowed_by_csp() {
+    let capability = read_json("capabilities/voice-overlay.json");
+    assert_eq!(capability["windows"], serde_json::json!(["voice-overlay"]));
+    assert_eq!(
+        capability["permissions"],
+        serde_json::json!(["core:event:allow-listen", "core:event:allow-unlisten"])
+    );
+
+    let config = read_json("tauri.conf.json");
+    for key in ["csp", "devCsp"] {
+        let csp = config["app"]["security"][key].as_str().expect("CSP string");
+        assert!(csp.contains("media-src 'self' blob:"), "{key}");
+    }
 }
 
 #[test]
@@ -89,6 +117,17 @@ fn build_manifest_declares_only_the_desktop_bridge_commands() {
         "terminal_stream_stop",
         "terminal_stream_focus",
         "terminal_write",
+        "voice_state",
+        "voice_settings_set",
+        "voice_key_set",
+        "voice_key_clear",
+        "voice_whisper_install",
+        "voice_whisper_remove",
+        "voice_transcribe",
+        "voice_speak",
+        "voice_insert_text",
+        "voice_copy_text",
+        "voice_overlay",
     ];
     let declared = commands
         .iter()

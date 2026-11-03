@@ -1,7 +1,7 @@
 // Development only: a scripted daemon so the UI can be looked at in a browser
 // (`vite dev` + `?mock=1`). Never bundled into production (guarded by DEV).
 
-import type { Bridge, TerminalStreamHandle } from "./bridge";
+import type { Bridge, TerminalStreamHandle, VoiceBridge } from "./bridge";
 import type {
   AccountUsageBucket,
   AccountUsageResult,
@@ -16,6 +16,12 @@ import type {
   WorkerCard,
   WorkspaceConversationResult,
 } from "./protocol";
+import {
+  DEFAULT_VOICE_SETTINGS,
+  type OverlayUpdate,
+  type VoiceState,
+  type WhisperModel,
+} from "./voice/types";
 import {
   CONVERSATION_ID,
   SESSION_ID,
@@ -463,12 +469,166 @@ export function createDevBridge(): Bridge {
     async writeTerminal() {
       return undefined;
     },
+    voice: mockVoice(),
     window: {
+      // `?mock=1&overlay=1` shows the dictation pill cycling through its states.
+      label: window.location.search.includes("overlay")
+        ? "voice-overlay"
+        : "main",
       close: async () => undefined,
       minimize: async () => undefined,
       toggleMaximize: async () => undefined,
       startDragging: async () => undefined,
       isMaximized: async () => false,
+    },
+  };
+}
+
+const WHISPER_BYTES: Record<WhisperModel, number> = {
+  "tiny.en": 77_704_715,
+  "base.en": 147_964_211,
+  "small.en": 487_614_201,
+  base: 147_951_465,
+  small: 487_601_967,
+};
+
+/** Voice commands against in-memory state: revisions, installs, a canned transcript. */
+function mockVoice(): VoiceBridge {
+  const installed = new Set<WhisperModel>(["base.en"]);
+  let binary = true;
+  let revision = 1;
+  let settings = structuredClone(DEFAULT_VOICE_SETTINGS);
+  let keySet = false;
+  const wait = (ms: number) =>
+    new Promise((resolve) => setTimeout(resolve, ms));
+  const snapshot = (): VoiceState => ({
+    revision,
+    settings: structuredClone(settings),
+    keySet,
+    endpointExternal: !/^https?:\/\/(localhost|127\.|\[::1\])/.test(
+      settings.endpoint.baseUrl,
+    ),
+    whisper: {
+      binaryInstalled: binary,
+      installedModels: [...installed],
+      catalog: (Object.keys(WHISPER_BYTES) as WhisperModel[]).map((model) => ({
+        model,
+        bytes: WHISPER_BYTES[model],
+        installed: installed.has(model),
+      })),
+    },
+    hotkeyRegistered: settings.hotkey !== "",
+    hotkeyError: null,
+    microphoneBlocked: false,
+  });
+  const overlayListeners = new Set<(update: OverlayUpdate) => void>();
+  if (window.location.search.includes("overlay")) {
+    // A looping demo of the pill for visual checks in a plain browser.
+    const send = (update: OverlayUpdate) =>
+      overlayListeners.forEach((listener) => listener(update));
+    let tick = 0;
+    setInterval(() => {
+      tick += 1;
+      const phase = tick % 40;
+      if (phase < 24)
+        send({
+          state: "recording",
+          detail: null,
+          level: 0.15 + 0.7 * Math.abs(Math.sin(tick / 3)),
+        });
+      else if (phase < 30)
+        send({ state: "transcribing", detail: null, level: null });
+      else if (phase < 34)
+        send({ state: "done", detail: "Inserted", level: null });
+      else if (phase < 38)
+        send({ state: "error", detail: "Nothing heard", level: null });
+      else send({ state: "hidden", detail: null, level: null });
+    }, 250);
+  }
+  return {
+    async state() {
+      await wait(30);
+      return snapshot();
+    },
+    async settingsSet(next, expected) {
+      await wait(60);
+      if (expected !== revision)
+        throw {
+          code: "LZ-VOICE-REVISION",
+          message: "Voice settings changed elsewhere.",
+        };
+      settings = structuredClone(next);
+      revision += 1;
+      return snapshot();
+    },
+    async keySet(key) {
+      await wait(60);
+      if (!key) throw { code: "LZ-VOICE-SETTINGS", message: "Empty key." };
+      keySet = true;
+      return snapshot();
+    },
+    async keyClear() {
+      keySet = false;
+      return snapshot();
+    },
+    async whisperInstall(model, onProgress) {
+      const total = WHISPER_BYTES[model];
+      for (let step = 1; step <= 10; step += 1) {
+        await wait(180);
+        onProgress({ stage: "model", received: (total / 10) * step, total });
+      }
+      onProgress({ stage: "verify", received: total, total });
+      await wait(300);
+      binary = true;
+      installed.add(model);
+      onProgress({ stage: "done", received: total, total });
+      return snapshot();
+    },
+    async whisperRemove(model) {
+      if (model) installed.delete(model);
+      else {
+        installed.clear();
+        binary = false;
+      }
+      return snapshot();
+    },
+    async transcribe(_wav, _purpose) {
+      await wait(700);
+      return {
+        text: "Check why the retry test is flaky.",
+        raw: "um check why the retry test is is flaky",
+        cleaning: settings.cleaning,
+        engine: settings.stt.engine,
+        external: false,
+        audioMs: 2400,
+        elapsedMs: 700,
+      };
+    },
+    async speak() {
+      throw {
+        code: "LZ-VOICE-ENDPOINT",
+        message: "The dev bridge has no speech endpoint.",
+      };
+    },
+    async copyText() {},
+    async openMicrophoneSettings() {},
+    async insertText() {
+      throw {
+        code: "LZ-VOICE-INSERT-REFUSED",
+        message: "The foreground window belongs to Lazoo.",
+      };
+    },
+    async overlay() {
+      return undefined;
+    },
+    async onPtt() {
+      return () => undefined;
+    },
+    async onOverlay(handler) {
+      overlayListeners.add(handler);
+      return () => {
+        overlayListeners.delete(handler);
+      };
     },
   };
 }

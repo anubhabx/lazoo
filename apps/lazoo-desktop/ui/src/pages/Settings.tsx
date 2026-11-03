@@ -21,6 +21,7 @@ import { asFailure } from "../lib/bridge";
 import { Failure, useRead } from "../lib/useRead";
 import { AddProjectDialog } from "../components/Rail";
 import { AccountsPage } from "./Accounts";
+import { VoicePage } from "./VoiceSettings";
 import type { SettingsSection } from "../lib/store";
 import {
   authorityLabel,
@@ -33,6 +34,7 @@ import {
 const SECTIONS: { id: SettingsSection; label: string }[] = [
   { id: "general", label: "General" },
   { id: "accounts", label: "Accounts" },
+  { id: "voice", label: "Voice" },
   { id: "employees", label: "Employees" },
   { id: "harnesses", label: "Harnesses" },
   { id: "projects", label: "Projects" },
@@ -66,6 +68,7 @@ export function SettingsPage() {
       <div className="settings__content">
         {section === "general" ? <General /> : null}
         {section === "accounts" ? <AccountsPage /> : null}
+        {section === "voice" ? <VoicePage /> : null}
         {section === "employees" ? <Employees /> : null}
         {section === "harnesses" ? <Harnesses /> : null}
         {section === "projects" ? <Projects /> : null}
