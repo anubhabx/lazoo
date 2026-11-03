@@ -6,11 +6,13 @@ import {
   PanelLeft,
   PanelRight,
   Plus,
+  Puzzle,
   Search,
   Settings,
   Sparkles,
   SquareTerminal,
   Users,
+  Wrench,
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 
@@ -101,6 +103,22 @@ export function CommandPalette() {
         run: () => store.navigate({ kind: "settings", section: "accounts" }),
       },
       {
+        id: "go-skills",
+        group: "Go to",
+        label: "Skills",
+        keywords: "library harness link expose",
+        icon: <Wrench size={14} aria-hidden="true" />,
+        run: () => store.navigate({ kind: "settings", section: "skills" }),
+      },
+      {
+        id: "go-plugins",
+        group: "Go to",
+        label: "Plugins",
+        keywords: "marketplace extension harness",
+        icon: <Puzzle size={14} aria-hidden="true" />,
+        run: () => store.navigate({ kind: "settings", section: "plugins" }),
+      },
+      {
         id: "new-work",
         group: "Actions",
         label: "New work",
@@ -115,6 +133,22 @@ export function CommandPalette() {
         keywords: "team employees onboarding recommended defaults",
         icon: <Sparkles size={14} aria-hidden="true" />,
         run: () => store.openSetup(),
+      },
+      {
+        id: "add-skills",
+        group: "Actions",
+        label: "Add skills",
+        keywords: "install skill library skills.sh github git folder",
+        icon: <Plus size={14} aria-hidden="true" />,
+        run: () => store.openExtensionDialog("add-skills"),
+      },
+      {
+        id: "install-plugin",
+        group: "Actions",
+        label: "Install plugin",
+        keywords: "plugin marketplace harness",
+        icon: <Plus size={14} aria-hidden="true" />,
+        run: () => store.openExtensionDialog("install-plugin"),
       },
       {
         id: "toggle-sidebar",
