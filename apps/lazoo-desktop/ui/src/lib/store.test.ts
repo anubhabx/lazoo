@@ -302,6 +302,39 @@ describe("Store", () => {
     store.dispose();
   });
 
+  test("extension events block controls while an operation runs and bump the tick when it changed something", async () => {
+    const bridge = scripted();
+    const store = new Store(bridge, { statusPollMs: 0 });
+    await store.init();
+    expect(store.getSnapshot().extensionBusy).toBe(false);
+    bridge.emit(event(300, "extension.operation.started"));
+    expect(store.getSnapshot().extensionBusy).toBe(true);
+    expect(store.getSnapshot().extensionTick).toBe(0);
+    bridge.emit(event(301, "extension.operation.finished"));
+    expect(store.getSnapshot().extensionBusy).toBe(false);
+    bridge.emit(event(302, "skill.changed"));
+    bridge.emit(event(303, "plugin.changed"));
+    expect(store.getSnapshot().extensionTick).toBe(2);
+    store.dispose();
+  });
+
+  test("the palette opens a Settings page and asks it to open its dialog once", async () => {
+    const store = new Store(scripted(), { statusPollMs: 0 });
+    store.openExtensionDialog("install-plugin");
+    expect(store.getSnapshot().route).toEqual({
+      kind: "settings",
+      section: "plugins",
+    });
+    expect(store.getSnapshot().extensionIntent).toBe("install-plugin");
+    store.clearExtensionIntent();
+    expect(store.getSnapshot().extensionIntent).toBeNull();
+    store.openExtensionDialog("add-skills");
+    expect(store.getSnapshot().route).toEqual({
+      kind: "settings",
+      section: "skills",
+    });
+  });
+
   test("transient failures are the only ones that keep a key", () => {
     expect(
       isTransient({ code: "LZ-DESKTOP-DAEMON-OFFLINE", message: "" }),

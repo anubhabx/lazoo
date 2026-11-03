@@ -10,6 +10,7 @@ mod config_apply;
 mod contract;
 mod copilot;
 mod discovery;
+pub mod extensions;
 mod grok;
 mod interactive_session;
 mod json_rpc;

@@ -1,6 +1,8 @@
 mod accounts;
 mod configuration;
+mod extensions;
 pub use accounts::AccountCommand;
+pub use extensions::{PluginCommand, SkillCommand};
 mod memory;
 mod memory_worker;
 mod terminal;
@@ -45,6 +47,10 @@ pub struct Cli {
 
 #[derive(Debug, Subcommand)]
 pub enum Command {
+    #[command(subcommand)]
+    Skill(SkillCommand),
+    #[command(subcommand)]
+    Plugin(PluginCommand),
     #[command(subcommand)]
     Account(AccountCommand),
     #[command(subcommand)]
@@ -905,6 +911,8 @@ fn timed_out(message: &'static str) -> CliError {
 #[must_use]
 pub fn command_request(command: &Command) -> (&'static str, Value, bool) {
     match command {
+        Command::Skill(command) => extensions::skill_request(command),
+        Command::Plugin(command) => extensions::plugin_request(command),
         Command::Account(command) => accounts::command_request(command),
         Command::MemoryWorker(command) => memory_worker::command_request(command),
         Command::Terminal(command) => terminal::command_request(command),

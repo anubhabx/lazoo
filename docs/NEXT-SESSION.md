@@ -13,6 +13,42 @@ stop the installed service before upgrade or uninstall). `feat/skills-plugins` (
 and plugin management; see its own record. On the owner's machine Windows denies microphone
 access for the user (`ConsentStore\microphone` = Deny in HKCU), so live capture needs that switch
 turned on; Settings → Voice says so and opens the page.
+## Skills and plugins implementation handoff, 2026-11-04
+
+The current worktree adds the owned skill library and native-plugin RPC/CLI slice:
+`skill.list`, source/update preview, install/update/expose/unexpose/remove, and
+`plugin.list`, marketplace list, preview, install/uninstall/enable/disable and
+marketplace add/remove. Previews are ten-minute, in-memory records bounded to
+eight; every apply carries a shared `expectedRevision`, rechecks staged/observed
+state, records a durable operation, advances the revision on finish, and emits
+`extension.operation.started`, `extension.operation.finished`, then
+`skill.changed` or `plugin.changed`. Pending recovery blocks subsequent mutation.
+The complete RPC contract and current limits are in
+`UI-BACKEND-HANDOFF.md#skills-and-plugins`.
+
+Skill backups are owner-protected `.lazoo-extension-backup-<uuid>` directories
+beside each target skill root; the data-root journal lists their exact paths.
+Plugin failure compensation is conditional on observing a newly installed identity.
+Changed native control-file bytes are treated as possible concurrent edits and
+leave recovery-needed/manual inspection rather than being overwritten. Existing
+same-name marketplaces with a different or unknown source refuse; cross-harness
+read-back checks both plugin name and marketplace source. Codex/Claude/Copilot
+native profiles isolate their config variable while retaining personal HOME/shared
+skills; OpenCode/Antigravity profiles isolate HOME.
+
+This is not a verification checkpoint. The implementation and its new tests are
+present in the worktree, but the root agent must run the relevant tests/acceptance
+work before any pass claim or verification record is created. Keep the unsupported
+operations visible: Codex and Copilot plugin enable/disable; Antigravity
+marketplace actions; OpenCode uninstall/toggles/Claude marketplaces; Grok Build
+extensions. Native
+provider files, accounts, and OAuth remain authoritative. Codex
+0.166.0-alpha.5.1 was found under
+`LocalAppData/OpenAI/Codex/bin/22cfb1d302613eae`, while the NVM shim is older
+0.153.4; use daemon executable discovery. Codex documents `CODEX_HOME/skills` as
+legacy. Disposable Codex/Copilot evidence and exact artifact paths are in the UI
+contract; they do not prove network installs, Antigravity exposure, or the
+extension-operation suite.
 
 ## Desktop native first, 2026-11-03
 

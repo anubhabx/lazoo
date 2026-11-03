@@ -5,6 +5,7 @@ mod approval;
 mod configuration;
 mod delivery;
 mod event_wire;
+mod extensions;
 mod idle;
 mod inbox;
 mod incident;
@@ -270,6 +271,7 @@ pub struct App {
     resource_budget: Option<Arc<resources::ResourceBudget>>,
     resource_budget_error: Option<String>,
     terminals: Arc<Mutex<terminal::TerminalState>>,
+    extensions: Arc<Mutex<extensions::ExtensionService>>,
 }
 
 /// How long a provider waits for the local user before a pending approval expires and is
@@ -367,6 +369,7 @@ impl App {
             resource_budget: None,
             resource_budget_error: None,
             terminals: Arc::new(Mutex::new(terminal::TerminalState::default())),
+            extensions: Arc::new(Mutex::new(extensions::ExtensionService::default())),
         };
         app.configuration_recover_startup()?;
         app.memory_recover()?;
@@ -399,6 +402,9 @@ impl App {
             );
         }
         let result = match request.method.as_str() {
+            method if method.starts_with("skill.") || method.starts_with("plugin.") => {
+                self.extension_rpc(method, request.params).await
+            }
             "system.status" => self.status(),
             "system.budget" => self.system_budget(&request.params),
             "memory.policy.show" => self.memory_policy_show(&request.params),

@@ -689,3 +689,246 @@ export type TerminalFrame =
       data: string;
     }
   | { kind: "closed"; reason: string };
+
+// ---- Skills and plugins -------------------------------------------------
+// The contract is docs/UI-BACKEND-HANDOFF.md, "Skills and plugins". These
+// requests carry no idempotency key (the daemon rejects unknown fields); the
+// ledger `revision` fences every change instead.
+
+export type ExposureMode = "link" | "copy";
+
+/** `accountId` omitted or null is the personal harness. */
+export interface ExtensionTarget {
+  provider: string;
+  accountId?: Uuid | null;
+}
+
+export type SkillSourceKind = "auto" | "local" | "github" | "skills-sh" | "git";
+
+export interface SkillSource {
+  source: string;
+  sourceKind: SkillSourceKind;
+  gitRef?: string | null;
+}
+
+export interface SkillInfo {
+  name: string;
+  description: string;
+  relativePath: string;
+  fileCount: number;
+  bytes: number;
+  checksum: string;
+  problems: string[];
+}
+
+export interface LibrarySkill extends SkillInfo {
+  source: SkillSource;
+  resolvedRevision: string | null;
+  revision: number;
+}
+
+export interface SkillExposure {
+  name: string;
+  target: ExtensionTarget;
+  path: string;
+  mode: ExposureMode;
+  checksum: string;
+  libraryPath: string;
+}
+
+export interface SkillInventoryEntry {
+  provider: string;
+  target: ExtensionTarget;
+  name: string;
+  description: string;
+  path: string;
+  canonicalPath: string;
+  kind: "link" | "copy" | "real-dir";
+  managed: boolean;
+  checksum: string | null;
+  fileCount: number | null;
+  bytes: number | null;
+  problems: string[];
+  enabled: boolean | null;
+  duplicate: boolean;
+  alsoVisibleTo: ExtensionTarget[];
+}
+
+export interface SkillTargetInfo {
+  target: ExtensionTarget;
+  skillRoots: string[];
+  exposureDirectory: string | null;
+  compatibility: "Native" | "Unsupported";
+  limitations: string[];
+}
+
+export interface SkillListProblem {
+  target: ExtensionTarget;
+  path: string;
+  reason: string;
+}
+
+/** The ledger's open intent or interrupted outcome; its paths name what to check. */
+export type ExtensionPending = Record<string, unknown>;
+
+export interface SkillListResult {
+  revision: number;
+  library: LibrarySkill[];
+  exposures: SkillExposure[];
+  inventory: SkillInventoryEntry[];
+  problems: SkillListProblem[];
+  pending: ExtensionPending | null;
+  targets: SkillTargetInfo[];
+}
+
+export interface ExtensionPreviewHeader {
+  previewId: Uuid;
+  revision: number;
+  expiresAt: Timestamp;
+}
+
+export interface SkillConflict {
+  name: string;
+  scope: "library" | "harness";
+  kind: "duplicate" | "conflict";
+  replaceAllowed: boolean;
+  target?: ExtensionTarget;
+  path?: string;
+  managed?: boolean;
+}
+
+export interface SkillPreview extends ExtensionPreviewHeader {
+  source: SkillSource;
+  skills: SkillInfo[];
+  resolvedRevision: string | null;
+  conflicts: SkillConflict[];
+  updateName: string | null;
+}
+
+export type SkillOperationStatus =
+  "applied" | "rolled-back" | "recovery-needed";
+
+export interface ExtensionErrorBody {
+  code: string;
+  message: string;
+  data?: unknown;
+}
+
+export interface SkillOutcome {
+  operationId: Uuid;
+  kind: "skill";
+  method: string;
+  status: SkillOperationStatus;
+  error: ExtensionErrorBody | null;
+  backupDirectory: string;
+  requiresProviderRestart: boolean;
+}
+
+export interface SkillMutationResult {
+  revision: number;
+  outcome: SkillOutcome;
+  library: LibrarySkill[];
+  exposures: SkillExposure[];
+}
+
+export type PluginAction =
+  | "install"
+  | "uninstall"
+  | "enable"
+  | "disable"
+  | "marketplace-add"
+  | "marketplace-remove";
+
+export interface PluginRecord {
+  name: string;
+  enabled?: boolean | null;
+  version?: string | null;
+  marketplace?: string | null;
+  path?: string | null;
+}
+
+export interface PluginMarketplaceRecord {
+  name: string;
+  source?: unknown;
+}
+
+export interface PluginObservation {
+  plugins: PluginRecord[];
+  marketplaces: PluginMarketplaceRecord[];
+  providerVersion: string;
+  compatibility: string;
+  limitations: string[];
+}
+
+export interface PluginTargetState {
+  target: ExtensionTarget;
+  observed: PluginObservation | null;
+  error: ExtensionErrorBody | null;
+}
+
+export interface PluginCapability {
+  provider: string;
+  compatibility: string;
+  /** `list`, `marketplace.add`, `install`, `enable`, and so on. */
+  actions: string[];
+  limitations: string[];
+  sessionEffect: string;
+  authentication: string;
+}
+
+export interface PluginListResult {
+  revision: number;
+  targets: PluginTargetState[];
+  capabilities: PluginCapability[];
+  pending: ExtensionPending | null;
+}
+
+export interface PluginMarketplaceSelection {
+  name: string;
+  source: string;
+}
+
+export interface PluginPlannedTarget {
+  target: ExtensionTarget;
+  before: PluginObservation | null;
+  commands: string[][];
+  error: ExtensionErrorBody | null;
+}
+
+export interface PluginPreview extends ExtensionPreviewHeader {
+  request: {
+    action: PluginAction;
+    targets: ExtensionTarget[];
+    name: string;
+    marketplace?: PluginMarketplaceSelection | null;
+  };
+  targets: PluginPlannedTarget[];
+}
+
+export type PluginTargetStatus =
+  | "applied"
+  | "rolled-back"
+  | "recovery-needed"
+  | "refused"
+  | "unsupported-or-unavailable";
+
+export interface PluginTargetOutcome {
+  target: ExtensionTarget;
+  status: PluginTargetStatus;
+  error: ExtensionErrorBody | null;
+  observed: PluginObservation | null;
+  rollbackStatus: string;
+  backupDirectory?: string;
+  limitations?: string[];
+}
+
+export interface PluginMutationResult {
+  revision: number;
+  outcome: {
+    operationId: Uuid;
+    kind: "plugin";
+    method: string;
+    targets: PluginTargetOutcome[];
+    sessionEffect: string;
+  };
+}

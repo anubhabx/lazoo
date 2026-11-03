@@ -2,6 +2,7 @@
 // (`vite dev` + `?mock=1`). Never bundled into production (guarded by DEV).
 
 import type { Bridge, TerminalStreamHandle, VoiceBridge } from "./bridge";
+import { createExtensionHandlers } from "./devExtensions";
 import type {
   AccountUsageBucket,
   AccountUsageResult,
@@ -159,6 +160,7 @@ export function createDevBridge(): Bridge {
 
   const handlers: Record<string, (params: Record<string, unknown>) => unknown> =
     {
+      ...createExtensionHandlers(emit),
       "system.status": () => status({ eventHighWater: sequence }),
       "project.list": () => [...projects],
       "project.register": (params) => {

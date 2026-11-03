@@ -11,6 +11,7 @@ import {
   type ReactNode,
 } from "react";
 import { AnimatePresence, motion } from "motion/react";
+import { createPortal } from "react-dom";
 
 import { words } from "../lib/util";
 
@@ -391,7 +392,9 @@ export function Dialog({
     };
   }, [open]);
 
-  return (
+  // Portalled so an ancestor's transform or containment (container queries, motion
+  // wrappers) can never become the fixed layer's containing block.
+  return createPortal(
     <AnimatePresence>
       {open ? (
         <motion.div
@@ -435,7 +438,8 @@ export function Dialog({
           </motion.div>
         </motion.div>
       ) : null}
-    </AnimatePresence>
+    </AnimatePresence>,
+    document.body,
   );
 }
 
