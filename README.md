@@ -148,6 +148,42 @@ cargo tauri dev
 Pop-Location
 ```
 
+## Skills and native plugins
+
+The daemon and `lazooctl` expose a preview-first extension contract: `skill list`,
+`skill source preview`, `skill update-preview`, `skill install|update|expose|unexpose|remove`,
+and `plugin list|preview|install|uninstall|enable|disable` plus `plugin marketplace
+list|add|remove`. Applies require the preview UUID and its `expectedRevision`; a
+preview expires after ten minutes, and every completed attempt advances the shared
+extension revision. Use `--json` to keep the returned preview, outcome, observed
+state, and per-target status intact. All plugin changes require a provider restart
+and the user's native OAuth/setup. The daemon never writes shared `.agents` roots,
+never simulates an unsupported command through raw provider config, and blocks
+further mutation when recovery is required. Skill backups are owner-protected
+`.lazoo-extension-backup-<uuid>` directories beside the affected target skill root;
+the operation journal records their exact paths. A changed native plugin control
+file is never blindly restored: the mutation becomes recovery-needed for manual
+inspection.
+
+Claude Code, Codex, GitHub Copilot, and Antigravity have native plugin adapters;
+OpenCode supports translated npm-module listing/install only; Grok Build is
+unsupported. Codex enable/disable, Antigravity marketplace commands, and OpenCode
+uninstall/enable/disable are refused; Copilot enable/disable is also refused after
+its disposable 1.0.79 commands exited 1 with `The plugins command is not available.` See
+[the UI/backend contract](docs/UI-BACKEND-HANDOFF.md#skills-and-plugins) for all
+request/result shapes, error codes, events, and CLI mapping. This slice is
+implemented but its new verification has not yet been run. Codex `CODEX_HOME/skills`
+is documented as legacy, and a disposable app-server `skills/list` under installed
+0.166.0-alpha.5.1 successfully found `lazoo-legacy-probe` there
+(`artifacts/acceptance/skills-plugins-native-check/codex-skills.json`). A seeded
+Copilot 1.0.79 plugin list also succeeded, while both toggle commands failed;
+`artifacts/acceptance/skills-plugins-native-check/codex-skills.json` and
+`artifacts/acceptance/skills-plugins-native-check/copilot-plugins.json` are limited disposable evidence. Local Copilot marketplace add/list/remove,
+including default marketplace text-list entries, is in
+`artifacts/acceptance/skills-plugins-native-check/copilot-marketplaces.json`.
+They do not prove a network install, Antigravity skill exposure, or the
+extension-operation suite.
+
 ## Verification
 
 The whole backend gate (format check, clippy with warnings denied, the workspace tests, the locked release build, and every acceptance script except the live model turn and the separately owned desktop, the real-binary ones with `-SkipBuild`) runs with one command and writes `artifacts\acceptance\gate-manifest.json` with every step's exit code and duration:

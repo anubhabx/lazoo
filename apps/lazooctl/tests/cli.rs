@@ -20,6 +20,70 @@ const ROOT_TASK_ID: &str = "00000000-0000-4000-8000-000000000008";
 const SESSION_ID: &str = "00000000-0000-4000-8000-000000000009";
 
 #[test]
+fn skills_and_plugins_cli_map_public_extension_requests() {
+    let skill = Cli::try_parse_from([
+        "lazooctl",
+        "skill",
+        "install",
+        "00000000-0000-4000-8000-000000000010",
+        "--names",
+        "fixture-a,fixture-b",
+        "--providers",
+        "claude-code,codex",
+        "--mode",
+        "copy",
+        "--replace",
+        "--expected-revision",
+        "7",
+    ])
+    .unwrap();
+    let request = command_request(&skill.command);
+    assert_eq!(request.0, "skill.install");
+    assert_eq!(
+        request.1,
+        json!({
+            "previewId":"00000000-0000-4000-8000-000000000010",
+            "names":["fixture-a","fixture-b"],
+            "providers":["claude-code","codex"], "mode":"copy", "replace":true,
+            "expectedRevision":7
+        })
+    );
+
+    let plugin = Cli::try_parse_from([
+        "lazooctl",
+        "plugin",
+        "preview",
+        "--action",
+        "install",
+        "--target",
+        "claude-code",
+        "--target",
+        "codex:00000000-0000-4000-8000-000000000011",
+        "--name",
+        "fixture@market",
+        "--marketplace-name",
+        "market",
+        "--marketplace-source",
+        "https://example.invalid/market.git",
+    ])
+    .unwrap();
+    let request = command_request(&plugin.command);
+    assert_eq!(request.0, "plugin.preview");
+    assert_eq!(
+        request.1,
+        json!({
+            "action":"install", "name":"fixture@market",
+            "targets":[
+                {"provider":"claude-code","accountId":null},
+                {"provider":"codex","accountId":"00000000-0000-4000-8000-000000000011"}
+            ],
+            "marketplace":{"name":"market","source":"https://example.invalid/market.git"}
+        })
+    );
+    assert!(!request.1.to_string().contains("secret"));
+}
+
+#[test]
 fn project_register_defaults_to_isolated() {
     let cli = Cli::try_parse_from(["lazooctl", "project", "register", "C:\\repo"]).unwrap();
     let Command::Project(ProjectCommand::Register { checkout_mode, .. }) = cli.command else {

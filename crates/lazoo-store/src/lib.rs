@@ -6,6 +6,7 @@ mod conversation;
 mod delivery;
 mod emergency;
 mod employee;
+mod extensions;
 mod inbox;
 mod incident;
 mod memory;
@@ -53,6 +54,7 @@ pub use employee::{
     CreateEmployeeInput, DisableEmployeeInput, RefreshProviderObservationsInput,
     UpdateEmployeeInput,
 };
+pub use extensions::ExtensionState;
 pub use inbox::{InboxArchive, InboxSources};
 pub use incident::{
     ApplyIncidentRemedyInput, IncidentRemedyAction, IncidentRemedyResult, ListIncidentsInput,
