@@ -38,51 +38,99 @@ fn main() {
     .expect("Tauri build configuration must be valid");
 }
 
+/// The app icon: the sidebar wordmark's mark (a 14-unit iris checkerboard with a solid 6-unit
+/// core, `.wordmark__mark` in `ui/src/styles/app.css`) on a slate rounded square, as a
+/// multi-size ICO. Each size scales the mark by whole pixels per unit so the dither stays crisp.
+// Pixel coordinates and colour channels are tiny (<= 256), so the float casts are exact.
+#[allow(
+    clippy::cast_precision_loss,
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss
+)]
 fn lazoo_icon() -> Vec<u8> {
-    const SIDE: u32 = 32;
-    const SIDE_U8: u8 = 32;
-    const SIDE_I32: i32 = 32;
-    const PIXEL_BYTES: u32 = SIDE * SIDE * 4;
-    const MASK_BYTES: u32 = SIDE * 4;
-    const IMAGE_BYTES: u32 = 40 + PIXEL_BYTES + MASK_BYTES;
-    let mut icon = Vec::with_capacity((22 + IMAGE_BYTES) as usize);
+    // (size in px, pixels per mark unit)
+    const SIZES: [(u32, u32); 7] = [(16, 1), (24, 1), (32, 2), (48, 2), (64, 3), (128, 6), (256, 11)];
+    const SLATE: [f32; 3] = [23.0, 28.0, 36.0]; // --lz-slate-100
+    const IRIS: [f32; 3] = [141.0, 154.0, 244.0]; // --lz-iris-500
+    const CORE: [f32; 3] = [168.0, 179.0, 249.0]; // --lz-iris-400
 
+    let mix = |a: [f32; 3], b: [f32; 3], t: f32| -> [f32; 3] {
+        [0, 1, 2].map(|i| a[i] + (b[i] - a[i]) * t)
+    };
+    let images: Vec<Vec<u8>> = SIZES
+        .iter()
+        .map(|&(size, unit)| {
+            let side = size as f32;
+            let radius = (side * 0.22).max(2.0);
+            let mark = 14 * unit;
+            let origin = (size - mark) / 2;
+            let mut pixels = Vec::with_capacity((size * size * 4) as usize);
+            // BMP rows run bottom-up.
+            for y in (0..size).rev() {
+                for x in 0..size {
+                    // Rounded-square coverage from a 4x4 supersample, for smooth corners.
+                    let mut covered = 0_u32;
+                    for sy in 0..4 {
+                        for sx in 0..4 {
+                            let px = x as f32 + (sx as f32 + 0.5) / 4.0;
+                            let py = y as f32 + (sy as f32 + 0.5) / 4.0;
+                            let dx = (radius - px).max(px - (side - radius)).max(0.0);
+                            let dy = (radius - py).max(py - (side - radius)).max(0.0);
+                            if dx * dx + dy * dy <= radius * radius {
+                                covered += 1;
+                            }
+                        }
+                    }
+                    let inside = |v: u32| v >= origin && v < origin + mark;
+                    let colour = if inside(x) && inside(y) {
+                        let (ux, uy) = ((x - origin) / unit, (y - origin) / unit);
+                        if (4..10).contains(&ux) && (4..10).contains(&uy) {
+                            CORE
+                        } else if (ux + uy) % 2 == 0 {
+                            mix(SLATE, IRIS, 0.55)
+                        } else {
+                            mix(SLATE, IRIS, 0.18)
+                        }
+                    } else {
+                        SLATE
+                    };
+                    let [r, g, b] = colour.map(|c| c.round() as u8);
+                    let alpha = (covered * 255 / 16) as u8;
+                    pixels.extend_from_slice(&[b, g, r, alpha]);
+                }
+            }
+            let mask_row = (size.div_ceil(32) * 4) as usize;
+            let mut image = Vec::new();
+            image.extend_from_slice(&40_u32.to_le_bytes());
+            image.extend_from_slice(&size.to_le_bytes());
+            image.extend_from_slice(&(size * 2).to_le_bytes());
+            image.extend_from_slice(&1_u16.to_le_bytes());
+            image.extend_from_slice(&32_u16.to_le_bytes());
+            image.extend_from_slice(&[0; 4]);
+            image.extend_from_slice(&u32::try_from(pixels.len() + mask_row * size as usize).unwrap().to_le_bytes());
+            image.extend_from_slice(&[0; 16]);
+            image.extend_from_slice(&pixels);
+            image.resize(image.len() + mask_row * size as usize, 0);
+            image
+        })
+        .collect();
+
+    let mut icon = Vec::new();
     icon.extend_from_slice(&0_u16.to_le_bytes());
     icon.extend_from_slice(&1_u16.to_le_bytes());
-    icon.extend_from_slice(&1_u16.to_le_bytes());
-    icon.extend_from_slice(&[SIDE_U8, SIDE_U8, 0, 0]);
-    icon.extend_from_slice(&1_u16.to_le_bytes());
-    icon.extend_from_slice(&32_u16.to_le_bytes());
-    icon.extend_from_slice(&IMAGE_BYTES.to_le_bytes());
-    icon.extend_from_slice(&22_u32.to_le_bytes());
-
-    icon.extend_from_slice(&40_u32.to_le_bytes());
-    icon.extend_from_slice(&SIDE_I32.to_le_bytes());
-    icon.extend_from_slice(&(SIDE_I32 * 2).to_le_bytes());
-    icon.extend_from_slice(&1_u16.to_le_bytes());
-    icon.extend_from_slice(&32_u16.to_le_bytes());
-    icon.extend_from_slice(&0_u32.to_le_bytes());
-    icon.extend_from_slice(&(PIXEL_BYTES + MASK_BYTES).to_le_bytes());
-    icon.extend_from_slice(&0_i32.to_le_bytes());
-    icon.extend_from_slice(&0_i32.to_le_bytes());
-    icon.extend_from_slice(&0_u32.to_le_bytes());
-    icon.extend_from_slice(&0_u32.to_le_bytes());
-
-    for y in (0..SIDE).rev() {
-        for x in 0..SIDE {
-            let border = x < 2 || y < 2 || x >= SIDE - 2 || y >= SIDE - 2;
-            let letter = (8..=12).contains(&x) && (7..=24).contains(&y)
-                || (8..=23).contains(&x) && (20..=24).contains(&y);
-            let (red, green, blue) = if letter {
-                (225, 91, 35)
-            } else if border {
-                (29, 31, 28)
-            } else {
-                (247, 243, 235)
-            };
-            icon.extend_from_slice(&[blue, green, red, 255]);
-        }
+    icon.extend_from_slice(&u16::try_from(images.len()).unwrap().to_le_bytes());
+    let mut offset = 6 + 16 * images.len();
+    for (&(size, _), image) in SIZES.iter().zip(&images) {
+        let byte = u8::try_from(size).unwrap_or(0); // 256 is written as 0
+        icon.extend_from_slice(&[byte, byte, 0, 0]);
+        icon.extend_from_slice(&1_u16.to_le_bytes());
+        icon.extend_from_slice(&32_u16.to_le_bytes());
+        icon.extend_from_slice(&u32::try_from(image.len()).unwrap().to_le_bytes());
+        icon.extend_from_slice(&u32::try_from(offset).unwrap().to_le_bytes());
+        offset += image.len();
     }
-    icon.resize(icon.len() + MASK_BYTES as usize, 0);
+    for image in images {
+        icon.extend_from_slice(&image);
+    }
     icon
 }

@@ -1,5 +1,19 @@
 # Backend handoff: four-provider UI starting point, 2026-10-29
 
+## Voice, skills and plugins, installer, 2026-11-04
+
+`feat/voice-mode` adds Lazoo Voice to the desktop (design and contract:
+`docs/superpowers/specs/2026-11-04-voice-mode-design.md`, evidence:
+`docs/verification/2026-11-04-voice-mode.md`), the desktop starting its own keeper, and the
+Windows installer (`scripts/build-installer.ps1`, bundle settings in
+`apps/lazoo-desktop/tauri.bundle.conf.json` so ordinary builds never need staged sidecars, a
+vendored Tauri 2.11.5 NSIS template whose only change installs per-user to
+`%LOCALAPPDATA%\Programs\Lazoo` because `%LOCALAPPDATA%\Lazoo` is the data root, and hooks that
+stop the installed service before upgrade or uninstall). `feat/skills-plugins` (Codex) adds skill
+and plugin management; see its own record. On the owner's machine Windows denies microphone
+access for the user (`ConsentStore\microphone` = Deny in HKCU), so live capture needs that switch
+turned on; Settings → Voice says so and opens the page.
+
 ## Desktop native first, 2026-11-03
 
 `feat/desktop-ui-native-first` (from `main` 4fc9527) makes the conversation the harness's own TUI under one agent bar and moves Lazoo's turn record into Activity (Ctrl+I); the Native/Transcript toggle is gone because no harness exposes a complete structured stream (`docs/superpowers/specs/2026-11-03-desktop-native-first-design.md`, section 4). Design system v0.3 is sharp and flat (2 to 6 px radii, hairlines, no glows, 60 to 200 ms motion, nothing animated on keyboard surfaces); agents get seeded dithered glyph avatars animated by state; Settings, Accounts gains routing order, reserves, observed usage windows and a usage table on top of the account-routing-preferences backend (`feat/account-routing-preferences`, Codex). Driving the real desktop found and fixed the Claude Code parent-session environment leak (transcripts off, failed resumes, `LZ-TURN-ACTIVATION-FAILED`) and a layout overflow that hid Accept/Decline. Open backend findings (Codex worker exits after its native view opens, busy-lead turns rejected instead of queued, `events list` early EOF, resume failure not falling back to fresh) are listed with evidence in `docs/verification/2026-11-03-desktop-native-first.md`.

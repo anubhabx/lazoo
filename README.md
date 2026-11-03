@@ -6,6 +6,18 @@ The name is a deliberately silly blend of **lazy** and **zoo**: wake the right e
 
 ## Status
 
+**Install:** `scripts/build-installer.ps1` builds a per-user Windows installer (no administrator
+rights) that puts `Lazoo.exe` and its service binaries in `%LOCALAPPDATA%\Programs\Lazoo`; data
+stays in `%LOCALAPPDATA%\Lazoo`. Opening the app starts its local service.
+
+**Voice** (Settings → Voice): speak into the conversation composer, hear the lead's replies read
+aloud as they stream, or hold a global push-to-talk hotkey (`Ctrl+Alt+Space` by default) to
+dictate into any Windows app. Speech to text runs on this computer with a pinned, hash-verified
+whisper.cpp build and model downloaded from Settings, or on any OpenAI-compatible endpoint;
+optional cleaning removes fillers and stutters locally or through the endpoint. Audio is never
+stored, and nothing leaves the computer unless external processing is switched on. Design:
+`docs/superpowers/specs/2026-11-04-voice-mode-design.md`.
+
 [Provider accounts and GitHub Copilot](docs/ACCOUNT-ROUTING.md) describes isolated
 native profiles, protected API keys, per-provider routing policies, and the compatible
 streaming API pool. Configure them under **Settings → Accounts** or `lazooctl account`.
@@ -46,7 +58,7 @@ Open the desktop from another terminal:
 & .\target\release\lazoo-desktop.exe
 ```
 
-The shell reconnects every ten seconds and keeps the last successful snapshot visible if the daemon becomes unavailable. It does not start or stop the keeper. The companion CLI remains available for control operations:
+The shell reconnects every ten seconds and keeps the last successful snapshot visible if the daemon becomes unavailable. On launch it starts `lazoo-keeper.exe` from its own directory when one is there (a keeper already running for the same data root makes the new one exit at once); closing the window leaves the service and employees running, and `lazooctl system shutdown` stops it. The companion CLI remains available for control operations:
 
 ```powershell
 & .\target\release\lazooctl.exe status
