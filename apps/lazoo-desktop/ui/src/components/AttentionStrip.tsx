@@ -7,7 +7,12 @@ import type {
   NativeTrustRequestRecord,
   WorkspaceConversationResult,
 } from "../lib/protocol";
-import { middleTruncate, providerLabel, relativeTime } from "../lib/util";
+import {
+  middleTruncate,
+  providerLabel,
+  deadlineIn,
+  relativeTime,
+} from "../lib/util";
 import { ActionButton } from "../pages/Conversation";
 import { Button, EASE } from "./primitives";
 
@@ -72,7 +77,7 @@ function AttentionItem({ item }: { item: InboxItem }) {
         <span className="meta">
           {item.requiredAction}
           {item.deadline
-            ? ` · ${item.deadline.kind} ${relativeTime(item.deadline.at)}`
+            ? ` · ${item.deadline.kind} ${deadlineIn(item.deadline.at)}`
             : ""}
           {` · ${relativeTime(item.createdAt)}`}
         </span>
@@ -105,7 +110,10 @@ function TrustItem({ request }: { request: NativeTrustRequestRecord }) {
       <span className="attention__text">
         <strong>{providerLabel(request.provider)}</strong> asks to trust{" "}
         <span className="mono">
-          {middleTruncate(request.canonicalWorkspacePath, 56)}
+          {middleTruncate(
+            request.canonicalWorkspacePath.replace(/^\\\\\?\\/, ""),
+            56,
+          )}
         </span>
         <span className="meta">
           {request.managedWorkspace

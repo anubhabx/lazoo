@@ -83,6 +83,47 @@ fn account_request(mut params: Value) -> Result<Value, RpcError> {
 }
 
 impl App {
+    pub(super) async fn account_usage(&self, params: Value) -> Result<Value, RpcError> {
+        let params: lazoo_protocol::AccountUsageParams = serde_json::from_value(params)
+            .map_err(|_| invalid_params("invalid account usage query"))?;
+        self.capture_passive_usage().await?;
+        self.store
+            .provider_account_usage(&params)
+            .map(to_value)
+            .map_err(account_error)
+    }
+
+    async fn capture_passive_usage(&self) -> Result<(), RpcError> {
+        let sessions = self
+            .live_sessions
+            .lock()
+            .await
+            .iter()
+            .map(|(id, session)| (*id, session.clone()))
+            .collect::<Vec<_>>();
+        for (id, session) in sessions {
+            let windows = session.take_usage_windows();
+            if !windows.is_empty() {
+                self.store
+                    .observe_session_usage_windows(id, &windows)
+                    .map_err(account_error)?;
+            }
+        }
+        Ok(())
+    }
+
+    pub(super) fn account_preferences(&self, params: Value) -> Result<Value, RpcError> {
+        let params: lazoo_protocol::AccountPreferencesParams =
+            serde_json::from_value(account_request(params)?)
+                .map_err(|_| invalid_params("invalid account preferences"))?;
+        let account = self
+            .store
+            .set_provider_account_preferences(&params)
+            .map_err(account_error)?;
+        self.publish_events()?;
+        Ok(to_value(account))
+    }
+
     /// An explicit owner action is the only account setup action that spends model quota.
     pub(super) async fn account_verify(&self, params: Value) -> Result<Value, RpcError> {
         let params: VerifyRoute = serde_json::from_value(account_request(params)?)
@@ -114,6 +155,7 @@ impl App {
         provider: ProviderKind,
         request: &mut lazoo_providers::SessionRequest,
     ) -> Result<Option<super::account_proxy::AccountProxy>, RpcError> {
+        self.capture_passive_usage().await?;
         let account = self
             .store
             .bind_provider_account(
@@ -188,8 +230,9 @@ impl App {
         }
     }
 
-    pub(super) fn account_list(&self, params: &Value) -> Result<Value, RpcError> {
+    pub(super) async fn account_list(&self, params: &Value) -> Result<Value, RpcError> {
         super::require_empty_params(params, "provider.accounts.list")?;
+        self.capture_passive_usage().await?;
         let accounts = self.store.provider_accounts().map_err(account_error)?;
         let policies = ProviderKind::ALL
             .into_iter()

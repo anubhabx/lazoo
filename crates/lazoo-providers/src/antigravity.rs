@@ -515,6 +515,8 @@ fn normalize_result(message: &Value) -> Result<Vec<ProviderEvent>, ProviderError
                 .or_else(|| usage.get("tokens_used"))
                 .and_then(Value::as_u64),
             cost_usd: None,
+            input_tokens_before: None,
+            output_tokens_before: None,
             raw: raw.clone(),
         });
     }

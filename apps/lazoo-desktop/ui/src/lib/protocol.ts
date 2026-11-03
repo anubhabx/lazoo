@@ -100,6 +100,7 @@ export interface EmployeeRecord {
 }
 
 export interface EmployeeSessionRecord {
+  account: SessionAccount | null;
   id: Uuid;
   employeeId: Uuid;
   employeeConfigurationRevision: number;
@@ -128,7 +129,7 @@ export interface ProviderListEntry {
 export type AccountCredentialKind = "native-profile" | "api-key";
 export type AccountApiProtocol = "responses" | "anthropic";
 export type AccountRoutingMode =
-  "inherited" | "balanced" | "pinned" | "api-pool";
+  "inherited" | "balanced" | "priority" | "pinned" | "api-pool";
 export interface ProviderAccountSpec {
   id: Uuid;
   provider: string;
@@ -143,6 +144,12 @@ export interface ProviderAccountSpec {
   enabled: boolean;
 }
 export interface ProviderAccountRecord {
+  createdAt: Timestamp;
+  reservePercent: number | null;
+  exhaustedUntil: Timestamp | null;
+  reserveEnforceable: boolean;
+  reserveReason: string | null;
+  windows: UsageWindow[];
   spec: ProviderAccountSpec;
   revision: number;
   hasSecret: boolean;
@@ -156,6 +163,7 @@ export interface ProviderAccountRecord {
   updatedAt: Timestamp;
 }
 export interface ProviderAccountPolicy {
+  order: Uuid[];
   provider: string;
   mode: AccountRoutingMode;
   accountId: Uuid | null;
@@ -165,6 +173,63 @@ export interface ProviderAccountsSnapshot {
   version: number;
   accounts: ProviderAccountRecord[];
   policies: ProviderAccountPolicy[];
+}
+
+export interface SessionAccount {
+  id: Uuid;
+  label: string;
+}
+export interface WorkerSessionSummary {
+  id: Uuid;
+  state: SessionLifecycleState;
+  account: SessionAccount | null;
+}
+export interface UsageWindow {
+  provider: string;
+  accountId: Uuid | null;
+  kind: string;
+  usedPercent: number | null;
+  remaining: number | null;
+  limit: number | null;
+  windowMinutes: number | null;
+  resetsAt: Timestamp | null;
+  observedAt: Timestamp;
+  source: string;
+  planType: string | null;
+}
+export interface AccountUsageParams {
+  from?: Timestamp;
+  to?: Timestamp;
+  bucket?: "hour" | "day";
+  provider?: string;
+  /** Omitted includes all accounts; null selects the unmanaged personal login. */
+  accountId?: Uuid | null;
+}
+export interface AccountPreferencesParams {
+  id: Uuid;
+  expectedRevision: number;
+  reservePercent: number | null;
+}
+export interface AccountUsageBucket {
+  start: Timestamp;
+  provider: string;
+  accountId: Uuid | null;
+  sessions: number;
+  turnsCompleted: number;
+  turnsFailed: number;
+  requests: number;
+  failures: number;
+  inputTokens: number | null;
+  outputTokens: number | null;
+  tokensReported: number;
+}
+export interface AccountUsageResult {
+  buckets: AccountUsageBucket[];
+  windows: UsageWindow[];
+  observableProviders: Record<
+    string,
+    { windows: boolean; tokens: boolean; reason: string | null }
+  >;
 }
 
 // ---- Inbox --------------------------------------------------------------
@@ -343,6 +408,7 @@ export type WorkerState =
   | "unknown";
 
 export interface LeadSessionSummary {
+  account: SessionAccount | null;
   id: Uuid;
   state: SessionLifecycleState;
   nativeHostPid: number | null;
@@ -394,7 +460,7 @@ export interface WorkerCard {
   stateReason: string;
   taskState: TaskState;
   effectiveAuthority: AuthorityMode;
-  session: { id: Uuid; state: SessionLifecycleState } | null;
+  session: WorkerSessionSummary | null;
   activeTurnId: Uuid | null;
   workspace: WorkerWorkspace | null;
   failureCode: string | null;

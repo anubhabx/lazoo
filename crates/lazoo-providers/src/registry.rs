@@ -138,6 +138,12 @@ pub enum ProviderSessionHandle {
 }
 
 impl ProviderSession for ProviderSessionHandle {
+    fn take_usage_windows(&self) -> Vec<lazoo_protocol::UsageWindow> {
+        match self {
+            Self::Interactive(session) => session.take_usage_windows(),
+            _ => Vec::new(),
+        }
+    }
     fn native_view_available(&self) -> bool {
         match self {
             Self::Codex(session) => session.native_view_available(),

@@ -231,7 +231,138 @@ describe("shell", () => {
   });
 });
 
+function accountRecord(overrides: Record<string, unknown> = {}) {
+  return {
+    spec: {
+      id: "acc-1",
+      provider: "codex",
+      label: "Work",
+      credentialKind: "native-profile",
+      profileDirectory: "",
+      credentialEnvironment: null,
+      baseUrl: null,
+      apiProtocol: null,
+      backendProvider: null,
+      models: [],
+      enabled: true,
+    },
+    revision: 2,
+    hasSecret: false,
+    deleted: false,
+    selections: 0,
+    requests: 0,
+    failures: 0,
+    cooldownUntil: 0,
+    lastStatus: null,
+    lastLatencyMillis: null,
+    updatedAt: "2026-11-01T00:00:00Z",
+    createdAt: "2026-11-01T00:00:00Z",
+    reservePercent: null,
+    exhaustedUntil: null,
+    reserveEnforceable: true,
+    reserveReason: null,
+    windows: [],
+    ...overrides,
+  };
+}
+
+describe("settings", () => {
+  test("a new employee is created from a dialog, not an always-open form", async () => {
+    const bridge = scripted();
+    bridge.on("employee.list", []);
+    bridge.on("employee.create", { employee: { id: "e1" } });
+    const user = userEvent.setup();
+    const { store } = mount(bridge);
+    store.navigate({ kind: "settings", section: "employees" });
+    await screen.findByRole("heading", { name: "Employees" });
+    expect(screen.queryByLabelText("Name")).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "New employee" }));
+    await user.type(await screen.findByLabelText("Name"), "nova");
+    await user.click(screen.getByRole("button", { name: "Create employee" }));
+    await waitFor(() =>
+      expect(bridge.callsTo("employee.create")[0]).toMatchObject({
+        name: "nova",
+        provider: "codex",
+        authorityMode: "ask",
+      }),
+    );
+    await waitFor(() =>
+      expect(screen.queryByLabelText("Name")).not.toBeInTheDocument(),
+    );
+  });
+});
+
 describe("provider accounts", () => {
+  test("priority routing lists accounts in order and moves one with the policy revision", async () => {
+    const bridge = scripted();
+    const second = accountRecord({
+      spec: { ...accountRecord().spec, id: "acc-2", label: "Personal" },
+    });
+    bridge.on("provider.accounts.list", {
+      version: 1,
+      accounts: [accountRecord(), second],
+      policies: [
+        {
+          provider: "codex",
+          mode: "priority",
+          accountId: null,
+          revision: 5,
+          order: ["acc-2", "acc-1"],
+        },
+      ],
+    });
+    const user = userEvent.setup();
+    const { store } = mount(bridge);
+    store.navigate({ kind: "settings", section: "accounts" });
+    const list = await screen.findByRole("list", { name: "Codex accounts" });
+    const rows = within(list).getAllByRole("listitem");
+    expect(rows[0]).toHaveTextContent("Personal");
+    expect(rows[1]).toHaveTextContent("Work");
+    await user.click(screen.getByRole("button", { name: "Move Work up" }));
+    await waitFor(() =>
+      expect(bridge.callsTo("provider.accounts.policy")[0]).toMatchObject({
+        provider: "codex",
+        mode: "priority",
+        order: ["acc-1", "acc-2"],
+        revision: 5,
+      }),
+    );
+  });
+
+  test("a reserve is sent as a preference; an unenforceable one is disabled with its reason", async () => {
+    const bridge = scripted();
+    bridge.on("provider.accounts.list", {
+      version: 1,
+      accounts: [
+        accountRecord(),
+        accountRecord({
+          spec: { ...accountRecord().spec, id: "acc-key", label: "CI key" },
+          reserveEnforceable: false,
+          reserveReason: "no quota window is reported",
+        }),
+      ],
+      policies: [],
+    });
+    bridge.on("provider.accounts.preferences", { ok: true });
+    const user = userEvent.setup();
+    const { store } = mount(bridge);
+    store.navigate({ kind: "settings", section: "accounts" });
+    await user.selectOptions(
+      await screen.findByLabelText("Reserve for Work"),
+      "20",
+    );
+    await waitFor(() =>
+      expect(bridge.callsTo("provider.accounts.preferences")[0]).toMatchObject({
+        id: "acc-1",
+        expectedRevision: 2,
+        reservePercent: 20,
+      }),
+    );
+    const blocked = screen.getByLabelText("Reserve for CI key");
+    expect(blocked).toBeDisabled();
+    expect(blocked).toHaveAttribute("title", "no quota window is reported");
+  });
+
   test("verifies routing only on explicit click and includes the selected model", async () => {
     const bridge = scripted();
     bridge.on("provider.accounts.verify", {
@@ -243,12 +374,14 @@ describe("provider accounts", () => {
     store.navigate({ kind: "settings", section: "accounts" });
     await screen.findByRole("heading", { name: "Accounts" });
     expect(bridge.callsTo("provider.accounts.verify")).toHaveLength(0);
-    await user.selectOptions(
-      screen.getByLabelText("Routing provider"),
-      "github-copilot",
-    );
-    await user.type(screen.getByLabelText("Verification model"), "test-model");
+    await user.click(screen.getByRole("tab", { name: /GitHub Copilot/ }));
     await user.click(screen.getByRole("button", { name: "Verify routing" }));
+    expect(bridge.callsTo("provider.accounts.verify")).toHaveLength(0);
+    await user.type(
+      await screen.findByLabelText("Verification model"),
+      "test-model",
+    );
+    await user.click(screen.getByRole("button", { name: "Send one prompt" }));
     expect(await screen.findByText("Routing verified")).toBeInTheDocument();
     expect(bridge.callsTo("provider.accounts.verify")[0]).toMatchObject({
       provider: "github-copilot",
@@ -261,7 +394,8 @@ describe("provider accounts", () => {
     const { store } = mount(bridge);
     store.navigate({ kind: "settings", section: "accounts" });
     await screen.findByRole("heading", { name: "Accounts" });
-    await user.type(screen.getByLabelText("Label"), "work key");
+    await user.click(screen.getByRole("button", { name: "New account" }));
+    await user.type(await screen.findByLabelText("Label"), "work key");
     await user.selectOptions(screen.getByLabelText("Credential"), "api-key");
     await user.type(screen.getByLabelText("Secret"), "do-not-keep");
     await user.click(screen.getByRole("button", { name: "Add account" }));
@@ -274,16 +408,27 @@ describe("provider accounts", () => {
     >;
     expect(request.secret).toBe("do-not-keep");
     expect(request.expectedRevision).toBe(0);
-    expect(screen.getByLabelText("Secret")).toHaveValue("");
+    // The dialog closes; reopening it shows no trace of the secret.
+    await waitFor(() =>
+      expect(screen.queryByLabelText("Secret")).not.toBeInTheDocument(),
+    );
+    await user.click(screen.getByRole("button", { name: "New account" }));
+    expect(await screen.findByLabelText("Secret")).toHaveValue("");
   });
 
   test("sends the current revision for policy edits", async () => {
     const bridge = scripted();
     bridge.on("provider.accounts.list", {
       version: 1,
-      accounts: [],
+      accounts: [accountRecord()],
       policies: [
-        { provider: "codex", mode: "inherited", accountId: null, revision: 7 },
+        {
+          provider: "codex",
+          mode: "inherited",
+          accountId: null,
+          revision: 7,
+          order: [],
+        },
       ],
     });
     const user = userEvent.setup();
@@ -374,7 +519,11 @@ describe("provider accounts", () => {
     const { store } = mount(bridge);
     store.navigate({ kind: "settings", section: "accounts" });
     await screen.findByRole("heading", { name: "Accounts" });
-    await user.selectOptions(screen.getByLabelText("Credential"), "api-key");
+    await user.click(screen.getByRole("button", { name: "New account" }));
+    await user.selectOptions(
+      await screen.findByLabelText("Credential"),
+      "api-key",
+    );
     await user.type(screen.getByLabelText("Base URL"), "https://example.test");
     await user.selectOptions(
       screen.getByLabelText("Provider"),
@@ -398,6 +547,11 @@ describe("provider accounts", () => {
 
   test("shows a stale account revision error instead of hiding it", async () => {
     const bridge = scripted();
+    bridge.on("provider.accounts.list", {
+      version: 1,
+      accounts: [accountRecord()],
+      policies: [],
+    });
     bridge.fail("provider.accounts.policy", {
       code: "LZ-REVISION-CONFLICT",
       message: "the account policy changed in another window",
@@ -537,7 +691,11 @@ describe("conversation", () => {
     expect(
       within(tabs).getByRole("tab", { name: /mira, lead, busy/ }),
     ).toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: "Transcript" }));
+    // Native first: Lazoo's record of the turn is in Activity, not a second pane.
+    expect(
+      screen.queryByRole("button", { name: "Transcript" }),
+    ).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Open details" }));
     expect(
       await screen.findByText(
         "Fix the flaky daemon test without widening timeouts.",
@@ -611,9 +769,7 @@ describe("conversation", () => {
       rows: 30,
     });
     expect(typeof params.idempotencyKey).toBe("string");
-    expect(
-      await screen.findByText("Native view · read-only"),
-    ).toBeInTheDocument();
+    expect(await screen.findByText(/· read-only/)).toBeInTheDocument();
     await waitFor(() => expect(bridge.terminalFrames).toHaveLength(1));
   });
 
@@ -656,6 +812,24 @@ describe("conversation", () => {
     expect(sent.activateIfNeeded).toBe(true);
   });
 
+  test("a message to a busy lead is confirmed as queued", async () => {
+    const bridge = scripted();
+    bridge.on("turn.submit", {
+      turn: { id: "t3", state: "recorded" },
+      message: { delivery: { state: "queued" } },
+    });
+    const user = userEvent.setup();
+    mount(bridge);
+    await user.click(await screen.findByText("fix flaky daemon test"));
+    const box = await screen.findByLabelText("Message to the lead");
+    expect(box).toHaveAttribute(
+      "placeholder",
+      expect.stringContaining("your message queues"),
+    );
+    await user.type(box, "also check the WAL{Enter}");
+    expect(await screen.findByText("Queued for mira")).toBeInTheDocument();
+  });
+
   test("destructive worker actions ask for confirmation before sending", async () => {
     const bridge = scripted();
     bridge.on(
@@ -668,10 +842,15 @@ describe("conversation", () => {
     await user.click(await screen.findByText("fix flaky daemon test"));
     await screen.findByRole("tablist", { name: "Agents" });
     act(() => store.focusTab(TASK_ID));
-    const cancel = await screen.findByRole("button", { name: "Cancel" });
-    await user.click(cancel);
+    // Destructive actions never take the inline slot; they sit in the agent's menu.
+    expect(
+      screen.queryByRole("button", { name: "Cancel" }),
+    ).not.toBeInTheDocument();
+    await user.click(await screen.findByRole("button", { name: /^More for / }));
+    await user.click(screen.getByRole("menuitem", { name: "Cancel" }));
     expect(bridge.callsTo("task.cancel")).toHaveLength(0);
-    await user.click(screen.getByRole("button", { name: "Confirm: Cancel" }));
+    const confirm = await screen.findByRole("dialog");
+    await user.click(within(confirm).getByRole("button", { name: "Cancel" }));
     await waitFor(() => expect(bridge.callsTo("task.cancel")).toHaveLength(1));
   });
 });

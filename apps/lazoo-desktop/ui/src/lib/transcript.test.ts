@@ -3,18 +3,15 @@ import { describe, expect, test } from "vitest";
 import { blockFromRecord, foldEvents, stateWord, turnTone } from "./transcript";
 import { turnRecord } from "../test/fixtures";
 
-describe("transcript folding", () => {
-  test("text deltas join into one assistant text; tools become rows", () => {
+describe("activity folding", () => {
+  test("text deltas join into one reply; finished tools are counted", () => {
     const folded = foldEvents(turnRecord().events);
     expect(folded.assistantText).toBe("Reproduced locally in 4 of 20 runs.");
-    expect(folded.rows).toHaveLength(1);
-    expect(folded.rows[0]).toMatchObject({
-      tone: "tool",
-      text: "task_delegate · completed",
-    });
+    expect(folded.toolRuns).toBe(1);
+    expect(folded.collaboration).toBe(0);
   });
 
-  test("thoughts fold separately and flush before the next row", () => {
+  test("reasoning is noted, terminal output is not listed, errors are kept", () => {
     const record = turnRecord({
       events: [
         {
@@ -56,16 +53,37 @@ describe("transcript folding", () => {
       ],
     });
     const block = blockFromRecord(record);
-    expect(block.thoughts).toEqual(["Think harder"]);
-    expect(block.events.map((row) => row.tone)).toEqual(["terminal", "error"]);
-    expect(block.events[0]!.text).toBe("cargo test");
-    expect(block.events[1]!.text).toBe("stalled");
+    expect(block.reasoned).toBe(true);
+    expect(block.toolRuns).toBe(0);
+    expect(block.errors).toEqual(["stalled"]);
+  });
+
+  test("Lazoo collaboration calls count apart from tools; unfinished calls do not count", () => {
+    const tool = (sequence: number, toolName: string, status: string) => ({
+      sequence,
+      kind: "tool-update",
+      provider: "claude-code",
+      nativeSessionId: null,
+      nativeTurnId: null,
+      payload: { toolName, status },
+      createdAt: "2026-10-31T10:00:00Z",
+    });
+    const folded = foldEvents([
+      tool(1, "Bash", "permission-requested"),
+      tool(2, "Bash", "completed"),
+      tool(3, "lazoo:task_delegate", "inProgress"),
+      tool(4, "lazoo:task_delegate", "completed"),
+      tool(5, "Edit", "failed"),
+    ]);
+    expect(folded.toolRuns).toBe(2);
+    expect(folded.collaboration).toBe(1);
   });
 
   test("a block never invents content: empty events stay empty", () => {
     const block = blockFromRecord(turnRecord({ events: [], text: "hi" }));
     expect(block.assistantText).toBe("");
-    expect(block.events).toEqual([]);
+    expect(block.toolRuns).toBe(0);
+    expect(block.errors).toEqual([]);
     expect(block.text).toBe("hi");
     expect(block.author).toBe("user");
   });
@@ -75,5 +93,17 @@ describe("transcript folding", () => {
     expect(turnTone("uncertain")).toBe("failed");
     expect(turnTone("completed")).toBe("done");
     expect(stateWord("retryable-failed")).toBe("failed, retryable");
+    expect(stateWord("recorded")).toBe("queued");
+  });
+});
+
+describe("deadlines", () => {
+  test("a future deadline reads forward, a past one as passed", async () => {
+    const { deadlineIn } = await import("./util");
+    const now = Date.parse("2026-11-03T10:00:00Z");
+    expect(deadlineIn("2026-11-03T10:04:00Z", now)).toBe("in 4m");
+    expect(deadlineIn("2026-11-03T12:00:00Z", now)).toBe("in 2h");
+    expect(deadlineIn("2026-11-03T10:00:20Z", now)).toBe("in under a minute");
+    expect(deadlineIn("2026-11-03T09:59:00Z", now)).toBe("passed");
   });
 });

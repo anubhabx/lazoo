@@ -223,6 +223,70 @@ mod tests {
     use lazoo_store::CreateEmployeeInput;
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn large_event_pages_and_oversized_subscription_events_survive_the_real_pipe() {
+        let temporary = tempfile::tempdir().unwrap();
+        let root = DataRoot::from_path(temporary.path().join("data"));
+        root.ensure().unwrap();
+        let store = Store::open_path(root.state_db()).unwrap();
+        let app = App::new(store.clone(), root.clone()).unwrap();
+        for size in [200_000, 200_000, 200_000, 200_000, 2_000_000] {
+            store
+                .record_session_resume_outcome(
+                    uuid::Uuid::nil(),
+                    uuid::Uuid::nil(),
+                    lazoo_store::SessionResumeOutcome::Skipped {
+                        reason: &"x".repeat(size),
+                    },
+                )
+                .unwrap();
+        }
+        let installation = Installation::load_or_create(&root).unwrap();
+        let mut server =
+            PipeServer::bind(&installation, &OwnerSecurity::current().unwrap()).unwrap();
+        for method in ["events.list", "events.subscribe"] {
+            let (accepted, client) = tokio::join!(
+                server.accept(),
+                PipeClient::connect(&installation, "large-events", "0.1.0")
+            );
+            let task_app = app.clone();
+            let task = tokio::spawn(async move {
+                Box::pin(serve_connection(task_app, accepted.unwrap())).await
+            });
+            let mut client = client.unwrap();
+            client
+                .send_json(&JsonRpcRequest {
+                    jsonrpc: "2.0".to_owned(),
+                    id: "page".to_owned(),
+                    method: method.to_owned(),
+                    params: json!({"after":0,"limit":200}),
+                })
+                .await
+                .unwrap();
+            let reply: serde_json::Value = client.receive_json().await.unwrap();
+            if method == "events.list" {
+                let page = reply["result"].as_array().unwrap();
+                assert_eq!(page.len(), 3);
+                assert_eq!(page.last().unwrap()["sequence"], 3);
+                task.await.unwrap().unwrap();
+            } else {
+                assert_eq!(reply["result"]["subscribed"], true);
+                for sequence in 1..=5 {
+                    let frame: serde_json::Value = client.receive_json().await.unwrap();
+                    assert_eq!(frame["params"]["sequence"], sequence);
+                    if sequence == 5 {
+                        assert_eq!(
+                            frame["params"]["payload"]["code"],
+                            "LZ-EVENT-PAYLOAD-TOO-LARGE"
+                        );
+                    }
+                }
+                task.abort();
+                let _ = task.await;
+            }
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn response_to_a_nonreading_client_has_a_deadline() {
         let temporary = tempfile::tempdir().unwrap();
         let installation =

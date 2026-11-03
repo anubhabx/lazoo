@@ -1,12 +1,12 @@
-import { motion } from "motion/react";
 import {
+  Gauge,
   Home,
   Inbox,
   MessageSquare,
+  PanelLeft,
   PanelRight,
   Plus,
   Search,
-  PanelLeft,
   Settings,
   Sparkles,
   SquareTerminal,
@@ -15,7 +15,7 @@ import {
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 
 import { useAppState, useStore } from "../lib/context";
-import { EASE, Kbd, ProjectGlyph, SPRING } from "./primitives";
+import { Kbd, ProjectGlyph } from "./primitives";
 
 interface Command {
   id: string;
@@ -93,6 +93,14 @@ export function CommandPalette() {
         run: () => store.navigate({ kind: "settings", section: "employees" }),
       },
       {
+        id: "go-accounts",
+        group: "Go to",
+        label: "Accounts and usage",
+        keywords: "routing quota limits reserve",
+        icon: <Gauge size={14} aria-hidden="true" />,
+        run: () => store.navigate({ kind: "settings", section: "accounts" }),
+      },
+      {
         id: "new-work",
         group: "Actions",
         label: "New work",
@@ -129,7 +137,6 @@ export function CommandPalette() {
     }
     const conversation = state.conversation;
     if (conversation && state.route.kind === "conversation") {
-      const id = conversation.conversation.id;
       list.push({
         id: "focus-lead",
         group: "Terminals",
@@ -148,19 +155,10 @@ export function CommandPalette() {
           run: () => store.focusTab(worker.taskId),
         });
       }
-      const mode = store.paneMode(id);
-      list.push({
-        id: "toggle-mode",
-        group: "Terminals",
-        label: mode === "native" ? "Show transcript" : "Show native terminal",
-        icon: <SquareTerminal size={14} aria-hidden="true" />,
-        run: () =>
-          store.setPaneMode(id, mode === "native" ? "transcript" : "native"),
-      });
       list.push({
         id: "toggle-details",
         group: "Actions",
-        label: state.detailsOpen ? "Close details" : "Open details",
+        label: state.detailsOpen ? "Hide activity" : "Show activity",
         hint: "Ctrl I",
         icon: <PanelRight size={14} aria-hidden="true" />,
         run: () => store.toggleDetails(),
@@ -221,28 +219,13 @@ export function CommandPalette() {
 
   return (
     <>
-      <motion.div
-        className="scrim"
-        initial={{ opacity: 0 }}
-        animate={{ opacity: 1 }}
-        exit={{ opacity: 0 }}
-        transition={{ duration: 0.15, ease: EASE }}
-        aria-hidden="true"
-      />
-      <motion.div
+      {/* Opened from the keyboard many times a day: no open or close motion. */}
+      <div className="scrim" aria-hidden="true" />
+      <div
         ref={dialog}
         className="palette"
         role="dialog"
         aria-label="Command palette"
-        initial={{ opacity: 0, y: -10, scale: 0.98 }}
-        animate={{ opacity: 1, y: 0, scale: 1 }}
-        exit={{
-          opacity: 0,
-          y: -6,
-          scale: 0.99,
-          transition: { duration: 0.14 },
-        }}
-        transition={SPRING}
         onKeyDown={onKey}
       >
         <div className="palette__input">
@@ -277,11 +260,7 @@ export function CommandPalette() {
                   onClick={() => run(command)}
                 >
                   {command.id === activeId ? (
-                    <motion.span
-                      layoutId="palette-selection"
-                      className="palette__highlight"
-                      transition={SPRING}
-                    />
+                    <span className="palette__highlight" />
                   ) : null}
                   <span className="row__icon">{command.icon}</span>
                   <span className="truncate">{command.label}</span>
@@ -307,7 +286,7 @@ export function CommandPalette() {
             <Kbd keys={["Esc"]} /> close
           </span>
         </div>
-      </motion.div>
+      </div>
     </>
   );
 }

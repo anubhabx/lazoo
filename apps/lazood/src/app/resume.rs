@@ -54,6 +54,54 @@ impl ResumeDecision {
 }
 
 impl App {
+    /// A process that exited while resuming may have lost its transcript. One fresh attempt
+    /// gets a new durable session row; all other failures and fresh-start failures return as-is.
+    pub(super) async fn retry_failed_resume(
+        &self,
+        employee: EmployeeRecord,
+        provider: ProviderKind,
+        failed_session_id: Uuid,
+        prior_session_id: Uuid,
+    ) -> Result<lazoo_protocol::SessionMutationResult, lazoo_protocol::RpcError> {
+        let key = format!("resume-fallback:{failed_session_id}");
+        let fresh = self
+            .store
+            .begin_session(&lazoo_store::BeginSessionInput {
+                request_id: key.clone(),
+                idempotency_key: key,
+                employee_id: employee.id,
+                expected_employee_revision: employee.configuration_revision,
+                owner_boot_id: self.boot_id,
+            })
+            .map_err(super::session_store_error)?;
+        self.store
+            .record_session_resume_outcome(
+                failed_session_id,
+                prior_session_id,
+                SessionResumeOutcome::Failed {
+                    fresh_session_id: fresh.session.id,
+                },
+            )
+            .map_err(super::session_store_error)?;
+        self.publish_events()?;
+        let directory = self.root.session_working_dir(fresh.session.id);
+        // Passing an explicit workspace prevents another resume decision, even if startup fails.
+        if std::fs::create_dir_all(&directory).is_err() {
+            self.record_session_failure(
+                fresh.session.id,
+                fresh.session.revision,
+                "LZ-SESSION-START-FAILED",
+                "fresh session directory could not be prepared",
+            )?;
+            return Err(super::session_failure(
+                "LZ-SESSION-START-FAILED",
+                "fresh session directory could not be prepared",
+                fresh.session.id,
+            ));
+        }
+        Box::pin(self.start_new_session(employee, provider, fresh, Some(directory))).await
+    }
+
     /// Decides whether the starting session `session_id` continues its employee's suspended
     /// predecessor. A store failure while deciding falls back to a fresh session: resume is an
     /// optimisation and must never stop an employee from waking.

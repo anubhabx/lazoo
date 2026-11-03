@@ -1,6 +1,5 @@
-import { motion } from "motion/react";
 import { X } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 import { useAppState, useBridge, useStore } from "../lib/context";
 import type { SessionResources, WorkerCard } from "../lib/protocol";
@@ -11,8 +10,12 @@ import {
   providerLabel,
   words,
 } from "../lib/util";
-import { Button, EASE } from "./primitives";
+import { ActivityPane } from "./ActivityPane";
+import { Button, Segmented } from "./primitives";
 
+type Panel = "activity" | "details";
+
+/** Ctrl+I: what Lazoo recorded (activity) and the facts behind the agent. */
 export function DetailsPanel() {
   const store = useStore();
   const state = useAppState();
@@ -21,38 +24,57 @@ export function DetailsPanel() {
   const tab = route.kind === "conversation" ? route.tab : "lead";
   const worker =
     conversation?.workers.find((card) => card.taskId === tab) ?? null;
+  const [panel, setPanel] = useState<Panel>("activity");
+  const names = useMemo(() => {
+    const map = new Map<string, string>();
+    if (conversation) {
+      map.set(conversation.lead.employeeId, conversation.lead.name);
+      for (const card of conversation.workers)
+        if (card.name) map.set(card.employeeId, card.name);
+    }
+    return map;
+  }, [conversation]);
 
   return (
-    <motion.aside
-      className="details"
-      aria-label="Details"
-      initial={{ width: 0, opacity: 0 }}
-      animate={{ width: "var(--details)", opacity: 1 }}
-      exit={{ width: 0, opacity: 0 }}
-      transition={{ duration: 0.22, ease: EASE }}
-    >
-      <div className="details__inner">
-        <div className="details__head">
-          <h2>Details</h2>
-          <Button
-            variant="ghost"
-            size="sm"
-            icon
-            aria-label="Close details"
-            onClick={() => store.toggleDetails(false)}
-          >
-            <X size={14} aria-hidden="true" />
-          </Button>
-        </div>
-        {!conversation ? (
-          <span className="meta">Loading…</span>
-        ) : worker ? (
-          <WorkerFacts worker={worker} />
-        ) : (
-          <LeadFacts />
-        )}
+    <aside className="details" aria-label="Details">
+      <div className="details__head">
+        <Segmented
+          name="details-panel"
+          label="Panel"
+          value={panel}
+          options={[
+            { value: "activity", label: "Activity" },
+            { value: "details", label: "Details" },
+          ]}
+          onChange={setPanel}
+        />
+        <span className="spacer" />
+        <Button
+          variant="ghost"
+          size="sm"
+          icon
+          aria-label="Close details"
+          onClick={() => store.toggleDetails(false)}
+        >
+          <X size={14} aria-hidden="true" />
+        </Button>
       </div>
-    </motion.aside>
+      {!conversation ? (
+        <span className="meta details__body">Loading…</span>
+      ) : panel === "activity" ? (
+        <ActivityPane
+          conversation={conversation}
+          taskId={worker?.taskId ?? null}
+          agentName={worker?.name ?? conversation.lead.name}
+          names={names}
+          pulse={conversation.eventHighWater}
+        />
+      ) : (
+        <div className="details__body">
+          {worker ? <WorkerFacts worker={worker} /> : <LeadFacts />}
+        </div>
+      )}
+    </aside>
   );
 }
 

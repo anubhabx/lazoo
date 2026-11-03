@@ -3,6 +3,10 @@
 
 import type { Bridge, TerminalStreamHandle } from "./bridge";
 import type {
+  AccountUsageBucket,
+  AccountUsageResult,
+  ProviderAccountRecord,
+  UsageWindow,
   EventFrame,
   EventSummary,
   InboxItem,
@@ -325,12 +329,23 @@ export function createDevBridge(): Bridge {
       ],
       "provider.accounts.list": () => ({
         version: 1,
-        accounts: [],
-        policies: [],
+        accounts: mockAccounts(),
+        policies: [
+          {
+            provider: "codex",
+            mode: "priority",
+            accountId: null,
+            revision: 4,
+            order: [ACCOUNT_WORK, ACCOUNT_SIDE],
+          },
+        ],
       }),
+      "provider.accounts.usage": (params) =>
+        mockUsage(String(params.provider ?? "codex")),
       "provider.accounts.put": () => ({ ok: true }),
       "provider.accounts.remove": () => ({ ok: true }),
       "provider.accounts.policy": () => ({ ok: true }),
+      "provider.accounts.preferences": () => ({ ok: true }),
       "provider.accounts.verify": () => ({
         modelAnswered: true,
         routeVerified: true,
@@ -454,6 +469,152 @@ export function createDevBridge(): Bridge {
       toggleMaximize: async () => undefined,
       startDragging: async () => undefined,
       isMaximized: async () => false,
+    },
+  };
+}
+
+const ACCOUNT_WORK = "acc00000-0000-4000-8000-000000000001";
+const ACCOUNT_SIDE = "acc00000-0000-4000-8000-000000000002";
+const ACCOUNT_KEY = "acc00000-0000-4000-8000-000000000003";
+
+function mockWindow(
+  accountId: string | null,
+  kind: string,
+  usedPercent: number,
+  windowMinutes: number,
+  resetInMinutes: number,
+): UsageWindow {
+  return {
+    provider: "codex",
+    accountId,
+    kind,
+    usedPercent,
+    remaining: null,
+    limit: null,
+    windowMinutes,
+    resetsAt: new Date(Date.now() + resetInMinutes * 60_000).toISOString(),
+    observedAt: new Date().toISOString(),
+    source: "codex app-server",
+    planType: "pro",
+  };
+}
+
+function mockAccount(
+  id: string,
+  label: string,
+  credentialKind: "native-profile" | "api-key",
+  extra: Partial<ProviderAccountRecord> = {},
+): ProviderAccountRecord {
+  return {
+    spec: {
+      id,
+      provider: "codex",
+      label,
+      credentialKind,
+      profileDirectory: "",
+      credentialEnvironment:
+        credentialKind === "api-key" ? "OPENAI_API_KEY" : null,
+      baseUrl: null,
+      apiProtocol: credentialKind === "api-key" ? "responses" : null,
+      backendProvider: null,
+      models: [],
+      enabled: true,
+    },
+    revision: 2,
+    hasSecret: credentialKind === "api-key",
+    deleted: false,
+    selections: 14,
+    requests: 0,
+    failures: 0,
+    cooldownUntil: 0,
+    lastStatus: null,
+    lastLatencyMillis: null,
+    updatedAt: new Date().toISOString(),
+    createdAt: "2026-11-01T10:00:00Z",
+    reservePercent: null,
+    exhaustedUntil: null,
+    reserveEnforceable: true,
+    reserveReason: null,
+    windows: [],
+    ...extra,
+  };
+}
+
+function mockAccounts(): ProviderAccountRecord[] {
+  return [
+    mockAccount(ACCOUNT_WORK, "Work", "native-profile", {
+      reservePercent: 20,
+      windows: [
+        mockWindow(ACCOUNT_WORK, "primary", 64, 300, 132),
+        mockWindow(ACCOUNT_WORK, "secondary", 21, 10080, 5 * 1440),
+      ],
+    }),
+    mockAccount(ACCOUNT_SIDE, "Personal", "native-profile", {
+      exhaustedUntil: new Date(Date.now() + 95 * 60_000).toISOString(),
+      windows: [
+        mockWindow(ACCOUNT_SIDE, "primary", 100, 300, 95),
+        mockWindow(ACCOUNT_SIDE, "secondary", 58, 10080, 2 * 1440),
+      ],
+    }),
+    mockAccount(ACCOUNT_KEY, "CI key", "api-key", {
+      reserveEnforceable: false,
+      reserveReason:
+        "API keys report request and token limits per minute, not a quota window.",
+      requests: 212,
+      failures: 3,
+      lastStatus: 200,
+      lastLatencyMillis: 640,
+    }),
+  ];
+}
+
+function mockUsage(provider: string): AccountUsageResult {
+  const day = 24 * 3600 * 1000;
+  const today = Math.floor(Date.now() / day) * day;
+  const buckets: AccountUsageBucket[] = [];
+  if (provider === "codex") {
+    const shape: [string | null, number[]][] = [
+      [ACCOUNT_WORK, [6, 9, 4, 12, 8, 14, 7]],
+      [ACCOUNT_SIDE, [2, 0, 5, 3, 9, 11, 0]],
+      [ACCOUNT_KEY, [0, 4, 4, 2, 0, 6, 3]],
+      [null, [1, 0, 0, 2, 0, 1, 0]],
+    ];
+    for (const [accountId, turns] of shape)
+      turns.forEach((count, index) => {
+        if (!count) return;
+        buckets.push({
+          start: new Date(today - (6 - index) * day).toISOString(),
+          provider,
+          accountId,
+          sessions: Math.ceil(count / 4),
+          turnsCompleted: count,
+          turnsFailed: index === 4 && accountId === ACCOUNT_SIDE ? 1 : 0,
+          requests: accountId === ACCOUNT_KEY ? count * 9 : 0,
+          failures: 0,
+          inputTokens: count * 41_000,
+          outputTokens: count * 3_900,
+          tokensReported: count,
+        });
+      });
+  }
+  return {
+    buckets,
+    windows:
+      provider === "codex" ? [mockWindow(null, "primary", 12, 300, 200)] : [],
+    observableProviders: {
+      codex: { windows: true, tokens: true, reason: null },
+      "claude-code": {
+        windows: false,
+        tokens: false,
+        reason: "Claude Code does not expose subscription windows to its hooks",
+      },
+      "github-copilot": {
+        windows: false,
+        tokens: true,
+        reason: "not reported by ACP",
+      },
+      opencode: { windows: false, tokens: false, reason: "not reported" },
+      antigravity: { windows: false, tokens: false, reason: "not reported" },
     },
   };
 }

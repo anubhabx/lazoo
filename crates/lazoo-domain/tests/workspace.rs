@@ -209,6 +209,7 @@ fn startability_follows_roster_availability_with_lazoo_words_for_each_block() {
 
 fn session(state: SessionLifecycleState) -> EmployeeSessionRecord {
     EmployeeSessionRecord {
+        account: None,
         id: Uuid::from_u128(9),
         employee_id: Uuid::from_u128(1),
         employee_configuration_revision: 1,

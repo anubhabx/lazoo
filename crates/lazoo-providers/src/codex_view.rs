@@ -57,6 +57,7 @@ pub(crate) struct CodexNativeViewConfig {
 }
 #[derive(Debug)]
 struct LeaseState {
+    host_pid: Option<u32>,
     closed: AtomicBool,
     viewer_connected: AtomicBool,
     handshakes: AtomicUsize,
@@ -84,6 +85,7 @@ impl CodexViewBackend {
         let token = format!("{}{}", Uuid::new_v4().simple(), Uuid::new_v4().simple());
         let (closed_tx, closed_rx) = watch::channel(false);
         let state = Arc::new(LeaseState {
+            host_pid: config.broker.native_host_pid(),
             closed: AtomicBool::new(false),
             viewer_connected: AtomicBool::new(false),
             handshakes: AtomicUsize::new(0),
@@ -135,6 +137,12 @@ impl CodexViewBackend {
 
 impl NativeViewBackend for CodexViewBackend {
     fn close(&self) {
+        tracing::warn!(
+            host_pid = self.state.host_pid,
+            reason = "view-lease-close",
+            canonical_termination = false,
+            "closing Codex viewer lease only"
+        );
         if self.state.close()
             && let Some(task) = self.listener_task.lock().unwrap().take()
         {
@@ -234,7 +242,9 @@ async fn accept_loop(listener: TcpListener, server: ViewServer, mut closed: watc
                 let task = tokio::spawn(async move {
                     tokio::task::yield_now().await;
                     let state = Arc::clone(&server.state);
-                    let _ = serve_connection(stream, server, connection_closed).await;
+                    let result = serve_connection(stream, server, connection_closed).await;
+                    tracing::warn!(host_pid = state.host_pid, reason = "view-connection-ended", failed = result.is_err(),
+                        canonical_termination = false, "Codex viewer disconnected");
                     state.handshakes.fetch_sub(1, Ordering::AcqRel);
                     let task_id = tokio::task::id();
                     state.connection_tasks.lock().unwrap().retain(|task| task.id() != task_id);
@@ -476,7 +486,13 @@ async fn route_read(
         "thread/list" => single_thread_list(server).await,
         "thread/unsubscribe" => {
             ensure_optional_thread(&params, server.broker.session_id())?;
-            Ok(json!({}))
+            Ok(json!({"status": "unsubscribed"}))
+        }
+        "account/rateLimits/read" => {
+            server
+                .broker
+                .request(method, Value::Null, READ_TIMEOUT, "native quota read")
+                .await
         }
         "account/read" => {
             server
@@ -493,7 +509,12 @@ async fn route_read(
             ensure_cwds(&params, &server.cwd)?;
             server
                 .broker
-                .request(method, params, READ_TIMEOUT, "native scoped read")
+                .request(
+                    method,
+                    json!({"cwds": [server.cwd], "forceReload": false}),
+                    READ_TIMEOUT,
+                    "native scoped read",
+                )
                 .await
         }
         "model/list" => {
@@ -523,15 +544,7 @@ async fn route_read(
 }
 async fn bootstrap_resume(params: Value, server: &ViewServer) -> Result<Value, ProviderError> {
     ensure_thread(&params, server.broker.session_id())?;
-    let read = server
-        .broker
-        .request(
-            "thread/read",
-            json!({"threadId": server.broker.session_id(), "includeTurns": false}),
-            READ_TIMEOUT,
-            "native view bootstrap thread read",
-        )
-        .await?;
+    let read = read_thread_metadata(server).await?;
     let mut thread = read.get("thread").cloned().ok_or_else(|| {
         ProviderError::Protocol("native view thread/read omitted thread".to_owned())
     })?;
@@ -547,7 +560,17 @@ async fn bootstrap_resume(params: Value, server: &ViewServer) -> Result<Value, P
 }
 async fn forward_thread_read(params: Value, server: &ViewServer) -> Result<Value, ProviderError> {
     ensure_thread(&params, server.broker.session_id())?;
-    let mut read = server
+    let mut read = read_thread_metadata(server).await?;
+    force_no_direct_input(&mut read)?;
+    Ok(read)
+}
+
+async fn read_thread_metadata(server: &ViewServer) -> Result<Value, ProviderError> {
+    // A new thread has no persisted rollout yet. Its canonical start response is authoritative.
+    if server.broker.is_new_empty_thread() {
+        return Ok(json!({"thread": server.genuine_thread_start["thread"]}));
+    }
+    server
         .broker
         .request(
             "thread/read",
@@ -555,9 +578,7 @@ async fn forward_thread_read(params: Value, server: &ViewServer) -> Result<Value
             READ_TIMEOUT,
             "native thread read",
         )
-        .await?;
-    force_no_direct_input(&mut read)?;
-    Ok(read)
+        .await
 }
 async fn history_read(
     method: &str,
@@ -575,15 +596,7 @@ async fn history_read(
         .await
 }
 async fn single_thread_list(server: &ViewServer) -> Result<Value, ProviderError> {
-    let read = server
-        .broker
-        .request(
-            "thread/read",
-            json!({"threadId": server.broker.session_id(), "includeTurns": false}),
-            READ_TIMEOUT,
-            "native thread list",
-        )
-        .await?;
+    let read = read_thread_metadata(server).await?;
     let mut thread = read.get("thread").cloned().ok_or_else(|| {
         ProviderError::Protocol("native view thread/read omitted thread".to_owned())
     })?;

@@ -5,13 +5,14 @@ import {
   useEffect,
   useId,
   useRef,
+  useState,
   type ButtonHTMLAttributes,
   type CSSProperties,
   type ReactNode,
 } from "react";
 import { AnimatePresence, motion } from "motion/react";
 
-import { providerLabel, words } from "../lib/util";
+import { words } from "../lib/util";
 
 export const EASE: [number, number, number, number] = [0.22, 1, 0.36, 1];
 /** Settles quickly without overshoot: the feel of every moving surface. */
@@ -23,24 +24,24 @@ export const SPRING = {
 } as const;
 
 export const fade = {
-  initial: { opacity: 0, y: 4 },
-  animate: { opacity: 1, y: 0 },
-  exit: { opacity: 0, y: -4 },
-  transition: { duration: 0.22, ease: EASE },
+  initial: { opacity: 0 },
+  animate: { opacity: 1 },
+  exit: { opacity: 0 },
+  transition: { duration: 0.16, ease: EASE },
 };
 
 export const fadeFast = {
   initial: { opacity: 0 },
   animate: { opacity: 1 },
   exit: { opacity: 0 },
-  transition: { duration: 0.15, ease: EASE },
+  transition: { duration: 0.12, ease: EASE },
 };
 
 export const rise = {
-  initial: { opacity: 0, y: 8 },
+  initial: { opacity: 0, y: 4 },
   animate: { opacity: 1, y: 0 },
-  exit: { opacity: 0, y: 4 },
-  transition: { duration: 0.28, ease: EASE },
+  exit: { opacity: 0 },
+  transition: { duration: 0.16, ease: EASE },
 };
 
 type ButtonProps = ButtonHTMLAttributes<HTMLButtonElement> & {
@@ -153,38 +154,8 @@ export function Badge({
   );
 }
 
-/** An agent's mark: its initial on its harness's hue. */
-export function Avatar({
-  name,
-  provider,
-  size = 22,
-  status,
-}: {
-  name: string;
-  provider: string | null | undefined;
-  size?: number;
-  status?: string;
-}) {
-  const style = {
-    "--avatar-hue": `var(--lz-provider-${provider ?? "none"}, var(--lz-slate-700))`,
-    width: size,
-    height: size,
-    fontSize: Math.round(size * 0.46),
-  } as CSSProperties;
-  return (
-    <span
-      className="avatar"
-      style={style}
-      title={`${name} · ${providerLabel(provider)}`}
-      aria-hidden="true"
-    >
-      {(name.trim()[0] ?? "?").toUpperCase()}
-      {status ? (
-        <span className="avatar__status dot" data-tone={status} />
-      ) : null}
-    </span>
-  );
-}
+/** An agent's mark: see AgentAvatar (dithered glyph, animated by state). */
+export { AgentAvatar as Avatar } from "./AgentAvatar";
 
 const GLYPH_HUES = [
   "var(--lz-iris-400)",
@@ -465,5 +436,85 @@ export function Dialog({
         </motion.div>
       ) : null}
     </AnimatePresence>
+  );
+}
+
+export interface MenuItem {
+  label: string;
+  onSelect: () => void;
+  danger?: boolean;
+  disabled?: boolean;
+}
+
+/**
+ * A small popover menu: secondary actions live here so a surface keeps one
+ * primary action. Escape, outside click and selection close it.
+ */
+export function Menu({
+  label,
+  items,
+  children,
+  align = "end",
+}: {
+  label: string;
+  items: MenuItem[];
+  children: ReactNode;
+  align?: "start" | "end";
+}) {
+  const [open, setOpen] = useState(false);
+  const root = useRef<HTMLSpanElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    function onDown(event: MouseEvent) {
+      if (!root.current?.contains(event.target as Node)) setOpen(false);
+    }
+    function onKey(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        event.stopPropagation();
+        setOpen(false);
+      }
+    }
+    window.addEventListener("mousedown", onDown);
+    window.addEventListener("keydown", onKey, true);
+    return () => {
+      window.removeEventListener("mousedown", onDown);
+      window.removeEventListener("keydown", onKey, true);
+    };
+  }, [open]);
+  if (!items.length) return null;
+  return (
+    <span className="menu-anchor" ref={root}>
+      <Button
+        variant="ghost"
+        size="sm"
+        icon
+        aria-label={label}
+        aria-haspopup="menu"
+        aria-expanded={open}
+        onClick={() => setOpen((value) => !value)}
+      >
+        {children}
+      </Button>
+      {open ? (
+        <div className="menu" role="menu" aria-label={label} data-align={align}>
+          {items.map((item) => (
+            <button
+              key={item.label}
+              type="button"
+              role="menuitem"
+              className="menu__item"
+              data-danger={item.danger || undefined}
+              disabled={item.disabled}
+              onClick={() => {
+                setOpen(false);
+                item.onSelect();
+              }}
+            >
+              {item.label}
+            </button>
+          ))}
+        </div>
+      ) : null}
+    </span>
   );
 }

@@ -1,4 +1,4 @@
-import { AnimatePresence, MotionConfig, motion } from "motion/react";
+import { AnimatePresence, MotionConfig } from "motion/react";
 import { useEffect, useMemo } from "react";
 
 import { CommandPalette } from "./components/CommandPalette";
@@ -17,6 +17,7 @@ import {
   useStore,
 } from "./lib/context";
 import type { Store } from "./lib/store";
+import { installDitherFields } from "./lib/dither";
 import { TerminalManager } from "./lib/terminals";
 import { ConversationPage } from "./pages/Conversation";
 import { InboxPage } from "./pages/Inbox";
@@ -27,6 +28,7 @@ export function App({ store, bridge }: { store: Store; bridge: Bridge }) {
   const terminals = useMemo(() => new TerminalManager(bridge), [bridge]);
 
   useEffect(() => {
+    installDitherFields();
     void store.init();
     // Warm the terminal renderer after the launcher has settled.
     const warmTimer = setTimeout(() => {
@@ -129,27 +131,16 @@ function Shell() {
       <div className="main">
         <Titlebar />
         <main className="stage" aria-label="Workspace">
-          <AnimatePresence initial={false}>
-            <motion.div
-              key={pageKey}
-              className="page-layer"
-              initial={{ opacity: 0, y: 6 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -3 }}
-              transition={{ duration: 0.2, ease: EASE }}
-            >
-              {route.kind === "launcher" ? <LauncherPage /> : null}
-              {route.kind === "conversation" ? <ConversationPage /> : null}
-              {route.kind === "inbox" ? <InboxPage /> : null}
-              {route.kind === "settings" ? <SettingsPage /> : null}
-            </motion.div>
-          </AnimatePresence>
+          <div key={pageKey} className="page-layer">
+            {route.kind === "launcher" ? <LauncherPage /> : null}
+            {route.kind === "conversation" ? <ConversationPage /> : null}
+            {route.kind === "inbox" ? <InboxPage /> : null}
+            {route.kind === "settings" ? <SettingsPage /> : null}
+          </div>
         </main>
-        <AnimatePresence initial={false}>
-          {state.detailsOpen && route.kind === "conversation" ? (
-            <DetailsPanel key="details" />
-          ) : null}
-        </AnimatePresence>
+        {state.detailsOpen && route.kind === "conversation" ? (
+          <DetailsPanel />
+        ) : null}
       </div>
       <Toasts />
       <AnimatePresence>

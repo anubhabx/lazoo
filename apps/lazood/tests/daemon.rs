@@ -150,6 +150,7 @@ struct FakeSessionBackend {
     turn_stall: Arc<AtomicBool>,
     /// Scripted start refusals: each one fails the next `start` before any session is counted.
     fail_starts: Arc<AtomicUsize>,
+    start_process_exit: Arc<AtomicBool>,
     working_directories: Arc<Mutex<Vec<PathBuf>>>,
     permission_requests: Arc<Mutex<Vec<PermissionRequest>>>,
     permission_decisions: Arc<Mutex<Vec<PermissionDecision>>>,
@@ -184,6 +185,7 @@ impl Default for FakeSessionBackend {
             turn_retryable_failure: Arc::new(AtomicBool::new(false)),
             turn_stall: Arc::new(AtomicBool::new(false)),
             fail_starts: Arc::new(AtomicUsize::new(0)),
+            start_process_exit: Arc::new(AtomicBool::new(false)),
             working_directories: Arc::new(Mutex::new(Vec::new())),
             permission_requests: Arc::new(Mutex::new(Vec::new())),
             permission_decisions: Arc::new(Mutex::new(Vec::new())),
@@ -329,7 +331,10 @@ impl SessionBackend for FakeSessionBackend {
         Box::pin(async move {
             if self.fail_starts.load(Ordering::SeqCst) > 0 {
                 self.fail_starts.fetch_sub(1, Ordering::SeqCst);
-                return Err(ProviderError::Protocol("scripted start failure".to_owned()));
+                if self.start_process_exit.load(Ordering::SeqCst) {
+                    return Err(ProviderError::ProcessExited { code: Some(1) });
+                }
+                return Err(ProviderError::NotDetected(provider));
             }
             let number = self.starts.fetch_add(1, Ordering::SeqCst) + 1;
             if self.gate_start.load(Ordering::SeqCst) {
@@ -2144,7 +2149,7 @@ fn raw_frame_archive_acceptance_contract_is_deterministic_and_backend_only() {
         "externalModelUseAbsent",
         "uiChangesAbsent",
         "deterministic-fake-transport",
-        "schemaVersion = 21",
+        "schemaVersion = 22",
         "wireFramesWithoutEvents = 'NOT_COVERED'",
         "nonCompletedTurns = 'NOT_COVERED'",
     ] {
@@ -3022,6 +3027,8 @@ async fn accepted_turn_allows_session_level_events_without_reproving_acceptance(
             raw: None,
         },
         ProviderEvent::Usage {
+            input_tokens_before: None,
+            output_tokens_before: None,
             provider: ProviderKind::Codex,
             session_id: "native-1".to_owned(),
             input_tokens: Some(10),
@@ -4113,7 +4120,7 @@ async fn status_reports_protocol_store_and_boot_identity() {
     let result = response.result.unwrap();
 
     assert_eq!(result["protocolVersion"], 1);
-    assert_eq!(result["schemaVersion"], 21);
+    assert_eq!(result["schemaVersion"], 22);
     assert_eq!(result["journalMode"], "wal");
     assert!(
         result["bootId"]
@@ -5418,7 +5425,7 @@ fn session_terminal_attach_acceptance_contract_is_real_binary_and_backend_only()
         "uiChangesAbsent",
         "real-binaries-disposable-data-root-no-provider",
         "schemaTwenty",
-        "schemaVersion = 21",
+        "schemaVersion = 22",
         "session-terminal-attach-manifest.json",
     ] {
         assert!(
@@ -5687,7 +5694,7 @@ fn employee_roster_acceptance_contract_is_backend_only() {
         "roster', 'refresh",
         "LZ-EMPLOYEE-STALE",
         "restartDurability",
-        "schemaVersion 21",
+        "schemaVersion 22",
         "providerSmokeAbsent",
     ] {
         assert!(
@@ -5725,7 +5732,7 @@ fn native_session_acceptance_contract_covers_containment_and_owner_loss() {
         "completeTreeTerminated",
         "nativeHostPid",
         "providerSmokeAbsent",
-        "schemaVersion 21",
+        "schemaVersion 22",
     ] {
         assert!(
             script.contains(required),
@@ -5755,7 +5762,7 @@ fn collaboration_bus_acceptance_contract_is_backend_only() {
         "deadLetterEvidence",
         "restartDurability",
         "auditOutboxEvidence",
-        "schemaVersion 21",
+        "schemaVersion 22",
         "providerSmokeAbsent",
         "desktopCapabilityExpansionAbsent",
     ] {
@@ -5880,6 +5887,9 @@ fn task_graph_acceptance_executes_backend_only_contract() {
     let status = Command::new("powershell")
         .args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-File"])
         .arg(&script_path)
+        // Reuse the workspace debug fixtures instead of recursively rebuilding
+        // the entire workspace with a different feature set during cargo test.
+        .args(["-BuildProfile", "debug", "-SkipBuild"])
         .arg("-OutputPath")
         .arg(&output_path)
         .status()
@@ -5891,8 +5901,10 @@ fn task_graph_acceptance_executes_backend_only_contract() {
     )
     .unwrap();
     assert_eq!(manifest["status"], "PASS");
-    assert_eq!(manifest["schemaVersion"], 21);
+    assert_eq!(manifest["schemaVersion"], 22);
     assert_eq!(manifest["mode"], "deterministic-fixture");
+    assert_eq!(manifest["gates"]["buildProfile"], "debug");
+    assert_eq!(manifest["gates"]["releaseBuild"], "SKIPPED_BY_CALLER");
     for field in [
         "rootIdentity",
         "replayNoDuplicate",
@@ -7084,7 +7096,7 @@ fn collaboration_tools_acceptance_contract_is_deterministic_and_backend_only() {
         "worker_turn_reports_failure_through_task_report_before_native_completion",
         "collaboration-tools-manifest.json",
         "deterministic-fake-transport",
-        "schemaVersion = 21",
+        "schemaVersion = 22",
     ] {
         assert!(
             script.contains(required),
@@ -7621,7 +7633,7 @@ async fn restart_owner_loss_and_emergency_spool_fold_into_startup_incidents_once
         .await
         .result
         .unwrap();
-    assert_eq!(status["schemaVersion"], 21);
+    assert_eq!(status["schemaVersion"], 22);
     assert_eq!(status["emergencyIncidentCount"], 1);
 }
 
@@ -7724,7 +7736,7 @@ fn minimum_incidents_acceptance_contract_is_deterministic_and_backend_only() {
         "incident_errors_use_exit_code_fifteen",
         "minimum-incidents-manifest.json",
         "deterministic-fake-transport",
-        "schemaVersion = 21",
+        "schemaVersion = 22",
     ] {
         assert!(
             script.contains(required),
@@ -8194,7 +8206,7 @@ fn result_delivery_acceptance_contract_is_deterministic_and_backend_only() {
         "externalModelUseAbsent",
         "uiChangesAbsent",
         "deterministic-fake-transport",
-        "schemaVersion = 21",
+        "schemaVersion = 22",
     ] {
         assert!(
             script.contains(required),
@@ -8701,7 +8713,7 @@ fn peer_messaging_acceptance_contract_is_deterministic_and_backend_only() {
         "externalModelUseAbsent",
         "uiChangesAbsent",
         "deterministic-fake-transport",
-        "schemaVersion = 21",
+        "schemaVersion = 22",
     ] {
         assert!(
             script.contains(required),
@@ -8824,7 +8836,7 @@ fn coalesced_notices_acceptance_contract_is_deterministic_and_backend_only() {
         "externalModelUseAbsent",
         "uiChangesAbsent",
         "deterministic-fake-transport",
-        "schemaVersion = 21",
+        "schemaVersion = 22",
     ] {
         assert!(
             script.contains(required),
@@ -9063,7 +9075,7 @@ fn activation_policy_acceptance_contract_is_deterministic_and_backend_only() {
         "externalModelUseAbsent",
         "uiChangesAbsent",
         "deterministic-fake-transport",
-        "schemaVersion = 21",
+        "schemaVersion = 22",
     ] {
         assert!(
             script.contains(required),
@@ -9462,6 +9474,260 @@ fn user_turn_request(conversation_id: uuid::Uuid, key: &str) -> JsonRpcRequest {
             "idempotencyKey": key
         }),
     )
+}
+
+#[tokio::test]
+async fn resilience_events_list_pages_fit_the_ipc_frame_without_sequence_gaps() {
+    let (_temporary, app) = test_app();
+    let store = Store::open_path(app.data_root().state_db()).unwrap();
+    for index in 0..120 {
+        store
+            .create_employee(&CreateEmployeeInput {
+                request_id: format!("large-event-{index}"),
+                idempotency_key: format!("large-event-{index}"),
+                name: format!("Large {index}"),
+                provider: "codex".to_owned(),
+                role: String::new(),
+                instructions: "x".repeat(12_000),
+                model: None,
+                reasoning_effort: None,
+                native_settings: json!({}),
+                authority_mode: AuthorityMode::Ask,
+                checkout_policy: EmployeeCheckoutPolicy::default(),
+                enabled: true,
+                activation_policy: lazoo_protocol::ActivationPolicy::Manual,
+                idle_timeout_seconds: 900,
+                provider_observation: None,
+            })
+            .unwrap();
+    }
+    let mut after = 0;
+    let high_water = store.status().unwrap().event_high_water;
+    while after < high_water {
+        let response = app
+            .handle(request(
+                "large-events",
+                "events.list",
+                json!({"after": after, "limit": 200}),
+            ))
+            .await;
+        assert!(serde_json::to_vec(&response).unwrap().len() <= lazoo_protocol::MAX_FRAME_BYTES);
+        let result = response.result.unwrap();
+        let page = result.as_array().unwrap();
+        assert!(!page.is_empty());
+        for event in page {
+            assert_eq!(event["sequence"].as_u64().unwrap(), after + 1);
+            after += 1;
+        }
+    }
+    let snapshot = app
+        .handle(request("large-snapshot", "desktop.snapshot", json!({})))
+        .await;
+    assert!(serde_json::to_vec(&snapshot).unwrap().len() <= lazoo_protocol::MAX_FRAME_BYTES);
+}
+
+/// Live regression (2026-11-03): the delivery pass, woken by the queued first turn, took the
+/// dormant lead's delivery gate, could not activate, and the submission parked its turn as
+/// queued with nothing left to start the session. The pass must leave that turn alone.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn resilience_background_delivery_never_strands_a_dormant_leads_first_turn() {
+    // The race is timing-dependent; twenty fresh daemons make a regression near-certain to
+    // show while a correct implementation can never fail.
+    for attempt in 0..20 {
+        let (_temporary, harness) = tool_harness_idle(
+            AuthorityMode::FullAutonomy,
+            lazoo_protocol::ActivationPolicy::Manual,
+            900,
+        );
+        let (_, conversation_id) = claude_lead(&harness, 900);
+        let stop = Arc::new(AtomicBool::new(false));
+        // Several concurrent delivery passes keep the recipient's gate contended.
+        let spinning: Vec<_> = (0..3)
+            .map(|_| {
+                let app = harness.app.clone();
+                let stop = Arc::clone(&stop);
+                tokio::spawn(async move {
+                    while !stop.load(Ordering::SeqCst) {
+                        let _ = app.deliver_pending_notices_once().await;
+                        tokio::task::yield_now().await;
+                    }
+                })
+            })
+            .collect();
+        let response = timeout(
+            Duration::from_secs(10),
+            harness
+                .app
+                .handle(user_turn_request(conversation_id, "dormant-first")),
+        )
+        .await
+        .expect("the first turn must activate the lead, not wait for a delivery pass");
+        stop.store(true, Ordering::SeqCst);
+        for task in spinning {
+            task.await.unwrap();
+        }
+        assert!(response.error.is_none(), "attempt {attempt}: {response:?}");
+        let result = response.result.unwrap();
+        assert_ne!(
+            result["message"]["delivery"]["state"], "queued",
+            "attempt {attempt}: {result}"
+        );
+        assert_eq!(harness.backend.turns.load(Ordering::SeqCst), 1);
+    }
+}
+
+#[tokio::test]
+async fn resilience_busy_user_turns_are_durable_fifo_without_provider_writes() {
+    let (_temporary, harness) = tool_harness_idle(
+        AuthorityMode::FullAutonomy,
+        lazoo_protocol::ActivationPolicy::Manual,
+        900,
+    );
+    let (_, conversation_id) = claude_lead(&harness, 900);
+    harness.backend.gate_events.store(true, Ordering::SeqCst);
+    let app = harness.app.clone();
+    let first = tokio::spawn(async move {
+        app.handle(user_turn_request(conversation_id, "fifo-first"))
+            .await
+    });
+    timeout(Duration::from_secs(3), async {
+        while harness.backend.turns.load(Ordering::SeqCst) == 0 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    let mut queued = Vec::new();
+    for key in ["fifo-second", "fifo-third"] {
+        let response = timeout(
+            Duration::from_secs(1),
+            harness.app.handle(user_turn_request(conversation_id, key)),
+        )
+        .await
+        .expect("busy submission must return its durable queue record promptly");
+        assert!(response.error.is_none(), "{response:?}");
+        let result = response.result.unwrap();
+        assert_eq!(result["turn"]["state"], "recorded");
+        assert_eq!(result["message"]["delivery"]["state"], "queued");
+        queued.push(
+            result["turn"]["id"]
+                .as_str()
+                .unwrap()
+                .parse::<uuid::Uuid>()
+                .unwrap(),
+        );
+    }
+    assert_eq!(harness.backend.turns.load(Ordering::SeqCst), 1);
+    let replay = harness
+        .app
+        .handle(user_turn_request(conversation_id, "fifo-second"))
+        .await;
+    assert_eq!(replay.result.unwrap()["turn"]["id"], queued[0].to_string());
+    harness.backend.gate_events.store(false, Ordering::SeqCst);
+    harness.backend.event_permits.add_permits(1);
+    assert!(first.await.unwrap().error.is_none());
+    harness.app.deliver_pending_notices_once().await.unwrap();
+    for turn_id in &queued {
+        assert_eq!(
+            harness.store.get_turn(*turn_id).unwrap().state,
+            TurnState::Completed
+        );
+    }
+    let requests = harness.backend.turn_requests.lock().unwrap();
+    assert_eq!(requests.len(), 3);
+    assert_eq!(
+        requests[1].correlation_id,
+        harness.store.get_turn(queued[0]).unwrap().correlation_id
+    );
+    assert_eq!(
+        requests[2].correlation_id,
+        harness.store.get_turn(queued[1]).unwrap().correlation_id
+    );
+}
+
+#[tokio::test]
+async fn resilience_failed_resume_start_retries_fresh_in_the_same_activation() {
+    let (_temporary, harness) = tool_harness_idle(
+        AuthorityMode::FullAutonomy,
+        lazoo_protocol::ActivationPolicy::Manual,
+        900,
+    );
+    let (lead, conversation_id) = claude_lead(&harness, 900);
+    submit_user_turn(&harness, conversation_id, "resume-start-first").await;
+    suspend_idle_now(&harness).await;
+    harness.backend.fail_starts.store(1, Ordering::SeqCst);
+    harness
+        .backend
+        .start_process_exit
+        .store(true, Ordering::SeqCst);
+    let response = harness
+        .app
+        .handle(user_turn_request(conversation_id, "resume-start-second"))
+        .await;
+    assert!(response.error.is_none(), "{response:?}");
+    assert_eq!(response.result.unwrap()["turn"]["state"], "completed");
+    let sessions = sessions_of(&harness, lead.id);
+    assert_eq!(sessions.len(), 3);
+    assert_eq!(
+        sessions[1].state,
+        lazoo_protocol::SessionLifecycleState::Failed
+    );
+    assert_eq!(
+        sessions[2].state,
+        lazoo_protocol::SessionLifecycleState::Idle
+    );
+    assert!(
+        harness.backend.resume_ids.lock().unwrap().is_empty(),
+        "successful retry must be fresh"
+    );
+    let events = harness.store.list_events(0, 1024).unwrap();
+    assert!(
+        events
+            .iter()
+            .any(|event| event.event_type == "session.resume.failed")
+    );
+}
+
+#[tokio::test]
+async fn resilience_startup_retry_requires_a_resume_exit_and_stops_after_one_fresh_attempt() {
+    for (has_prior, process_exit, failures, expected_sessions, remaining) in [
+        (false, true, 2, 1, 1), // Never retry an initial fresh activation.
+        (true, false, 2, 2, 1), // Unavailable/incompatible startup is not a lost transcript.
+        (true, true, 2, 3, 0),  // A failing fresh fallback does not recurse.
+    ] {
+        let (_temporary, harness) = tool_harness_idle(
+            AuthorityMode::FullAutonomy,
+            lazoo_protocol::ActivationPolicy::Manual,
+            900,
+        );
+        let (lead, conversation_id) = claude_lead(&harness, 900);
+        if has_prior {
+            submit_user_turn(&harness, conversation_id, "retry-bounds-first").await;
+            suspend_idle_now(&harness).await;
+        }
+        harness
+            .backend
+            .start_process_exit
+            .store(process_exit, Ordering::SeqCst);
+        harness
+            .backend
+            .fail_starts
+            .store(failures, Ordering::SeqCst);
+        let response = harness
+            .app
+            .handle(user_turn_request(conversation_id, "retry-bounds-next"))
+            .await;
+        assert_eq!(response.error.unwrap().code, "LZ-TURN-ACTIVATION-FAILED");
+        assert_eq!(sessions_of(&harness, lead.id).len(), expected_sessions);
+        assert_eq!(
+            harness.backend.fail_starts.load(Ordering::SeqCst),
+            remaining
+        );
+        assert_eq!(
+            harness.backend.turns.load(Ordering::SeqCst),
+            usize::from(has_prior)
+        );
+    }
 }
 
 async fn suspend_idle_now(harness: &ToolHarness) {
@@ -9997,7 +10263,7 @@ fn idle_suspension_acceptance_contract_is_deterministic_and_backend_only() {
         "externalModelUseAbsent",
         "uiChangesAbsent",
         "deterministic-fake-transport",
-        "schemaVersion = 21",
+        "schemaVersion = 22",
     ] {
         assert!(
             script.contains(required),
@@ -10284,7 +10550,7 @@ fn lead_remediation_acceptance_contract_is_deterministic_and_backend_only() {
         "externalModelUseAbsent",
         "uiChangesAbsent",
         "deterministic-fake-transport",
-        "schemaVersion = 21",
+        "schemaVersion = 22",
     ] {
         assert!(
             script.contains(required),
@@ -10326,7 +10592,7 @@ fn incident_thresholds_acceptance_contract_is_deterministic_and_backend_only() {
         "externalModelUseAbsent",
         "uiChangesAbsent",
         "deterministic-fake-transport",
-        "schemaVersion = 21",
+        "schemaVersion = 22",
     ] {
         assert!(
             script.contains(required),
@@ -10535,7 +10801,7 @@ fn user_notifications_acceptance_contract_is_deterministic_and_backend_only() {
         "externalModelUseAbsent",
         "uiChangesAbsent",
         "deterministic-fake-transport",
-        "schemaVersion = 21",
+        "schemaVersion = 22",
     ] {
         assert!(
             script.contains(required),
@@ -10629,7 +10895,7 @@ fn message_arrival_acceptance_contract_is_deterministic_and_backend_only() {
         "externalModelUseAbsent",
         "uiChangesAbsent",
         "deterministic-fake-transport",
-        "schemaVersion = 21",
+        "schemaVersion = 22",
     ] {
         assert!(
             script.contains(required),
@@ -10851,7 +11117,7 @@ fn message_priority_acceptance_contract_is_deterministic_and_backend_only() {
         "externalModelUseAbsent",
         "uiChangesAbsent",
         "deterministic-fake-transport",
-        "schemaVersion = 21",
+        "schemaVersion = 22",
     ] {
         assert!(
             script.contains(required),
@@ -11040,7 +11306,7 @@ fn configurable_thresholds_acceptance_contract_is_deterministic_and_backend_only
         "externalModelUseAbsent",
         "uiChangesAbsent",
         "deterministic-fake-transport",
-        "schemaVersion = 21",
+        "schemaVersion = 22",
     ] {
         assert!(
             script.contains(required),
@@ -11569,7 +11835,7 @@ fn desktop_inbox_acceptance_contract_is_deterministic_and_backend_only() {
         "externalModelUseAbsent",
         "uiChangesAbsent",
         "deterministic-fake-transport",
-        "schemaVersion = 21",
+        "schemaVersion = 22",
     ] {
         assert!(
             script.contains(required),
@@ -11754,7 +12020,7 @@ fn resource_accounting_acceptance_contract_is_deterministic_and_backend_only() {
         "externalModelUseAbsent",
         "uiChangesAbsent",
         "deterministic-fake-transport",
-        "schemaVersion = 21",
+        "schemaVersion = 22",
     ] {
         assert!(
             script.contains(required),
@@ -11791,7 +12057,7 @@ fn resource_budget_acceptance_contract_measures_lazoo_itself_without_a_provider(
         "$idleCpuCeiling = 0.01",
         "$routingCpuCeiling = 0.05",
         "$idleMemoryCeilingBytes = 350MB",
-        "schemaVersion = 21",
+        "schemaVersion = 22",
         "real-binaries-no-provider",
     ] {
         assert!(
@@ -11963,7 +12229,7 @@ fn conversation_rename_acceptance_contract_is_deterministic_and_backend_only() {
         "externalModelUseAbsent",
         "uiChangesAbsent",
         "deterministic-fake-transport",
-        "schemaVersion = 21",
+        "schemaVersion = 22",
     ] {
         assert!(
             script.contains(required),
@@ -12076,7 +12342,7 @@ fn provider_config_acceptance_contract_is_read_only_and_backend_only() {
         "externalModelUseAbsent",
         "uiChangesAbsent",
         "deterministic-fake-transport",
-        "schemaVersion = 21",
+        "schemaVersion = 22",
     ] {
         assert!(
             script.contains(required),
@@ -13061,7 +13327,7 @@ fn core_scenario_acceptance_contract_maps_every_step_to_evidence() {
         "externalModelUseAbsent",
         "uiChangesAbsent",
         "deterministic-fake-transport",
-        "schemaVersion = 21",
+        "schemaVersion = 22",
     ] {
         assert!(
             script.contains(required),
@@ -13424,7 +13690,7 @@ fn workspace_read_models_acceptance_contract_is_deterministic_and_backend_only()
         "externalModelUseAbsent",
         "uiChangesAbsent",
         "deterministic-fake-transport",
-        "schemaVersion = 21",
+        "schemaVersion = 22",
     ] {
         assert!(
             script.contains(required),
@@ -13746,7 +14012,7 @@ fn workspace_conversation_acceptance_contract_is_deterministic_and_backend_only(
         "externalModelUseAbsent",
         "uiChangesAbsent",
         "deterministic-fake-transport",
-        "schemaVersion = 21",
+        "schemaVersion = 22",
     ] {
         assert!(
             script.contains(required),
@@ -13910,7 +14176,7 @@ fn workspace_actions_acceptance_contract_is_deterministic_and_backend_only() {
         "externalModelUseAbsent",
         "uiChangesAbsent",
         "deterministic-fake-transport",
-        "schemaVersion = 21",
+        "schemaVersion = 22",
     ] {
         assert!(
             script.contains(required),
@@ -14048,7 +14314,7 @@ fn provider_migration_preview_acceptance_contract_is_deterministic_and_backend_o
         "externalModelUseAbsent",
         "uiChangesAbsent",
         "deterministic-fake-transport",
-        "schemaVersion = 21",
+        "schemaVersion = 22",
     ] {
         assert!(
             script.contains(required),
@@ -14550,7 +14816,7 @@ fn claude_governed_parity_acceptance_contract_is_deterministic_and_backend_only(
         "externalModelUseAbsent",
         "uiChangesAbsent",
         "deterministic-fake-transport",
-        "schemaVersion = 21",
+        "schemaVersion = 22",
     ] {
         assert!(
             script.contains(required),
@@ -15141,9 +15407,30 @@ impl SessionBackend for AcpFixtureBackend {
                 .lock()
                 .unwrap()
                 .push((request.permission_mode.clone(), request.cwd.clone()));
+            // The fake ACP server must not consult the owner's personal configuration.
+            let mut isolated = request.clone();
+            if !isolated.cwd.join(".git").exists() {
+                std::fs::create_dir_all(isolated.cwd.join(".git")).unwrap();
+            }
+            isolated
+                .launch_environment
+                .set("USERPROFILE", isolated.cwd.join("fixture-home"));
+            isolated
+                .launch_environment
+                .set("HOME", isolated.cwd.join("fixture-home"));
+            isolated
+                .launch_environment
+                .set("XDG_CONFIG_HOME", isolated.cwd.join("fixture-config"));
+            for key in [
+                "OPENCODE_CONFIG",
+                "OPENCODE_CONFIG_CONTENT",
+                "OPENCODE_CONFIG_DIR",
+            ] {
+                isolated.launch_environment.remove(key);
+            }
             let session = lazoo_providers::ProviderAdapter::start(
                 &lazoo_providers::OpenCodeAdapter::with_executable(self.executable.clone()),
-                request,
+                &isolated,
             )
             .await?;
             Ok(Box::new(AcpFixtureSession(session)) as Box<dyn ManagedSession>)
@@ -15479,7 +15766,7 @@ fn opencode_governed_delivery_acceptance_contract_is_deterministic_and_backend_o
         "uiChangesAbsent",
         "deterministic-fake-transport",
         "schemaTwenty",
-        "schemaVersion = 21",
+        "schemaVersion = 22",
         "CURRENT_20_NATIVE_WORKSPACE_TRUST",
         "GOVERNED_FOUR_PROVIDERS",
         "current provider-parity contract",
@@ -15547,7 +15834,7 @@ fn opencode_full_autonomy_acceptance_contract_is_deterministic_and_backend_only(
         "uiChangesAbsent",
         "deterministic-fake-transport",
         "schemaTwenty",
-        "schemaVersion = 21",
+        "schemaVersion = 22",
         "CURRENT_20_NATIVE_WORKSPACE_TRUST",
         "GOVERNED_FOUR_PROVIDERS",
         "current provider-parity contract",

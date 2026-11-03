@@ -725,6 +725,7 @@ struct TurnEventState {
     text_parts: HashSet<String>,
     part_text: HashMap<String, String>,
     retained_text_bytes: usize,
+    usage: HashMap<String, (Option<u64>, Option<u64>)>,
 }
 
 fn turn_state_error(session_id: &str, value: &Value, message: &str) -> ProviderEvent {
@@ -787,6 +788,30 @@ fn normalize_event(
                     ));
                 }
                 state.assistant_messages.insert(id.to_owned());
+                if let Some(tokens) = info.get("tokens") {
+                    let input = tokens.get("input").and_then(Value::as_u64);
+                    let output = tokens.get("output").and_then(Value::as_u64);
+                    if input.is_some() || output.is_some() {
+                        let previous = state.usage.entry(id.to_owned()).or_default();
+                        previous.0 = previous.0.max(input);
+                        previous.1 = previous.1.max(output);
+                        let input_tokens = sum_reported(state.usage.values().map(|value| value.0));
+                        let output_tokens = sum_reported(state.usage.values().map(|value| value.1));
+                        return Some(ProviderEvent::Usage {
+                            provider: ProviderKind::OpenCode,
+                            session_id: session_id.to_owned(),
+                            input_tokens,
+                            output_tokens,
+                            total_tokens: input_tokens
+                                .zip(output_tokens)
+                                .and_then(|(input, output)| input.checked_add(output)),
+                            cost_usd: None,
+                            input_tokens_before: None,
+                            output_tokens_before: None,
+                            raw: None,
+                        });
+                    }
+                }
             }
             None
         }
@@ -923,6 +948,12 @@ fn normalize_event(
         }),
         _ => None,
     }
+}
+
+fn sum_reported(values: impl Iterator<Item = Option<u64>>) -> Option<u64> {
+    values.flatten().fold(None, |total, next| {
+        Some(total.unwrap_or(0_u64).saturating_add(next))
+    })
 }
 
 fn permission_request(
@@ -1617,6 +1648,39 @@ mod tests {
         let identifiers = (0..MAX_TURN_IDENTIFIERS).map(|i| i.to_string()).collect();
         assert!(identifier_exceeds_bound("new", &identifiers));
         assert!(!identifier_exceeds_bound("0", &identifiers));
+    }
+
+    #[test]
+    fn token_reports_accumulate_owned_messages_without_counting_replay_or_foreign_usage() {
+        let mut state = TurnEventState::default();
+        let event = |id, parent, input, output| json!({"type":"message.updated","properties":{"info":{"id":id,"parentID":parent,"sessionID":"ses","tokens":{"input":input,"output":output},"apiKey":"private-token"}}});
+        assert!(
+            normalize_event(
+                "ses",
+                "user",
+                &event("foreign", "other", 999, 999),
+                &mut state
+            )
+            .is_none()
+        );
+        for (id, input, output, expected_input, expected_output) in [
+            ("a", 100, 20, 100, 20),
+            ("a", 100, 20, 100, 20),
+            ("b", 60, 10, 160, 30),
+            ("a", 50, 5, 160, 30),
+        ] {
+            let usage =
+                normalize_event("ses", "user", &event(id, "user", input, output), &mut state)
+                    .unwrap();
+            assert!(
+                matches!(usage, ProviderEvent::Usage { input_tokens: Some(i), output_tokens: Some(o), raw: None, .. } if i == expected_input && o == expected_output)
+            );
+            assert!(
+                !serde_json::to_string(&usage)
+                    .unwrap()
+                    .contains("private-token")
+            );
+        }
     }
 
     #[test]

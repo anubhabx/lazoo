@@ -1,4 +1,3 @@
-import { AnimatePresence, motion } from "motion/react";
 import {
   ChevronRight,
   FolderPlus,
@@ -14,14 +13,13 @@ import { useAppState, useStore } from "../lib/context";
 import type { ConversationRow, ProjectRecord } from "../lib/protocol";
 import { relativeTime } from "../lib/util";
 import {
+  Avatar,
   Button,
   Dialog,
   Dot,
-  EASE,
   Field,
   Kbd,
   ProjectGlyph,
-  SPRING,
 } from "./primitives";
 
 /** How many conversations an open project shows before "Show all". */
@@ -49,15 +47,18 @@ export function markerTone(
   }
 }
 
-/** The selected row's highlight glides from row to row. */
-function Selection() {
-  return (
-    <motion.span
-      layoutId="rail-selection"
-      className="rail-selection"
-      transition={SPRING}
-    />
-  );
+/** What the lead's avatar shows for a conversation row. */
+function rowStatus(row: ConversationRow): string {
+  switch (row.marker) {
+    case "active":
+      return "running";
+    case "needs-attention":
+      return "attention";
+    case "failed":
+      return "failed";
+    default:
+      return "idle";
+  }
 }
 
 export function Rail() {
@@ -83,7 +84,7 @@ export function Rail() {
             size="sm"
             icon
             tip="Hide sidebar  Ctrl B"
-            tipSide="right"
+            tipSide="bottom"
             aria-label="Hide sidebar"
             onClick={() => store.toggleSidebar(true)}
           >
@@ -112,20 +113,14 @@ export function Rail() {
             current={route.kind === "inbox"}
             onClick={() => store.navigate({ kind: "inbox", filter: "all" })}
             trailing={
-              <AnimatePresence>
-                {unresolved > 0 ? (
-                  <motion.span
-                    className="rail-badge"
-                    aria-label={`${unresolved} items need you`}
-                    initial={{ opacity: 0, scale: 0.6 }}
-                    animate={{ opacity: 1, scale: 1 }}
-                    exit={{ opacity: 0, scale: 0.6 }}
-                    transition={SPRING}
-                  >
-                    {unresolved}
-                  </motion.span>
-                ) : null}
-              </AnimatePresence>
+              unresolved > 0 ? (
+                <span
+                  className="rail-badge"
+                  aria-label={`${unresolved} items need you`}
+                >
+                  {unresolved}
+                </span>
+              ) : null
             }
           />
         </nav>
@@ -139,7 +134,7 @@ export function Rail() {
                 size="sm"
                 icon
                 tip="Add a project"
-                tipSide="right"
+                tipSide="left"
                 aria-label="Add a project"
                 onClick={() => setAdding(true)}
               >
@@ -168,11 +163,9 @@ export function Rail() {
               <span>Recents</span>
             </div>
             <div role="list" aria-label="Conversation history">
-              <AnimatePresence initial={false}>
-                {home.map((row) => (
-                  <ConversationEntry key={row.id} row={row} />
-                ))}
-              </AnimatePresence>
+              {home.map((row) => (
+                <ConversationEntry key={row.id} row={row} />
+              ))}
             </div>
             {homeLoaded && home.length === 0 ? (
               <p className="rail-section__empty">No conversations yet</p>
@@ -220,7 +213,6 @@ function RailButton({
       aria-label={ariaLabel}
       onClick={onClick}
     >
-      {current ? <Selection /> : null}
       <span className="rail-row__icon">{icon}</span>
       <span className="rail-row__label">{label}</span>
       {trailing ? <span className="rail-row__trail">{trailing}</span> : null}
@@ -281,7 +273,6 @@ function ProjectEntry({ project }: { project: ProjectRecord }) {
           title={project.canonicalPath}
           onClick={() => store.selectSpace(project.id)}
         >
-          {current ? <Selection /> : null}
           <span className="rail-row__icon">
             <ProjectGlyph name={project.displayName} size={18} />
           </span>
@@ -304,44 +295,37 @@ function ProjectEntry({ project }: { project: ProjectRecord }) {
           <ChevronRight size={13} aria-hidden="true" />
         </button>
       </div>
-      <AnimatePresence initial={false}>
-        {expanded ? (
-          <motion.div
-            key="children"
-            className="rail-project__children"
-            role="list"
-            aria-label={`${project.displayName} conversations`}
-            initial={{ height: 0, opacity: 0 }}
-            animate={{ height: "auto", opacity: 1 }}
-            exit={{ height: 0, opacity: 0 }}
-            transition={{ duration: 0.24, ease: EASE }}
-          >
-            {preview.map((row) => (
-              <ConversationEntry key={row.id} row={row} nested />
-            ))}
-            {rows.length === 0 && project.id in state.spaceConversations ? (
-              <button
-                type="button"
-                className="rail-row rail-row--nested rail-row--hint"
-                onClick={() => store.selectSpace(project.id)}
-              >
-                <span className="rail-row__label">
-                  Start the first conversation
-                </span>
-              </button>
-            ) : null}
-            {rows.length > PROJECT_PREVIEW ? (
-              <button
-                type="button"
-                className="rail-row rail-row--nested rail-row--hint"
-                onClick={() => store.selectSpace(project.id)}
-              >
-                <span className="rail-row__label">Show all {rows.length}</span>
-              </button>
-            ) : null}
-          </motion.div>
-        ) : null}
-      </AnimatePresence>
+      {expanded ? (
+        <div
+          className="rail-project__children"
+          role="list"
+          aria-label={`${project.displayName} conversations`}
+        >
+          {preview.map((row) => (
+            <ConversationEntry key={row.id} row={row} nested />
+          ))}
+          {rows.length === 0 && project.id in state.spaceConversations ? (
+            <button
+              type="button"
+              className="rail-row rail-row--nested rail-row--hint"
+              onClick={() => store.selectSpace(project.id)}
+            >
+              <span className="rail-row__label">
+                Start the first conversation
+              </span>
+            </button>
+          ) : null}
+          {rows.length > PROJECT_PREVIEW ? (
+            <button
+              type="button"
+              className="rail-row rail-row--nested rail-row--hint"
+              onClick={() => store.selectSpace(project.id)}
+            >
+              <span className="rail-row__label">Show all {rows.length}</span>
+            </button>
+          ) : null}
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -359,14 +343,7 @@ function ConversationEntry({
   const marker = markerTone(row, state.seen);
   const selected = route.kind === "conversation" && route.id === row.id;
   return (
-    <motion.div
-      role="listitem"
-      layout="position"
-      initial={{ opacity: 0, x: -4 }}
-      animate={{ opacity: 1, x: 0 }}
-      exit={{ opacity: 0, x: -4 }}
-      transition={{ duration: 0.2, ease: EASE }}
-    >
+    <div role="listitem">
       <button
         type="button"
         className={`rail-row rail-row--conv ${nested ? "rail-row--nested" : ""} ${marker ? "rail-row--strong" : ""}`.trim()}
@@ -375,18 +352,25 @@ function ConversationEntry({
         title={row.markerReason ?? row.title}
         onClick={() => store.openConversation(row.id)}
       >
-        {selected ? <Selection /> : null}
+        <span className="rail-row__icon">
+          <Avatar
+            name={row.leadName ?? row.title}
+            provider={row.provider}
+            size={20}
+            status={rowStatus(row)}
+          />
+        </span>
         <span className="rail-row__label">{row.title}</span>
         <span className="rail-row__trail">
-          {marker ? <Dot tone={marker.tone} /> : null}
+          {marker?.tone === "complete" ? <Dot tone="complete" /> : null}
           <span className="rail-row__time">{relativeTime(row.updatedAt)}</span>
         </span>
       </button>
-    </motion.div>
+    </div>
   );
 }
 
-function AddProjectDialog({
+export function AddProjectDialog({
   open,
   onClose,
 }: {

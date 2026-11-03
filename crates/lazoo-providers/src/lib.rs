@@ -3,6 +3,7 @@ mod antigravity;
 mod claude;
 mod codex;
 mod codex_broker;
+mod codex_frame;
 mod codex_view;
 mod config;
 mod config_apply;
@@ -21,6 +22,7 @@ mod opencode;
 mod opencode_http;
 mod opencode_view;
 mod preview;
+mod quota;
 mod redaction;
 mod registry;
 

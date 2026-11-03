@@ -1,26 +1,22 @@
-import { AnimatePresence, motion } from "motion/react";
-import { ArrowUp, PanelRight } from "lucide-react";
+import { ArrowUp, Ellipsis, PanelRight } from "lucide-react";
 import {
   useEffect,
   useMemo,
   useRef,
   useState,
+  useSyncExternalStore,
   type KeyboardEvent,
 } from "react";
 
 import { AttentionStrip } from "../components/AttentionStrip";
 import { TerminalPane } from "../components/TerminalPane";
-import { TranscriptPane } from "../components/TranscriptPane";
 import {
   Avatar,
-  Badge,
   Button,
-  EASE,
-  SPRING,
-  Segmented,
+  Dialog,
+  Menu,
   Skeleton,
-  StatusWord,
-  fadeFast,
+  type MenuItem,
 } from "../components/primitives";
 import { useAppState, useStore, useTerminals } from "../lib/context";
 import type {
@@ -30,7 +26,6 @@ import type {
   WorkerCard,
   WorkerState,
 } from "../lib/protocol";
-import type { PaneMode } from "../lib/store";
 import { authorityLabel, providerLabel, shortId, words } from "../lib/util";
 
 export function lifecycleTone(lifecycle: LeadLifecycle): string {
@@ -73,7 +68,7 @@ export function workerTone(state: WorkerState): string {
   }
 }
 
-interface Tab {
+export interface Tab {
   key: string;
   name: string;
   role: string;
@@ -85,17 +80,12 @@ interface Tab {
   worker: WorkerCard | null;
 }
 
-export function ConversationPage() {
-  const store = useStore();
-  const terminals = useTerminals();
+/** The lead first, then each worker, with the session its pane shows. */
+export function useAgentTabs(): Tab[] {
   const state = useAppState();
-  const route = state.route;
   const conversation = state.conversation;
-  const routeTab = route.kind === "conversation" ? route.tab : "lead";
-  const conversationId = route.kind === "conversation" ? route.id : null;
-
   const sessions = state.sessions;
-  const tabs = useMemo<Tab[]>(() => {
+  return useMemo<Tab[]>(() => {
     if (!conversation) return [];
     const { lead, workers } = conversation;
     // A finished worker's card carries no session, but the daemon keeps its suspended
@@ -133,11 +123,17 @@ export function ConversationPage() {
       })),
     ];
   }, [conversation, sessions]);
+}
 
+export function ConversationPage() {
+  const store = useStore();
+  const terminals = useTerminals();
+  const state = useAppState();
+  const route = state.route;
+  const conversation = state.conversation;
+  const routeTab = route.kind === "conversation" ? route.tab : "lead";
+  const tabs = useAgentTabs();
   const active = tabs.find((tab) => tab.key === routeTab) ?? tabs[0] ?? null;
-  const mode: PaneMode = conversationId
-    ? store.paneMode(conversationId)
-    : "native";
 
   // Terminals for tabs that left, or for another conversation, are released.
   useEffect(() => {
@@ -149,22 +145,10 @@ export function ConversationPage() {
     void terminals.releaseAllExcept(keep);
   }, [tabs, terminals]);
 
-  const names = useMemo(() => {
-    const map = new Map<string, string>();
-    if (conversation) {
-      map.set(conversation.lead.employeeId, conversation.lead.name);
-      for (const worker of conversation.workers) {
-        if (worker.name) map.set(worker.employeeId, worker.name);
-      }
-    }
-    return map;
-  }, [conversation]);
-
   if (!conversation) {
     return (
       <div className="conv" aria-busy={!state.conversationError}>
-        <div />
-        <div />
+        <div className="agentbar" />
         <div className="conv__frame">
           <div className="frame-state">
             {state.conversationError ? (
@@ -173,26 +157,25 @@ export function ConversationPage() {
                   {state.conversationError.code}
                 </span>
                 <span>{state.conversationError.message}</span>
-                <Button
-                  size="sm"
-                  onClick={() => store.navigate({ kind: "launcher" })}
-                >
-                  Back to new work
-                </Button>
+                <div className="frame-state__actions">
+                  <Button
+                    size="sm"
+                    onClick={() => store.navigate({ kind: "launcher" })}
+                  >
+                    Back to new work
+                  </Button>
+                </div>
               </>
             ) : (
               <div className="frame-loading" role="status">
                 <span className="sr-only">Opening conversation…</span>
-                <Skeleton width="38%" height={12} />
+                <Skeleton width="38%" height={10} />
                 <Skeleton width="72%" height={10} />
                 <Skeleton width="64%" height={10} />
-                <Skeleton width="48%" height={10} />
               </div>
             )}
           </div>
         </div>
-        <div />
-        <div />
       </div>
     );
   }
@@ -202,114 +185,51 @@ export function ConversationPage() {
 
   return (
     <div className="conv">
-      <div className="tabs">
-        <div className="tabs__list" role="tablist" aria-label="Agents">
-          <AnimatePresence initial={false}>
-            {tabs.map((tab) => (
-              <motion.button
-                key={tab.key}
-                type="button"
-                role="tab"
-                className={`tab ${tab.done ? "tab--done" : ""}`.trim()}
-                aria-selected={active?.key === tab.key}
-                aria-label={`${tab.name}, ${tab.role}, ${tab.stateLabel}`}
-                title={`${tab.name} · ${providerLabel(tab.provider)} · ${tab.stateLabel}`}
-                onClick={() => store.focusTab(tab.key)}
-                layout
-                initial={{ opacity: 0, x: -6 }}
-                animate={{ opacity: 1, x: 0 }}
-                exit={{ opacity: 0, x: -6 }}
-                transition={{ duration: 0.22, ease: EASE }}
-              >
-                {active?.key === tab.key ? (
-                  <motion.span
-                    className="tab__indicator"
-                    layoutId="tab-indicator"
-                    transition={SPRING}
-                  />
-                ) : null}
-                <Avatar
-                  name={tab.name}
-                  provider={tab.provider}
-                  size={18}
-                  status={tab.tone}
-                />
-                <span className="tab__name">{tab.name}</span>
-                {tab.key === "lead" ? (
-                  <span className="tab__role">lead</span>
-                ) : null}
-              </motion.button>
-            ))}
-          </AnimatePresence>
+      <div className="agentbar">
+        <div className="agentbar__tabs" role="tablist" aria-label="Agents">
+          {tabs.map((tab) => (
+            <button
+              key={tab.key}
+              type="button"
+              role="tab"
+              className="agent-tab"
+              data-done={tab.done || undefined}
+              aria-selected={active?.key === tab.key}
+              aria-label={`${tab.name}, ${tab.role}, ${tab.stateLabel}`}
+              title={`${tab.name} · ${providerLabel(tab.provider)} · ${tab.stateLabel}`}
+              onClick={() => store.focusTab(tab.key)}
+            >
+              <Avatar
+                name={tab.name}
+                provider={tab.provider}
+                size={20}
+                status={tab.tone}
+              />
+              <span className="agent-tab__name">{tab.name}</span>
+              {tab.key === "lead" ? (
+                <span className="agent-tab__role">lead</span>
+              ) : null}
+            </button>
+          ))}
         </div>
-        <div className="tabs__end">
-          <Segmented
-            name="pane-mode"
-            label="Pane mode"
-            value={mode}
-            options={[
-              { value: "native", label: "Native" },
-              { value: "transcript", label: "Transcript" },
-            ]}
-            onChange={(value) =>
-              conversationId && store.setPaneMode(conversationId, value)
-            }
-          />
-          <Button
-            variant="ghost"
-            size="sm"
-            icon
-            aria-label={state.detailsOpen ? "Close details" : "Open details"}
-            aria-pressed={state.detailsOpen}
-            onClick={() => store.toggleDetails()}
-          >
-            <PanelRight size={14} aria-hidden="true" />
-          </Button>
-        </div>
+        <AgentFacts tab={active} />
       </div>
 
-      <Header tab={active} />
-
-      <div className="conv__frame" data-focused={mode === "native" && isLead}>
-        <AnimatePresence mode="wait" initial={false}>
-          {mode === "native" ? (
-            <motion.div
-              key="native"
-              style={{ position: "absolute", inset: 0 }}
-              {...fadeFast}
-            >
-              {tabs.map((tab) => (
-                <PaneSlot key={tab.key} visible={active?.key === tab.key}>
-                  <TerminalPane
-                    sessionId={tab.sessionId}
-                    pulse={pulse}
-                    visible={active?.key === tab.key}
-                    agentName={tab.name}
-                    isLead={tab.key === "lead"}
-                    finished={tab.done || tab.worker?.state === "failed"}
-                    onShowTranscript={() =>
-                      conversationId &&
-                      store.setPaneMode(conversationId, "transcript")
-                    }
-                  />
-                </PaneSlot>
-              ))}
-            </motion.div>
-          ) : (
-            <motion.div
-              key="transcript"
-              style={{ position: "absolute", inset: 0 }}
-              {...fadeFast}
-            >
-              <TranscriptPane
-                conversation={conversation}
-                taskId={active?.worker?.taskId ?? null}
-                names={names}
-                pulse={pulse}
-              />
-            </motion.div>
-          )}
-        </AnimatePresence>
+      <div className="conv__frame">
+        {tabs.map((tab) => (
+          <PaneSlot key={tab.key} visible={active?.key === tab.key}>
+            <TerminalPane
+              sessionId={tab.sessionId}
+              pulse={pulse}
+              visible={active?.key === tab.key}
+              agentName={tab.name}
+              isLead={tab.key === "lead"}
+              finished={tab.done || tab.worker?.state === "failed"}
+              starting={tab.tone === "starting"}
+              onShowActivity={() => store.toggleDetails(true)}
+            />
+          </PaneSlot>
+        ))}
       </div>
 
       <AttentionStrip conversation={conversation} />
@@ -318,8 +238,10 @@ export function ConversationPage() {
         <Composer />
       ) : active?.worker ? (
         <div className="conv__footer-note">
-          {active.worker.stateReason}
-          {active.worker.failureCode ? ` · ${active.worker.failureCode}` : ""}
+          <span className="truncate">{active.worker.stateReason}</span>
+          {active.worker.failureCode ? (
+            <span className="mono">{active.worker.failureCode}</span>
+          ) : null}
         </div>
       ) : null}
     </div>
@@ -339,78 +261,126 @@ function PaneSlot({
   }, [visible]);
   if (!everVisible) return null;
   return (
-    <div
-      style={{
-        position: "absolute",
-        inset: 0,
-        visibility: visible ? "visible" : "hidden",
-        pointerEvents: visible ? "auto" : "none",
-      }}
-      aria-hidden={!visible}
-    >
+    <div className="pane-slot" data-visible={visible} aria-hidden={!visible}>
       {children}
     </div>
   );
 }
 
-function Header({ tab }: { tab: Tab | null }) {
-  const { conversation } = useAppState();
-  if (!conversation || !tab) return <div className="conv__header" />;
+const DESTRUCTIVE = [
+  "stop-session",
+  "cancel",
+  "cancel-turn",
+  "decline",
+  "resolve-failed",
+];
+
+/** The active agent's machine facts, one inline action, the rest in a menu. */
+function AgentFacts({ tab }: { tab: Tab | null }) {
+  const store = useStore();
+  const terminals = useTerminals();
+  useSyncExternalStore(
+    terminals.subscribe,
+    terminals.getVersion,
+    terminals.getVersion,
+  );
+  const state = useAppState();
+  const { conversation } = state;
+  const [confirm, setConfirm] = useState<InboxAction | null>(null);
+  if (!conversation || !tab) return <div className="agentbar__end" />;
   const { lead } = conversation;
   const actions = tab.worker
     ? tab.worker.actions
     : lead.actions.filter((a) => a.action !== "rename");
   const model = tab.worker ? tab.worker.model : lead.model;
-  const working = tab.tone === "running" || tab.tone === "starting";
-  const workerCount = conversation.workers.length;
+  const authority = tab.worker
+    ? tab.worker.effectiveAuthority
+    : (lead.authority ?? "ask");
+  // One inline action at most, and never a destructive one: cancelling a turn
+  // is the exception because it is what a busy agent most often needs.
+  const inline = actions.find(
+    (action) =>
+      action.action === "cancel-turn" || !DESTRUCTIVE.includes(action.action),
+  );
+  const rest = actions.filter((action) => action !== inline);
+  const view = tab.sessionId ? terminals.get(tab.sessionId) : undefined;
+  const items: MenuItem[] = rest.map((action) => ({
+    label: action.label,
+    danger: DESTRUCTIVE.includes(action.action),
+    onSelect: () =>
+      DESTRUCTIVE.includes(action.action)
+        ? setConfirm(action)
+        : void store.act(action),
+  }));
+  if (view?.record && view.live && tab.sessionId) {
+    const id = tab.sessionId;
+    items.push({
+      label: "Close native view",
+      onSelect: () => void terminals.close(id),
+    });
+  }
+  items.push({
+    label: state.detailsOpen ? "Hide activity" : "Show activity",
+    onSelect: () => store.toggleDetails(),
+  });
+  const readOnly = Boolean(view?.record && view.live && view.kind !== "attach");
+  // Which account this session burns (absent when the harness's own login is used).
+  const account = tab.worker
+    ? (tab.worker.session?.account ?? null)
+    : (lead.session?.account ?? null);
 
   return (
-    <div className="conv__header">
-      <span className="conv__identity">
-        <strong>{tab.name}</strong>
-        <Badge tone={tab.key === "lead" ? "accent" : "neutral"}>
-          {tab.key === "lead" ? "lead" : "worker"}
-        </Badge>
-        <span className="conv__meta">
-          {providerLabel(tab.provider)}
-          {model ? ` · ${model}` : ""}
-          {" · "}
-          {authorityLabel(
-            tab.worker
-              ? tab.worker.effectiveAuthority
-              : (lead.authority ?? "ask"),
-          )}
-        </span>
-        <span className="sep" aria-hidden="true">
-          ·
-        </span>
-        {working ? (
-          <span className="status-word">
-            <span className="dot" data-tone={tab.tone} aria-hidden="true" />
-            <span className="shimmer-text">
-              {tab.stateLabel === "busy" ? "working" : tab.stateLabel}
-            </span>
-          </span>
-        ) : (
-          <StatusWord tone={tab.tone} label={tab.stateLabel} />
-        )}
-        {tab.key === "lead" && workerCount > 0 ? (
-          <span className="conv__meta">
-            {" · "}
-            {workerCount} {workerCount === 1 ? "worker" : "workers"}
-          </span>
-        ) : null}
+    <div className="agentbar__end">
+      <span className="agentbar__facts">
+        {providerLabel(tab.provider)}
+        {model ? ` · ${model}` : ""} · {authorityLabel(authority)}
+        {account ? ` · ${account.label}` : ""}
+        {readOnly ? " · read-only" : ""}
       </span>
-      {tab.worker ? (
-        <span className="conv__task truncate" title={tab.worker.label}>
-          {tab.worker.label}
-        </span>
-      ) : null}
-      <div className="conv__actions">
-        {actions.map((action) => (
-          <ActionButton key={action.action} action={action} />
-        ))}
-      </div>
+      {inline ? <ActionButton action={inline} /> : null}
+      <Menu label={`More for ${tab.name}`} items={items}>
+        <Ellipsis size={15} aria-hidden="true" />
+      </Menu>
+      <Button
+        variant="ghost"
+        size="sm"
+        icon
+        tip="Activity  Ctrl I"
+        tipSide="left"
+        aria-label={state.detailsOpen ? "Close details" : "Open details"}
+        aria-pressed={state.detailsOpen}
+        onClick={() => store.toggleDetails()}
+      >
+        <PanelRight size={15} aria-hidden="true" />
+      </Button>
+      <Dialog
+        open={confirm !== null}
+        onClose={() => setConfirm(null)}
+        title={`${confirm?.label ?? ""}?`}
+        description={`This applies to ${tab.name} immediately.`}
+        width={400}
+        footer={
+          <>
+            <span className="spacer" />
+            <Button variant="ghost" onClick={() => setConfirm(null)}>
+              Keep it
+            </Button>
+            <Button
+              variant="danger"
+              data-autofocus
+              onClick={() => {
+                const action = confirm;
+                setConfirm(null);
+                if (action) void store.act(action);
+              }}
+            >
+              {confirm?.label}
+            </Button>
+          </>
+        }
+      >
+        {null}
+      </Dialog>
     </div>
   );
 }
@@ -424,13 +394,7 @@ export function ActionButton({
 }) {
   const store = useStore();
   useAppState();
-  const destructive = [
-    "stop-session",
-    "cancel",
-    "cancel-turn",
-    "decline",
-    "resolve-failed",
-  ].includes(action.action);
+  const destructive = DESTRUCTIVE.includes(action.action);
   const [confirming, setConfirming] = useState(false);
   const target = String(action.params.id ?? action.params.conversationId ?? "");
   const busy = store.isBusy(`${action.action}:${target}`);
@@ -522,7 +486,7 @@ function Composer() {
     lifecycle === "dormant"
       ? `Send the first request to ${lead?.name ?? "the lead"}`
       : lifecycle === "busy"
-        ? `${lead?.name} is working; your next message is queued`
+        ? `${lead?.name} is working · your message queues`
         : `Message ${lead?.name ?? "the lead"}`;
 
   return (
@@ -533,7 +497,7 @@ function Composer() {
         void send();
       }}
     >
-      <div className="composer__box" data-ready={Boolean(text.trim())}>
+      <div className="composer__box">
         <textarea
           ref={textarea}
           rows={1}
@@ -543,48 +507,43 @@ function Composer() {
           onChange={(event) => setText(event.target.value)}
           onKeyDown={onKey}
         />
-        <div className="composer__controls">
-          {modes.length > 1 ? (
-            <select
-              className="select select--pill"
-              aria-label="Authority for this request"
-              value={authority}
-              onChange={(event) =>
-                setAuthority(event.target.value as AuthorityMode)
-              }
-            >
-              {modes.map((mode) => (
-                <option key={mode} value={mode}>
-                  {authorityLabel(mode)}
-                </option>
-              ))}
-            </select>
-          ) : (
-            <span className="composer__authority">
-              {authorityLabel(authority)}
-            </span>
-          )}
-          <span className="composer__hint" aria-hidden="true">
-            Enter sends · Shift+Enter adds a line
-          </span>
-          <span className="spacer" />
-          <Button
-            type="submit"
-            variant="primary"
-            size="sm"
-            icon
-            className="composer__send"
-            loading={busy}
-            disabled={!text.trim()}
-            aria-label={busy ? "Sending" : "Send"}
+        {modes.length > 1 ? (
+          <select
+            className="select select--bare"
+            aria-label="Authority for this request"
+            value={authority}
+            onChange={(event) =>
+              setAuthority(event.target.value as AuthorityMode)
+            }
           >
-            {busy ? null : <ArrowUp size={15} aria-hidden="true" />}
-          </Button>
-        </div>
+            {modes.map((mode) => (
+              <option key={mode} value={mode}>
+                {authorityLabel(mode)}
+              </option>
+            ))}
+          </select>
+        ) : (
+          <span className="composer__authority">
+            {authorityLabel(authority)}
+          </span>
+        )}
+        <Button
+          type="submit"
+          variant="primary"
+          size="sm"
+          icon
+          className="composer__send"
+          loading={busy}
+          disabled={!text.trim()}
+          aria-label={busy ? "Sending" : "Send"}
+        >
+          {busy ? null : <ArrowUp size={14} aria-hidden="true" />}
+        </Button>
       </div>
       {state.composerError ? (
         <p className="composer__error" role="alert">
-          {state.composerError.code}: {state.composerError.message}
+          <span className="mono">{state.composerError.code}</span>{" "}
+          {state.composerError.message}
         </p>
       ) : null}
     </form>

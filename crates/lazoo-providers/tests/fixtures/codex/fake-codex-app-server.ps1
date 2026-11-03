@@ -36,10 +36,22 @@ while ($null -ne ($line = [Console]::In.ReadLine())) {
             Write-Message @{ id = $message.id; result = @{ thread = @{ id = 'thread-1'; cwd = (Get-Location).Path; canAcceptDirectInput = $true } } }
         }
         'thread/turns/list' {
+            if (Test-Path -LiteralPath 'oversized-view-history') {
+                Write-Message @{ id = $message.id; result = @{ data = @(@{ text = ('x' * (600 * 1024)) }); nextCursor = $null } }
+                continue
+            }
+            if (Test-Path -LiteralPath 'flood-view-history') {
+                for ($index = 0; $index -lt 128; $index++) {
+                    Write-Message @{ method = 'thread/status/changed'; params = @{ threadId = 'thread-1' } }
+                }
+            }
             Write-Message @{ id = $message.id; error = @{ code = -32044; message = 'fixture history unavailable' } }
         }
         'thread/items/list' {
             Write-Message @{ id = $message.id; error = @{ code = -32044; message = 'fixture history unavailable' } }
+        }
+        'account/rateLimits/read' {
+            Write-Message @{ id = $message.id; result = @{ rateLimits = @{ primary = @{ usedPercent = 25; windowDurationMins = 300; resetsAt = 2000000000 }; planType = 'pro' } } }
         }
         'account/read' {
             Write-Message @{ id = $message.id; result = @{ account = @{ id = 'fixture' } } }
@@ -87,6 +99,48 @@ while ($null -ne ($line = [Console]::In.ReadLine())) {
             $prompt = ''
             if ($null -ne $message.params.input) {
                 $prompt = [string]$message.params.input[0].text
+            }
+            if ($prompt -like '*VIEW_END_BURST*') {
+                Set-Content -LiteralPath 'fake-codex-wait-view' -Value 'ready'
+                # Bootstrap and history requests are served while canonical work is in flight.
+                for ($readIndex = 0; $readIndex -lt 2; $readIndex++) {
+                    $viewRead = [Console]::In.ReadLine() | ConvertFrom-Json
+                    if ($viewRead.method -eq 'thread/read') {
+                        Write-Message @{ id = $viewRead.id; result = @{ thread = @{ id = 'thread-1'; turns = @() } } }
+                    } else {
+                        Write-Message @{ id = $viewRead.id; result = @{ data = @(); nextCursor = $null } }
+                    }
+                }
+                Write-Message @{ method = 'item/started'; params = @{ threadId = 'thread-1'; turnId = 'turn-1'; item = @{ id = 'cmd-1'; type = 'commandExecution'; status = 'inProgress'; command = 'cargo test' } } }
+                Write-Message @{ method = 'item/commandExecution/outputDelta'; params = @{ threadId = 'thread-1'; turnId = 'turn-1'; itemId = 'cmd-1'; delta = 'tests passed' } }
+                Write-Message @{ method = 'item/completed'; params = @{ threadId = 'thread-1'; turnId = 'turn-1'; item = @{ id = 'cmd-1'; type = 'commandExecution'; status = 'completed'; exitCode = 0 } } }
+                # A final history refresh interleaves with a finite burst, then a delayed final.
+                $viewRead = [Console]::In.ReadLine() | ConvertFrom-Json
+                Write-Message @{ id = $viewRead.id; result = @{ data = @(); nextCursor = $null } }
+                $frames = [System.Collections.Generic.List[string]]::new()
+                for ($index = 0; $index -lt 64; $index++) {
+                    $frames.Add((@{ method = 'item/agentMessage/delta'; params = @{ threadId = 'thread-1'; turnId = 'turn-1'; itemId = 'final-1'; delta = 'x' } } | ConvertTo-Json -Depth 10 -Compress))
+                }
+                $frames.Add((@{ method = 'thread/tokenUsage/updated'; params = @{ threadId = 'thread-1'; tokenUsage = @{ total = @{ inputTokens = 100; outputTokens = 64; totalTokens = 164 } } } } | ConvertTo-Json -Depth 10 -Compress))
+                $frames.Add((@{ method = 'account/rateLimits/updated'; params = @{ rateLimits = @{ primary = @{ usedPercent = 25; windowDurationMins = 300 } } } } | ConvertTo-Json -Depth 10 -Compress))
+                [Console]::Out.WriteLine(($frames -join "`n"))
+                [Console]::Out.Flush()
+                Start-Sleep -Milliseconds 200
+                if (Test-Path -LiteralPath 'hold-final-for-reconnect') {
+                    $deadline = [DateTime]::UtcNow.AddSeconds(5)
+                    while (!(Test-Path -LiteralPath 'release-final') -and [DateTime]::UtcNow -lt $deadline) {
+                        Start-Sleep -Milliseconds 10
+                    }
+                }
+                Write-Message @{ method = 'item/completed'; params = @{ threadId = 'thread-1'; turnId = 'turn-1'; item = @{ id = 'final-1'; type = 'agentMessage'; text = ('x' * 64) } } }
+                Write-Message @{ method = 'turn/completed'; params = @{ threadId = 'thread-1'; turn = @{ id = 'turn-1'; status = 'completed' } } }
+                continue
+            }
+            if ($prompt -like '*EXIT_WITH_CODE*') { exit 37 }
+            if ($prompt -like '*VIEW_DURING_TURN*') {
+                Set-Content -LiteralPath 'fake-codex-wait-view' -Value 'ready'
+                $viewRead = [Console]::In.ReadLine() | ConvertFrom-Json
+                Write-Message @{ id = $viewRead.id; result = @{ data = @(@{ text = ('x' * (600 * 1024)) }); nextCursor = $null } }
             }
             if ($prompt -like '*REQUEST_APPROVAL*') {
                 Write-Message @{

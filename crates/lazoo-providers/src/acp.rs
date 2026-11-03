@@ -622,6 +622,7 @@ fn event_session_id(event: &ProviderEvent) -> Option<&str> {
         | ProviderEvent::ThoughtDelta { session_id, .. }
         | ProviderEvent::ToolUpdate { session_id, .. }
         | ProviderEvent::TerminalUpdate { session_id, .. }
+        | ProviderEvent::Quota { session_id, .. }
         | ProviderEvent::Usage { session_id, .. }
         | ProviderEvent::PermissionRequested { session_id, .. }
         | ProviderEvent::Progress { session_id, .. }
@@ -809,6 +810,8 @@ fn normalize_session_update(
             output_tokens: None,
             total_tokens: update.get("used").and_then(Value::as_u64),
             cost_usd: update.get("cost").and_then(Value::as_f64),
+            input_tokens_before: None,
+            output_tokens_before: None,
             raw,
         },
         "turn_completed" => {
@@ -823,6 +826,8 @@ fn normalize_session_update(
                     .get("costUsdTicks")
                     .and_then(Value::as_u64)
                     .and_then(usd_ticks),
+                input_tokens_before: None,
+                output_tokens_before: None,
                 raw,
             }
         }

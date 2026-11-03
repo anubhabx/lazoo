@@ -141,6 +141,8 @@ impl App {
         };
         // The monitor holds only the receiver and lifecycle fence. For a borrowed record,
         // `terminal_stop` releases the logical view and never stops the canonical ConPTY.
+        tracing::debug!(session_id = %session.id, canonical_host_pid = ?session.native_host_pid,
+            terminal_id = %terminal.id, viewer_pid = terminal.pid, "native viewer attached");
         let mut closed = lease.closed_subscription();
         let app = self.clone();
         let monitor_terminal = terminal.clone();

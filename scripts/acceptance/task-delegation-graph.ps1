@@ -1,5 +1,6 @@
 param(
     [switch]$SkipBuild,
+    [ValidateSet('debug', 'release')][string]$BuildProfile = 'release',
     [string]$OutputPath = ''
 )
 
@@ -224,10 +225,12 @@ function Invoke-Delegate(
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
 $cargoExe = (Get-Command cargo -CommandType Application -ErrorAction Stop |
     Select-Object -First 1).Source
-$releaseDir = Join-Path $repoRoot 'target\release'
-$script:daemonExe = Join-Path $releaseDir 'lazood.exe'
-$script:ctlExe = Join-Path $releaseDir 'lazooctl.exe'
-$fixtureExe = Join-Path $releaseDir 'lazoo-turn-transport-fixture.exe'
+$binaryDir = Join-Path $repoRoot "target\$BuildProfile"
+$script:daemonExe = Join-Path $binaryDir 'lazood.exe'
+$script:ctlExe = Join-Path $binaryDir 'lazooctl.exe'
+$fixtureExe = Join-Path $binaryDir 'lazoo-turn-transport-fixture.exe'
+$desktopBefore = (& git -C $repoRoot diff --binary HEAD -- apps/lazoo-desktop) -join [Environment]::NewLine
+Assert-Equal $LASTEXITCODE 0 'desktop baseline diff'
 $artifactDir = Join-Path $repoRoot 'artifacts\acceptance'
 if ([string]::IsNullOrWhiteSpace($OutputPath)) {
     $OutputPath = Join-Path $artifactDir 'task-delegation-graph-manifest.json'
@@ -278,22 +281,25 @@ New-Item -ItemType Directory -Force -Path $artifactDir, $manifestDirectory, $scr
 try {
     if (-not $SkipBuild) {
         $timer = [Diagnostics.Stopwatch]::StartNew()
-        & $cargoExe build --workspace --release --locked
+        $buildArguments = @('build', '--workspace', '--locked')
+        if ($BuildProfile -eq 'release') { $buildArguments += '--release' }
+        & $cargoExe @buildArguments
         $buildExit = $LASTEXITCODE
         $timer.Stop()
-        Add-Command 'cargo build --workspace --release --locked' $buildExit $timer.ElapsedMilliseconds
-        Assert-Equal $buildExit 0 'locked release build'
+        Add-Command "cargo $($buildArguments -join ' ')" $buildExit $timer.ElapsedMilliseconds
+        Assert-Equal $buildExit 0 "locked $BuildProfile build"
     }
     foreach ($binary in @($script:daemonExe, $script:ctlExe, $fixtureExe)) {
         Assert-True (Test-Path -LiteralPath $binary) "binary exists: $binary"
     }
     New-Item -ItemType Directory -Force -Path $script:fixtureDir | Out-Null
     Copy-Item -LiteralPath $fixtureExe -Destination (Join-Path $script:fixtureDir 'codex.exe')
-    $gates.releaseBuild = if ($SkipBuild) { 'SKIPPED_BY_CALLER' } else { 'PASS' }
+    $gates.releaseBuild = if ($SkipBuild -or $BuildProfile -ne 'release') { 'SKIPPED_BY_CALLER' } else { 'PASS' }
+    $gates.buildProfile = $BuildProfile
 
     $daemon = Start-Daemon
     $status = Wait-Status
-    Assert-Equal $status.schemaVersion 21 'schema 21'
+    Assert-Equal $status.schemaVersion 22 'schema 22'
     Assert-Equal $status.journalMode 'wal' 'SQLite journal mode'
     $gates.schema8 = 'PASS'
 
@@ -653,13 +659,13 @@ try {
     $evidence.worktreeMutationAbsent = $true
     $evidence.conptyAbsent = $true
 
-    # The desktop is owned separately; this slice must leave it untouched in the working tree
-    # (the same check every other slice makes) and must never hand it task authority: the
+    # Preserve the desktop state present at entry, including authorized caller changes.
+    # The acceptance script must never mutate it or hand it task authority: the
     # desktop's Rust allowlist may offer the task actions the contract index names as data
     # (accept, cancel, resolve) but none of the employee-only verbs.
-    $desktopStatus = @(& git -C $repoRoot status --porcelain -- apps/lazoo-desktop)
-    Assert-Equal $LASTEXITCODE 0 'desktop worktree status check'
-    Assert-Equal $desktopStatus.Count 0 'desktop worktree changes absent'
+    $desktopAfter = (& git -C $repoRoot diff --binary HEAD -- apps/lazoo-desktop) -join [Environment]::NewLine
+    Assert-Equal $LASTEXITCODE 0 'desktop final diff'
+    Assert-Equal $desktopAfter $desktopBefore 'acceptance preserves the desktop worktree'
     $desktopClient = Get-Content -LiteralPath (Join-Path $repoRoot 'apps\lazoo-desktop\src\client.rs') -Raw
     $desktopMethods = @([regex]::Matches($desktopClient, '\("([a-z.]+)",\s*Kind::(?:Read|Mutation)\)') | ForEach-Object { $_.Groups[1].Value })
     Assert-True ($desktopMethods.Count -gt 0) 'desktop allowlist readable'
@@ -699,7 +705,7 @@ try {
         }
     })
     $manifest = [ordered]@{
-        schemaVersion = 21
+        schemaVersion = 22
         acceptance = 'task-delegation-graph'
         mode = 'deterministic-fixture'
         status = $manifestStatus

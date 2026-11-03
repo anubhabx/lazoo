@@ -352,11 +352,19 @@ impl App {
             workspace.first_user_text.as_deref(),
         );
         let lead = self.lead_header(lead_entry, &workspace);
-        let workers = workspace
+        let mut workers: Vec<WorkerCard> = workspace
             .workers
             .iter()
             .map(|row| worker_card(row, &roster, &sources))
             .collect();
+        for worker in &mut workers {
+            if let Some(session) = &mut worker.session {
+                session.account = self
+                    .store
+                    .provider_session_account(session.id)
+                    .map_err(store_error)?;
+            }
+        }
         let attention = unresolved_items(&sources)
             .into_iter()
             .filter(|item| item.scope.conversation_id == Some(conversation.id))
@@ -400,6 +408,7 @@ impl App {
                 .as_ref()
                 .map(|task| task.effective_authority),
             session: entry.session.as_ref().map(|session| LeadSessionSummary {
+                account: session.account.clone(),
                 id: session.id,
                 state: session.state,
                 native_host_pid: session.native_host_pid,
@@ -493,8 +502,11 @@ fn worker_card(row: &WorkerRow, roster: &RosterSnapshot, sources: &InboxSources)
         task_state: task.state,
         effective_authority: task.effective_authority,
         session: task.active_session_id.and_then(|id| {
-            row.session_state
-                .map(|state| WorkerSessionSummary { id, state })
+            row.session_state.map(|state| WorkerSessionSummary {
+                id,
+                state,
+                account: None,
+            })
         }),
         active_turn_id: task.active_turn_id,
         workspace: row.dispatch.as_ref().map(|dispatch| WorkerWorkspace {

@@ -1,14 +1,14 @@
-import { AnimatePresence, motion } from "motion/react";
 import {
   useEffect,
   useLayoutEffect,
   useRef,
   useState,
   useSyncExternalStore,
+  type ReactNode,
 } from "react";
 
 import { useTerminals } from "../lib/context";
-import { Button, fadeFast } from "./primitives";
+import { Button } from "./primitives";
 
 interface Props {
   sessionId: string | null;
@@ -19,9 +19,16 @@ interface Props {
   isLead: boolean;
   /** The worker's task reached a terminal state; its session is gone or suspended. */
   finished?: boolean;
-  onShowTranscript: () => void;
+  /** The agent's session is starting (trust, warm-up); the view opens once it is ready. */
+  starting?: boolean;
+  onShowActivity: () => void;
 }
 
+/**
+ * The genuine harness TUI, edge to edge. Lazoo adds nothing on top of it;
+ * when there is no live view, one dithered field says why and offers at most
+ * one way forward.
+ */
 export function TerminalPane({
   sessionId,
   pulse,
@@ -29,7 +36,8 @@ export function TerminalPane({
   agentName,
   isLead,
   finished = false,
-  onShowTranscript,
+  starting = false,
+  onShowActivity,
 }: Props) {
   const terminals = useTerminals();
   useSyncExternalStore(
@@ -80,7 +88,17 @@ export function TerminalPane({
   const live = Boolean(entry?.record && entry.live);
   const exited = Boolean(entry?.record && !entry.live);
 
-  // Native mode means "show me the TUI": open the view once per session when the daemon allows it.
+  // A refused keystroke is worth one quiet note, not a permanent badge.
+  const refused = Boolean(entry?.inputRefused);
+  const [showRefused, setShowRefused] = useState(false);
+  useEffect(() => {
+    if (!refused) return;
+    setShowRefused(true);
+    const timer = setTimeout(() => setShowRefused(false), 4000);
+    return () => clearTimeout(timer);
+  }, [refused]);
+
+  // Native first: open the view once per session whenever the daemon allows it.
   useEffect(() => {
     if (!sessionId || !entry || !status || !visible) return;
     if (entry.record || entry.opening || status.viewOpening || status.opening)
@@ -90,13 +108,123 @@ export function TerminalPane({
     void terminals.open(sessionId, "view", status.sessionRevision);
   }, [sessionId, entry, status, visible, autoOpened, terminals]);
 
-  const noteKind =
-    entry?.kind === "attach"
-      ? "Attached · keys go to this terminal"
-      : "Native view · read-only";
+  const reopen = () =>
+    sessionId &&
+    status &&
+    void terminals.open(sessionId, "view", status.sessionRevision);
+
+  let field: ReactNode = null;
+  // A closed view keeps its last screen readable; a quiet bar says so.
+  const closedNote = exited ? (
+    <div className="terminal-note" role="status">
+      <span>
+        {entry?.kind === "attach" ? "Attachment" : "View"} closed
+        {entry?.exitCode !== null && entry?.exitCode !== undefined
+          ? ` · exit ${entry.exitCode}`
+          : ""}
+        {entry?.error ? ` · ${entry.error.code}` : ""}
+      </span>
+      {status?.viewable ? (
+        <Button size="sm" variant="ghost" onClick={reopen}>
+          Reopen
+        </Button>
+      ) : null}
+    </div>
+  ) : null;
+  if (exited) {
+    field = null;
+  } else if (!live) {
+    if (!sessionId) {
+      field = (
+        <Field
+          title={finished ? "No live session" : "No native session yet"}
+          detail={
+            finished
+              ? `${agentName} finished this task.`
+              : isLead
+                ? `${agentName} starts when you send the first request.`
+                : `${agentName} has not started a session for this task.`
+          }
+          action={
+            finished ? (
+              <Button size="sm" variant="ghost" onClick={onShowActivity}>
+                Show activity
+              </Button>
+            ) : null
+          }
+        />
+      );
+    } else if (entry?.opening || status?.viewOpening || status?.opening) {
+      field = <Field title="Opening the native view…" busy />;
+    } else if (starting && status && !status.viewable) {
+      field = (
+        <Field
+          title={`Starting ${agentName}…`}
+          detail="The native view opens as soon as the session is ready."
+          busy
+        />
+      );
+    } else if (entry?.error) {
+      field = (
+        <Field
+          title={entry.error.code}
+          detail={entry.error.message}
+          action={
+            status?.viewable ? (
+              <Button size="sm" onClick={reopen}>
+                Try again
+              </Button>
+            ) : (
+              <Button size="sm" variant="ghost" onClick={onShowActivity}>
+                Show activity
+              </Button>
+            )
+          }
+        />
+      );
+    } else if (status && !status.viewable) {
+      field = (
+        <Field
+          title={
+            status.attachable ? "Session suspended" : "Native view unavailable"
+          }
+          detail={status.viewBlockingReason ?? status.blockingReason ?? ""}
+          action={
+            status.attachable ? (
+              <Button
+                size="sm"
+                onClick={() =>
+                  void terminals.open(
+                    sessionId,
+                    "attach",
+                    status.sessionRevision,
+                  )
+                }
+              >
+                Attach and take over
+              </Button>
+            ) : (
+              <Button size="sm" variant="ghost" onClick={onShowActivity}>
+                Show activity
+              </Button>
+            )
+          }
+        />
+      );
+    } else if (entry?.statusError) {
+      field = (
+        <Field
+          title={entry.statusError.code}
+          detail={entry.statusError.message}
+        />
+      );
+    } else {
+      field = <Field title="Reading terminal status…" busy />;
+    }
+  }
 
   return (
-    <div className="terminal-layer" style={{ position: "absolute", inset: 0 }}>
+    <div className="terminal-layer">
       <div
         ref={container}
         className="terminal-host"
@@ -104,157 +232,35 @@ export function TerminalPane({
         aria-label={`${agentName} terminal`}
         role="region"
       />
-      <AnimatePresence>
-        {sessionId && (live || exited) ? (
-          <motion.div key="note" className="frame-note" {...fadeFast}>
-            {exited ? (
-              <>
-                <span>
-                  {entry?.kind === "attach" ? "Attachment" : "View"} closed
-                  {entry?.exitCode !== null && entry?.exitCode !== undefined
-                    ? ` · exit ${entry.exitCode}`
-                    : ""}
-                  {entry?.error
-                    ? ` · ${entry.error.code}: ${entry.error.message}`
-                    : ""}
-                </span>
-                {status?.viewable ? (
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    onClick={() =>
-                      void terminals.open(
-                        sessionId,
-                        "view",
-                        status.sessionRevision,
-                      )
-                    }
-                  >
-                    Reopen
-                  </Button>
-                ) : null}
-              </>
-            ) : (
-              <>
-                <span>
-                  {entry?.inputRefused
-                    ? "Native view · input refused by the provider"
-                    : noteKind}
-                </span>
-                {entry?.gap ? <span className="sep">·</span> : null}
-                {entry?.gap ? <span>earlier output was lost</span> : null}
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  onClick={() => void terminals.close(sessionId)}
-                >
-                  Close
-                </Button>
-              </>
-            )}
-          </motion.div>
-        ) : null}
-      </AnimatePresence>
-      <AnimatePresence>
-        {!live && !exited ? (
-          <motion.div key="state" className="frame-state" {...fadeFast}>
-            {!sessionId ? (
-              <>
-                <span className="frame-state__title">
-                  {finished ? "No live session" : "No native session yet"}
-                </span>
-                <span>
-                  {finished
-                    ? `${agentName} finished this task; its turns are in the transcript.`
-                    : isLead
-                      ? `${agentName} starts when you send the first request.`
-                      : `${agentName} has not started a session for this task.`}
-                </span>
-                {finished ? (
-                  <div className="frame-state__actions">
-                    <Button
-                      size="sm"
-                      variant="ghost"
-                      onClick={onShowTranscript}
-                    >
-                      Show transcript
-                    </Button>
-                  </div>
-                ) : null}
-              </>
-            ) : entry?.opening || status?.viewOpening || status?.opening ? (
-              <span className="frame-state__title">
-                Opening the native view…
-              </span>
-            ) : entry?.error ? (
-              <>
-                <span className="frame-state__title">{entry.error.code}</span>
-                <span>{entry.error.message}</span>
-                <div className="frame-state__actions">
-                  {status?.viewable ? (
-                    <Button
-                      size="sm"
-                      onClick={() =>
-                        void terminals.open(
-                          sessionId,
-                          "view",
-                          status.sessionRevision,
-                        )
-                      }
-                    >
-                      Try again
-                    </Button>
-                  ) : null}
-                  <Button size="sm" variant="ghost" onClick={onShowTranscript}>
-                    Show transcript
-                  </Button>
-                </div>
-              </>
-            ) : status && !status.viewable ? (
-              <>
-                <span className="frame-state__title">
-                  {status.attachable
-                    ? "Session suspended"
-                    : "Native view unavailable"}
-                </span>
-                <span>
-                  {status.viewBlockingReason ?? status.blockingReason ?? ""}
-                </span>
-                <div className="frame-state__actions">
-                  {status.attachable ? (
-                    <Button
-                      size="sm"
-                      onClick={() =>
-                        void terminals.open(
-                          sessionId,
-                          "attach",
-                          status.sessionRevision,
-                        )
-                      }
-                    >
-                      Attach and take over
-                    </Button>
-                  ) : null}
-                  <Button size="sm" variant="ghost" onClick={onShowTranscript}>
-                    Show transcript
-                  </Button>
-                </div>
-              </>
-            ) : entry?.statusError ? (
-              <>
-                <span className="frame-state__title">
-                  {entry.statusError.code}
-                </span>
-                <span>{entry.statusError.message}</span>
-              </>
-            ) : (
-              <span className="frame-state__title">
-                Reading terminal status…
-              </span>
-            )}
-          </motion.div>
-        ) : null}
-      </AnimatePresence>
+      {live && (showRefused || entry?.gap) ? (
+        <div className="terminal-note" role="status">
+          {showRefused
+            ? "Read-only view · type in the composer below"
+            : "Earlier output was lost"}
+        </div>
+      ) : null}
+      {closedNote}
+      {field}
+    </div>
+  );
+}
+
+function Field({
+  title,
+  detail,
+  action,
+  busy = false,
+}: {
+  title: string;
+  detail?: string | null;
+  action?: ReactNode;
+  busy?: boolean;
+}) {
+  return (
+    <div className="frame-state" data-busy={busy || undefined}>
+      <span className="frame-state__title">{title}</span>
+      {detail ? <span>{detail}</span> : null}
+      {action ? <div className="frame-state__actions">{action}</div> : null}
     </div>
   );
 }

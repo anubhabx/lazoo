@@ -185,6 +185,8 @@ pub enum WorkerState {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct LeadSessionSummary {
+    #[serde(default)]
+    pub account: Option<crate::SessionAccount>,
     pub id: Uuid,
     pub state: SessionLifecycleState,
     pub native_host_pid: Option<u32>,
@@ -235,9 +237,11 @@ pub struct WorkerWorkspace {
     pub base_commit: Option<String>,
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct WorkerSessionSummary {
+    #[serde(default)]
+    pub account: Option<crate::SessionAccount>,
     pub id: Uuid,
     pub state: SessionLifecycleState,
 }

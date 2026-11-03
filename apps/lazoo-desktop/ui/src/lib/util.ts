@@ -35,6 +35,35 @@ export function clockTime(iso: string | null | undefined): string {
   });
 }
 
+/** A deadline relative to now: "in 4m", "in 2h", or "passed" once it is over. */
+export function deadlineIn(iso: string | null | undefined, now = Date.now()) {
+  if (!iso) return "";
+  const at = Date.parse(iso);
+  if (Number.isNaN(at)) return "";
+  const seconds = Math.round((at - now) / 1000);
+  if (seconds <= 0) return "passed";
+  if (seconds < 60) return "in under a minute";
+  const minutes = Math.round(seconds / 60);
+  if (minutes < 60) return `in ${minutes}m`;
+  const hours = Math.round(minutes / 60);
+  if (hours < 24) return `in ${hours}h`;
+  return `in ${Math.round(hours / 24)}d`;
+}
+
+/** A future moment: clock time today, otherwise day and time. */
+export function untilTime(iso: string | null | undefined, now = Date.now()) {
+  if (!iso) return "";
+  const at = Date.parse(iso);
+  if (Number.isNaN(at)) return "";
+  const date = new Date(at);
+  const clock = date.toLocaleTimeString(undefined, {
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+  if (at - now < 20 * 3600 * 1000) return clock;
+  return `${date.toLocaleDateString(undefined, { weekday: "short" })} ${clock}`;
+}
+
 export type DayGroup = "Today" | "Previous 7 days" | "Earlier";
 
 export function dayGroup(iso: string, now = Date.now()): DayGroup {

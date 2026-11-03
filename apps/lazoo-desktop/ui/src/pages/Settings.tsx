@@ -1,40 +1,26 @@
-import { motion } from "motion/react";
-import { Sparkles } from "lucide-react";
-import {
-  Fragment,
-  useCallback,
-  useEffect,
-  useLayoutEffect,
-  useRef,
-  useState,
-  useSyncExternalStore,
-  type FormEvent,
-} from "react";
+import { Fragment, useState, type FormEvent } from "react";
 
 import {
   Avatar,
   Badge,
   Button,
+  Dialog,
   Field,
+  Kbd,
   ProjectGlyph,
-  SPRING,
-  Segmented,
   Switch,
 } from "../components/primitives";
-import { useAppState, useBridge, useStore, useTerminals } from "../lib/context";
+import { useAppState, useBridge, useStore } from "../lib/context";
 import type {
   AuthorityMode,
   EmployeeRecord,
   NativeTrustPolicy,
-  ProviderAccountPolicy,
-  ProviderAccountRecord,
-  ProviderAccountSpec,
-  ProviderAccountsSnapshot,
   ProviderListEntry,
-  RpcFailure,
-  TerminalRecord,
 } from "../lib/protocol";
 import { asFailure } from "../lib/bridge";
+import { Failure, useRead } from "../lib/useRead";
+import { AddProjectDialog } from "../components/Rail";
+import { AccountsPage } from "./Accounts";
 import type { SettingsSection } from "../lib/store";
 import {
   authorityLabel,
@@ -73,20 +59,13 @@ export function SettingsPage() {
               store.navigate({ kind: "settings", section: entry.id })
             }
           >
-            {section === entry.id ? (
-              <motion.span
-                layoutId="settings-selection"
-                className="rail-selection"
-                transition={SPRING}
-              />
-            ) : null}
             <span className="row__label">{entry.label}</span>
           </button>
         ))}
       </nav>
       <div className="settings__content">
         {section === "general" ? <General /> : null}
-        {section === "accounts" ? <Accounts /> : null}
+        {section === "accounts" ? <AccountsPage /> : null}
         {section === "employees" ? <Employees /> : null}
         {section === "harnesses" ? <Harnesses /> : null}
         {section === "projects" ? <Projects /> : null}
@@ -95,45 +74,6 @@ export function SettingsPage() {
         {section === "daemon" ? <Daemon /> : null}
       </div>
     </section>
-  );
-}
-
-/** Read one daemon method; the result is shown as it is, never invented. */
-function useRead<T>(
-  method: string,
-  params: unknown = {},
-  deps: unknown[] = [],
-) {
-  const bridge = useBridge();
-  const [data, setData] = useState<T | null>(null);
-  const [error, setError] = useState<RpcFailure | null>(null);
-  const [version, setVersion] = useState(0);
-  const reload = useCallback(() => setVersion((value) => value + 1), []);
-  useEffect(() => {
-    let cancelled = false;
-    setError(null);
-    bridge
-      .call<T>(method, params)
-      .then((value) => {
-        if (!cancelled) setData(value);
-      })
-      .catch((failure: unknown) => {
-        if (!cancelled) setError(asFailure(failure));
-      });
-    return () => {
-      cancelled = true;
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [method, version, ...deps]);
-  return { data, error, reload };
-}
-
-function Failure({ error }: { error: RpcFailure | null }) {
-  if (!error) return null;
-  return (
-    <p className="meta" role="alert">
-      {error.code}: {error.message}
-    </p>
   );
 }
 
@@ -208,699 +148,43 @@ function FactPair({ label, value }: { label: string; value: unknown }) {
   );
 }
 
+const SHORTCUTS: [string, string[]][] = [
+  ["New work", ["Ctrl", "N"]],
+  ["Search and commands", ["Ctrl", "K"]],
+  ["Activity and details", ["Ctrl", "I"]],
+  ["Toggle the sidebar", ["Ctrl", "B"]],
+  ["Back, forward", ["Alt", "← →"]],
+];
+
 function General() {
-  const store = useStore();
-  const { defaultPaneMode } = useAppState();
   return (
     <>
       <h2>General</h2>
       <p className="settings__lede">
-        How agents are shown when a conversation opens.
+        Conversations open on each agent&apos;s own TUI. Lazoo&apos;s record of
+        requests, replies and delegations is in Activity.
       </p>
-      <div className="card">
-        <h3>Default pane</h3>
-        <Segmented
-          name="default-pane"
-          label="Default pane"
-          value={defaultPaneMode}
-          options={[
-            { value: "native", label: "Native terminal" },
-            { value: "transcript", label: "Transcript" },
-          ]}
-          onChange={(value) => store.setDefaultPaneMode(value)}
-        />
-        <p className="meta">
-          Native shows the harness&apos;s own TUI through a read-only view.
-          Transcript shows Lazoo&apos;s rendering of the durable turn history
-          and costs no process. Each conversation remembers its own choice.
-        </p>
-      </div>
-      <div className="card">
+      <section className="settings__group">
+        <h3>Keyboard</h3>
+        <dl className="facts facts--keys">
+          {SHORTCUTS.map(([label, keys]) => (
+            <Fragment key={label}>
+              <dt>{label}</dt>
+              <dd>
+                <Kbd keys={keys} />
+              </dd>
+            </Fragment>
+          ))}
+        </dl>
+      </section>
+      <section className="settings__group">
         <h3>Motion</h3>
         <p className="meta">
-          Transitions follow the Windows &quot;Show animations&quot; setting.
-          When it is off, nonessential motion is removed.
+          Follows the Windows &quot;Show animations&quot; setting. When it is
+          off, avatars hold still and nonessential motion is removed.
         </p>
-      </div>
+      </section>
     </>
-  );
-}
-
-const ACCOUNT_PROVIDERS = [
-  "codex",
-  "claude-code",
-  "github-copilot",
-  "opencode",
-  "antigravity",
-];
-const poolProviders = new Set(["codex", "claude-code", "opencode"]);
-const uuid = () => crypto.randomUUID();
-
-function Accounts() {
-  const store = useStore();
-  const accounts = useRead<ProviderAccountsSnapshot>("provider.accounts.list");
-  const [form, setForm] = useState({
-    provider: "codex",
-    label: "",
-    kind: "native-profile" as "native-profile" | "api-key",
-    secret: "",
-    backendProvider: "",
-    baseUrl: "",
-    models: "",
-  });
-  const [login, setLogin] = useState<TerminalRecord | null>(null);
-  const [draftId, setDraftId] = useState(uuid);
-  const [rotating, setRotating] = useState<string | null>(null);
-  const [rotationSecret, setRotationSecret] = useState("");
-  const [routingProvider, setRoutingProvider] = useState("codex");
-  const [verificationModel, setVerificationModel] = useState("");
-  const [verifying, setVerifying] = useState(false);
-  const snapshot = accounts.data;
-  const visible = (snapshot?.accounts ?? []).filter(
-    (account) => !account.deleted,
-  );
-  const policyFor = (provider: string): ProviderAccountPolicy =>
-    snapshot?.policies.find((policy) => policy.provider === provider) ?? {
-      provider,
-      mode: "inherited",
-      accountId: null,
-      revision: 0,
-    };
-  const api = form.kind === "api-key";
-  useEffect(() => {
-    if (!snapshot?.accounts.some((account) => account.spec.id === draftId))
-      return;
-    // A lost response may still have committed. Reconcile its durable ID before
-    // the next submission so it cannot create a second copy of the draft.
-    setDraftId(uuid());
-    setForm((value) => ({ ...value, label: "", secret: "", models: "" }));
-  }, [draftId, snapshot]);
-  const defaults = (provider: string) =>
-    provider === "codex"
-      ? { env: "OPENAI_API_KEY", protocol: "responses" }
-      : provider === "claude-code"
-        ? { env: "ANTHROPIC_API_KEY", protocol: "anthropic" }
-        : provider === "github-copilot"
-          ? { env: "COPILOT_GITHUB_TOKEN", protocol: null }
-          : form.backendProvider.trim() === "anthropic"
-            ? { env: "ANTHROPIC_API_KEY", protocol: "anthropic" }
-            : form.backendProvider.trim() === "openai"
-              ? { env: "OPENAI_API_KEY", protocol: "responses" }
-              : form.backendProvider.trim() === "google"
-                ? { env: "GOOGLE_GENERATIVE_AI_API_KEY", protocol: null }
-                : form.backendProvider.trim() === "openrouter"
-                  ? { env: "OPENROUTER_API_KEY", protocol: null }
-                  : { env: "OPENAI_API_KEY", protocol: null };
-  async function save(event: FormEvent) {
-    event.preventDefault();
-    if (!form.label.trim()) return;
-    const defaulted = defaults(form.provider);
-    const spec: ProviderAccountSpec = {
-      id: draftId,
-      provider: form.provider,
-      label: form.label.trim(),
-      credentialKind: form.kind,
-      profileDirectory: "",
-      credentialEnvironment: api ? defaulted.env : null,
-      baseUrl:
-        api && form.provider !== "github-copilot"
-          ? form.baseUrl.trim() || null
-          : null,
-      apiProtocol: api
-        ? (defaulted.protocol as ProviderAccountSpec["apiProtocol"])
-        : null,
-      backendProvider:
-        form.provider === "opencode" && api
-          ? form.backendProvider.trim() || null
-          : null,
-      models: form.models
-        .split(",")
-        .map((model) => model.trim())
-        .filter(Boolean),
-      enabled: true,
-    };
-    const result = await store.mutate(
-      "provider.accounts.put",
-      {
-        spec,
-        expectedRevision: 0,
-        ...(api && form.secret ? { secret: form.secret } : {}),
-      },
-      `account.put:${spec.id}`,
-    );
-    // A secret never leaves component state and is cleared immediately after the mutation settles.
-    setForm((value) => ({
-      ...value,
-      label: result ? "" : value.label,
-      secret: "",
-      models: result ? "" : value.models,
-    }));
-    if (result) setDraftId(uuid());
-    accounts.reload();
-  }
-  async function setPolicy(
-    provider: string,
-    mode: ProviderAccountPolicy["mode"],
-    accountId: string | null,
-  ) {
-    const eligible = visible.filter(
-      (account) => account.spec.provider === provider && account.spec.enabled,
-    );
-    const normalizedAccountId =
-      mode === "pinned" ? (accountId ?? eligible[0]?.spec.id ?? null) : null;
-    if (mode === "pinned" && !normalizedAccountId) {
-      store.toast({
-        tone: "error",
-        title: "No enabled account",
-        detail: "Add or enable an account before pinning new sessions.",
-      });
-      return;
-    }
-    const current = policyFor(provider);
-    const result = await store.mutate(
-      "provider.accounts.policy",
-      {
-        provider,
-        mode,
-        accountId: normalizedAccountId,
-        revision: current.revision,
-      },
-      `account.policy:${provider}:${current.revision}`,
-    );
-    if (result) accounts.reload();
-  }
-  async function verifyRouting() {
-    setVerifying(true);
-    const result = (await store.mutate(
-      "provider.accounts.verify",
-      {
-        provider: routingProvider,
-        model: verificationModel.trim() || null,
-      },
-      `account.verify:${routingProvider}`,
-    )) as { modelAnswered: boolean; routeVerified: boolean } | null;
-    setVerifying(false);
-    if (result)
-      store.toast({
-        tone: result.routeVerified ? "info" : "error",
-        title: result.routeVerified
-          ? "Routing verified"
-          : "Routing not verified",
-        detail: result.routeVerified
-          ? "The selected route returned a model response."
-          : result.modelAnswered
-            ? "The provider answered, but routing changed or readiness could not be recorded. Refresh and verify again."
-            : "The provider did not return a completed answer. Check sign-in and model access.",
-      });
-    accounts.reload();
-  }
-  async function toggle(account: ProviderAccountRecord) {
-    const result = await store.mutate(
-      "provider.accounts.put",
-      {
-        spec: { ...account.spec, enabled: !account.spec.enabled },
-        expectedRevision: account.revision,
-      },
-      `account.toggle:${account.spec.id}:${account.revision}`,
-    );
-    if (result) accounts.reload();
-  }
-  async function remove(account: ProviderAccountRecord) {
-    const result = await store.mutate(
-      "provider.accounts.remove",
-      { id: account.spec.id, expectedRevision: account.revision },
-      `account.remove:${account.spec.id}:${account.revision}`,
-    );
-    if (result) accounts.reload();
-  }
-  async function rotateSecret(account: ProviderAccountRecord) {
-    if (!rotationSecret) return;
-    const result = await store.mutate(
-      "provider.accounts.put",
-      {
-        spec: account.spec,
-        expectedRevision: account.revision,
-        secret: rotationSecret,
-      },
-      `account.rotate:${account.spec.id}:${account.revision}`,
-    );
-    setRotationSecret("");
-    if (result) setRotating(null);
-    accounts.reload();
-  }
-  async function signIn(account: ProviderAccountRecord) {
-    const terminal = (await store.mutate(
-      "provider.accounts.login",
-      { id: account.spec.id, expectedRevision: account.revision },
-      `account.login:${account.spec.id}:${account.revision}`,
-    )) as TerminalRecord | null;
-    if (terminal) setLogin(terminal);
-  }
-  const routingPolicy = policyFor(routingProvider);
-  const routingChoices = visible.filter(
-    (account) =>
-      account.spec.provider === routingProvider && account.spec.enabled,
-  );
-  return (
-    <>
-      <h2>Accounts</h2>
-      <p className="settings__lede">
-        Separate native profiles and API credentials. Secrets are protected by
-        Windows for this user and never shown again. Secret fields clear after
-        submission and are not saved in browser storage.
-      </p>
-      <Failure error={accounts.error} />
-      <div className="card">
-        <h3>Routing</h3>
-        <div className="form-grid">
-          <Field label="Routing provider" htmlFor="routing-provider">
-            <select
-              id="routing-provider"
-              className="select"
-              value={routingProvider}
-              onChange={(event) => setRoutingProvider(event.target.value)}
-            >
-              {ACCOUNT_PROVIDERS.map((provider) => (
-                <option key={provider} value={provider}>
-                  {providerLabel(provider)}
-                </option>
-              ))}
-            </select>
-          </Field>
-          <Field label="New sessions" htmlFor="routing-mode">
-            <select
-              id="routing-mode"
-              className="select"
-              value={routingPolicy.mode}
-              onChange={(event) =>
-                void setPolicy(
-                  routingProvider,
-                  event.target.value as ProviderAccountPolicy["mode"],
-                  event.target.value === "pinned"
-                    ? (routingPolicy.accountId ??
-                        routingChoices[0]?.spec.id ??
-                        null)
-                    : null,
-                )
-              }
-            >
-              <option value="inherited">Use existing behavior</option>
-              <option value="balanced">Balance accounts</option>
-              <option value="pinned" disabled={!routingChoices.length}>
-                Pin an account
-                {routingChoices.length ? "" : " (no enabled account)"}
-              </option>
-              {poolProviders.has(routingProvider) ? (
-                <option value="api-pool">Pool API credentials</option>
-              ) : null}
-            </select>
-          </Field>
-          {routingPolicy.mode === "pinned" ? (
-            <Field label="Pinned account" htmlFor="routing-account">
-              <select
-                id="routing-account"
-                className="select"
-                value={routingPolicy.accountId ?? ""}
-                onChange={(event) =>
-                  void setPolicy(
-                    routingProvider,
-                    "pinned",
-                    event.target.value || null,
-                  )
-                }
-              >
-                <option value="">Choose an account</option>
-                {routingChoices.map((account) => (
-                  <option key={account.spec.id} value={account.spec.id}>
-                    {account.spec.label}
-                  </option>
-                ))}
-              </select>
-            </Field>
-          ) : null}
-        </div>
-        <p className="meta">
-          {routingProvider === "github-copilot" ||
-          routingProvider === "antigravity"
-            ? `Native sessions stay pinned. ${providerLabel(routingProvider)} does not use Lazoo's API proxy pool.`
-            : "Changes apply to new sessions. Existing and resumed native sessions retain their account."}
-        </p>
-        <div className="form-grid">
-          <Field
-            label="Verification model"
-            htmlFor="account-verification-model"
-          >
-            <input
-              id="account-verification-model"
-              className="input"
-              value={verificationModel}
-              onChange={(event) => setVerificationModel(event.target.value)}
-              placeholder={
-                routingProvider === "opencode"
-                  ? "backend/model (required for API accounts)"
-                  : "Optional"
-              }
-            />
-          </Field>
-          <Button
-            style={{ alignSelf: "end" }}
-            disabled={verifying}
-            onClick={() => void verifyRouting()}
-          >
-            {verifying ? "Verifying…" : "Verify routing"}
-          </Button>
-        </div>
-        <p className="meta">
-          Sends one short prompt through the current route and uses model quota.
-          Run after sign-in or changing credentials.
-          {routingProvider === "opencode" &&
-            " API accounts require a matching backend/model selection."}
-        </p>
-      </div>
-      {visible.length ? (
-        <table className="table">
-          <thead>
-            <tr>
-              <th>Account</th>
-              <th>Provider</th>
-              <th>Credential</th>
-              <th>State</th>
-              <th>Calls</th>
-              <th>Last result</th>
-              <th />
-            </tr>
-          </thead>
-          <tbody>
-            {visible.map((account) => (
-              <Fragment key={account.spec.id}>
-                <tr>
-                  <td>
-                    {account.spec.label}
-                    {account.hasSecret
-                      ? ""
-                      : account.spec.credentialKind === "api-key"
-                        ? " · key needed"
-                        : ""}
-                  </td>
-                  <td>{providerLabel(account.spec.provider)}</td>
-                  <td>
-                    {account.spec.credentialKind === "native-profile"
-                      ? "Native profile"
-                      : "API key"}
-                  </td>
-                  <td>
-                    {!account.spec.enabled
-                      ? "disabled"
-                      : account.cooldownUntil * 1000 > Date.now()
-                        ? "cooldown"
-                        : "enabled"}
-                  </td>
-                  <td>
-                    {account.requests} requests · {account.failures} failed
-                  </td>
-                  <td>
-                    {account.lastStatus ?? "—"}
-                    {account.lastLatencyMillis !== null
-                      ? ` · ${account.lastLatencyMillis}ms`
-                      : ""}
-                  </td>
-                  <td>
-                    <Button
-                      size="sm"
-                      variant="ghost"
-                      onClick={() => void toggle(account)}
-                    >
-                      {account.spec.enabled ? "Disable" : "Enable"}
-                    </Button>
-                    {account.spec.credentialKind === "native-profile" &&
-                    account.spec.enabled ? (
-                      <Button
-                        size="sm"
-                        variant="ghost"
-                        onClick={() => void signIn(account)}
-                      >
-                        Sign in
-                      </Button>
-                    ) : null}
-                    {account.spec.credentialKind === "api-key" ? (
-                      <Button
-                        size="sm"
-                        variant="ghost"
-                        onClick={() => {
-                          setRotating(account.spec.id);
-                          setRotationSecret("");
-                        }}
-                      >
-                        Rotate key
-                      </Button>
-                    ) : null}
-                    <Button
-                      size="sm"
-                      variant="ghost"
-                      onClick={() => void remove(account)}
-                    >
-                      Remove
-                    </Button>
-                  </td>
-                </tr>
-                {rotating === account.spec.id ? (
-                  <tr key={`${account.spec.id}:rotate`}>
-                    <td colSpan={7}>
-                      <div className="form-actions">
-                        <label className="field">
-                          <span className="field__label">New secret</span>
-                          <input
-                            className="input"
-                            aria-label={`New secret for ${account.spec.label}`}
-                            type="password"
-                            autoComplete="new-password"
-                            value={rotationSecret}
-                            onChange={(event) =>
-                              setRotationSecret(event.target.value)
-                            }
-                          />
-                        </label>
-                        <Button
-                          size="sm"
-                          onClick={() => void rotateSecret(account)}
-                          disabled={!rotationSecret}
-                        >
-                          Save new key
-                        </Button>
-                        <Button
-                          size="sm"
-                          variant="ghost"
-                          onClick={() => {
-                            setRotating(null);
-                            setRotationSecret("");
-                          }}
-                        >
-                          Cancel
-                        </Button>
-                      </div>
-                    </td>
-                  </tr>
-                ) : null}
-              </Fragment>
-            ))}
-          </tbody>
-        </table>
-      ) : snapshot ? (
-        <p className="meta">
-          No accounts configured. Add an account before selecting balanced,
-          pinned, or API pool routing.
-        </p>
-      ) : null}
-      <form className="card" onSubmit={(event) => void save(event)}>
-        <h3>Add account</h3>
-        <div className="form-grid">
-          <Field label="Provider" htmlFor="account-provider">
-            <select
-              id="account-provider"
-              className="select"
-              value={form.provider}
-              onChange={(event) =>
-                setForm({
-                  ...form,
-                  provider: event.target.value,
-                  kind:
-                    event.target.value === "antigravity"
-                      ? "native-profile"
-                      : form.kind,
-                  baseUrl:
-                    event.target.value === "github-copilot" ? "" : form.baseUrl,
-                })
-              }
-            >
-              {ACCOUNT_PROVIDERS.map((provider) => (
-                <option key={provider} value={provider}>
-                  {providerLabel(provider)}
-                </option>
-              ))}
-            </select>
-          </Field>
-          <Field label="Label" htmlFor="account-label">
-            <input
-              id="account-label"
-              required
-              className="input"
-              value={form.label}
-              onChange={(event) =>
-                setForm({ ...form, label: event.target.value })
-              }
-            />
-          </Field>
-          {form.provider !== "antigravity" ? (
-            <Field label="Credential" htmlFor="account-kind">
-              <select
-                id="account-kind"
-                className="select"
-                value={form.kind}
-                onChange={(event) =>
-                  setForm({
-                    ...form,
-                    kind: event.target.value as typeof form.kind,
-                  })
-                }
-              >
-                <option value="native-profile">Native profile</option>
-                <option value="api-key">API key</option>
-              </select>
-            </Field>
-          ) : null}
-          {api ? (
-            <Field
-              label="Secret"
-              htmlFor="account-secret"
-              hint="Saved once; it cannot be displayed later."
-            >
-              <input
-                id="account-secret"
-                type="password"
-                autoComplete="new-password"
-                className="input"
-                value={form.secret}
-                onChange={(event) =>
-                  setForm({ ...form, secret: event.target.value })
-                }
-              />
-            </Field>
-          ) : null}
-          {api && form.provider === "opencode" ? (
-            <Field
-              label="OpenCode backend"
-              htmlFor="account-backend"
-              hint="OpenAI and Anthropic can use API pooling; Google and OpenRouter stay direct to a session."
-            >
-              <select
-                id="account-backend"
-                required
-                className="select"
-                value={form.backendProvider}
-                onChange={(event) =>
-                  setForm({ ...form, backendProvider: event.target.value })
-                }
-              >
-                <option value="">Choose a backend</option>
-                <option value="openai">OpenAI (API pool)</option>
-                <option value="anthropic">Anthropic (API pool)</option>
-                <option value="google">Google (direct session)</option>
-                <option value="openrouter">OpenRouter (direct session)</option>
-              </select>
-            </Field>
-          ) : null}
-          {api && form.provider !== "github-copilot" ? (
-            <Field label="Base URL" htmlFor="account-base">
-              <input
-                id="account-base"
-                className="input"
-                placeholder="Optional"
-                value={form.baseUrl}
-                onChange={(event) =>
-                  setForm({ ...form, baseUrl: event.target.value })
-                }
-              />
-            </Field>
-          ) : null}
-          <Field
-            label="Models"
-            htmlFor="account-models"
-            hint="Optional, comma separated."
-          >
-            <input
-              id="account-models"
-              className="input"
-              value={form.models}
-              onChange={(event) =>
-                setForm({ ...form, models: event.target.value })
-              }
-            />
-          </Field>
-        </div>
-        <div className="form-actions">
-          <Button
-            type="submit"
-            variant="primary"
-            disabled={
-              !form.label.trim() ||
-              (api &&
-                form.provider === "opencode" &&
-                !form.backendProvider.trim())
-            }
-          >
-            Add account
-          </Button>
-        </div>
-      </form>
-      {login ? (
-        <LoginTerminal terminal={login} onClose={() => setLogin(null)} />
-      ) : null}
-    </>
-  );
-}
-
-function LoginTerminal({
-  terminal,
-  onClose,
-}: {
-  terminal: TerminalRecord;
-  onClose: () => void;
-}) {
-  const terminals = useTerminals();
-  const host = useRef<HTMLDivElement>(null);
-  const key = `provider-login:${terminal.id}`;
-  useSyncExternalStore(
-    terminals.subscribe,
-    terminals.getVersion,
-    terminals.getVersion,
-  );
-  useLayoutEffect(() => {
-    if (!host.current) return;
-    terminals.mount(key, host.current);
-    void terminals.adoptRecord(key, terminal);
-    return () => {
-      void terminals.close(key);
-    };
-  }, [key, terminal, terminals]);
-  return (
-    <div className="card">
-      <h3>Provider sign-in</h3>
-      <p className="meta">
-        Complete the provider&apos;s own sign-in here. This terminal accepts
-        input and is separate from agent sessions.
-      </p>
-      <div
-        ref={host}
-        className="terminal-host"
-        style={{ height: 360 }}
-        aria-label="Provider sign-in terminal"
-      />
-      <div className="form-actions">
-        <Button variant="ghost" onClick={onClose}>
-          Close
-        </Button>
-      </div>
-    </div>
   );
 }
 
@@ -918,6 +202,7 @@ function Employees() {
     authorityMode: "ask" as AuthorityMode,
     checkoutPolicy: "isolated" as "isolated" | "read-only",
   });
+  const [adding, setAdding] = useState(false);
 
   async function create(event: FormEvent) {
     event.preventDefault();
@@ -949,6 +234,7 @@ function Employees() {
         reasoningEffort: "",
       }));
       employees.reload();
+      setAdding(false);
       store.toast({
         tone: "info",
         title: "Employee created",
@@ -971,22 +257,22 @@ function Employees() {
 
   return (
     <>
-      <h2>Employees</h2>
+      <div className="settings__title-row">
+        <h2>Employees</h2>
+        <span className="settings__title-actions">
+          <Button variant="ghost" size="sm" onClick={() => store.openSetup()}>
+            Set up agents
+          </Button>
+          <Button variant="primary" size="sm" onClick={() => setAdding(true)}>
+            New employee
+          </Button>
+        </span>
+      </div>
       <p className="settings__lede">
         Named identities on a harness. Creating one runs a bounded readiness
-        probe, never a model.
+        probe, never a model. Set up agents offers the recommended team for the
+        harnesses on this machine.
       </p>
-      <div className="settings__callout">
-        <Sparkles size={16} aria-hidden="true" />
-        <span>
-          Lazoo ships a recommended team for the harnesses on this machine: a
-          lead, builders, and a reviewer, each on the model developers prefer
-          for that work.
-        </span>
-        <Button variant="accent" size="sm" onClick={() => store.openSetup()}>
-          Set up agents
-        </Button>
-      </div>
       <Failure error={employees.error} />
       {list.length ? (
         <div className="table-wrap">
@@ -1049,130 +335,145 @@ function Employees() {
       ) : employees.data ? (
         <p className="meta">No employees yet.</p>
       ) : null}
-      <form className="card" onSubmit={(event) => void create(event)}>
-        <h3>New employee</h3>
-        <div className="form-grid">
-          <Field label="Name" htmlFor="emp-name">
-            <input
-              id="emp-name"
-              className="input"
-              required
-              value={form.name}
-              onChange={(event) =>
-                setForm({ ...form, name: event.target.value })
-              }
-            />
-          </Field>
-          <Field
-            label="Harness"
-            htmlFor="emp-provider"
-            hint={
-              detected.length
-                ? undefined
-                : "No harness detected on this machine yet."
-            }
-          >
-            <select
-              id="emp-provider"
-              className="select"
-              value={form.provider}
-              onChange={(event) =>
-                setForm({ ...form, provider: event.target.value })
-              }
-            >
-              {[
-                "codex",
-                "claude-code",
-                "github-copilot",
-                "opencode",
-                "antigravity",
-              ].map((provider) => (
-                <option key={provider} value={provider}>
-                  {providerLabel(provider)}
-                  {detected.some((entry) => entry.provider === provider)
-                    ? ""
-                    : " (not detected)"}
-                </option>
-              ))}
-            </select>
-          </Field>
-          <Field label="Role" htmlFor="emp-role">
-            <input
-              id="emp-role"
-              className="input"
-              placeholder="e.g. backend"
-              value={form.role}
-              onChange={(event) =>
-                setForm({ ...form, role: event.target.value })
-              }
-            />
-          </Field>
-          <Field
-            label="Model"
-            htmlFor="emp-model"
-            hint="Leave empty for the harness default."
-          >
-            <input
-              id="emp-model"
-              className="input"
-              value={form.model}
-              onChange={(event) =>
-                setForm({ ...form, model: event.target.value })
-              }
-            />
-          </Field>
-          <Field label="Reasoning effort" htmlFor="emp-effort">
-            <input
-              id="emp-effort"
-              className="input"
-              placeholder="e.g. high"
-              value={form.reasoningEffort}
-              onChange={(event) =>
-                setForm({ ...form, reasoningEffort: event.target.value })
-              }
-            />
-          </Field>
-          <Field label="Authority ceiling" htmlFor="emp-authority">
-            <select
-              id="emp-authority"
-              className="select"
-              value={form.authorityMode}
-              onChange={(event) =>
-                setForm({
-                  ...form,
-                  authorityMode: event.target.value as AuthorityMode,
-                })
+      <Dialog
+        open={adding}
+        onClose={() => setAdding(false)}
+        title="New employee"
+        description="A named identity on one harness. Lazoo probes the harness once; it does not start a model."
+        width={560}
+      >
+        <form className="stack" onSubmit={(event) => void create(event)}>
+          <div className="form-grid">
+            <Field label="Name" htmlFor="emp-name">
+              <input
+                id="emp-name"
+                className="input"
+                data-autofocus
+                required
+                value={form.name}
+                onChange={(event) =>
+                  setForm({ ...form, name: event.target.value })
+                }
+              />
+            </Field>
+            <Field
+              label="Harness"
+              htmlFor="emp-provider"
+              hint={
+                detected.length
+                  ? undefined
+                  : "No harness detected on this machine yet."
               }
             >
-              <option value="ask">Ask</option>
-              <option value="self-decision">Self-decision</option>
-              <option value="full-autonomy">Full autonomy</option>
-            </select>
-          </Field>
-          <Field label="Checkout policy" htmlFor="emp-checkout">
-            <select
-              id="emp-checkout"
-              className="select"
-              value={form.checkoutPolicy}
-              onChange={(event) =>
-                setForm({
-                  ...form,
-                  checkoutPolicy: event.target.value as
-                    "isolated" | "read-only",
-                })
-              }
+              <select
+                id="emp-provider"
+                className="select"
+                value={form.provider}
+                onChange={(event) =>
+                  setForm({ ...form, provider: event.target.value })
+                }
+              >
+                {[
+                  "codex",
+                  "claude-code",
+                  "github-copilot",
+                  "opencode",
+                  "antigravity",
+                ].map((provider) => (
+                  <option key={provider} value={provider}>
+                    {providerLabel(provider)}
+                    {detected.some((entry) => entry.provider === provider)
+                      ? ""
+                      : " (not detected)"}
+                  </option>
+                ))}
+              </select>
+            </Field>
+            <Field label="Role" htmlFor="emp-role">
+              <input
+                id="emp-role"
+                className="input"
+                placeholder="e.g. backend"
+                value={form.role}
+                onChange={(event) =>
+                  setForm({ ...form, role: event.target.value })
+                }
+              />
+            </Field>
+            <Field
+              label="Model"
+              htmlFor="emp-model"
+              hint="Leave empty for the harness default."
             >
-              <option value="isolated">Isolated worktree</option>
-              <option value="read-only">Read-only</option>
-            </select>
-          </Field>
-        </div>
-        <div className="form-actions">
-          <Button type="submit" variant="primary" disabled={!form.name.trim()}>
-            Create employee
-          </Button>
-        </div>
-      </form>
+              <input
+                id="emp-model"
+                className="input"
+                value={form.model}
+                onChange={(event) =>
+                  setForm({ ...form, model: event.target.value })
+                }
+              />
+            </Field>
+            <Field label="Reasoning effort" htmlFor="emp-effort">
+              <input
+                id="emp-effort"
+                className="input"
+                placeholder="e.g. high"
+                value={form.reasoningEffort}
+                onChange={(event) =>
+                  setForm({ ...form, reasoningEffort: event.target.value })
+                }
+              />
+            </Field>
+            <Field label="Authority ceiling" htmlFor="emp-authority">
+              <select
+                id="emp-authority"
+                className="select"
+                value={form.authorityMode}
+                onChange={(event) =>
+                  setForm({
+                    ...form,
+                    authorityMode: event.target.value as AuthorityMode,
+                  })
+                }
+              >
+                <option value="ask">Ask</option>
+                <option value="self-decision">Self-decision</option>
+                <option value="full-autonomy">Full autonomy</option>
+              </select>
+            </Field>
+            <Field label="Checkout policy" htmlFor="emp-checkout">
+              <select
+                id="emp-checkout"
+                className="select"
+                value={form.checkoutPolicy}
+                onChange={(event) =>
+                  setForm({
+                    ...form,
+                    checkoutPolicy: event.target.value as
+                      "isolated" | "read-only",
+                  })
+                }
+              >
+                <option value="isolated">Isolated worktree</option>
+                <option value="read-only">Read-only</option>
+              </select>
+            </Field>
+          </div>
+          <div className="form-actions">
+            <Button variant="ghost" onClick={() => setAdding(false)}>
+              Cancel
+            </Button>
+            <Button
+              type="submit"
+              variant="primary"
+              disabled={!form.name.trim()}
+            >
+              Create employee
+            </Button>
+          </div>
+        </form>
+      </Dialog>
     </>
   );
 }
@@ -1281,35 +582,17 @@ function TrustPolicy({ provider }: { provider: string }) {
 }
 
 function Projects() {
-  const store = useStore();
   const { projects } = useAppState();
-  const [form, setForm] = useState({
-    path: "",
-    name: "",
-    checkoutMode: "isolated" as "isolated" | "lead-main",
-  });
-
-  async function register(event: FormEvent) {
-    event.preventDefault();
-    if (!form.path.trim()) return;
-    const result = await store.mutate(
-      "project.register",
-      {
-        path: form.path.trim(),
-        displayName: form.name.trim() || null,
-        checkoutMode: form.checkoutMode,
-      },
-      `project.register:${form.path.trim().toLowerCase()}`,
-    );
-    if (result) {
-      setForm({ path: "", name: "", checkoutMode: "isolated" });
-      store.toast({ tone: "info", title: "Project registered" });
-    }
-  }
+  const [adding, setAdding] = useState(false);
 
   return (
     <>
-      <h2>Projects</h2>
+      <div className="settings__title-row">
+        <h2>Projects</h2>
+        <Button variant="primary" size="sm" onClick={() => setAdding(true)}>
+          Register a project
+        </Button>
+      </div>
       <p className="settings__lede">
         Registered local repositories. Each is a space with its own
         conversations.
@@ -1347,58 +630,7 @@ function Projects() {
           No projects registered. Home holds projectless conversations.
         </p>
       )}
-      <form className="card" onSubmit={(event) => void register(event)}>
-        <h3>Register a project</h3>
-        <div className="form-grid">
-          <Field
-            label="Path"
-            htmlFor="proj-path"
-            hint="A local Git repository."
-          >
-            <input
-              id="proj-path"
-              className="input"
-              required
-              placeholder="C:\\workspace\\my-repo"
-              value={form.path}
-              onChange={(event) =>
-                setForm({ ...form, path: event.target.value })
-              }
-            />
-          </Field>
-          <Field label="Display name" htmlFor="proj-name">
-            <input
-              id="proj-name"
-              className="input"
-              value={form.name}
-              onChange={(event) =>
-                setForm({ ...form, name: event.target.value })
-              }
-            />
-          </Field>
-          <Field label="Checkout mode" htmlFor="proj-checkout">
-            <select
-              id="proj-checkout"
-              className="select"
-              value={form.checkoutMode}
-              onChange={(event) =>
-                setForm({
-                  ...form,
-                  checkoutMode: event.target.value as "isolated" | "lead-main",
-                })
-              }
-            >
-              <option value="isolated">Isolated worktrees</option>
-              <option value="lead-main">Lead on main</option>
-            </select>
-          </Field>
-        </div>
-        <div className="form-actions">
-          <Button type="submit" variant="primary" disabled={!form.path.trim()}>
-            Register
-          </Button>
-        </div>
-      </form>
+      <AddProjectDialog open={adding} onClose={() => setAdding(false)} />
     </>
   );
 }

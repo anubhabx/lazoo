@@ -66,6 +66,8 @@ pub enum SessionLifecycleState {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct EmployeeSessionRecord {
+    #[serde(default)]
+    pub account: Option<crate::SessionAccount>,
     pub id: Uuid,
     pub employee_id: Uuid,
     pub employee_configuration_revision: u64,

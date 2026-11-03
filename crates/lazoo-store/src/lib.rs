@@ -1,3 +1,4 @@
+mod account_usage;
 mod accounts;
 mod approval;
 mod configuration;
@@ -268,6 +269,8 @@ pub enum StoreError {
         turn_recipient: Uuid,
         lead_employee_id: Uuid,
     },
+    #[error("turn recipient {employee_id} is busy with earlier work")]
+    TurnRecipientBusy { employee_id: Uuid },
     #[error("turn {turn_id} acceptance has no native turn id or progress evidence")]
     TurnAcceptanceEvidence { turn_id: Uuid },
     #[error("turn {turn_id} cancellation was not requested")]

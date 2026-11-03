@@ -32,6 +32,10 @@ pub(crate) async fn run_if_requested() -> Option<i32> {
         Err(())
     };
     if let Ok(value) = result {
+        if event == "StatusLine" {
+            println!("Lazoo");
+            return Some(0);
+        }
         println!("{value}");
         Some(0)
     } else {
@@ -58,6 +62,7 @@ fn valid_invocation(provider: &str, event: &str) -> bool {
                 | "Stop"
                 | "StopFailure"
                 | "SessionEnd"
+                | "StatusLine"
         )
 }
 

@@ -51,6 +51,7 @@ pub(crate) struct QueuedHook {
 struct State {
     closed: bool,
     sender: mpsc::Sender<QueuedHook>,
+    quota: Option<crate::ProviderEvent>,
 }
 
 /// Private loopback callback server.  The opaque bearer and queue are unique per native session.
@@ -72,6 +73,7 @@ impl NativeHookServer {
         let state = Arc::new(Mutex::new(State {
             closed: false,
             sender,
+            quota: None,
         }));
         let (shutdown, mut shutdown_rx) = tokio::sync::watch::channel(false);
         let connection_shutdown = shutdown.clone();
@@ -122,6 +124,11 @@ impl NativeHookServer {
     pub(crate) fn token(&self) -> &str {
         &self.token
     }
+    pub(crate) fn take_quota(&self, session_id: &str) -> Option<crate::ProviderEvent> {
+        let quota = self.state.lock().ok()?.quota.take()?;
+        matches!(&quota, crate::ProviderEvent::Quota { session_id: id, .. } if id == session_id)
+            .then_some(quota)
+    }
     pub(crate) fn close(&self) {
         if let Ok(mut state) = self.state.lock() {
             state.closed = true;
@@ -136,6 +143,7 @@ impl Drop for NativeHookServer {
     }
 }
 
+#[allow(clippy::too_many_lines)] // Keep callback authentication and admission in one auditable path.
 async fn handle(
     state: Arc<Mutex<State>>,
     token: &str,
@@ -196,6 +204,23 @@ async fn handle(
         return Ok(refuse(StatusCode::BAD_REQUEST, "LZ-HOOK-EVENT"));
     };
     let payload = value.get("payload").cloned().unwrap_or(Value::Null);
+    // Statuslines are observations, never control decisions. Retain only the latest
+    // normalized numeric snapshot and reply immediately even when the session is idle.
+    if event == "StatusLine" {
+        let Ok(mut state) = state.lock() else {
+            return Ok(refuse(StatusCode::GONE, "LZ-HOOK-CLOSED"));
+        };
+        if state.closed {
+            return Ok(refuse(StatusCode::GONE, "LZ-HOOK-CLOSED"));
+        }
+        if let Some(quota) = crate::quota::claude_statusline(&payload) {
+            state.quota = Some(quota);
+        }
+        return Ok(response(
+            StatusCode::OK,
+            &json!({"requestId":request_id,"event":event,"result":{}}),
+        ));
+    }
     let (reply_tx, reply_rx) = oneshot::channel();
     let sender = match state.lock() {
         Ok(state) if !state.closed => state.sender.clone(),
@@ -324,6 +349,44 @@ mod tests {
                 .pointer("/hookSpecificOutput/permissionDecision")
                 .is_none()
         );
+    }
+
+    #[tokio::test]
+    async fn statusline_is_authenticated_redacted_and_never_waits_for_a_control_hook() {
+        let (server, mut received) = NativeHookServer::open(ProviderKind::ClaudeCode)
+            .await
+            .unwrap();
+        let target = server
+            .endpoint()
+            .trim_start_matches("http://")
+            .trim_end_matches("/hook");
+        let body = json!({"requestId":Uuid::new_v4(),"event":"StatusLine","payload":{"session_id":"owned","rate_limits":{"five_hour":{"used_percentage":81,"resets_at":2_000_000_000}},"apiKey":"secret-fixture-value"}}).to_string();
+        for (token, status) in [("wrong", "HTTP/1.1 401"), (server.token(), "HTTP/1.1 200")] {
+            let mut stream = TcpStream::connect(target).await.unwrap();
+            let request = format!(
+                "POST /hook HTTP/1.1\r\nHost: {target}\r\nAuthorization: Bearer {token}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            );
+            stream.write_all(request.as_bytes()).await.unwrap();
+            let mut reply = Vec::new();
+            timeout(Duration::from_secs(2), stream.read_to_end(&mut reply))
+                .await
+                .unwrap()
+                .unwrap();
+            assert!(String::from_utf8_lossy(&reply).starts_with(status));
+            if token == "wrong" {
+                assert!(server.take_quota("owned").is_none());
+            }
+        }
+        assert!(received.try_recv().is_err());
+        let quota = server.take_quota("owned").unwrap();
+        assert!(
+            !serde_json::to_string(&quota)
+                .unwrap()
+                .contains("secret-fixture-value")
+        );
+        assert!(server.take_quota("owned").is_none());
+        server.close();
     }
 
     #[tokio::test]

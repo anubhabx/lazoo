@@ -485,6 +485,78 @@ impl Store {
         required_turn(&connection, id)
     }
 
+    /// Durable user queue, ordered across conversations by recipient. Internal memory work
+    /// and employee notice/dispatch turns retain their own delivery policies.
+    pub fn pending_user_turns(&self, limit: u32) -> Result<Vec<TurnMutationResult>, StoreError> {
+        let connection = self.lock()?;
+        let mut statement = connection.prepare(
+            "SELECT id FROM conversation_turns t WHERE state='recorded' AND author_kind='user'
+             AND EXISTS(SELECT 1 FROM processed_commands c WHERE c.idempotency_key=t.id AND c.scope='turn.queue')
+             AND NOT EXISTS(SELECT 1 FROM memory_summary_attempts m WHERE m.turn_id=t.id)
+             ORDER BY sequence LIMIT ?1",
+        )?;
+        let ids = statement
+            .query_map([i64::from(limit)], |row| row.get::<_, String>(0))?
+            .collect::<Result<Vec<_>, _>>()?;
+        ids.into_iter()
+            .map(|id| {
+                let id = Uuid::parse_str(&id).map_err(|_| StoreError::InvalidRecord {
+                    field: "conversation_turns.id",
+                    message: "invalid turn id".to_owned(),
+                })?;
+                turn_result(&connection, required_turn(&connection, id)?, None)
+            })
+            .collect()
+    }
+
+    /// Mark only authorized user delivery as queued. A dormant submission refused before
+    /// activation keeps its existing recorded-only semantics until explicitly replayed.
+    pub fn queue_user_turn(&self, turn_id: Uuid) -> Result<TurnMutationResult, StoreError> {
+        let mut connection = self.lock()?;
+        let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let turn = required_turn(&transaction, turn_id)?;
+        let internal: bool = transaction.query_row(
+            "SELECT EXISTS(SELECT 1 FROM memory_summary_attempts WHERE turn_id=?1)",
+            [turn_id.to_string()],
+            |row| row.get(0),
+        )?;
+        let key = turn_id.to_string();
+        let queued: bool = transaction.query_row(
+            "SELECT EXISTS(SELECT 1 FROM processed_commands WHERE scope='turn.queue' AND idempotency_key=?1)",
+            [&key], |row| row.get(0))?;
+        if turn.state != TurnState::Recorded
+            || !matches!(turn.author, MessageSender::User(_))
+            || internal
+            || queued
+        {
+            return turn_result(&transaction, turn, None);
+        }
+        let now = Utc::now().to_rfc3339();
+        transaction.execute(
+            "INSERT INTO processed_commands(scope,idempotency_key,request_id,response_json,created_at)
+             VALUES('turn.queue',?1,?2,?3,?4)",
+            params![key, format!("turn-queue:{key}"), json!({"turnId":turn_id}).to_string(), now])?;
+        let sequence = employee::insert_event(
+            &transaction,
+            "turn.queued",
+            &json!({"turnId":turn_id, "employeeId":turn.recipient.employee_id}),
+            &now,
+        )?;
+        let result = turn_result(&transaction, turn, Some(sequence))?;
+        transaction.commit()?;
+        Ok(result)
+    }
+
+    pub fn turn_recipient_is_busy(&self, turn_id: Uuid) -> Result<bool, StoreError> {
+        let connection = self.lock()?;
+        let turn = required_turn(&connection, turn_id)?;
+        match require_recipient_free(&connection, &turn) {
+            Ok(()) => Ok(false),
+            Err(StoreError::TurnRecipientBusy { .. }) => Ok(true),
+            Err(error) => Err(error),
+        }
+    }
+
     pub fn begin_turn_submission(
         &self,
         input: &BeginTurnSubmissionInput,
@@ -504,6 +576,7 @@ impl Store {
         let current = required_turn(&transaction, input.turn_id)?;
         require_turn_revision(&current, input.expected_revision)?;
         require_turn_state(&current, &[TurnState::Recorded], "recorded")?;
+        require_recipient_free(&transaction, &current)?;
         let reserved_for_another_turn: bool = transaction.query_row(
             "SELECT EXISTS(SELECT 1 FROM memory_summary_attempts WHERE session_id=?1 AND turn_id<>?2)",
             params![input.recipient_session_id.to_string(), input.turn_id.to_string()],
@@ -583,6 +656,7 @@ impl Store {
         .and_then(|result| commit_turn_result(transaction, result))
     }
 
+    #[allow(clippy::too_many_lines)] // The usage projection commits atomically with event and task state.
     pub fn observe_turn(&self, input: &ObserveTurnInput) -> Result<TurnMutationResult, StoreError> {
         validate_conversation_command_key(&input.idempotency_key)?;
         validate_turn_event_payload(&input.payload)?;
@@ -647,6 +721,17 @@ impl Store {
         }
 
         let now = Utc::now().to_rfc3339();
+        crate::account_usage::observe_turn(
+            &transaction,
+            current.id,
+            &input.provider,
+            input
+                .native_session_id
+                .as_deref()
+                .or(current.native_session_id.as_deref()),
+            &input.payload,
+            input.transition,
+        )?;
         let appended = append_turn_event(
             &transaction,
             &current,
@@ -759,6 +844,16 @@ impl Store {
                 (target == TurnState::TerminalFailed).then_some(now.clone()),
             ],
         )?;
+        if let Some(provider) = current.provider.as_deref() {
+            crate::account_usage::observe_turn(
+                &transaction,
+                current.id,
+                provider,
+                current.native_session_id.as_deref(),
+                &serde_json::json!({}),
+                Some(target),
+            )?;
+        }
         task::project_turn_tx(&transaction, input.turn_id, "turn-failed", &now)?;
         effective_turn_result(
             &transaction,
@@ -895,6 +990,7 @@ impl Store {
         let current = required_turn(&transaction, input.turn_id)?;
         require_turn_revision(&current, input.expected_revision)?;
         require_turn_state(&current, &[TurnState::RetryableFailed], "retryable-failed")?;
+        require_recipient_free(&transaction, &current)?;
         validate_turn_transition(current.state, TurnState::Recorded)?;
         let owned_session = require_owned_idle_session(
             &transaction,
@@ -1345,6 +1441,28 @@ fn validate_endpoint(
                 employee_id: endpoint.employee_id,
             });
         }
+    }
+    Ok(())
+}
+
+fn require_recipient_free(
+    connection: &Connection,
+    turn: &ConversationTurnRecord,
+) -> Result<(), StoreError> {
+    let busy: bool = connection.query_row(
+        "SELECT EXISTS(SELECT 1 FROM conversation_turns WHERE recipient_employee_id=?1 AND id<>?2
+         AND (state IN ('submitting','accepted') OR
+              (state='recorded' AND author_kind='user'
+               AND EXISTS(SELECT 1 FROM processed_commands c WHERE c.idempotency_key=conversation_turns.id AND c.scope='turn.queue')
+               AND sequence <
+               (SELECT sequence FROM conversation_turns WHERE id=?2))))",
+        params![turn.recipient.employee_id.to_string(), turn.id.to_string()],
+        |row| row.get(0),
+    )?;
+    if busy {
+        return Err(StoreError::TurnRecipientBusy {
+            employee_id: turn.recipient.employee_id,
+        });
     }
     Ok(())
 }

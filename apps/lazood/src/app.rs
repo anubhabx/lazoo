@@ -1,8 +1,10 @@
+mod account_headers;
 mod account_proxy;
 mod accounts;
 mod approval;
 mod configuration;
 mod delivery;
+mod event_wire;
 mod idle;
 mod inbox;
 mod incident;
@@ -76,6 +78,9 @@ pub type SessionBackendFuture<'a> =
     Pin<Box<dyn Future<Output = Result<Box<dyn ManagedSession>, ProviderError>> + Send + 'a>>;
 
 pub trait ManagedSession: Send + Sync {
+    fn take_usage_windows(&self) -> Vec<lazoo_protocol::UsageWindow> {
+        Vec::new()
+    }
     fn id(&self) -> String;
     fn native_host_pid(&self) -> Option<u32>;
     fn native_view_available(&self) -> bool {
@@ -181,6 +186,9 @@ struct ProviderSessionBackend {
 }
 
 impl ManagedSession for ProviderSessionHandle {
+    fn take_usage_windows(&self) -> Vec<lazoo_protocol::UsageWindow> {
+        ProviderSession::take_usage_windows(self)
+    }
     fn native_view_available(&self) -> bool {
         ProviderSession::native_view_available(self)
     }
@@ -249,6 +257,8 @@ pub struct App {
     live_sessions: Arc<Mutex<BTreeMap<Uuid, Arc<dyn ManagedSession>>>>,
     account_routes: Arc<Mutex<BTreeMap<Uuid, account_proxy::AccountProxy>>>,
     live_turns: Arc<Mutex<BTreeMap<Uuid, Arc<LiveTurn>>>>,
+    delivery_gates: Arc<Mutex<BTreeMap<Uuid, Arc<Mutex<()>>>>>,
+    delivery_notify: Arc<Notify>,
     task_dispatch_notify: Arc<Notify>,
     approval_notify: Arc<Notify>,
     native_trust_notify: Arc<Notify>,
@@ -346,6 +356,8 @@ impl App {
             live_sessions: Arc::new(Mutex::new(BTreeMap::new())),
             account_routes: Arc::new(Mutex::new(BTreeMap::new())),
             live_turns: Arc::new(Mutex::new(BTreeMap::new())),
+            delivery_gates: Arc::new(Mutex::new(BTreeMap::new())),
+            delivery_notify: Arc::new(Notify::new()),
             task_dispatch_notify: Arc::new(Notify::new()),
             approval_notify: Arc::new(Notify::new()),
             native_trust_notify: Arc::new(Notify::new()),
@@ -416,7 +428,9 @@ impl App {
             "events.list" => self.list_events(request.params),
             "desktop.snapshot" => self.desktop_snapshot(&request.params),
             "provider.list" => self.provider_list(&request.params),
-            "provider.accounts.list" => self.account_list(&request.params),
+            "provider.accounts.list" => self.account_list(&request.params).await,
+            "provider.accounts.usage" => self.account_usage(request.params).await,
+            "provider.accounts.preferences" => self.account_preferences(request.params),
             "provider.accounts.put" => self.account_put(request.params),
             "provider.accounts.remove" => self.account_remove(request.params),
             "provider.accounts.policy" => self.account_policy_set(request.params),
@@ -498,10 +512,19 @@ impl App {
                 data: Some(json!({"method": method})),
             }),
         };
-        match result {
+        let response = match result {
             Ok(value) => JsonRpcResponse::success(request.id, value),
             Err(error) => JsonRpcResponse::failure(request.id, error),
+        };
+        if serde_json::to_vec(&response)
+            .is_ok_and(|bytes| bytes.len() > lazoo_protocol::MAX_FRAME_BYTES)
+        {
+            return JsonRpcResponse::failure(response.id, RpcError {
+                code: "LZ-RESPONSE-TOO-LARGE".to_owned(),
+                message: "response exceeds the IPC frame limit; request a smaller page or narrower detail".to_owned(), data: None,
+            });
         }
+        response
     }
 
     /// Retain a live receiver before fixing the durable replay interval. Callers drain with
@@ -533,6 +556,7 @@ impl App {
             .list_events(after, 1024)?
             .into_iter()
             .take_while(|event| event.sequence <= replay_high_water)
+            .map(event_wire::bounded_event)
             .collect())
     }
 
@@ -611,7 +635,7 @@ impl App {
         }
         self.store
             .list_events(params.after, params.limit)
-            .map(to_value)
+            .map(|events| to_value(event_wire::bounded_page(events)))
             .map_err(store_error)
     }
 
@@ -628,7 +652,7 @@ impl App {
             captured_at: Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true),
             status: self.system_status(store_status),
             projects,
-            events,
+            events: event_wire::bounded_page(events),
         }))
     }
 
@@ -1119,10 +1143,10 @@ impl App {
         if managed_workspace {
             session_request = session_request.with_managed_workspace();
         }
-        if let Some(model) = employee.model {
+        if let Some(model) = employee.model.clone() {
             session_request = session_request.with_model(model);
         }
-        if let Some(effort) = employee.reasoning_effort {
+        if let Some(effort) = employee.reasoning_effort.clone() {
             session_request = session_request.with_effort(effort);
         }
         if matches!(
@@ -1166,6 +1190,20 @@ impl App {
                     "LZ-SESSION-START-FAILED",
                     "provider session did not become ready",
                 )?;
+                if let resume::ResumeDecision::Resume {
+                    prior_session_id, ..
+                } = resume
+                    && matches!(error, ProviderError::ProcessExited { .. })
+                {
+                    drop(account_proxy);
+                    return Box::pin(self.retry_failed_resume(
+                        employee,
+                        provider,
+                        session_id,
+                        prior_session_id,
+                    ))
+                    .await;
+                }
                 return Err(session_failure(
                     "LZ-SESSION-START-FAILED",
                     "provider session did not become ready",
@@ -1303,6 +1341,8 @@ impl App {
         }
 
         let session_id = stopping.session.id;
+        tracing::warn!(session_id = %session_id, host_pid = ?stopping.session.native_host_pid,
+            reason = "session-stop-or-replace", "stopping canonical provider session");
         self.close_native_view_for_session(session_id).await;
         let session = self.live_sessions.lock().await.remove(&session_id);
         self.account_routes.lock().await.remove(&session_id);
@@ -1512,6 +1552,10 @@ impl App {
     }
 
     pub async fn shutdown_live_sessions(&self) {
+        tracing::warn!(
+            reason = "daemon-shutdown",
+            "stopping owned provider sessions"
+        );
         self.live_turns.lock().await.clear();
         self.account_routes.lock().await.clear();
         let session_ids = self

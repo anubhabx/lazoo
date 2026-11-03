@@ -11,7 +11,7 @@ import {
 } from "../components/primitives";
 import { useAppState, useStore } from "../lib/context";
 import type { InboxFilter, InboxItem } from "../lib/protocol";
-import { providerLabel, relativeTime, words } from "../lib/util";
+import { providerLabel, deadlineIn, relativeTime, words } from "../lib/util";
 import { ActionButton } from "./Conversation";
 
 const FILTERS: { value: InboxFilter; label: string }[] = [
@@ -189,7 +189,7 @@ function InboxRow({ item }: { item: InboxItem }) {
             : ""}
           {` · ${item.requiredAction}`}
           {item.deadline
-            ? ` · ${item.deadline.kind} ${relativeTime(item.deadline.at)}`
+            ? ` · ${item.deadline.kind} ${deadlineIn(item.deadline.at)}`
             : ""}
           {` · ${relativeTime(item.updatedAt)}`}
           {item.attention !== "action-required"

@@ -481,11 +481,35 @@ fn opencode_acceptance_without_progress_becomes_stalled() {
     ));
 }
 
+// These protocol fixtures own their profile and repository boundary. Personal
+// OpenCode configuration must not influence deterministic permission tests.
+fn fixture_request(cwd: &Path) -> SessionRequest {
+    std::fs::create_dir_all(cwd.join(".git")).unwrap();
+    let mut request = SessionRequest::new(cwd);
+    request
+        .launch_environment
+        .set("USERPROFILE", cwd.join("fixture-home"));
+    request
+        .launch_environment
+        .set("HOME", cwd.join("fixture-home"));
+    request
+        .launch_environment
+        .set("XDG_CONFIG_HOME", cwd.join("fixture-config"));
+    for key in [
+        "OPENCODE_CONFIG",
+        "OPENCODE_CONFIG_CONTENT",
+        "OPENCODE_CONFIG_DIR",
+    ] {
+        request.launch_environment.remove(key);
+    }
+    request
+}
+
 #[tokio::test]
 async fn observed_acp_turn_streams_before_completion_and_selects_the_offered_numeric_allow_once() {
     let temporary = tempdir().unwrap();
     let session = OpenCodeAdapter::with_executable(fake_acp())
-        .start(&SessionRequest::new(temporary.path()))
+        .start(&fixture_request(temporary.path()))
         .await
         .unwrap();
     let observer = GateObserver::approving();
@@ -527,7 +551,7 @@ async fn observed_acp_refuses_malformed_and_duplicate_requests_without_reauthori
     for prompt in ["MISMATCH", "MISSING_ONCE", "UNKNOWN_KIND"] {
         let temporary = tempdir().unwrap();
         let session = OpenCodeAdapter::with_executable(fake_acp())
-            .start(&SessionRequest::new(temporary.path()))
+            .start(&fixture_request(temporary.path()))
             .await
             .unwrap();
         let observer = GateObserver::approving();
@@ -550,7 +574,7 @@ async fn observed_acp_refuses_malformed_and_duplicate_requests_without_reauthori
 
     let temporary = tempdir().unwrap();
     let session = OpenCodeAdapter::with_executable(fake_acp())
-        .start(&SessionRequest::new(temporary.path()))
+        .start(&fixture_request(temporary.path()))
         .await
         .unwrap();
     let observer = GateObserver::approving();
@@ -583,7 +607,7 @@ async fn observed_acp_records_a_reused_jsonrpc_id_and_refusals_are_not_progress(
     // A reused JSON-RPC id is refused and recorded too.
     let temporary = tempdir().unwrap();
     let session = OpenCodeAdapter::with_executable(fake_acp())
-        .start(&SessionRequest::new(temporary.path()))
+        .start(&fixture_request(temporary.path()))
         .await
         .unwrap();
     let observer = GateObserver::approving();
@@ -613,7 +637,7 @@ async fn observed_acp_records_a_reused_jsonrpc_id_and_refusals_are_not_progress(
     // A model that keeps asking for a refused tool never counts as making progress: the
     // progress deadline still fires while the refusals are being recorded.
     let temporary = tempdir().unwrap();
-    let mut request = SessionRequest::new(temporary.path());
+    let mut request = fixture_request(temporary.path());
     request.progress_timeout_millis = 1_500;
     let session = OpenCodeAdapter::with_executable(fake_acp())
         .start(&request)
@@ -661,7 +685,7 @@ fn refusal_payloads(events: &[ProviderEvent]) -> Vec<serde_json::Value> {
 async fn observed_acp_permission_titles_are_not_durable_and_cannot_be_reauthorized() {
     let temporary = tempdir().unwrap();
     let session = OpenCodeAdapter::with_executable(fake_acp())
-        .start(&SessionRequest::new(temporary.path()))
+        .start(&fixture_request(temporary.path()))
         .await
         .unwrap();
     let observer = GateObserver::approving();
@@ -699,7 +723,7 @@ async fn observed_acp_permission_titles_are_not_durable_and_cannot_be_reauthoriz
 async fn acp_native_cancellation_missing_observer_and_deadline_all_reply_cancelled() {
     let temporary = tempdir().unwrap();
     let session = OpenCodeAdapter::with_executable(fake_acp())
-        .start(&SessionRequest::new(temporary.path()))
+        .start(&fixture_request(temporary.path()))
         .await
         .unwrap();
     session.turn(&TurnRequest::new("EXECUTE")).await.unwrap();
@@ -712,7 +736,7 @@ async fn acp_native_cancellation_missing_observer_and_deadline_all_reply_cancell
 
     let temporary = tempdir().unwrap();
     let session = OpenCodeAdapter::with_executable(fake_acp())
-        .start(&SessionRequest::new(temporary.path()))
+        .start(&fixture_request(temporary.path()))
         .await
         .unwrap();
     tokio::time::sleep(Duration::from_millis(100)).await;
@@ -729,7 +753,7 @@ async fn acp_native_cancellation_missing_observer_and_deadline_all_reply_cancell
 
     let temporary = tempdir().unwrap();
     let session = OpenCodeAdapter::with_executable(fake_acp())
-        .start(&SessionRequest::new(temporary.path()))
+        .start(&fixture_request(temporary.path()))
         .await
         .unwrap();
     let observer = GateObserver::approving();
@@ -748,7 +772,7 @@ async fn acp_native_cancellation_missing_observer_and_deadline_all_reply_cancell
     session.stop().await.unwrap();
 
     let temporary = tempdir().unwrap();
-    let mut session_request = SessionRequest::new(temporary.path());
+    let mut session_request = fixture_request(temporary.path());
     session_request.turn_timeout_millis = 1_000;
     let session = OpenCodeAdapter::with_executable(fake_acp())
         .start(&session_request)
@@ -789,7 +813,7 @@ async fn observed_acp_admits_command_edit_delete_and_move_as_governed_requests()
     ] {
         let temporary = tempdir().unwrap();
         let session = OpenCodeAdapter::with_executable(fake_acp())
-            .start(&SessionRequest::new(temporary.path()))
+            .start(&fixture_request(temporary.path()))
             .await
             .unwrap();
         let observer = GateObserver::approving();
@@ -842,7 +866,7 @@ async fn observed_acp_refuses_every_other_kind_with_a_cancel_and_a_recorded_reas
     ] {
         let temporary = tempdir().unwrap();
         let session = OpenCodeAdapter::with_executable(fake_acp())
-            .start(&SessionRequest::new(temporary.path()).with_permission_mode("ask"))
+            .start(&fixture_request(temporary.path()).with_permission_mode("ask"))
             .await
             .unwrap();
         let observer = GateObserver::approving();

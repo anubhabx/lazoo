@@ -80,6 +80,7 @@ fn degraded_reason_is_preserved_without_raw_probe_evidence() {
 #[test]
 fn session_state_only_overlays_a_route_ready_provider() {
     let mut session = EmployeeSessionRecord {
+        account: None,
         id: uuid::Uuid::new_v4(),
         employee_id: uuid::Uuid::new_v4(),
         employee_configuration_revision: 1,

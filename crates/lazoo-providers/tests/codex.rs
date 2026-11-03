@@ -239,7 +239,12 @@ async fn observed_codex_turn_emits_response_acceptance_before_stream_without_dup
             ..
         } if session_id == "thread-1" && turn_id.as_deref() == Some("turn-1")
     ));
-    assert!(matches!(captured[1], ProviderEvent::TextDelta { .. }));
+    assert!(
+        matches!(&captured[1], ProviderEvent::Quota { windows, raw: None, .. }
+        if windows.len() == 1 && windows[0].used_percent == Some(25.0)
+            && windows[0].source == "codex-app-server")
+    );
+    assert!(matches!(captured[2], ProviderEvent::TextDelta { .. }));
     assert_eq!(
         captured
             .iter()
@@ -637,6 +642,304 @@ fn native_view_request_with_token(
         .headers_mut()
         .insert(AUTHORIZATION, format!("Bearer {token}").parse().unwrap());
     request
+}
+
+#[tokio::test]
+async fn native_view_history_failures_cannot_end_canonical_work() {
+    ensure_session_host();
+    for trigger in ["oversized-view-history", "flood-view-history"] {
+        let temporary = tempdir().unwrap();
+        let session = CodexAdapter::with_executable(fake_codex())
+            .start(&SessionRequest::new(temporary.path()))
+            .await
+            .unwrap();
+        session
+            .turn(&TurnRequest::new("persist history"))
+            .await
+            .unwrap();
+        fs::write(temporary.path().join(trigger), "").unwrap();
+        let lease = session.open_native_view().await.unwrap().unwrap();
+        let descriptor = lease.launch_descriptor();
+        let token = descriptor.command().env[&OsString::from("LAZOO_NATIVE_VIEW_TOKEN")]
+            .to_string_lossy()
+            .into_owned();
+        let (mut viewer, _) = connect_async(native_view_request_with_token(&descriptor, &token))
+            .await
+            .unwrap();
+        viewer
+            .send(Message::Text(
+                json!({"id": 1, "method": "thread/turns/list",
+            "params": {"threadId": "thread-1", "limit": 100}})
+                .to_string()
+                .into(),
+            ))
+            .await
+            .unwrap();
+        // Either a bounded read error or loss of this view is acceptable.
+        let _ = tokio::time::timeout(Duration::from_secs(5), viewer.next())
+            .await
+            .unwrap();
+        lease.close();
+        let events = session
+            .turn(&TurnRequest::new("canonical work continues"))
+            .await
+            .unwrap_or_else(|error| panic!("{trigger} ended canonical work: {error}"));
+        assert!(
+            events
+                .iter()
+                .any(|event| matches!(event, ProviderEvent::TurnCompleted { .. }))
+        );
+        session.stop().await.unwrap();
+    }
+}
+
+#[tokio::test]
+async fn native_view_oversized_history_during_turn_preserves_completion() {
+    ensure_session_host();
+    let temporary = tempdir().unwrap();
+    let session = CodexAdapter::with_executable(fake_codex())
+        .start(&SessionRequest::new(temporary.path()))
+        .await
+        .unwrap();
+    session
+        .turn(&TurnRequest::new("persist history"))
+        .await
+        .unwrap();
+    let lease = session.open_native_view().await.unwrap().unwrap();
+    let descriptor = lease.launch_descriptor();
+    let token = descriptor.command().env[&OsString::from("LAZOO_NATIVE_VIEW_TOKEN")]
+        .to_string_lossy()
+        .into_owned();
+    let (mut viewer, _) = connect_async(native_view_request_with_token(&descriptor, &token))
+        .await
+        .unwrap();
+    let prompt = TurnRequest::new("VIEW_DURING_TURN");
+    let (turn, ()) = tokio::join!(session.turn(&prompt), async {
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while !temporary.path().join("fake-codex-wait-view").exists() {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap();
+        let reply = native_view_request(
+            &mut viewer,
+            8,
+            "thread/turns/list",
+            json!({"threadId":"thread-1","limit":100}),
+        )
+        .await;
+        assert_eq!(reply["error"]["code"], -32001);
+    });
+    assert!(
+        turn.unwrap()
+            .iter()
+            .any(|event| matches!(event, ProviderEvent::TurnCompleted { .. }))
+    );
+    lease.close();
+    session.stop().await.unwrap();
+}
+
+struct SlowToolOutputObserver;
+
+impl TurnEventObserver for SlowToolOutputObserver {
+    fn observe(&self, event: &ProviderEvent) -> Result<(), ProviderError> {
+        if matches!(event, ProviderEvent::TerminalUpdate { output: Some(output), .. } if output == "tests passed")
+        {
+            // Model a bounded durable-observer delay while another worker drains stdout.
+            std::thread::sleep(Duration::from_millis(600));
+        }
+        Ok(())
+    }
+}
+
+#[derive(Clone, Default)]
+struct ExitLog(std::sync::Arc<Mutex<Vec<u8>>>);
+
+impl std::io::Write for ExitLog {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        self.0.lock().unwrap().extend_from_slice(bytes);
+        Ok(bytes.len())
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+#[tokio::test]
+async fn native_child_exit_and_controller_drop_report_real_codes_without_view_tokens() {
+    use tracing::instrument::WithSubscriber;
+    ensure_session_host();
+    for (prompt, expected_reason, expected_code) in [
+        (Some("EXIT_WITH_CODE"), "reader-eof", 37),
+        (None, "controller-drop", 1),
+    ] {
+        let log = ExitLog::default();
+        let writer = log.clone();
+        let subscriber = tracing_subscriber::fmt()
+            .json()
+            .with_max_level(tracing::Level::DEBUG)
+            .with_writer(move || writer.clone())
+            .finish();
+        let token = async {
+            let temporary = tempdir().unwrap();
+            let session = CodexAdapter::with_executable(fake_codex())
+                .start(&SessionRequest::new(temporary.path()))
+                .await
+                .unwrap();
+            let lease = session.open_native_view().await.unwrap().unwrap();
+            let descriptor = lease.launch_descriptor();
+            let token = descriptor.command().env[&OsString::from("LAZOO_NATIVE_VIEW_TOKEN")]
+                .to_string_lossy()
+                .into_owned();
+            if let Some(prompt) = prompt {
+                let error = session.turn(&TurnRequest::new(prompt)).await.unwrap_err();
+                assert!(
+                    matches!(error, ProviderError::ProcessExited { code: Some(37) }),
+                    "{error}"
+                );
+            }
+            drop(session);
+            lease.close();
+            token
+        }
+        .with_subscriber(subscriber)
+        .await;
+        tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                let output = String::from_utf8(log.0.lock().unwrap().clone()).unwrap();
+                if output.contains("Codex child exit observed") {
+                    assert!(
+                        output.contains(&format!("\"exit_code\":\"Some({expected_code})\"")),
+                        "{output}"
+                    );
+                    // EOF can race the OS wait observer, but no controller kill may precede a natural exit.
+                    if prompt.is_none() {
+                        assert!(output.contains(expected_reason), "{output}");
+                    }
+                    assert!(!output.contains(&token));
+                    assert!(!output.contains("LAZOO_NATIVE_VIEW_TOKEN"));
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap();
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn native_view_end_burst_preserves_final_message_and_next_turn() {
+    check_native_view_end_burst(false).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn native_view_reconnect_before_final_preserves_canonical_work() {
+    check_native_view_end_burst(true).await;
+}
+
+#[allow(clippy::too_many_lines)] // The fixture orders bootstrap, tool output, reconnect and final completion.
+async fn check_native_view_end_burst(reconnect: bool) {
+    ensure_session_host();
+    let _ = tracing_subscriber::fmt()
+        .with_test_writer()
+        .with_max_level(tracing::Level::DEBUG)
+        .try_init();
+    let temporary = tempdir().unwrap();
+    if reconnect {
+        fs::write(temporary.path().join("hold-final-for-reconnect"), "").unwrap();
+    }
+    let session = CodexAdapter::with_executable(fake_codex())
+        .start(&SessionRequest::new(temporary.path()))
+        .await
+        .unwrap();
+    let prompt = TurnRequest::new("VIEW_END_BURST");
+    let (turn, ()) = tokio::join!(
+        session.turn_observed(&prompt, &SlowToolOutputObserver),
+        async {
+            tokio::time::timeout(Duration::from_secs(5), async {
+                while !temporary.path().join("fake-codex-wait-view").exists() {
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                }
+            })
+            .await
+            .unwrap();
+            let lease = session.open_native_view().await.unwrap().unwrap();
+            let descriptor = lease.launch_descriptor();
+            let token = descriptor.command().env[&OsString::from("LAZOO_NATIVE_VIEW_TOKEN")]
+                .to_string_lossy()
+                .into_owned();
+            let (mut viewer, _) =
+                connect_async(native_view_request_with_token(&descriptor, &token))
+                    .await
+                    .unwrap();
+            for (id, method) in [
+                (1, "thread/resume"),
+                (2, "thread/turns/list"),
+                (3, "thread/items/list"),
+            ] {
+                let reply =
+                    native_view_request(&mut viewer, id, method, json!({"threadId":"thread-1"}))
+                        .await;
+                assert!(reply.get("result").is_some(), "{reply}");
+            }
+            if reconnect {
+                lease.close();
+                let replacement = session.open_native_view().await.unwrap().unwrap();
+                let descriptor = replacement.launch_descriptor();
+                let token = descriptor.command().env[&OsString::from("LAZOO_NATIVE_VIEW_TOKEN")]
+                    .to_string_lossy()
+                    .into_owned();
+                let (mut reconnected, _) =
+                    connect_async(native_view_request_with_token(&descriptor, &token))
+                        .await
+                        .unwrap();
+                let initialized =
+                    native_view_request(&mut reconnected, 4, "initialize", json!({})).await;
+                assert!(initialized.get("result").is_some());
+                replacement.close();
+                fs::write(temporary.path().join("release-final"), "").unwrap();
+            }
+            // Read notifications until completion or view-only lag, then close the lease.
+            while let Ok(Some(Ok(message))) =
+                tokio::time::timeout(Duration::from_secs(3), viewer.next()).await
+            {
+                let Ok(text) = message.into_text() else { break };
+                let value: serde_json::Value = serde_json::from_str(&text).unwrap();
+                if value["method"] == "turn/completed" {
+                    break;
+                }
+            }
+            lease.close();
+        }
+    );
+    let events = turn.expect("finite end-of-turn burst must not kill the canonical child");
+    assert!(events.iter().any(|event| matches!(event, ProviderEvent::TurnCompleted { output: Some(output), .. } if output == &"x".repeat(64))));
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| matches!(event, ProviderEvent::TextDelta { .. }))
+            .count(),
+        64
+    );
+    assert!(events.iter().any(|event| matches!(
+        event,
+        ProviderEvent::Usage {
+            total_tokens: Some(164),
+            ..
+        }
+    )));
+    let events = session
+        .turn(&TurnRequest::new("canonical work after view close"))
+        .await
+        .unwrap();
+    assert!(
+        events
+            .iter()
+            .any(|event| matches!(event, ProviderEvent::TurnCompleted { .. }))
+    );
+    session.stop().await.unwrap();
 }
 
 #[tokio::test]

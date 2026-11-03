@@ -95,7 +95,7 @@ try {
     $stopwatch.Stop()
     $manifest = [ordered]@{
         status = $manifestStatus
-        schemaVersion = 21
+        schemaVersion = 22
         mode = 'deterministic-fake-transport'
         startedAt = $startedAt.ToString('o')
         durationMs = [long]$stopwatch.ElapsedMilliseconds

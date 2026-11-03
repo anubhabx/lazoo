@@ -98,6 +98,7 @@ fn add_key(
 fn configure_pool(store: &Store) {
     store
         .set_provider_account_policy(&ProviderAccountPolicy {
+            order: Vec::new(),
             provider: "codex".into(),
             mode: AccountRoutingMode::ApiPool,
             account_id: None,
@@ -126,6 +127,7 @@ async fn anthropic_proxy_supports_native_beta_paths_and_uses_only_the_selected_k
         .unwrap();
     store
         .set_provider_account_policy(&ProviderAccountPolicy {
+            order: Vec::new(),
             provider: "claude-code".into(),
             mode: AccountRoutingMode::ApiPool,
             account_id: None,

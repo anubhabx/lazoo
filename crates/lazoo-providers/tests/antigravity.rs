@@ -168,11 +168,19 @@ fn read_host_pid(directory: &Path) -> u32 {
 }
 
 fn host_is_running(pid: u32) -> bool {
-    let output = std::process::Command::new("tasklist")
-        .args(["/FI", &format!("PID eq {pid}"), "/NH", "/FO", "CSV"])
+    // tasklist can be denied by the sandbox even for our own child processes.
+    // Get-Process uses local process enumeration and does not require WMI access.
+    let output = std::process::Command::new("powershell.exe")
+        .args([
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            &format!("[bool](Get-Process -Id {pid} -ErrorAction SilentlyContinue)"),
+        ])
         .output()
         .unwrap();
-    String::from_utf8_lossy(&output.stdout).contains(&format!("\"{pid}\""))
+    assert!(output.status.success(), "process liveness query failed");
+    String::from_utf8_lossy(&output.stdout).trim() == "True"
 }
 
 async fn assert_host_gone(pid: u32) {

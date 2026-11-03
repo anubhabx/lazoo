@@ -1,5 +1,5 @@
 import { AnimatePresence, motion } from "motion/react";
-import { Check, ChevronDown, CircleSlash, Sparkles, X } from "lucide-react";
+import { Check, ChevronDown, CircleSlash, X } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 
 import { useAppState, useStore } from "../lib/context";
@@ -316,10 +316,7 @@ export function SetupDialog() {
                   </AnimatePresence>
                 </span>
               </div>
-              <p className="draft__why">
-                <Sparkles size={12} aria-hidden="true" />
-                {draft.why}
-              </p>
+              <p className="draft__why">{draft.why}</p>
               <AnimatePresence initial={false}>
                 {editing === draft.key ? (
                   <motion.div

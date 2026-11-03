@@ -1,0 +1,331 @@
+{
+  "date": "2026-11-03",
+  "codexVersion": "0.153.4",
+  "command": "codex app-server generate-json-schema --out artifacts/account-preferences-codex-schema",
+  "schemaSha256": {
+    "ServerNotification.json": "b3e76cf11842f3e8b3270c05e000212b56eabafb0152fc38e8f920e2ef902991",
+    "ClientRequest.json": "25bc001b5dfe3b35785597b8f9ad9e5aaf7e437331fa9921f041c9e0e03fc9f3"
+  },
+  "readRequest": {
+    "properties": {
+      "id": {
+        "$ref": "#/definitions/RequestId"
+      },
+      "method": {
+        "enum": [
+          "account/rateLimits/read"
+        ],
+        "title": "Account/rateLimits/readRequestMethod",
+        "type": "string"
+      },
+      "params": {
+        "type": "null"
+      }
+    },
+    "required": [
+      "id",
+      "method"
+    ],
+    "title": "Account/rateLimits/readRequest",
+    "type": "object"
+  },
+  "definitions": {
+    "RateLimitWindow": {
+      "properties": {
+        "resetsAt": {
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "usedPercent": {
+          "format": "int32",
+          "type": "integer"
+        },
+        "windowDurationMins": {
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "usedPercent"
+      ],
+      "type": "object"
+    },
+    "RateLimitSnapshot": {
+      "properties": {
+        "credits": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/CreditsSnapshot"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "individualLimit": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/SpendControlLimitSnapshot"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "limitId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "limitName": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "planType": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/PlanType"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "primary": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/RateLimitWindow"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "rateLimitReachedType": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/RateLimitReachedType"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "secondary": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/RateLimitWindow"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "spendControlReached": {
+          "description": "Backend-reported spend-control state. `None` is unavailable, not a sparse-update recovery.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "AccountRateLimitsUpdatedNotification": {
+      "description": "Sparse rolling rate-limit update.\n\nClients should merge available values into the most recent `account/rateLimits/read` response or refetch that snapshot. Nullable account metadata may be unavailable in a rolling update and does not clear a previously observed value.",
+      "properties": {
+        "rateLimits": {
+          "$ref": "#/definitions/RateLimitSnapshot"
+        }
+      },
+      "required": [
+        "rateLimits"
+      ],
+      "type": "object"
+    },
+    "CodexErrorInfo": {
+      "description": "This translation layer make sure that we expose codex error code in camel case.\n\nWhen an upstream HTTP status is available (for example, from the Responses API or a provider), it is forwarded in `httpStatusCode` on the relevant `codexErrorInfo` variant.",
+      "oneOf": [
+        {
+          "enum": [
+            "contextWindowExceeded",
+            "sessionBudgetExceeded",
+            "usageLimitExceeded",
+            "rateLimitExceeded",
+            "serverOverloaded",
+            "cyberPolicy",
+            "misalignmentPolicyViolation",
+            "internalServerError",
+            "unauthorized",
+            "badRequest",
+            "threadRollbackFailed",
+            "sandboxError",
+            "other"
+          ],
+          "type": "string"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "httpConnectionFailed": {
+              "properties": {
+                "httpStatusCode": {
+                  "format": "uint16",
+                  "minimum": 0,
+                  "type": [
+                    "integer",
+                    "null"
+                  ]
+                }
+              },
+              "type": "object"
+            }
+          },
+          "required": [
+            "httpConnectionFailed"
+          ],
+          "title": "HttpConnectionFailedCodexErrorInfo",
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Failed to connect to the response SSE stream.",
+          "properties": {
+            "responseStreamConnectionFailed": {
+              "properties": {
+                "httpStatusCode": {
+                  "format": "uint16",
+                  "minimum": 0,
+                  "type": [
+                    "integer",
+                    "null"
+                  ]
+                }
+              },
+              "type": "object"
+            }
+          },
+          "required": [
+            "responseStreamConnectionFailed"
+          ],
+          "title": "ResponseStreamConnectionFailedCodexErrorInfo",
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "The response SSE stream disconnected in the middle of a turn before completion.",
+          "properties": {
+            "responseStreamDisconnected": {
+              "properties": {
+                "httpStatusCode": {
+                  "format": "uint16",
+                  "minimum": 0,
+                  "type": [
+                    "integer",
+                    "null"
+                  ]
+                }
+              },
+              "type": "object"
+            }
+          },
+          "required": [
+            "responseStreamDisconnected"
+          ],
+          "title": "ResponseStreamDisconnectedCodexErrorInfo",
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Reached the retry limit for responses.",
+          "properties": {
+            "responseTooManyFailedAttempts": {
+              "properties": {
+                "httpStatusCode": {
+                  "format": "uint16",
+                  "minimum": 0,
+                  "type": [
+                    "integer",
+                    "null"
+                  ]
+                }
+              },
+              "type": "object"
+            }
+          },
+          "required": [
+            "responseTooManyFailedAttempts"
+          ],
+          "title": "ResponseTooManyFailedAttemptsCodexErrorInfo",
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Returned when `turn/start` or `turn/steer` is submitted while the current active turn cannot accept same-turn steering, for example `/review` or manual `/compact`.",
+          "properties": {
+            "activeTurnNotSteerable": {
+              "properties": {
+                "turnKind": {
+                  "$ref": "#/definitions/NonSteerableTurnKind"
+                }
+              },
+              "required": [
+                "turnKind"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "activeTurnNotSteerable"
+          ],
+          "title": "ActiveTurnNotSteerableCodexErrorInfo",
+          "type": "object"
+        }
+      ]
+    },
+    "PlanType": {
+      "enum": [
+        "free",
+        "go",
+        "plus",
+        "pro",
+        "prolite",
+        "team",
+        "self_serve_business_prolite",
+        "self_serve_business_usage_based",
+        "business",
+        "ent26",
+        "enterprise_cbp_automation",
+        "enterprise_cbp_usage_based",
+        "enterprise",
+        "edu",
+        "edu_plus",
+        "edu_pro",
+        "unknown"
+      ],
+      "type": "string"
+    }
+  },
+  "claude": {
+    "version": "2.1.316",
+    "binaryFieldsPresent": [
+      "rate_limits",
+      "five_hour",
+      "used_percentage",
+      "resets_at",
+      "StopFailure",
+      "rate_limit_event"
+    ],
+    "liveQuotaCaptureVerified": false
+  },
+  "modelQuotaConsumedForResearch": false
+}

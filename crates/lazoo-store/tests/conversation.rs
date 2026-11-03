@@ -66,6 +66,91 @@ fn user() -> MessageSender {
     })
 }
 
+#[test]
+fn user_queue_is_durable_fifo_across_conversations_and_cancelled_work_is_skipped() {
+    let temporary = tempdir().unwrap();
+    let path = temporary.path().join("queue.db");
+    let store = Store::open_path(&path).unwrap();
+    let lead = store
+        .create_employee(&employee("queue-lead", true, true))
+        .unwrap()
+        .employee;
+    let owner = Uuid::new_v4();
+    let session_id = warm_session(&store, lead.id, owner);
+    let first_conversation = create_conversation(&store, "queue-first", lead.id, None).conversation;
+    let second_conversation =
+        create_conversation(&store, "queue-second", lead.id, None).conversation;
+    let unqueued = record_turn(
+        &store,
+        "unqueued",
+        first_conversation.id,
+        user(),
+        None,
+        "explicit replay only",
+    );
+    let first = record_turn(
+        &store,
+        "queued-1",
+        first_conversation.id,
+        user(),
+        None,
+        "first",
+    );
+    let second = record_turn(
+        &store,
+        "queued-2",
+        second_conversation.id,
+        user(),
+        None,
+        "second",
+    );
+    for turn in [&first, &second] {
+        store.queue_user_turn(turn.turn.id).unwrap();
+    }
+    drop(store);
+    let store = Store::open_path(&path).unwrap();
+    let pending = store.pending_user_turns(10).unwrap();
+    assert_eq!(
+        pending
+            .iter()
+            .map(|result| result.turn.id)
+            .collect::<Vec<_>>(),
+        [first.turn.id, second.turn.id]
+    );
+    assert!(!store.turn_recipient_is_busy(first.turn.id).unwrap());
+    let input = BeginTurnSubmissionInput {
+        request_id: "queued-begin".to_owned(),
+        idempotency_key: "queued-begin".to_owned(),
+        turn_id: second.turn.id,
+        expected_revision: 1,
+        owner_boot_id: owner,
+        recipient_session_id: session_id,
+    };
+    assert!(matches!(
+        store.begin_turn_submission(&input),
+        Err(StoreError::TurnRecipientBusy { .. })
+    ));
+    assert!(
+        store
+            .get_message(second.turn.message_id)
+            .unwrap()
+            .attempts
+            .is_empty()
+    );
+    store
+        .request_turn_cancel(&RequestTurnCancelInput {
+            request_id: "cancel-first".to_owned(),
+            idempotency_key: "cancel-first".to_owned(),
+            turn_id: first.turn.id,
+            expected_revision: 1,
+        })
+        .unwrap();
+    let submitting = store.begin_turn_submission(&input).unwrap();
+    assert_eq!(submitting.turn.state, TurnState::Submitting);
+    assert!(store.turn_recipient_is_busy(unqueued.turn.id).unwrap());
+    assert!(store.pending_user_turns(10).unwrap().is_empty());
+}
+
 fn record_turn(
     store: &Store,
     key: &str,

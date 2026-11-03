@@ -388,6 +388,7 @@ impl CodexSession {
         let _turn_gate = self.turn_gate.lock().await;
         self.new_empty_thread
             .store(false, std::sync::atomic::Ordering::Release);
+        let events = self.initial_turn_events().await;
         let result = self
             .process
             .request(
@@ -405,9 +406,7 @@ impl CodexSession {
             })?
             .to_owned();
         self.set_active_turn(Some(turn_id));
-        let outcome = self
-            .collect_turn(self.initial_turn_events(), None, None)
-            .await;
+        let outcome = self.collect_turn(events, None, None).await;
         self.set_active_turn(None);
         outcome
     }
@@ -420,6 +419,7 @@ impl CodexSession {
         let _turn_gate = self.turn_gate.lock().await;
         self.new_empty_thread
             .store(false, std::sync::atomic::Ordering::Release);
+        let mut events = self.initial_turn_events().await;
         let result = self
             .process
             .request(
@@ -438,23 +438,21 @@ impl CodexSession {
             .to_owned();
         self.set_active_turn(Some(turn_id.clone()));
 
-        let mut events = self.initial_turn_events();
         let started = ProviderEvent::TurnStarted {
             provider: ProviderKind::Codex,
             session_id: self.session_id.clone(),
             turn_id: Some(turn_id.clone()),
             raw: None,
         };
-        let initial_observation = events
-            .iter()
-            .chain(std::iter::once(&started))
-            .try_for_each(|event| observer.observe(event));
+        // Admission evidence precedes auxiliary quota observations; a resumed
+        // session still announces its retained identity first.
+        events.insert(usize::from(self.resumed), started);
+        let initial_observation = events.iter().try_for_each(|event| observer.observe(event));
         if let Err(error) = initial_observation {
             self.interrupt_after_observer_error(&turn_id, &error).await;
             self.set_active_turn(None);
             return Err(error);
         }
-        events.push(started);
 
         let outcome = self
             .collect_turn(events, Some(observer), Some(&turn_id))
@@ -466,8 +464,8 @@ impl CodexSession {
         outcome
     }
 
-    fn initial_turn_events(&self) -> Vec<ProviderEvent> {
-        if self.resumed {
+    async fn initial_turn_events(&self) -> Vec<ProviderEvent> {
+        let mut events = if self.resumed {
             vec![ProviderEvent::SessionStarted {
                 provider: ProviderKind::Codex,
                 session_id: self.session_id.clone(),
@@ -476,7 +474,20 @@ impl CodexSession {
             }]
         } else {
             Vec::new()
+        };
+        if let Ok(snapshot) = self
+            .process
+            .request(
+                "account/rateLimits/read",
+                Value::Null,
+                Duration::from_secs(2),
+                "Codex quota observation",
+            )
+            .await
+        {
+            events.push(crate::quota::codex(&snapshot, self.session_id.clone()));
         }
+        events
     }
 
     async fn interrupt_after_observer_error(&self, turn_id: &str, _error: &ProviderError) {
@@ -541,9 +552,18 @@ impl CodexSession {
                 events.push(permission);
                 continue;
             }
+            if let Some(quota) = crate::quota::codex_exhaustion(&message, &self.session_id) {
+                if let Some(observer) = observer {
+                    observer.observe(&quota)?;
+                }
+                events.push(quota);
+            }
             let Some(mut event) = normalize_codex_message(&message)? else {
                 continue;
             };
+            if let ProviderEvent::Quota { session_id, .. } = &mut event {
+                session_id.clone_from(&self.session_id);
+            }
             last_progress = Instant::now();
             if let ProviderEvent::TextDelta { text, .. } = &event {
                 output.push_str(text);
@@ -671,6 +691,7 @@ pub fn normalize_codex_message(message: &Value) -> Result<Option<ProviderEvent>,
         .unwrap_or_default();
     let turn_id = string_at(&params, "/turnId").or_else(|| string_at(&params, "/turn/id"));
     match method {
+        "account/rateLimits/updated" => Ok(Some(crate::quota::codex(&params, thread_id))),
         "thread/started" | "turn/started" | "turn/completed" => {
             normalize_codex_lifecycle(method, &params, thread_id, turn_id)
         }
@@ -784,6 +805,24 @@ fn normalize_codex_stream(
                 output_tokens: total.get("outputTokens").and_then(Value::as_u64),
                 total_tokens: total.get("totalTokens").and_then(Value::as_u64),
                 cost_usd: None,
+                input_tokens_before: total
+                    .get("inputTokens")
+                    .and_then(Value::as_u64)
+                    .zip(
+                        params
+                            .pointer("/tokenUsage/last/inputTokens")
+                            .and_then(Value::as_u64),
+                    )
+                    .map(|(total, last)| total.saturating_sub(last)),
+                output_tokens_before: total
+                    .get("outputTokens")
+                    .and_then(Value::as_u64)
+                    .zip(
+                        params
+                            .pointer("/tokenUsage/last/outputTokens")
+                            .and_then(Value::as_u64),
+                    )
+                    .map(|(total, last)| total.saturating_sub(last)),
                 raw,
             })
         }
