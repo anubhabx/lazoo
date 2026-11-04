@@ -1,10 +1,10 @@
 {
-  "builtAt": "2026-11-04T05:42:38.5902630Z",
-  "commit": "48045797db3f8a2acaa1a988e611f002e42c19f6",
+  "builtAt": "2026-11-04T14:25:21.7286906Z",
+  "commit": "810c9f38d6bd49b6764f646b02d2961e09134cd9",
   "installer": {
     "path": "target\\installer\\release\\bundle\\nsis\\Lazoo_0.1.0_x64-setup.exe",
-    "bytes": 9032385,
-    "sha256": "69ae2819474b1e992c9bf3091bf65c6a243299bc437d353c814616bc46e1c481"
+    "bytes": 9030917,
+    "sha256": "4ada231df514d67b68f5c6dd77108050ed11d6b9dbbd58c0eb264a8334efdade"
   },
   "tauriCli": "@tauri-apps/cli@2.11.5",
   "rustflags": "-C target-feature=+crt-static",
