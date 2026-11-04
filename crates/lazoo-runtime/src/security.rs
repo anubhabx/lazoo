@@ -81,7 +81,7 @@ impl OwnerSecurity {
             )
         }?;
 
-        let path = HSTRING::from(path.to_string_lossy().as_ref());
+        let path = win32_path(path);
         let result = unsafe {
             SetFileSecurityW(
                 &path,
@@ -97,7 +97,7 @@ impl OwnerSecurity {
     }
 
     pub fn read_path_sddl(path: &Path) -> Result<String, RuntimeError> {
-        let path = HSTRING::from(path.to_string_lossy().as_ref());
+        let path = win32_path(path);
         let flags = DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION;
         let mut required = 0_u32;
         let _ = unsafe { GetFileSecurityW(&path, flags.0, None, 0, &raw mut required) };
@@ -130,6 +130,43 @@ impl OwnerSecurity {
             let _ = LocalFree(Some(HLOCAL(string.0.cast::<c_void>())));
         }
         Ok(sddl)
+    }
+}
+
+/// A path for raw Win32 calls. Rust's `std::fs` lifts the 260-character `MAX_PATH` limit on its
+/// own; direct calls such as `SetFileSecurityW` and `MoveFileExW` do not, so an absolute drive
+/// path gets the verbatim `\\?\` prefix (which also needs backslashes). Others pass through.
+#[must_use]
+pub fn win32_path(path: &Path) -> HSTRING {
+    HSTRING::from(win32_path_text(path))
+}
+
+fn win32_path_text(path: &Path) -> String {
+    let text = path.to_string_lossy();
+    let bytes = text.as_bytes();
+    let drive = bytes.len() > 2
+        && bytes[0].is_ascii_alphabetic()
+        && bytes[1] == b':'
+        && matches!(bytes[2], b'\\' | b'/');
+    if drive && !text.contains("..") {
+        format!(r"\\?\{}", text.replace('/', "\\"))
+    } else {
+        text.into_owned()
+    }
+}
+
+#[cfg(test)]
+mod win32_path_tests {
+    use super::win32_path_text;
+    use std::path::Path;
+
+    #[test]
+    fn drive_paths_become_verbatim_and_others_pass_through() {
+        assert_eq!(win32_path_text(Path::new(r"C:\a\b")), r"\\?\C:\a\b");
+        assert_eq!(win32_path_text(Path::new("C:/a/b")), r"\\?\C:\a\b");
+        assert_eq!(win32_path_text(Path::new(r"\\?\C:\a")), r"\\?\C:\a");
+        assert_eq!(win32_path_text(Path::new(r"C:\a\..\b")), r"C:\a\..\b");
+        assert_eq!(win32_path_text(Path::new(r"relative\b")), r"relative\b");
     }
 }
 
