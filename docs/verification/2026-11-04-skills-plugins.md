@@ -38,6 +38,42 @@ The resumed baseline's first observed focused run passed its single existing tes
 - Antigravity help exposes no read-only skill-list command. Its exposure root is inferred from documented configuration locations; actual skill loading remains unverified. Native plugin network installs, remote skill fetches, and live cross-provider installs were not exercised. Grok Build is Unsupported. Codex/Copilot plugin toggles, Antigravity marketplace management, and OpenCode removal/toggles/Claude marketplaces are explicitly unsupported.
 - No release build or full historical acceptance-script suite is claimed. No desktop UI was built for this slice. Interrupted native mutations may require manual inspection of private journals; there is no automatic blanket restore over changed native configuration.
 
+## Desktop pages and live run (Claude, after the backend)
+
+Settings > Skills and Settings > Plugins (`apps/lazoo-desktop/ui/src/pages/Skills.tsx`,
+`Plugins.tsx`, 26 UI tests) were built by a Sonnet agent against `UI-BACKEND-HANDOFF.md` and
+reviewed in a browser against the dev bridge; the shared `Dialog` now renders in a portal because
+the pages' container query trapped fixed dialogs inside a list. The backend record above claims no
+release build or full suite; the combined gate runs on `feat/voice-mode`, which contains this
+branch (see `docs/verification/2026-11-04-voice-mode.md`).
+
+Live run: debug build, fresh data root, disposable home (`USERPROFILE`/`HOME` redirected), the real
+desktop driven over CDP. Add skills > GitHub `anthropics/skills` previewed revision `ca45fc4` with
+its skills; choosing `pdf` for Claude Code and Codex in link mode reported "Installed 1 skill", and
+`~/.claude/skills/pdf` and `~/.codex/skills/pdf` are directory junctions to
+`<data root>/extensions/library/pdf`. The library row shows both links and "Also visible to
+OpenCode" through the Claude root. Settings > Plugins ran the real Claude Code CLI against the
+disposable home: Native, no plugins, no marketplaces.
+
+The live run found four defects the fixtures could not, fixed in "fix: skill sources from real
+repositories on Windows":
+
+1. Git runs with system config disabled, which drops Git for Windows' `core.longpaths`: pack
+   files under the staging root failed with "Filename too long". Every bounded git call now
+   passes `-c core.longpaths=true`.
+2. The staging-size watcher walked the tree while git wrote and failed the fetch when a temporary
+   file vanished between listing and stat; vanished entries are skipped.
+3. Marketplace skill paths relative to a `"./"` plugin source (Anthropic's own marketplace)
+   became `/skills/x` and were refused as traversal; they are joined as paths with `.` dropped,
+   and `..`, roots and drives are still refused (test
+   `marketplace_paths_relative_to_a_dot_source_resolve`).
+4. `SetFileSecurityW` and `MoveFileExW` received plain paths and failed past 260 characters;
+   `lazoo_runtime::win32_path` adds the verbatim prefix for absolute drive paths (test
+   `drive_paths_become_verbatim_and_others_pass_through`).
+
+The Add skills dialog also stopped preselecting every skill of a collection (only a lone
+installable one), gained Select all, and clamps long descriptions.
+
 ## Exact paths to stage
 
 Stage exactly the following 77 paths. Exclude all `artifacts/` paths, including older artifacts and disposable native-check homes. The manifests/logs are local verification evidence, not product files.

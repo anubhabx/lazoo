@@ -140,8 +140,9 @@ Do not change durable lifecycle state because the desktop lost its connection.
 
 ## Skills and plugins
 
-This is an implemented daemon/CLI contract, but its new tests and acceptance gate
-are still pending. The desktop owns no separate state: it calls the RPCs below,
+This contract is implemented, tested (`scripts/acceptance/skills-plugins.ps1`, in the
+gate) and bound by Settings > Skills and Settings > Plugins. The desktop owns no
+separate state: it calls the RPCs below,
 keeps the returned `revision`, and refreshes after the durable events. All request
 objects reject unknown fields. `ExtensionTarget` is `{ provider, accountId? }`,
 where an omitted/null `accountId` means the personal harness and a non-null UUID
