@@ -5,9 +5,8 @@ use std::{
 };
 
 use uuid::Uuid;
-use windows::{
-    Win32::Storage::FileSystem::{MOVEFILE_REPLACE_EXISTING, MOVEFILE_WRITE_THROUGH, MoveFileExW},
-    core::HSTRING,
+use windows::Win32::Storage::FileSystem::{
+    MOVEFILE_REPLACE_EXISTING, MOVEFILE_WRITE_THROUGH, MoveFileExW,
 };
 
 use crate::{RuntimeError, io_error};

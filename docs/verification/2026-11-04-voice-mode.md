@@ -47,8 +47,37 @@ hotkey capture, read-aloud skipping history and worker turns.
 
 ## Live run in the real window (Claude)
 
-Pending in this session: keeper autostart from the desktop, Settings > Voice with the microphone
-block shown, a Whisper model install from the UI, the dictation overlay in its real window.
+Debug build of the merged tree (voice plus skills and plugins), a fresh data root, a disposable
+home (`USERPROFILE`/`HOME` redirected so no real harness directory was touched), driven over CDP.
+
+- **Keeper autostart.** Only `lazoo-desktop.exe` was started. It spawned `lazoo-keeper.exe`
+  (parent: the desktop), which spawned `lazood.exe`; the UI reported Connected with no manual
+  step. A second launch against the same data root leaves the running keeper alone.
+- **Settings > Voice** rendered the "Windows is blocking the microphone" note with "Open Windows
+  settings" (this machine's HKCU microphone consent is Deny) and "Registered" for the hotkey.
+- **Model install from the UI.** Install on Tiny, English downloaded whisper.cpp b5454 and
+  `ggml-tiny.en.bin` (77,704,715 bytes, the pinned size and SHA-256) into the data root; 15 DLLs
+  plus `whisper-cli.exe` under `voice/whisper/b5454/Release`.
+- **Transcription through the app** (`voice_transcribe` in the main window, Windows SAPI speech
+  because the microphone is blocked): 5.6 s of "Um, please add a retry budget to the dispatcher,
+  and uh run the tests." became raw "Um, please add a retry budget to the dispatcher and I run
+  the tests." and cleaned "Please add a retry budget to the dispatcher and I run the tests." in
+  1.0 to 1.1 s, `external: false`; `voice/tmp` empty afterwards.
+- **Overlay** in its real 280 x 56 window: Recording with the level track, then the Inserted
+  flash, then hidden; it never took focus.
+- **Global hotkey** held for 1.2 s through `keybd_event` while another app was focused: the
+  overlay went Recording, then Transcribing.
+
+### Defect found and fixed in the live run
+
+With no speech, whisper returned "you" (its well-known silence hallucination), so push-to-talk
+could insert "You." into the focused application; Windows can also hand a denied desktop app
+silent buffers. `voice_transcribe` now returns an empty transcript without running any engine
+when the loudest sample stays under about -34 dBFS (unit test `silence_and_near_silence_are_gated_but_speech_is_not`),
+and the overlay and composer explain an empty result as a microphone block when `voice_state`
+reports one. Rechecked live: 1.2 s of silence returned `{"text":"","elapsedMs":0}`; speech still
+transcribed in 1.0 s. Note for the owner: the first hotkey test ran before this fix and may have
+typed "You." into whichever window had focus at the time.
 
 ## Not verified
 
