@@ -396,8 +396,12 @@ describe("Skills page", () => {
     );
     expect(dialog).toHaveTextContent("Unverified");
     await user.click(within(dialog).getByRole("checkbox", { name: /Codex/ }));
-    await user.click(
+    // Several installable skills: none is chosen for the user.
+    expect(
       within(dialog).getByRole("checkbox", { name: /api-design/ }),
+    ).not.toBeChecked();
+    await user.click(
+      within(dialog).getByRole("checkbox", { name: /pdf-forms/ }),
     );
     await user.click(within(dialog).getByRole("button", { name: "Copy" }));
     await user.click(

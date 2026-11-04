@@ -2591,3 +2591,16 @@ kbd,
   overflow-wrap: anywhere;
   white-space: pre-wrap;
 }
+
+.ext-clamp {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+}
+
+.ext-select-all {
+  display: flex;
+  justify-content: flex-end;
+  margin: -28px 0 4px;
+}

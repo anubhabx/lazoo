@@ -310,6 +310,14 @@ async fn git_bounded(
     env: &LaunchEnvironment,
     staging: &Path,
 ) -> Result<Vec<u8>, ExtensionError> {
+    // System and global config are disabled above, and Git for Windows keeps `core.longpaths`
+    // in its system config: without it, pack files or deep sources under the staging root fail
+    // with "Filename too long" once the path passes 260 characters.
+    let args: Vec<String> = ["-c".into(), "core.longpaths=true".into()]
+        .into_iter()
+        .chain(args.iter().cloned())
+        .collect();
+    let args = &args;
     tokio::select! {
         result = run_command(Path::new("git.exe"),args,cwd,env,Duration::from_secs(60)) => { let output = result?; staging_usage(staging)?; Ok(output) },
         result = async { loop { tokio::time::sleep(Duration::from_millis(100)).await; staging_usage(staging)?; } #[allow(unreachable_code)] Ok::<(),ExtensionError>(()) } => { result?; Err(ExtensionError::Limit("git staging")) }
@@ -320,13 +328,27 @@ fn staging_usage(root: &Path) -> Result<(), ExtensionError> {
     let mut todo = vec![root.to_path_buf()];
     let mut count = 0;
     let mut bytes = 0;
+    // This walk runs while git writes, and git creates and deletes temporary files and
+    // directories (`tmp_pack_*`, `*.lock`) all the time: anything that vanished mid-walk is
+    // skipped rather than failing the whole fetch.
+    let gone = |error: &std::io::Error| error.kind() == std::io::ErrorKind::NotFound;
     while let Some(path) = todo.pop() {
-        if !path.exists() {
-            continue;
-        }
-        for entry in fs::read_dir(path)? {
-            let entry = entry?;
-            let meta = fs::symlink_metadata(entry.path())?;
+        let entries = match fs::read_dir(&path) {
+            Ok(entries) => entries,
+            Err(error) if gone(&error) => continue,
+            Err(error) => return Err(error.into()),
+        };
+        for entry in entries {
+            let entry = match entry {
+                Ok(entry) => entry,
+                Err(error) if gone(&error) => continue,
+                Err(error) => return Err(error.into()),
+            };
+            let meta = match fs::symlink_metadata(entry.path()) {
+                Ok(meta) => meta,
+                Err(error) if gone(&error) => continue,
+                Err(error) => return Err(error.into()),
+            };
             count += 1;
             bytes += meta.len();
             if is_unsafe(&meta) || count > MAX_FILES * 2 || bytes > MAX_BYTES * 2 {
@@ -373,13 +395,23 @@ pub fn discover_skill_roots(tree: &FileTree) -> Result<Vec<PathBuf>, ExtensionEr
     ] {
         if let Some(bytes) = tree.get(Path::new(manifest)) {
             let value: serde_json::Value = serde_json::from_slice(bytes)?;
+            // Manifest paths are relative to the plugin `source` ("./" in Anthropic's own
+            // marketplace), so they are joined as paths and `.` parts dropped; `..`, roots and
+            // drive prefixes stay and are refused below.
+            let relative = |prefix: &str, item: &str| -> PathBuf {
+                Path::new(prefix)
+                    .join(item)
+                    .components()
+                    .filter(|part| !matches!(part, std::path::Component::CurDir))
+                    .collect()
+            };
             let mut skill_paths = Vec::new();
             if let Some(items) = value["skills"].as_array() {
                 skill_paths.extend(
                     items
                         .iter()
                         .filter_map(serde_json::Value::as_str)
-                        .map(str::to_owned),
+                        .map(|item| relative("", item)),
                 );
             }
             if let Some(plugins) = value["plugins"].as_array() {
@@ -387,17 +419,12 @@ pub fn discover_skill_roots(tree: &FileTree) -> Result<Vec<PathBuf>, ExtensionEr
                     if let Some(items) = plugin["skills"].as_array() {
                         let prefix = plugin["source"].as_str().unwrap_or("");
                         for item in items.iter().filter_map(serde_json::Value::as_str) {
-                            skill_paths.push(if prefix.is_empty() {
-                                item.to_owned()
-                            } else {
-                                format!("{prefix}/{}", item.strip_prefix("./").unwrap_or(item))
-                            });
+                            skill_paths.push(relative(prefix, item));
                         }
                     }
                 }
             }
-            for item in skill_paths {
-                let path = PathBuf::from(item.strip_prefix("./").unwrap_or(&item));
+            for path in skill_paths {
                 if !safe_relative(&path) {
                     return Err(ExtensionError::Unsafe(
                         "plugin manifest skill path traversal".into(),
@@ -490,6 +517,35 @@ mod tests {
             .collect();
             assert!(discover_skill_roots(&tree).is_err(), "{path}");
         }
+    }
+
+    #[test]
+    fn marketplace_paths_relative_to_a_dot_source_resolve() {
+        // The shape of anthropics/skills' .claude-plugin/marketplace.json.
+        let manifest = serde_json::json!({"plugins": [
+            {"name": "document-skills", "source": "./", "skills": ["./skills/pdf"]},
+            {"name": "bad", "source": "./", "skills": ["./../escape"]}
+        ]});
+        let skill = b"---\nname: pdf\ndescription: PDF tools\n---\n".to_vec();
+        let mut tree: FileTree = [
+            (
+                PathBuf::from(".claude-plugin/marketplace.json"),
+                serde_json::to_vec(&manifest).unwrap(),
+            ),
+            (PathBuf::from("skills/pdf/SKILL.md"), skill),
+        ]
+        .into_iter()
+        .collect();
+        assert!(discover_skill_roots(&tree).is_err(), "`..` still refused");
+        let good = serde_json::json!({"plugins": [manifest["plugins"][0].clone()]});
+        tree.insert(
+            PathBuf::from(".claude-plugin/marketplace.json"),
+            serde_json::to_vec(&good).unwrap(),
+        );
+        assert_eq!(
+            discover_skill_roots(&tree).unwrap(),
+            vec![PathBuf::from("skills/pdf")]
+        );
     }
 
     #[test]

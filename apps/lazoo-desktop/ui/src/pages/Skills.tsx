@@ -877,13 +877,12 @@ function AddSkillsDialog({
     }
     const found = result.value;
     setPreview(found);
-    setSelected(
-      new Set(
-        found.skills
-          .filter((skill) => installable(found, skill))
-          .map((skill) => skill.name),
-      ),
-    );
+    // A collection repository can hold dozens of skills: nothing is chosen for the user unless
+    // the source has exactly one installable skill.
+    const installableNames = found.skills
+      .filter((skill) => installable(found, skill))
+      .map((skill) => skill.name);
+    setSelected(new Set(installableNames.length === 1 ? installableNames : []));
     setReplace(new Set());
   }
 
@@ -1061,6 +1060,28 @@ function AddSkillsDialog({
           <ErrorLine error={error} />
           <fieldset className="ext-fieldset">
             <legend>Skills found</legend>
+            {preview.skills.filter((skill) => installable(preview, skill))
+              .length > 1 ? (
+              <div className="ext-select-all">
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => {
+                    const names = preview.skills
+                      .filter((skill) => installable(preview, skill))
+                      .map((skill) => skill.name);
+                    const all = names.every((name) => selected.has(name));
+                    setSelected(new Set(all ? [] : names));
+                  }}
+                >
+                  {preview.skills
+                    .filter((skill) => installable(preview, skill))
+                    .every((skill) => selected.has(skill.name))
+                    ? "Select none"
+                    : "Select all"}
+                </Button>
+              </div>
+            ) : null}
             {preview.skills.length ? (
               preview.skills.map((skill) => (
                 <FoundSkill
@@ -1275,7 +1296,9 @@ function FoundSkill({
         />
         <span>
           <strong className="mono">{skill.name}</strong>
-          <span className="meta">{skill.description}</span>
+          <span className="meta ext-clamp" title={skill.description}>
+            {skill.description}
+          </span>
           <span className="meta">
             {skill.fileCount} file{skill.fileCount === 1 ? "" : "s"} ·{" "}
             {formatBytes(skill.bytes)}
