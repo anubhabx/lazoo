@@ -155,21 +155,6 @@ fn win32_path_text(path: &Path) -> String {
     }
 }
 
-#[cfg(test)]
-mod win32_path_tests {
-    use super::win32_path_text;
-    use std::path::Path;
-
-    #[test]
-    fn drive_paths_become_verbatim_and_others_pass_through() {
-        assert_eq!(win32_path_text(Path::new(r"C:\a\b")), r"\\?\C:\a\b");
-        assert_eq!(win32_path_text(Path::new("C:/a/b")), r"\\?\C:\a\b");
-        assert_eq!(win32_path_text(Path::new(r"\\?\C:\a")), r"\\?\C:\a");
-        assert_eq!(win32_path_text(Path::new(r"C:\a\..\b")), r"C:\a\..\b");
-        assert_eq!(win32_path_text(Path::new(r"relative\b")), r"relative\b");
-    }
-}
-
 pub fn protect_for_current_user(data: &[u8]) -> Result<Vec<u8>, RuntimeError> {
     crypt_data(data, true)
 }
@@ -231,5 +216,20 @@ impl Drop for HandleGuard {
         unsafe {
             let _ = CloseHandle(self.0);
         }
+    }
+}
+
+#[cfg(test)]
+mod win32_path_tests {
+    use super::win32_path_text;
+    use std::path::Path;
+
+    #[test]
+    fn drive_paths_become_verbatim_and_others_pass_through() {
+        assert_eq!(win32_path_text(Path::new(r"C:\a\b")), r"\\?\C:\a\b");
+        assert_eq!(win32_path_text(Path::new("C:/a/b")), r"\\?\C:\a\b");
+        assert_eq!(win32_path_text(Path::new(r"\\?\C:\a")), r"\\?\C:\a");
+        assert_eq!(win32_path_text(Path::new(r"C:\a\..\b")), r"C:\a\..\b");
+        assert_eq!(win32_path_text(Path::new(r"relative\b")), r"relative\b");
     }
 }
