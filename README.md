@@ -7,7 +7,7 @@ The name is a deliberately silly blend of **lazy** and **zoo**: wake the right e
 ## Status
 
 **Install:** `scripts/build-installer.ps1` builds a per-user Windows installer (no administrator
-rights) that puts `Lazoo.exe` and its service binaries in `%LOCALAPPDATA%\Programs\Lazoo`; data
+rights) that puts `lazoo-desktop.exe` (Start menu: Lazoo) and its service binaries in `%LOCALAPPDATA%\Programs\Lazoo`; data
 stays in `%LOCALAPPDATA%\Lazoo`. Opening the app starts its local service.
 
 **Voice** (Settings → Voice): speak into the conversation composer, hear the lead's replies read

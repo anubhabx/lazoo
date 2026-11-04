@@ -79,6 +79,32 @@ reports one. Rechecked live: 1.2 s of silence returned `{"text":"","elapsedMs":0
 transcribed in 1.0 s. Note for the owner: the first hotkey test ran before this fix and may have
 typed "You." into whichever window had focus at the time.
 
+## Installer
+
+`pwsh -File scripts/build-installer.ps1 -Verify` (manifest
+`artifacts/installer/installer-manifest.json`): release binaries with `+crt-static` in
+`target/installer` (sidecars 6 min cold), the pinned Tauri CLI 2.11.5 downloading NSIS 3.11 and
+`nsis_tauri_utils` 0.5.3 (hash-validated by the CLI), the vendored template and hooks, producing
+`Lazoo_0.1.0_x64-setup.exe` (about 9 MB). Verification, all PASS: silent install to a temporary
+folder exits 0 with `lazoo-desktop.exe` and the four service binaries beside it; `lazooctl --help`
+runs (static CRT loads alone); the installed app, launched against a temporary data root, starts
+the installed keeper and daemon by itself; `lazooctl status` answers; silent uninstall exits 0,
+its pre-uninstall hook stops the installed service, and the files are removed. The owner's real
+data root was never used.
+
+Found on the way: the Tauri CLI runs `beforeBuildCommand` from the frontend folder, so the bundle
+config clears it and the script builds the UI itself; the installed main binary keeps the crate
+name `lazoo-desktop.exe` (the Start menu entry is "Lazoo"); and two verification-script bugs
+(`Start-Process -Wait` returning a null exit code, and PowerShell's `0 -eq $false`).
+
+## Full gate
+
+Not completed in this session: `scripts/gate.ps1` passed format, strict clippy and test-host,
+then Claude Code's low-memory reaper stopped it during the workspace test build (the laptop has
+16 GB and the owner's own applications hold much of it). Owner decision: open the PRs and run the
+gate before merging. Run it on this branch, which contains `feat/skills-plugins`:
+`pwsh -File scripts/gate.ps1 -OutputPath artifacts/acceptance/core-v1-gate-manifest.json`.
+
 ## Not verified
 
 Real microphone capture on this machine (blocked by the user's Windows privacy setting), any real

@@ -1,0 +1,25 @@
+{
+  "builtAt": "2026-11-04T05:42:38.5902630Z",
+  "commit": "48045797db3f8a2acaa1a988e611f002e42c19f6",
+  "installer": {
+    "path": "target\\installer\\release\\bundle\\nsis\\Lazoo_0.1.0_x64-setup.exe",
+    "bytes": 9032385,
+    "sha256": "69ae2819474b1e992c9bf3091bf65c6a243299bc437d353c814616bc46e1c481"
+  },
+  "tauriCli": "@tauri-apps/cli@2.11.5",
+  "rustflags": "-C target-feature=+crt-static",
+  "verify": {
+    "installExit": 0,
+    "lazoo-desktop.exe": true,
+    "lazood.exe": true,
+    "lazoo-keeper.exe": true,
+    "lazooctl.exe": true,
+    "lazoo-session-host.exe": true,
+    "lazooctlHelp": true,
+    "serviceStartedByApp": true,
+    "statusExit": 0,
+    "uninstallExit": 0,
+    "serviceStoppedByUninstall": true,
+    "removed": true
+  }
+}
