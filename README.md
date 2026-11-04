@@ -150,6 +150,13 @@ Pop-Location
 
 ## Skills and native plugins
 
+In the desktop, **Settings → Skills** adds skills from a skills.sh page, GitHub (`owner/repo` or a
+tree URL), any Git URL or a local folder: preview what the source contains, pick skills and the
+harnesses that should see them, and choose link (one copy, junctions into each harness) or copy.
+It also lists what every harness already reads on this computer. **Settings → Plugins** shows each
+harness's own plugins and marketplaces and runs installs, removals and toggles through that
+harness's CLI after showing the exact commands.
+
 The daemon and `lazooctl` expose a preview-first extension contract: `skill list`,
 `skill source preview`, `skill update-preview`, `skill install|update|expose|unexpose|remove`,
 and `plugin list|preview|install|uninstall|enable|disable` plus `plugin marketplace
