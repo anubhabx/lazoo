@@ -1,0 +1,82 @@
+{
+  "manifestVersion": 1,
+  "status": "PASS",
+  "schemaVersion": 23,
+  "mode": "deterministic-temporary-homes",
+  "startedAt": "2026-11-04T14:18:34.2846933Z",
+  "durationMs": 34506,
+  "commands": [
+    {
+      "command": "cargo test -p lazood --test skills_plugins --locked",
+      "exitCode": 0,
+      "durationMs": 28870
+    },
+    {
+      "command": "cargo test -p lazooctl --test cli skills_and_plugins_cli_map_public_extension_requests --locked -- --exact",
+      "exitCode": 0,
+      "durationMs": 3048
+    },
+    {
+      "command": "cargo test -p lazoo-providers --lib extensions --locked",
+      "exitCode": 0,
+      "durationMs": 1769
+    },
+    {
+      "command": "cargo test -p lazoo-store --test store store_enables_wal_foreign_keys_and_schema_version --locked -- --exact",
+      "exitCode": 0,
+      "durationMs": 798
+    }
+  ],
+  "binaries": {
+    "cargo": "C:\\Users\\anubhab\\.cargo\\bin\\cargo.exe",
+    "sessionHost": {
+      "path": "C:\\workspace\\Orchestrator\\target\\debug\\lazoo-session-host.exe",
+      "sha256": "87732519B33E6A694BBE6493942D035BDD09B525E0C62F5F844711D29A828CD5"
+    }
+  },
+  "sourceHashes": [
+    {
+      "path": "apps/lazood/tests/skills_plugins.rs",
+      "sha256": "769BA36BC7956195B67A1D3BCC2549EA0835C82DB006EFFCF846713AE80A73CE"
+    },
+    {
+      "path": "apps/lazooctl/tests/cli.rs",
+      "sha256": "A999572EBD2A4E55835943D8D40E264960769292934E06703711B2BA50831691"
+    },
+    {
+      "path": "crates/lazoo-providers/src/extensions/plugins.rs",
+      "sha256": "3CB5FB5A09A48C0B23928D4A46E47F4437FCA01C703CEFAFE6E99037A5105734"
+    },
+    {
+      "path": "migrations/0023_extensions.sql",
+      "sha256": "30E0FA5DA42059ADF1A1544E9B4C7159319D2D7B5B4ABCBF077E28250BD6B0D3"
+    }
+  ],
+  "environment": {
+    "CARGO_BUILD_JOBS": "2",
+    "CARGO_INCREMENTAL": "0",
+    "CARGO_PROFILE_DEV_DEBUG": "0",
+    "CARGO_PROFILE_TEST_DEBUG": "0",
+    "RUST_TEST_THREADS": "2"
+  },
+  "assertions": [
+    "temporary-home-only",
+    "revision-fence",
+    "unmanaged-preservation",
+    "copy-drift-refusal",
+    "link-lifecycle",
+    "update-staging-tamper",
+    "native-profile-expansion",
+    "pending-intent-block",
+    "fake-native-plugin-preview-apply",
+    "partial-plugin-outcomes",
+    "cli-request-mapping",
+    "provider-extension-units",
+    "schema-23"
+  ],
+  "boundaries": {
+    "realNativeHarness": "NOT_RUN",
+    "userHomes": "UNTOUCHED",
+    "network": "NOT_USED"
+  }
+}
