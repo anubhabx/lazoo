@@ -409,7 +409,13 @@ export class VoiceController {
       }
       const text = result.text.trim();
       if (!text) {
-        this.flash("error", "Nothing heard");
+        // Windows hands a denied desktop app silent audio; say which it is.
+        this.flash(
+          "error",
+          this.snapshot.state?.microphoneBlocked
+            ? "Windows is blocking the microphone"
+            : "Nothing heard",
+        );
         return;
       }
       await this.deliver(text);

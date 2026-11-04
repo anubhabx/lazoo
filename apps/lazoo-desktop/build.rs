@@ -49,7 +49,15 @@ fn main() {
 )]
 fn lazoo_icon() -> Vec<u8> {
     // (size in px, pixels per mark unit)
-    const SIZES: [(u32, u32); 7] = [(16, 1), (24, 1), (32, 2), (48, 2), (64, 3), (128, 6), (256, 11)];
+    const SIZES: [(u32, u32); 7] = [
+        (16, 1),
+        (24, 1),
+        (32, 2),
+        (48, 2),
+        (64, 3),
+        (128, 6),
+        (256, 11),
+    ];
     const SLATE: [f32; 3] = [23.0, 28.0, 36.0]; // --lz-slate-100
     const IRIS: [f32; 3] = [141.0, 154.0, 244.0]; // --lz-iris-500
     const CORE: [f32; 3] = [168.0, 179.0, 249.0]; // --lz-iris-400
@@ -107,7 +115,11 @@ fn lazoo_icon() -> Vec<u8> {
             image.extend_from_slice(&1_u16.to_le_bytes());
             image.extend_from_slice(&32_u16.to_le_bytes());
             image.extend_from_slice(&[0; 4]);
-            image.extend_from_slice(&u32::try_from(pixels.len() + mask_row * size as usize).unwrap().to_le_bytes());
+            image.extend_from_slice(
+                &u32::try_from(pixels.len() + mask_row * size as usize)
+                    .unwrap()
+                    .to_le_bytes(),
+            );
             image.extend_from_slice(&[0; 16]);
             image.extend_from_slice(&pixels);
             image.resize(image.len() + mask_row * size as usize, 0);

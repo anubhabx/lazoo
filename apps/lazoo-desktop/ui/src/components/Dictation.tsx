@@ -76,7 +76,12 @@ export function useDictation({
       if (!result) return;
       const text = result.text.trim();
       if (!text) {
-        setError({ code: "LZ-VOICE-EMPTY", message: "Nothing was heard." });
+        setError({
+          code: "LZ-VOICE-EMPTY",
+          message: voice.getSnapshot().state?.microphoneBlocked
+            ? "Nothing was heard: Windows is blocking the microphone (Settings > Voice)."
+            : "Nothing was heard.",
+        });
         return;
       }
       if (voice.getSnapshot().state?.settings.reviewBeforeSend ?? true) {

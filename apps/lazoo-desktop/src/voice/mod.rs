@@ -202,15 +202,15 @@ fn audio_error(message: &str) -> DesktopFailure {
 }
 
 /// Checks RIFF/WAVE, PCM, mono, 16 kHz, 16-bit, non-empty and at most five minutes.
-/// Returns the audio length in milliseconds.
-pub fn validate_wav(bytes: &[u8]) -> Result<u64, DesktopFailure> {
+/// Returns the audio length in milliseconds and the PCM samples.
+pub fn validate_wav(bytes: &[u8]) -> Result<(u64, &[u8]), DesktopFailure> {
     if bytes.len() < 12 || &bytes[0..4] != b"RIFF" || &bytes[8..12] != b"WAVE" {
         return Err(audio_error("The audio is not a WAV file."));
     }
     let word =
         |at: usize| u32::from_le_bytes([bytes[at], bytes[at + 1], bytes[at + 2], bytes[at + 3]]);
     let half = |at: usize| u16::from_le_bytes([bytes[at], bytes[at + 1]]);
-    let (mut position, mut format_ok, mut data_len) = (12_usize, false, None);
+    let (mut position, mut format_ok, mut data) = (12_usize, false, None);
     while position + 8 <= bytes.len() {
         let size = word(position + 4) as usize;
         let body = position + 8;
@@ -225,7 +225,7 @@ pub fn validate_wav(bytes: &[u8]) -> Result<u64, DesktopFailure> {
                     && half(body + 14) == 16;
             }
             b"data" => {
-                data_len = Some(size.min(bytes.len() - body));
+                data = Some((body, size.min(bytes.len() - body)));
                 break;
             }
             _ => {}
@@ -235,14 +235,25 @@ pub fn validate_wav(bytes: &[u8]) -> Result<u64, DesktopFailure> {
     if !format_ok {
         return Err(audio_error("The audio must be PCM 16-bit mono at 16 kHz."));
     }
-    let data_len = data_len.unwrap_or(0);
+    let (data_at, data_len) = data.unwrap_or((0, 0));
     if data_len < 2 {
         return Err(audio_error("The audio is empty."));
     }
     if data_len > MAX_AUDIO_BYTES {
         return Err(audio_error("The audio is longer than five minutes."));
     }
-    Ok(data_len as u64 / 32)
+    Ok((data_len as u64 / 32, &bytes[data_at..data_at + data_len]))
+}
+
+/// Whisper invents words for silence ("you", "Thank you."), and Windows can hand a desktop app
+/// silent buffers when its privacy settings deny the microphone. A clip whose loudest sample
+/// stays under about -34 dBFS has no speech in it, so no engine runs and nothing is sent anywhere.
+pub fn is_silent(pcm: &[u8]) -> bool {
+    const PEAK: i32 = 650; // 2% of full scale
+    pcm.as_chunks::<2>()
+        .0
+        .iter()
+        .all(|pair| i32::from(i16::from_le_bytes(*pair)).abs() < PEAK)
 }
 
 #[derive(Serialize)]
@@ -309,7 +320,18 @@ async fn transcribe_wav(wav: &[u8]) -> Result<Transcript, DesktopFailure> {
             "Speech to text is turned off in Settings, Voice.",
         ));
     }
-    let audio_ms = validate_wav(wav)?;
+    let (audio_ms, pcm) = validate_wav(wav)?;
+    if is_silent(pcm) {
+        return Ok(Transcript {
+            text: String::new(),
+            raw: String::new(),
+            cleaning: settings.cleaning,
+            engine,
+            external: false,
+            audio_ms,
+            elapsed_ms: 0,
+        });
+    }
     let voice = voice_dir()?;
     let mut external = false;
     let raw = if engine == SttEngine::Endpoint {
@@ -433,17 +455,38 @@ mod tests {
     #[test]
     fn valid_wav_reports_its_duration() {
         assert_eq!(
-            validate_wav(&wav(1, 1, 16_000, 16, 16_000)).expect("one second"),
+            validate_wav(&wav(1, 1, 16_000, 16, 16_000))
+                .expect("one second")
+                .0,
             1000
         );
         assert_eq!(
-            validate_wav(&wav(1, 1, 16_000, 16, 8_000)).expect("half"),
+            validate_wav(&wav(1, 1, 16_000, 16, 8_000)).expect("half").0,
             500
         );
         assert_eq!(
-            validate_wav(&wav(1, 1, 16_000, 16, 16_000 * 300)).expect("five minutes"),
+            validate_wav(&wav(1, 1, 16_000, 16, 16_000 * 300))
+                .expect("five minutes")
+                .0,
             300_000
         );
+    }
+
+    #[test]
+    fn silence_and_near_silence_are_gated_but_speech_is_not() {
+        let samples = |values: &[i16]| {
+            values
+                .iter()
+                .flat_map(|v| v.to_le_bytes())
+                .collect::<Vec<u8>>()
+        };
+        assert!(is_silent(&samples(&[0; 1600])));
+        assert!(is_silent(&samples(&[12, -40, 300, -649, 0])));
+        assert!(!is_silent(&samples(&[0, 0, 4_000, -2_000, 0])));
+        assert!(!is_silent(&samples(&[0, -650])));
+        let clip = wav(1, 1, 16_000, 16, 160);
+        let (_, pcm) = validate_wav(&clip).expect("valid");
+        assert_eq!(pcm.len(), 320);
     }
 
     #[test]
@@ -453,7 +496,7 @@ mod tests {
         let mut with_list = list_first[..12].to_vec();
         with_list.extend_from_slice(b"LIST\x03\x00\x00\x00abc\x00");
         with_list.extend_from_slice(&list_first[12..]);
-        assert_eq!(validate_wav(&with_list).expect("extra chunk"), 10);
+        assert_eq!(validate_wav(&with_list).expect("extra chunk").0, 10);
         list_first.truncate(11);
 
         let mut truncated_header = wav(1, 1, 16_000, 16, 160);
