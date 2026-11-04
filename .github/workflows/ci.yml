@@ -24,6 +24,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
+      # rustfmt.toml pins newline_style = "Windows"; check out CRLF like a Windows clone.
+      - run: git config --global core.autocrlf true
       - uses: actions/checkout@v5
       - run: rustup toolchain install
       - run: cargo fmt --all -- --check
