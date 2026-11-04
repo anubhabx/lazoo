@@ -1,5 +1,0 @@
-# Recorded hashes cover the exact captured evidence bytes on every platform.
-*.json -text whitespace=blank-at-eol,blank-at-eof,space-before-tab,cr-at-eol
-native-tui/release-evidence/* -text
-# Screen captures intentionally retain cursor controls, padding and original EOLs.
-native-tui/release-evidence/screen-* -diff

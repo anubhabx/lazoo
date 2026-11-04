@@ -1,0 +1,45 @@
+name: CI
+
+# A cheap backstop, not the gate. The repository is private on GitHub Free, so Actions
+# minutes are capped and Windows minutes bill at a multiple. The full gate
+# (scripts/gate.ps1) must pass locally before a PR is raised; see README "Verification".
+# ponytail: no cargo test or acceptance scripts here; add cargo test if minutes allow.
+
+on:
+  pull_request:
+    paths-ignore:
+      - 'docs/**'
+      - '**/*.md'
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  format-and-ui:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+      - run: rustup toolchain install
+      - run: cargo fmt --all -- --check
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: apps/lazoo-desktop/ui/package-lock.json
+      - run: npm --prefix apps/lazoo-desktop/ui ci
+      - run: npm --prefix apps/lazoo-desktop/ui run check
+
+  clippy:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+      - run: rustup toolchain install
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo clippy --workspace --all-targets --locked -- -D warnings

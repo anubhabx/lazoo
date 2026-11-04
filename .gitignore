@@ -22,13 +22,14 @@ node_modules/
 .lazoo/
 .worktrees/
 .superpowers/
-artifacts/research/
+artifacts/
 *.db
 *.db-shm
 *.db-wal
 *.log
 
-# Editor and operating-system files
+# Editor, agent tool and operating-system files
+.playwright-mcp/
 .idea/
 .vscode/
 .DS_Store

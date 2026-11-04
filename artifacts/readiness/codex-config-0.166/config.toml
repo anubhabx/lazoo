@@ -1,8 +1,0 @@
-model = "fixture-model"
-[mcp_servers.fixture_stdio]
-command = "fixture-mcp"
-args = ["--stdio", "--safe"]
-enabled = false
-[mcp_servers.fixture_http]
-url = "https://example.invalid/mcp"
-enabled = false

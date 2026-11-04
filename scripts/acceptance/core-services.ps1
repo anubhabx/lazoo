@@ -116,7 +116,7 @@ $runRoot = Join-Path ([IO.Path]::GetTempPath()) "lazoo-core-services-$runId"
 $script:dataRoot = Join-Path $runRoot 'data'
 $artifactDir = Join-Path $repoRoot 'artifacts\acceptance'
 if ([string]::IsNullOrWhiteSpace($OutputPath)) {
-    $OutputPath = Join-Path $artifactDir "core-services-$runId.json"
+    $OutputPath = Join-Path $artifactDir 'core-services-manifest.json'
 }
 $manifestPath = [IO.Path]::GetFullPath($OutputPath)
 $startedAt = [DateTime]::UtcNow

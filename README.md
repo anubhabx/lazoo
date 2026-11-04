@@ -205,6 +205,8 @@ extension-operation suite.
 
 ## Verification
 
+**Run the gate locally before raising a PR.** The repository is private on GitHub Free, so Actions minutes are capped and anything past the free allowance is billed. CI (`.github/workflows/ci.yml`) is only a backstop: on pull requests it runs the format check, the UI check and clippy, not the workspace tests or the acceptance scripts. Put the local gate result (`GATE PASS: <n> steps`, or the failed steps) in the PR description. `artifacts/` is local output and is not tracked. Evidence cited by older verification notes is in git history at `d2ba8a8` and earlier.
+
 The whole backend gate (format check, clippy with warnings denied, the workspace tests, the locked release build, and every acceptance script except the live model turn and the separately owned desktop, the real-binary ones with `-SkipBuild`) runs with one command and writes `artifacts\acceptance\gate-manifest.json` with every step's exit code and duration:
 
 ```powershell
