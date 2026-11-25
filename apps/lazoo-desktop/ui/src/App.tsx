@@ -7,6 +7,7 @@ import { Rail } from "./components/Rail";
 import { SetupDialog } from "./components/SetupDialog";
 import { Titlebar } from "./components/Titlebar";
 import { Toasts } from "./components/Toasts";
+import { VoiceOverlay } from "./components/VoiceOverlay";
 import { EASE } from "./components/primitives";
 import type { Bridge } from "./lib/bridge";
 import {
@@ -19,13 +20,31 @@ import {
 import type { Store } from "./lib/store";
 import { installDitherFields } from "./lib/dither";
 import { TerminalManager } from "./lib/terminals";
+import { VoiceController } from "./lib/voice/controller";
+import { VoiceProvider } from "./lib/voice/context";
 import { ConversationPage } from "./pages/Conversation";
 import { InboxPage } from "./pages/Inbox";
 import { LauncherPage } from "./pages/Launcher";
 import { SettingsPage } from "./pages/Settings";
 
+/** The dictation overlay is its own window; it renders the pill and nothing else. */
 export function App({ store, bridge }: { store: Store; bridge: Bridge }) {
+  if (bridge.window.label === "voice-overlay")
+    return <VoiceOverlay bridge={bridge} />;
+  return <MainApp store={store} bridge={bridge} />;
+}
+
+function MainApp({ store, bridge }: { store: Store; bridge: Bridge }) {
   const terminals = useMemo(() => new TerminalManager(bridge), [bridge]);
+  const voice = useMemo(
+    () => new VoiceController(bridge, store),
+    [bridge, store],
+  );
+
+  useEffect(() => {
+    void voice.start();
+    return () => voice.dispose();
+  }, [voice]);
 
   useEffect(() => {
     installDitherFields();
@@ -46,12 +65,14 @@ export function App({ store, bridge }: { store: Store; bridge: Bridge }) {
     <StoreProvider value={store}>
       <BridgeProvider value={bridge}>
         <TerminalsProvider value={terminals}>
-          <MotionConfig
-            reducedMotion="user"
-            transition={{ duration: 0.22, ease: EASE }}
-          >
-            <Shell />
-          </MotionConfig>
+          <VoiceProvider value={voice}>
+            <MotionConfig
+              reducedMotion="user"
+              transition={{ duration: 0.22, ease: EASE }}
+            >
+              <Shell />
+            </MotionConfig>
+          </VoiceProvider>
         </TerminalsProvider>
       </BridgeProvider>
     </StoreProvider>

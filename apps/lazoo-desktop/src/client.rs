@@ -68,7 +68,7 @@ impl From<&DesktopClientError> for DesktopFailure {
         match error {
             DesktopClientError::Timeout | DesktopClientError::Ipc(IpcError::Io(_)) => Self::new(
                 "LZ-DESKTOP-DAEMON-OFFLINE",
-                "Lazoo cannot reach the local daemon. Start lazoo-keeper and retry.",
+                "Lazoo cannot reach its local service. It starts with the app; if this persists, run lazoo-keeper and retry.",
             ),
             DesktopClientError::Ipc(IpcError::Authentication) => Self::new(
                 "LZ-IPC-AUTH",
@@ -132,6 +132,23 @@ impl Kind {
 /// raw terminal open, provider config apply, memory maintenance and agent-only tools,
 /// stays unreachable from the frontend.
 pub const ALLOWED: &[(&str, Kind)] = &[
+    ("skill.list", Kind::Read),
+    ("skill.source.preview", Kind::Mutation),
+    ("skill.install", Kind::Mutation),
+    ("skill.expose", Kind::Mutation),
+    ("skill.unexpose", Kind::Mutation),
+    ("skill.update.preview", Kind::Mutation),
+    ("skill.update", Kind::Mutation),
+    ("skill.remove", Kind::Mutation),
+    ("plugin.list", Kind::Mutation),
+    ("plugin.marketplace.list", Kind::Mutation),
+    ("plugin.preview", Kind::Mutation),
+    ("plugin.marketplace.add", Kind::Mutation),
+    ("plugin.marketplace.remove", Kind::Mutation),
+    ("plugin.install", Kind::Mutation),
+    ("plugin.uninstall", Kind::Mutation),
+    ("plugin.enable", Kind::Mutation),
+    ("plugin.disable", Kind::Mutation),
     ("system.status", Kind::Read),
     ("system.resources", Kind::Read),
     ("system.budget", Kind::Read),
@@ -392,8 +409,8 @@ mod tests {
             .iter()
             .filter(|(_, kind)| *kind == Kind::Read)
             .count();
-        assert_eq!(reads, 44);
-        assert_eq!(ALLOWED.len() - reads, 31);
+        assert_eq!(reads, 45);
+        assert_eq!(ALLOWED.len() - reads, 47);
     }
 
     #[test]

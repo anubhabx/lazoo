@@ -1,7 +1,0 @@
-*
-!.gitignore
-!config.toml
-!list.json
-!stdio.json
-!http.json
-!manifest.json

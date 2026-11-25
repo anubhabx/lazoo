@@ -5,9 +5,8 @@ use std::{
 };
 
 use uuid::Uuid;
-use windows::{
-    Win32::Storage::FileSystem::{MOVEFILE_REPLACE_EXISTING, MOVEFILE_WRITE_THROUGH, MoveFileExW},
-    core::HSTRING,
+use windows::Win32::Storage::FileSystem::{
+    MOVEFILE_REPLACE_EXISTING, MOVEFILE_WRITE_THROUGH, MoveFileExW,
 };
 
 use crate::{RuntimeError, io_error};
@@ -34,8 +33,8 @@ pub fn atomic_write(path: &Path, bytes: &[u8]) -> Result<(), RuntimeError> {
             .map_err(|error| io_error(&temporary, error))?;
         drop(file);
 
-        let source = HSTRING::from(temporary.to_string_lossy().as_ref());
-        let destination = HSTRING::from(path.to_string_lossy().as_ref());
+        let source = crate::security::win32_path(&temporary);
+        let destination = crate::security::win32_path(path);
         unsafe {
             MoveFileExW(
                 &source,

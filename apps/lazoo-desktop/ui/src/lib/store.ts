@@ -30,6 +30,9 @@ import { newKey, readStorage, writeStorage } from "./util";
 export type SettingsSection =
   | "general"
   | "accounts"
+  | "voice"
+  | "skills"
+  | "plugins"
   | "employees"
   | "harnesses"
   | "projects"
@@ -88,7 +91,15 @@ export interface AppState {
   toasts: Toast[];
   /** Window-level title when the shell runs outside Tauri. */
   bridgeMissing: boolean;
+  /** Bumped on every skill or plugin change event; the extension pages re-read. */
+  extensionTick: number;
+  /** An extension operation has started and not yet finished. */
+  extensionBusy: boolean;
+  /** A dialog the command palette asked a Settings page to open. */
+  extensionIntent: ExtensionIntent | null;
 }
+
+export type ExtensionIntent = "add-skills" | "install-plugin";
 
 export type Model =
   | "status"
@@ -201,6 +212,9 @@ function initialState(): AppState {
     composerError: null,
     toasts: [],
     bridgeMissing: false,
+    extensionTick: 0,
+    extensionBusy: false,
+    extensionIntent: null,
   };
 }
 
@@ -309,6 +323,10 @@ export class Store {
       if (this.everConnected) {
         // A reconnect: every model may have moved while the pipe was down.
         for (const model of ALL_MODELS) this.schedule(model);
+        this.set((state) => ({
+          extensionTick: state.extensionTick + 1,
+          extensionBusy: false,
+        }));
       }
       this.everConnected = true;
     } catch (error) {
@@ -353,6 +371,37 @@ export class Store {
     if (event.sequence <= this.lastSequence) return;
     this.lastSequence = event.sequence;
     for (const model of modelsForEvent(event.eventType)) this.schedule(model);
+    this.onExtensionEvent(event.eventType);
+  }
+
+  /**
+   * Skills and plugins have no read model here: the pages re-read when the tick
+   * moves. An operation in progress blocks their controls until it finishes.
+   */
+  private onExtensionEvent(eventType: string) {
+    if (eventType === "extension.operation.started") {
+      this.set({ extensionBusy: true });
+    } else if (eventType === "extension.operation.finished") {
+      this.set({ extensionBusy: false });
+    } else if (
+      eventType === "skill.changed" ||
+      eventType === "plugin.changed"
+    ) {
+      this.set((state) => ({ extensionTick: state.extensionTick + 1 }));
+    }
+  }
+
+  /** The palette's "Add skills" and "Install plugin": open the page, then its dialog. */
+  openExtensionDialog(intent: ExtensionIntent) {
+    this.navigate({
+      kind: "settings",
+      section: intent === "add-skills" ? "skills" : "plugins",
+    });
+    this.set({ extensionIntent: intent });
+  }
+
+  clearExtensionIntent() {
+    if (this.state.extensionIntent) this.set({ extensionIntent: null });
   }
 
   /** Debounced re-read: at most one read per model per 250 ms. */

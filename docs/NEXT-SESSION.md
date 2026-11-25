@@ -1,5 +1,55 @@
 # Backend handoff: four-provider UI starting point, 2026-10-29
 
+## Voice, skills and plugins, installer, 2026-11-04
+
+`feat/voice-mode` adds Lazoo Voice to the desktop (design and contract:
+`docs/superpowers/specs/2026-11-04-voice-mode-design.md`, evidence:
+`docs/verification/2026-11-04-voice-mode.md`), the desktop starting its own keeper, and the
+Windows installer (`scripts/build-installer.ps1`, bundle settings in
+`apps/lazoo-desktop/tauri.bundle.conf.json` so ordinary builds never need staged sidecars, a
+vendored Tauri 2.11.5 NSIS template whose only change installs per-user to
+`%LOCALAPPDATA%\Programs\Lazoo` because `%LOCALAPPDATA%\Lazoo` is the data root, and hooks that
+stop the installed service before upgrade or uninstall). `feat/skills-plugins` (Codex) adds skill
+and plugin management; see its own record. On the owner's machine Windows denies microphone
+access for the user (`ConsentStore\microphone` = Deny in HKCU), so live capture needs that switch
+turned on; Settings → Voice says so and opens the page.
+## Skills and plugins implementation handoff, 2026-11-04
+
+The current worktree adds the owned skill library and native-plugin RPC/CLI slice:
+`skill.list`, source/update preview, install/update/expose/unexpose/remove, and
+`plugin.list`, marketplace list, preview, install/uninstall/enable/disable and
+marketplace add/remove. Previews are ten-minute, in-memory records bounded to
+eight; every apply carries a shared `expectedRevision`, rechecks staged/observed
+state, records a durable operation, advances the revision on finish, and emits
+`extension.operation.started`, `extension.operation.finished`, then
+`skill.changed` or `plugin.changed`. Pending recovery blocks subsequent mutation.
+The complete RPC contract and current limits are in
+`UI-BACKEND-HANDOFF.md#skills-and-plugins`.
+
+Skill backups are owner-protected `.lazoo-extension-backup-<uuid>` directories
+beside each target skill root; the data-root journal lists their exact paths.
+Plugin failure compensation is conditional on observing a newly installed identity.
+Changed native control-file bytes are treated as possible concurrent edits and
+leave recovery-needed/manual inspection rather than being overwritten. Existing
+same-name marketplaces with a different or unknown source refuse; cross-harness
+read-back checks both plugin name and marketplace source. Codex/Claude/Copilot
+native profiles isolate their config variable while retaining personal HOME/shared
+skills; OpenCode/Antigravity profiles isolate HOME.
+
+This is not a verification checkpoint. The implementation and its new tests are
+present in the worktree, but the root agent must run the relevant tests/acceptance
+work before any pass claim or verification record is created. Keep the unsupported
+operations visible: Codex and Copilot plugin enable/disable; Antigravity
+marketplace actions; OpenCode uninstall/toggles/Claude marketplaces; Grok Build
+extensions. Native
+provider files, accounts, and OAuth remain authoritative. Codex
+0.166.0-alpha.5.1 was found under
+`LocalAppData/OpenAI/Codex/bin/22cfb1d302613eae`, while the NVM shim is older
+0.153.4; use daemon executable discovery. Codex documents `CODEX_HOME/skills` as
+legacy. Disposable Codex/Copilot evidence and exact artifact paths are in the UI
+contract; they do not prove network installs, Antigravity exposure, or the
+extension-operation suite.
+
 ## Desktop native first, 2026-11-03
 
 `feat/desktop-ui-native-first` (from `main` 4fc9527) makes the conversation the harness's own TUI under one agent bar and moves Lazoo's turn record into Activity (Ctrl+I); the Native/Transcript toggle is gone because no harness exposes a complete structured stream (`docs/superpowers/specs/2026-11-03-desktop-native-first-design.md`, section 4). Design system v0.3 is sharp and flat (2 to 6 px radii, hairlines, no glows, 60 to 200 ms motion, nothing animated on keyboard surfaces); agents get seeded dithered glyph avatars animated by state; Settings, Accounts gains routing order, reserves, observed usage windows and a usage table on top of the account-routing-preferences backend (`feat/account-routing-preferences`, Codex). Driving the real desktop found and fixed the Claude Code parent-session environment leak (transcripts off, failed resumes, `LZ-TURN-ACTIVATION-FAILED`) and a layout overflow that hid Accept/Decline. Open backend findings (Codex worker exits after its native view opens, busy-lead turns rejected instead of queued, `events list` early EOF, resume failure not falling back to fresh) are listed with evidence in `docs/verification/2026-11-03-desktop-native-first.md`.

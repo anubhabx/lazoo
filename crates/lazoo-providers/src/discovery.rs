@@ -40,6 +40,7 @@ pub struct DiscoveryEnvironment {
     config_home: Option<PathBuf>,
     /// `CODEX_HOME` when set; otherwise Codex lives at `<config_home>/.codex`.
     codex_home: Option<PathBuf>,
+    extension_homes: BTreeMap<String, PathBuf>,
 }
 
 impl DiscoveryEnvironment {
@@ -57,8 +58,19 @@ impl DiscoveryEnvironment {
             persisted_user_path,
             persisted_machine_path,
             known_locations: BTreeMap::new(),
-            config_home: env::var_os("USERPROFILE").map(PathBuf::from),
+            config_home: env::var_os("USERPROFILE")
+                .or_else(|| env::var_os("HOME"))
+                .map(PathBuf::from),
             codex_home: env::var_os("CODEX_HOME").map(PathBuf::from),
+            extension_homes: [
+                "CLAUDE_CONFIG_DIR",
+                "COPILOT_HOME",
+                "XDG_CONFIG_HOME",
+                "OPENCODE_CONFIG_DIR",
+            ]
+            .into_iter()
+            .filter_map(|key| env::var_os(key).map(|value| (key.to_owned(), PathBuf::from(value))))
+            .collect(),
         };
         environment.add_default_known_locations();
         environment
@@ -73,6 +85,7 @@ impl DiscoveryEnvironment {
             known_locations: BTreeMap::new(),
             config_home: None,
             codex_home: None,
+            extension_homes: BTreeMap::new(),
         }
     }
 
@@ -98,6 +111,17 @@ impl DiscoveryEnvironment {
     #[must_use]
     pub fn codex_home(&self) -> Option<&Path> {
         self.codex_home.as_deref()
+    }
+
+    #[must_use]
+    pub fn extension_home(&self, key: &str) -> Option<&Path> {
+        self.extension_homes.get(key).map(PathBuf::as_path)
+    }
+
+    #[must_use]
+    pub fn with_extension_home(mut self, key: &str, path: impl Into<PathBuf>) -> Self {
+        self.extension_homes.insert(key.to_owned(), path.into());
+        self
     }
 
     #[must_use]

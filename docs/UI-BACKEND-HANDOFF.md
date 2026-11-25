@@ -29,15 +29,16 @@ process execution. No frontend binding is added here.
 | Resource display | `system.resources`, `session.resources` |
 | Owner terminal | Terminal lifecycle RPCs and the separate authenticated byte channel |
 | Native workspace trust | `native.trust.list`, `native.trust.show`, `native.trust.policy.show` |
+| Skills and native plugins | `skill.*`, `plugin.*`; see **Skills and plugins** below |
 
 The exact supported method names are dispatched in `apps/lazood/src/app.rs`;
 avoid deriving additional methods from this table. The CLI provides executable
 examples through `--help` and `--json`.
 
 Selected Codex MCP configuration apply remains gated to exact reviewed versions:
-`0.155.1`, `0.162.0-alpha.17.2`, and `0.165.0-alpha.1.2`. An installed provider is
+`0.155.1`, `0.162.0-alpha.17.2`, `0.165.0-alpha.1.2`, and `0.166.0-alpha.5.1`. An installed provider is
 not automatically eligible for configuration writes. Use preview results and
-their refusal reasons; see the [current compatibility evidence](verification/2026-10-29-codex-mcp-configuration.md).
+their refusal reasons; see the [current compatibility evidence](verification/2026-11-04-codex-mcp-configuration-0.166.md).
 
 ## Launch and capability handling
 
@@ -136,6 +137,159 @@ Debounce relevant-event refreshes to at most one read per 250 ms. See the
 for the event families per surface. On disconnect retain last-known information,
 show connection uncertainty, and reconnect from the last safely consumed cursor.
 Do not change durable lifecycle state because the desktop lost its connection.
+
+## Skills and plugins
+
+This contract is implemented, tested (`scripts/acceptance/skills-plugins.ps1`, in the
+gate) and bound by Settings > Skills and Settings > Plugins. The desktop owns no
+separate state: it calls the RPCs below,
+keeps the returned `revision`, and refreshes after the durable events. All request
+objects reject unknown fields. `ExtensionTarget` is `{ provider, accountId? }`,
+where an omitted/null `accountId` means the personal harness and a non-null UUID
+must identify an existing native-profile account. Provider names are the protocol
+`ProviderKind` values. `mode` is `"link"` or `"copy"`.
+
+Every preview has `{ previewId: UUID, revision: u64, expiresAt: RFC-3339 UTC }`.
+At most eight skill/plugin previews are active together; they expire after ten
+minutes. A skill preview also has `source`, `skills`, `resolvedRevision?`,
+`conflicts`, and (for update previews) `updateName?`; each skill is
+`{ name, description, relativePath, fileCount, bytes, checksum, problems }`.
+A plugin preview has that header plus `{ request, targets }`. Each planned plugin
+target is `{ target, before?, commands, error? }`; `before` is the redacted,
+normalized native observation and `commands` are the exact native argument arrays
+to be run. A preview is consumed only after a finished attempted mutation;
+preflight refusals retain it. Missing, consumed, or
+expired previews return `LZ-EXTENSION-PREVIEW-EXPIRED`.
+
+The desktop allowlist uses its existing long-deadline class for previews and native plugin reads as well as mutations; `skill.list` uses the read deadline. This timeout classification does not make plugin list operations apply changes.
+
+### Skill RPCs
+
+| RPC | Parameters | Result |
+| --- | --- | --- |
+| `skill.list` | `{}` | `{ revision, library, exposures, inventory, problems, pending, targets }`. `library` entries add `{ source, resolvedRevision?, revision }`; exposures are `{ name, target, path, mode, checksum, libraryPath }`. Inventory entries report provider/target/name/description/path/canonicalPath/kind/managed/checksum/fileCount/bytes/problems/enabled plus `duplicate` and `alsoVisibleTo`; `kind` is `link`, `copy`, or `real-dir`, and `enabled` is nullable boolean. If linked/unreadable resources prevent a complete checksum, metadata remains visible with null `checksum`, `fileCount`, and `bytes`, plus a `problems` entry. Targets report roots, primary exposure directory, `Native`/`Unsupported`, and limitations. |
+| `skill.source.preview` | `SkillSource`: `{ source: string, sourceKind?: "auto"|"local"|"github"|"skills-sh"|"git", gitRef?: string|null }` | A skill preview. Sources may be local directories, GitHub shorthand/tree URLs, skills.sh pages, or HTTPS Git URLs; the result records the resolved source revision when available. |
+| `skill.update.preview` | `{ name }` | A skill preview for the managed library entry's recorded source; refuses an unmanaged name. |
+| `skill.install` | `{ previewId, names: string[1..32 unique], providers?: ProviderKind[], mode, replace?: boolean, expectedRevision }` | `{ revision, outcome, library, exposures }`. Selected names must occur exactly once and have no validation problems. |
+| `skill.update` | Same as install | Same result. It only accepts its `skill.update.preview`, exactly that one name, and `replace: true`. |
+| `skill.expose` | `{ name, providers: ProviderKind[], mode, expectedRevision }` | `{ revision, outcome, library, exposures }`; `providers` must identify a managed skill and create exposures for each existing personal/profile target of those providers. |
+| `skill.unexpose` | `{ name, providers: ProviderKind[nonempty], expectedRevision }` | Same mutation result; removes matching desired exposures. |
+| `skill.remove` | `{ name, expectedRevision }` | Same mutation result; removes the owned library copy and all desired exposures after ownership/content checks. |
+
+Each conflict record is `{ name, scope: "library"|"harness", kind: "duplicate"|"conflict", replaceAllowed, target?, path?, managed? }`; the final three keys occur for harness conflicts. Source traversal accepts at most 4,096 entries including directories, 64 MiB across regular files, 8 MiB per file, and depth 24; skill discovery is depth 3. Git refs containing `/` are disambiguated by explicit `gitRef`.
+
+The mutation `outcome` is `{ operationId, kind: "skill", method, status,
+error?, backupDirectory, requiresProviderRestart: true }`, where `status` is
+`applied`, `rolled-back`, or `recovery-needed`. Each target-volume skill backup
+is an owner-protected sibling of its skill root named
+`.lazoo-extension-backup-<uuid>`; the data-root operation journal records the
+exact backup paths. A library replacement is never
+implicit: differing same-name content needs `replace: true`; unmanaged destination
+or shared-root collisions return `LZ-SKILL-UNMANAGED-CONFLICT`. The daemon rejects
+unsafe source/path trees, reparse points, special files, traversal, validation
+problems, modified staged/library/exposure bytes, and non-owned deletes. Shared
+roots are observed only; Lazoo writes its dedicated first root. Newly created
+native profiles need a later expose action.
+
+### Plugin RPCs
+
+`PluginAction` is one of `"install"`, `"uninstall"`, `"enable"`, `"disable"`,
+`"marketplace-add"`, or `"marketplace-remove"`. `marketplace` is optional
+`{ name, source }`; a cross-harness install with it requires `name` to be
+`plugin@marketplace-name`.
+
+| RPC | Parameters | Result |
+| --- | --- | --- |
+| `plugin.list` | `{ target?: ExtensionTarget }` | `{ revision, targets, capabilities, pending }`. Each target is `{ target, observed?, error? }`; observed is `{ plugins, marketplaces, providerVersion, compatibility, limitations }`, and a plugin record is `{ name, enabled?, version?, marketplace?, path? }`. |
+| `plugin.marketplace.list` | `{ target?: ExtensionTarget }` | Same envelope; successful `observed` is `{ marketplaces: [{ name, source }] }`. |
+| `plugin.preview` | `{ action, targets: ExtensionTarget[1..16 distinct], name, marketplace?: { name, source } }` | A plugin preview described above. Per-target planning errors remain in the preview rather than failing all targets. |
+| `plugin.install`, `plugin.uninstall`, `plugin.enable`, `plugin.disable`, `plugin.marketplace.add`, `plugin.marketplace.remove` | `{ previewId, expectedRevision }` | `{ revision, outcome }`. `outcome` is `{ operationId, kind: "plugin", method, targets, sessionEffect: "Requires provider restart" }`; each target has `{ target, status, error?, observed?, rollbackStatus, backupDirectory?, limitations? }`. Status is `applied`, `rolled-back`, `recovery-needed`, `refused`, or `unsupported-or-unavailable`. |
+
+The daemon checks the preview's action, executable, observed native state, and
+revision again before a command. It backs up known control files and a recoverable
+uninstall package, then observes afterward. It compensates an install only when
+the newly installed identity is observed. If native control-file bytes changed,
+it does not blindly restore them because it cannot distinguish concurrent external
+edits; the result is `recovery-needed` and requires manual inspection. Existing
+marketplaces with the requested name but a different or unknown source are
+refused; a cross-harness install is read back by both plugin name and marketplace
+source. Marketplace add requires `name == marketplace.name`; equivalent
+owner/repo and `https://github.com/owner/repo.git` identities compare equal.
+The daemon does not claim cross-provider atomicity, overwrite concurrent
+native changes, or delete unknown package caches. Native command output and
+credentials do not escape the API.
+
+### Revision, errors, and events
+
+`expectedRevision` fences every mutation. The extension ledger revision increases
+once for every finished operation, including a rolled-back or recovery-needed one.
+Before any mutation it rejects a changed revision with `LZ-EXTENSION-STALE`
+(`data.currentRevision`) and an interrupted journal with
+`LZ-EXTENSION-RECOVERY-REQUIRED` (`data.revision`, `data.pending`). A skill
+preview made at another revision is drift (`LZ-EXTENSION-DRIFT`); a plugin
+preview revision/action mismatch is `LZ-INVALID-PARAMS`. Refresh and preview again.
+
+Extension-specific errors are `LZ-INVALID-PARAMS`, `LZ-EXTENSION-UNSAFE`,
+`LZ-EXTENSION-LIMIT`, `LZ-EXTENSION-DRIFT`, `LZ-EXTENSION-UNSUPPORTED`,
+`LZ-EXTENSION-NOT-DETECTED`, `LZ-EXTENSION-NATIVE-FAILED`,
+`LZ-EXTENSION-TIMEOUT`, `LZ-EXTENSION-FORMAT`, `LZ-EXTENSION-IO`,
+`LZ-EXTENSION-PREVIEW-EXPIRED`, `LZ-SKILL-CONFLICT`, and
+`LZ-SKILL-UNMANAGED-CONFLICT`; unknown extension methods return
+`LZ-METHOD-NOT-FOUND`. `plugin.preview` can instead return a successful preview
+whose individual target carries its RPC error. Generic parameter parsing uses
+`LZ-INVALID-PARAMS` and does not expose native command output.
+
+Each native command permits at most 1 MiB of stdout and 1 MiB of stderr and has a
+45-second deadline. Git source preparation has a 60-second deadline while
+monitoring a 128 MiB staging directory with at most 8,192 entries. These limits
+are independent of the eight active previews and their ten-minute expiry.
+
+The durable event sequence is `extension.operation.started` with the recorded
+intent (operation ID, kind, method, targets/journal and exact backup locations), then
+`extension.operation.finished` with `{ revision, outcome, recoveryNeeded }`, then
+`skill.changed` or `plugin.changed` with `{ revision, operationId }`. A client
+should refresh `skill.list` or the relevant plugin list on either changed event;
+the operation-start event indicates an in-progress exclusive mutation, not a
+completed native change.
+
+### Native capability matrix and limits
+
+Every plugin capability entry includes `compatibility`, `actions`,
+`limitations`, `sessionEffect: "Requires provider restart"`, and
+`authentication: "Requires user OAuth or native setup"`.
+
+| Provider | Label and actions | Exact limitation |
+| --- | --- | --- |
+| Claude Code | Native: list, marketplace list/add/remove, install/uninstall, enable/disable | User scope only. |
+| Codex | Native: list, marketplace list/add/remove, install/uninstall | Enable/disable is unsupported: there is no native CLI command; the reviewed TOML writer is MCP-only. Current Codex documentation describes `CODEX_HOME/skills` as legacy, but the disposable 0.166.0-alpha.5.1 app-server probe successfully found `lazoo-legacy-probe` there. |
+| GitHub Copilot | Native: list, marketplace list/add/remove, install/uninstall | Installed state comes from comment-bearing native config/settings. Enable/disable is unsupported: a disposable Copilot 1.0.79 plugin list succeeded, but both `plugins disable|enable <name> --plugin` returned exit 1, `The plugins command is not available.` |
+| Antigravity | Native: list, install/uninstall, enable/disable | Marketplace management and cross-harness Claude-marketplace conversion are unsupported. |
+| OpenCode | Translated with documented limitations: list, install | npm modules only; local `.js`/`.ts` modules are inventoried; removal/toggles and Claude-format marketplaces are unsupported. |
+| Grok Build | Unsupported | Excluded from core v1. |
+
+Skill exposure has no plugin-specific compatibility matrix: all current harnesses
+except Grok Build expose through their configured native skills root, while
+Antigravity also reports that its global root is inferred and its installed CLI
+has no read-only skills inventory command; its exposure remains unverified. A missing native executable is
+`LZ-EXTENSION-NOT-DETECTED`; unsupported roots or native actions are explicit
+refusals, never config-file emulation.
+
+Profile environments deliberately match account-session isolation. Codex, Claude
+Code, and Copilot profiles isolate their provider config variable but retain the
+personal `HOME` and its shared skill roots. OpenCode and Antigravity profiles
+isolate `HOME`. The current installed Codex candidate used for this slice is
+`0.166.0-alpha.5.1` under
+`LocalAppData/OpenAI/Codex/bin/22cfb1d302613eae`; the NVM shim resolves the older
+`0.153.4`, so executable discovery must choose the candidate returned by the
+daemon rather than a shell shim. The Codex skills evidence is
+`artifacts/acceptance/skills-plugins-native-check/codex-skills.json`; it proves
+only disposable app-server `skills/list` visibility of the legacy skill. Copilot
+plugin-list/toggle evidence is
+`artifacts/acceptance/skills-plugins-native-check/copilot-plugins.json`; it proves the listed
+toggle commands are unavailable. Copilot's disposable local marketplace add/list/remove
+evidence is `artifacts/acceptance/skills-plugins-native-check/copilot-marketplaces.json`;
+the native text list includes defaults. No artifact live-tests a network install,
+an Antigravity skill exposure, or an extension-operation pass.
 
 ## Older conversation history
 

@@ -6,6 +6,18 @@ The name is a deliberately silly blend of **lazy** and **zoo**: wake the right e
 
 ## Status
 
+**Install:** `scripts/build-installer.ps1` builds a per-user Windows installer (no administrator
+rights) that puts `lazoo-desktop.exe` (Start menu: Lazoo) and its service binaries in `%LOCALAPPDATA%\Programs\Lazoo`; data
+stays in `%LOCALAPPDATA%\Lazoo`. Opening the app starts its local service.
+
+**Voice** (Settings → Voice): speak into the conversation composer, hear the lead's replies read
+aloud as they stream, or hold a global push-to-talk hotkey (`Ctrl+Alt+Space` by default) to
+dictate into any Windows app. Speech to text runs on this computer with a pinned, hash-verified
+whisper.cpp build and model downloaded from Settings, or on any OpenAI-compatible endpoint;
+optional cleaning removes fillers and stutters locally or through the endpoint. Audio is never
+stored, and nothing leaves the computer unless external processing is switched on. Design:
+`docs/superpowers/specs/2026-11-04-voice-mode-design.md`.
+
 [Provider accounts and GitHub Copilot](docs/ACCOUNT-ROUTING.md) describes isolated
 native profiles, protected API keys, per-provider routing policies, and the compatible
 streaming API pool. Configure them under **Settings → Accounts** or `lazooctl account`.
@@ -46,7 +58,7 @@ Open the desktop from another terminal:
 & .\target\release\lazoo-desktop.exe
 ```
 
-The shell reconnects every ten seconds and keeps the last successful snapshot visible if the daemon becomes unavailable. It does not start or stop the keeper. The companion CLI remains available for control operations:
+The shell reconnects every ten seconds and keeps the last successful snapshot visible if the daemon becomes unavailable. On launch it starts `lazoo-keeper.exe` from its own directory when one is there (a keeper already running for the same data root makes the new one exit at once); closing the window leaves the service and employees running, and `lazooctl system shutdown` stops it. The companion CLI remains available for control operations:
 
 ```powershell
 & .\target\release\lazooctl.exe status
@@ -148,7 +160,52 @@ cargo tauri dev
 Pop-Location
 ```
 
+## Skills and native plugins
+
+In the desktop, **Settings → Skills** adds skills from a skills.sh page, GitHub (`owner/repo` or a
+tree URL), any Git URL or a local folder: preview what the source contains, pick skills and the
+harnesses that should see them, and choose link (one copy, junctions into each harness) or copy.
+It also lists what every harness already reads on this computer. **Settings → Plugins** shows each
+harness's own plugins and marketplaces and runs installs, removals and toggles through that
+harness's CLI after showing the exact commands.
+
+The daemon and `lazooctl` expose a preview-first extension contract: `skill list`,
+`skill source preview`, `skill update-preview`, `skill install|update|expose|unexpose|remove`,
+and `plugin list|preview|install|uninstall|enable|disable` plus `plugin marketplace
+list|add|remove`. Applies require the preview UUID and its `expectedRevision`; a
+preview expires after ten minutes, and every completed attempt advances the shared
+extension revision. Use `--json` to keep the returned preview, outcome, observed
+state, and per-target status intact. All plugin changes require a provider restart
+and the user's native OAuth/setup. The daemon never writes shared `.agents` roots,
+never simulates an unsupported command through raw provider config, and blocks
+further mutation when recovery is required. Skill backups are owner-protected
+`.lazoo-extension-backup-<uuid>` directories beside the affected target skill root;
+the operation journal records their exact paths. A changed native plugin control
+file is never blindly restored: the mutation becomes recovery-needed for manual
+inspection.
+
+Claude Code, Codex, GitHub Copilot, and Antigravity have native plugin adapters;
+OpenCode supports translated npm-module listing/install only; Grok Build is
+unsupported. Codex enable/disable, Antigravity marketplace commands, and OpenCode
+uninstall/enable/disable are refused; Copilot enable/disable is also refused after
+its disposable 1.0.79 commands exited 1 with `The plugins command is not available.` See
+[the UI/backend contract](docs/UI-BACKEND-HANDOFF.md#skills-and-plugins) for all
+request/result shapes, error codes, events, and CLI mapping. This slice is
+implemented but its new verification has not yet been run. Codex `CODEX_HOME/skills`
+is documented as legacy, and a disposable app-server `skills/list` under installed
+0.166.0-alpha.5.1 successfully found `lazoo-legacy-probe` there
+(`artifacts/acceptance/skills-plugins-native-check/codex-skills.json`). A seeded
+Copilot 1.0.79 plugin list also succeeded, while both toggle commands failed;
+`artifacts/acceptance/skills-plugins-native-check/codex-skills.json` and
+`artifacts/acceptance/skills-plugins-native-check/copilot-plugins.json` are limited disposable evidence. Local Copilot marketplace add/list/remove,
+including default marketplace text-list entries, is in
+`artifacts/acceptance/skills-plugins-native-check/copilot-marketplaces.json`.
+They do not prove a network install, Antigravity skill exposure, or the
+extension-operation suite.
+
 ## Verification
+
+**Run the gate locally before raising a PR.** The repository is private on GitHub Free, so Actions minutes are capped and anything past the free allowance is billed. CI (`.github/workflows/ci.yml`) is only a backstop: on pull requests it runs the format check, the UI check and clippy, not the workspace tests or the acceptance scripts. Put the local gate result (`GATE PASS: <n> steps`, or the failed steps) in the PR description. `artifacts/` is local output and is not tracked. Evidence cited by older verification notes is in git history at `d2ba8a8` and earlier.
 
 The whole backend gate (format check, clippy with warnings denied, the workspace tests, the locked release build, and every acceptance script except the live model turn and the separately owned desktop, the real-binary ones with `-SkipBuild`) runs with one command and writes `artifacts\acceptance\gate-manifest.json` with every step's exit code and duration:
 

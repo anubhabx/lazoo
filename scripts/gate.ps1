@@ -39,6 +39,14 @@ $manifestPath = [IO.Path]::GetFullPath($OutputPath)
 New-Item -ItemType Directory -Force -Path (Split-Path -Parent $manifestPath) | Out-Null
 
 $excluded = @('provider-adapters', 'provider-live-lifecycle', 'opencode-governed-live', 'desktop-shell', 'desktop-budget')
+# Auto-discovery includes this deterministic temporary-home extension gate; keep the guard so a
+# future rename cannot silently drop its manifest-backed coverage from the full gate.
+$requiredDeterministic = @('skills-plugins')
+foreach ($required in $requiredDeterministic) {
+    if (-not (Test-Path (Join-Path $repoRoot "scripts\acceptance\$required.ps1"))) {
+        throw "required deterministic acceptance script is missing: $required"
+    }
+}
 $startedAt = [DateTime]::UtcNow
 $stopwatch = [Diagnostics.Stopwatch]::StartNew()
 $steps = [Collections.Generic.List[object]]::new()

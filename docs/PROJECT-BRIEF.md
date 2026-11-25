@@ -942,7 +942,30 @@ Current Stage 4 status: the Antigravity adapter is implemented and passed fresh 
 - MCP/plugin/skill compatibility model;
 - preview, backup, apply, and rollback.
 
-Current Stage 5 status: read-only provider configuration discovery is implemented for MCP servers (`provider.config`): Codex, Claude Code, and OpenCode configuration files are parsed, secrets are redacted to key names, integrations are hashed to one identity, and duplicates, conflicts, and unsupported entries are named; nothing is written. Schema 16 to 18 implement the rest of the stage as bounded services: compressed, hash-checked canonical turn archives under a 256 MiB default quota with a 4 MiB per-source cap, global and per-project retention policies, recoverable write and cleanup intents, and explicit cleanup preview and apply; a typed FTS memory ledger with source citations, scoped retrieval (project memory across tasks, Home within its conversation), and bounded context injection of eight facts or 2 KiB; an opt-in native summary worker (exact employee and model, one active job, per-scope admission spacing, a four-minute deadline, strict JSON validation, a fresh reserved session per attempt, no automatic resend); and selected Codex MCP configuration preview, apply, show, and rollback with private backups and redacted metadata for the exactly reviewed Codex 0.155.1, 0.162.0-alpha.17.2, and 0.165.0-alpha.1.2 formats. Schema 19 (2026-10-17) adds the redacted raw provider frames of completed turns as a second archive kind within the same quota and cleanup preview; wire frames that map to no event are not captured. Other configuration formats and versions, plugin and skill apply, external API summarizers, and vector retrieval remain unimplemented or refused.
+Current Stage 5 status: read-only provider configuration discovery is implemented for MCP servers (`provider.config`): Codex, Claude Code, and OpenCode configuration files are parsed, secrets are redacted to key names, integrations are hashed to one identity, and duplicates, conflicts, and unsupported entries are named; nothing is written. Schema 16 to 18 implement the rest of the stage as bounded services: compressed, hash-checked canonical turn archives under a 256 MiB default quota with a 4 MiB per-source cap, global and per-project retention policies, recoverable write and cleanup intents, and explicit cleanup preview and apply; a typed FTS memory ledger with source citations, scoped retrieval (project memory across tasks, Home within its conversation), and bounded context injection of eight facts or 2 KiB; an opt-in native summary worker (exact employee and model, one active job, per-scope admission spacing, a four-minute deadline, strict JSON validation, a fresh reserved session per attempt, no automatic resend); and selected Codex MCP configuration preview, apply, show, and rollback with private backups and redacted metadata for the exactly reviewed Codex 0.155.1, 0.162.0-alpha.17.2, and 0.165.0-alpha.1.2 formats. Schema 19 (2026-10-17) adds the redacted raw provider frames of completed turns as a second archive kind within the same quota and cleanup preview; wire frames that map to no event are not captured. Other configuration formats and versions, external API summarizers, and vector retrieval remain unimplemented or refused.
+
+The skills/plugins slice now implements the owner-protected Lazoo skill library,
+source/update previews, link/copy exposure to personal and existing native-profile
+harnesses, inventory, native plugin observation, preview, and bounded apply. It
+uses a common revision fence, ten-minute previews, durable operation intent/outcome
+events, native read-back, private backups, and recovery-needed blocking. Provider
+files and OAuth/native setup remain authoritative. The exact supported RPCs,
+result shapes, lifecycle events, and provider limits are in
+`docs/UI-BACKEND-HANDOFF.md` under “Skills and plugins”. The new deterministic
+tests and acceptance gate have not yet been run; this is an implementation-status
+statement, not verification evidence. Unsupported operations remain explicit:
+Codex plugin enable/disable, Antigravity marketplace management, OpenCode plugin
+uninstall/toggles/Claude marketplaces, and every Grok Build extension action.
+Skill backups are owner-protected `.lazoo-extension-backup-<uuid>` directories
+beside each target skill root, with exact locations recorded in the data-root
+journal. Plugin rollback never overwrites changed native control-file bytes;
+unattributable concurrent change requires recovery/manual inspection. Codex,
+Claude Code, and Copilot profile targets retain personal HOME/shared skills while
+isolating their config variable; OpenCode and Antigravity profiles isolate HOME.
+Codex legacy-skill visibility and local Copilot marketplace behavior have
+disposable evidence; Copilot toggles are unsupported. Network installs,
+Antigravity exposure, and the extension-operation suite remain unverified. The
+exact artifact paths and limits are maintained in the UI/backend contract.
 
 ### Stage 6: connectors
 
@@ -966,6 +989,8 @@ Current Stage 5 status: read-only provider configuration discovery is implemente
 - streaming STT/TTS;
 - interruption, privacy, and retention controls;
 - performance and accessibility validation.
+
+Current Stage 8 status (2026-11-04, `docs/superpowers/specs/2026-11-04-voice-mode-design.md`): voice is implemented in the desktop without a daemon or schema change, because speech only ever becomes the text of an ordinary turn. Integrated mode is a composer microphone and a "read replies aloud" mode that speaks the lead's reply sentence by sentence as it streams (system voices through WebView2, or an endpoint), with stop, replay, Esc and a text-only fallback. The standalone surface is a configurable global push-to-talk hotkey with a non-activating overlay that inserts the text into the focused Windows app (or copies it, or sends it to the open conversation). Speech to text is local by default (a pinned whisper.cpp CPU build and ggml models downloaded on demand and verified by SHA-256, run at below-normal priority with bounded threads and a deadline) or any OpenAI-compatible endpoint; cleaning is off, deterministic local rules, or an endpoint model that falls back to local rules. Audio is never stored (the local engine's temporary WAV is deleted on every path), every external call is refused before any I/O unless the user allows external processing, the endpoint key is DPAPI-protected and never returned, voice never answers an approval, and the voice state reports when Windows privacy settings block the microphone. Deferred: streaming partial transcription, hands-free voice activity detection, a tray-resident overlay with the main window closed, GPU engines.
 
 Each stage requires a separate implementation plan and acceptance evidence. Later stages must not be used to postpone reliability work in the control-plane kernel.
 

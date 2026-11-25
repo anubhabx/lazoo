@@ -1,6 +1,7 @@
 mod client;
 mod events;
 mod terminal;
+mod voice;
 
 use std::{
     collections::HashMap,
@@ -158,9 +159,43 @@ async fn terminal_write(
     terminal::write(&installation, terminal_id, boot_id, &data).await
 }
 
+/// Starts the local service: `lazoo-keeper.exe` beside this executable (the installer puts it
+/// there), which supervises `lazood.exe`. The keeper holds a per-installation single-instance
+/// lock, so when one already runs the new one exits at once; spawning on every launch is the
+/// whole protocol. It runs detached from the desktop (closing the window keeps employees
+/// working) with a windowless console the daemon inherits, and with the desktop's environment,
+/// so `LAZOO_DATA_ROOT` reaches it. Without a keeper beside the executable nothing happens and
+/// the UI reports the daemon offline as before.
+fn start_keeper() {
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
+        let Ok(mut keeper) = std::env::current_exe() else {
+            return;
+        };
+        keeper.set_file_name("lazoo-keeper.exe");
+        if keeper.is_file() {
+            let _ = std::process::Command::new(keeper)
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .creation_flags(CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP)
+                .spawn();
+        }
+    }
+}
+
 pub fn run() {
     tauri::Builder::default()
         .manage(DesktopState::default())
+        .manage(voice::VoiceRuntime::default())
+        .plugin(
+            tauri_plugin_global_shortcut::Builder::new()
+                .with_handler(voice::hotkey::on_event)
+                .build(),
+        )
         .invoke_handler(tauri::generate_handler![
             daemon_call,
             events_subscribe,
@@ -169,10 +204,30 @@ pub fn run() {
             terminal_stream_stop,
             terminal_stream_focus,
             terminal_write,
+            voice::voice_state,
+            voice::voice_settings_set,
+            voice::voice_key_set,
+            voice::voice_key_clear,
+            voice::voice_whisper_install,
+            voice::voice_whisper_remove,
+            voice::voice_transcribe,
+            voice::voice_speak,
+            voice::voice_insert_text,
+            voice::voice_copy_text,
+            voice::voice_overlay,
+            voice::voice_open_microphone_settings,
         ])
+        .setup(|app| {
+            start_keeper();
+            Ok(voice::setup(app)?)
+        })
         .on_window_event(|window, event| {
             if matches!(event, tauri::WindowEvent::Destroyed) {
                 tauri::Manager::state::<DesktopState>(window).abort_all();
+                // The hidden voice overlay must not keep the process alive after the app closes.
+                if window.label() == "main" {
+                    tauri::Manager::app_handle(window).exit(0);
+                }
             }
         })
         .run(tauri::generate_context!())

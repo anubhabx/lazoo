@@ -3,18 +3,24 @@ import {
   Home,
   Inbox,
   MessageSquare,
+  Mic,
   PanelLeft,
   PanelRight,
   Plus,
+  Puzzle,
   Search,
   Settings,
   Sparkles,
+  Square,
   SquareTerminal,
   Users,
+  Volume2,
+  Wrench,
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 
 import { useAppState, useStore } from "../lib/context";
+import { useVoice, useVoiceState } from "../lib/voice/context";
 import { Kbd, ProjectGlyph } from "./primitives";
 
 interface Command {
@@ -30,6 +36,8 @@ interface Command {
 export function CommandPalette() {
   const store = useStore();
   const state = useAppState();
+  const voice = useVoice();
+  const voiceState = useVoiceState();
   const [query, setQuery] = useState("");
   const [index, setIndex] = useState(0);
   const input = useRef<HTMLInputElement>(null);
@@ -101,6 +109,30 @@ export function CommandPalette() {
         run: () => store.navigate({ kind: "settings", section: "accounts" }),
       },
       {
+        id: "go-voice",
+        group: "Go to",
+        label: "Voice settings",
+        keywords: "dictation speech microphone whisper hotkey read aloud",
+        icon: <Mic size={14} aria-hidden="true" />,
+        run: () => store.navigate({ kind: "settings", section: "voice" }),
+      },
+      {
+        id: "go-skills",
+        group: "Go to",
+        label: "Skills",
+        keywords: "library harness link expose",
+        icon: <Wrench size={14} aria-hidden="true" />,
+        run: () => store.navigate({ kind: "settings", section: "skills" }),
+      },
+      {
+        id: "go-plugins",
+        group: "Go to",
+        label: "Plugins",
+        keywords: "marketplace extension harness",
+        icon: <Puzzle size={14} aria-hidden="true" />,
+        run: () => store.navigate({ kind: "settings", section: "plugins" }),
+      },
+      {
         id: "new-work",
         group: "Actions",
         label: "New work",
@@ -117,6 +149,22 @@ export function CommandPalette() {
         run: () => store.openSetup(),
       },
       {
+        id: "add-skills",
+        group: "Actions",
+        label: "Add skills",
+        keywords: "install skill library skills.sh github git folder",
+        icon: <Plus size={14} aria-hidden="true" />,
+        run: () => store.openExtensionDialog("add-skills"),
+      },
+      {
+        id: "install-plugin",
+        group: "Actions",
+        label: "Install plugin",
+        keywords: "plugin marketplace harness",
+        icon: <Plus size={14} aria-hidden="true" />,
+        run: () => store.openExtensionDialog("install-plugin"),
+      },
+      {
         id: "toggle-sidebar",
         group: "Actions",
         label: state.sidebarCollapsed ? "Show sidebar" : "Hide sidebar",
@@ -125,6 +173,29 @@ export function CommandPalette() {
         run: () => store.toggleSidebar(),
       },
     ];
+    const tts = voiceState.state?.settings;
+    if (tts && tts.tts.engine !== "off") {
+      list.push({
+        id: "read-aloud",
+        group: "Actions",
+        label: "Read replies aloud",
+        hint: tts.readReplies ? "on" : "off",
+        keywords: "speak voice tts",
+        icon: <Volume2 size={14} aria-hidden="true" />,
+        run: () => void voice.setReadReplies(!tts.readReplies),
+      });
+    }
+    if (voiceState.speaking) {
+      list.push({
+        id: "stop-speaking",
+        group: "Actions",
+        label: "Stop speaking",
+        hint: "Esc",
+        keywords: "voice silence quiet",
+        icon: <Square size={14} aria-hidden="true" />,
+        run: () => voice.stopSpeaking(),
+      });
+    }
     for (const row of state.conversations?.conversations ?? []) {
       list.push({
         id: `conv-${row.id}`,
@@ -165,7 +236,7 @@ export function CommandPalette() {
       });
     }
     return list;
-  }, [state, store]);
+  }, [state, store, voice, voiceState]);
 
   const filtered = useMemo(() => {
     const needle = query.trim().toLowerCase();
