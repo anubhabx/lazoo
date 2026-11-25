@@ -13,8 +13,13 @@ import {
   Button,
   Dialog,
   Field,
+  Empty,
   Menu,
+  Page,
+  PageHeader,
+  Section,
   Segmented,
+  TableSkeleton,
 } from "../components/primitives";
 import { useAppState, useStore, useTerminals } from "../lib/context";
 import type {
@@ -186,47 +191,47 @@ export function AccountsPage() {
   const ordered = policy.mode === "priority";
 
   return (
-    <>
-      <div className="settings__title-row">
-        <h2>Accounts</h2>
-        <Button variant="primary" size="sm" onClick={() => setAdding(true)}>
-          New account
-        </Button>
-      </div>
-      <p className="settings__lede">
-        Which account pays for each agent, and how close it is to its limit.
-        Secrets are protected by Windows for this user and never shown again.
-      </p>
+    <Page wide>
+      <PageHeader
+        title="Accounts"
+        description="Which account pays for each agent, and how close it is to its limit. Secrets are protected by Windows for this user and never shown again."
+        actions={
+          <Button variant="primary" onClick={() => setAdding(true)}>
+            New account
+          </Button>
+        }
+        meta={
+          <div
+            className="harness-tabs"
+            role="tablist"
+            aria-label="Routing provider"
+          >
+            {ACCOUNT_PROVIDERS.map((entry) => (
+              <button
+                key={entry}
+                type="button"
+                role="tab"
+                className="harness-tab"
+                aria-selected={entry === current}
+                onClick={() => setProvider(entry)}
+              >
+                <span
+                  className="harness-tab__swatch"
+                  style={{ background: `var(--lz-provider-${entry})` }}
+                  aria-hidden="true"
+                />
+                {providerLabel(entry)}
+                {counts(entry) ? (
+                  <span className="harness-tab__count">{counts(entry)}</span>
+                ) : null}
+              </button>
+            ))}
+          </div>
+        }
+      />
       <Failure error={accounts.error} />
 
-      <div
-        className="harness-tabs"
-        role="tablist"
-        aria-label="Routing provider"
-      >
-        {ACCOUNT_PROVIDERS.map((entry) => (
-          <button
-            key={entry}
-            type="button"
-            role="tab"
-            className="harness-tab"
-            aria-selected={entry === current}
-            onClick={() => setProvider(entry)}
-          >
-            <span
-              className="harness-tab__swatch"
-              style={{ background: `var(--lz-provider-${entry})` }}
-              aria-hidden="true"
-            />
-            {providerLabel(entry)}
-            {counts(entry) ? (
-              <span className="harness-tab__count">{counts(entry)}</span>
-            ) : null}
-          </button>
-        ))}
-      </div>
-
-      <section className="settings__group" aria-label="Routing">
+      <Section label="Routing">
         <div className="routing">
           <Field label="New sessions" htmlFor="routing-mode">
             <select
@@ -280,21 +285,19 @@ export function AccountsPage() {
             </Field>
           ) : null}
           <span className="spacer" />
-          <Button size="sm" onClick={() => setVerifying(true)}>
-            Verify routing
-          </Button>
+          <Button onClick={() => setVerifying(true)}>Verify routing</Button>
         </div>
         <p className="meta">
           {MODE_HELP[policy.mode]} Changes apply to new sessions; running and
           resumed sessions keep their account.
         </p>
-      </section>
+      </Section>
 
-      <section className="settings__group" aria-label="Accounts list">
-        <h3>
-          {providerLabel(current)} accounts
-          {ordered ? <span className="meta"> · in routing order</span> : null}
-        </h3>
+      <Section
+        label="Accounts list"
+        title={`${providerLabel(current)} accounts`}
+        description={ordered ? "In routing order" : undefined}
+      >
         {members.length ? (
           <div
             className="accounts"
@@ -315,13 +318,16 @@ export function AccountsPage() {
             ))}
           </div>
         ) : snapshot ? (
-          <p className="meta">
-            No {providerLabel(current)} accounts. Sessions use the
-            harness&apos;s own login until you add one.
-          </p>
-        ) : null}
+          <Empty
+            compact
+            title={`No ${providerLabel(current)} accounts`}
+            detail="Sessions use the harness's own login until you add one."
+          />
+        ) : accounts.error ? null : (
+          <TableSkeleton rows={3} />
+        )}
         <PersonalWindows provider={current} />
-      </section>
+      </Section>
 
       <UsageSection provider={current} accounts={members} />
 
@@ -341,7 +347,7 @@ export function AccountsPage() {
         onClose={() => setVerifying(false)}
         reload={accounts.reload}
       />
-    </>
+    </Page>
   );
 }
 
@@ -462,7 +468,6 @@ function AccountRow({
             <span className="account__rank">{position}</span>
             <Button
               variant="ghost"
-              size="sm"
               icon
               aria-label={`Move ${label} up`}
               disabled={first}
@@ -472,7 +477,6 @@ function AccountRow({
             </Button>
             <Button
               variant="ghost"
-              size="sm"
               icon
               aria-label={`Move ${label} down`}
               disabled={last}
@@ -484,7 +488,9 @@ function AccountRow({
         ) : null}
       </span>
       <span className="account__who">
-        <span className="account__label">{label}</span>
+        <span className="account__label" title={label}>
+          {label}
+        </span>
         <span className="account__kind">
           {native ? "native profile" : "API key"}
           {account.spec.models.length
@@ -545,13 +551,12 @@ function AccountRow({
       </span>
       <span className="account__actions">
         {native && account.spec.enabled ? (
-          <Button size="sm" variant="ghost" onClick={() => void signIn()}>
+          <Button variant="ghost" onClick={() => void signIn()}>
             Sign in
           </Button>
         ) : null}
         {!native ? (
           <Button
-            size="sm"
             variant="ghost"
             onClick={() => {
               setRotating(true);
@@ -608,11 +613,10 @@ function AccountRow({
             value={secret}
             onChange={(event) => setSecret(event.target.value)}
           />
-          <Button size="sm" type="submit" disabled={!secret}>
+          <Button type="submit" disabled={!secret}>
             Save new key
           </Button>
           <Button
-            size="sm"
             variant="ghost"
             onClick={() => {
               setRotating(false);
@@ -697,14 +701,11 @@ function UsageSection({
   const span = bucket === "day" ? 7 : 24;
 
   return (
-    <section className="settings__group" aria-label="Usage">
-      <div className="settings__title-row">
-        <h3>
-          Usage{" "}
-          <span className="meta">
-            · {bucket === "day" ? "last 7 days" : "last 24 hours"}
-          </span>
-        </h3>
+    <Section
+      label="Usage"
+      title="Usage"
+      description={bucket === "day" ? "Last 7 days" : "Last 24 hours"}
+      actions={
         <Segmented
           name="usage-bucket"
           label="Usage range"
@@ -715,7 +716,8 @@ function UsageSection({
           ]}
           onChange={setBucket}
         />
-      </div>
+      }
+    >
       <Failure error={usage.error} />
       {rows.length ? (
         <div className="table-wrap">
@@ -724,11 +726,11 @@ function UsageSection({
               <tr>
                 <th>Account</th>
                 <th>Activity</th>
-                <th>Sessions</th>
-                <th>Turns</th>
-                <th>Failed</th>
-                <th>Requests</th>
-                <th>Tokens in / out</th>
+                <th className="num">Sessions</th>
+                <th className="num">Turns</th>
+                <th className="num">Failed</th>
+                <th className="num">Requests</th>
+                <th className="num">Tokens in / out</th>
               </tr>
             </thead>
             <tbody>
@@ -746,15 +748,19 @@ function UsageSection({
                         bucket={bucket}
                       />
                     </td>
-                    <td className="mono">{sum((entry) => entry.sessions)}</td>
-                    <td className="mono">
+                    <td className="mono num">
+                      {sum((entry) => entry.sessions)}
+                    </td>
+                    <td className="mono num">
                       {sum((entry) => entry.turnsCompleted)}
                     </td>
-                    <td className="mono">
+                    <td className="mono num">
                       {sum((entry) => entry.turnsFailed)}
                     </td>
-                    <td className="mono">{sum((entry) => entry.requests)}</td>
-                    <td className="mono">
+                    <td className="mono num">
+                      {sum((entry) => entry.requests)}
+                    </td>
+                    <td className="mono num">
                       {reported
                         ? `${compact(sum((entry) => entry.inputTokens ?? 0))} / ${compact(sum((entry) => entry.outputTokens ?? 0))}`
                         : "not reported"}
@@ -766,10 +772,13 @@ function UsageSection({
           </table>
         </div>
       ) : usage.data ? (
-        <p className="meta">
-          No {providerLabel(provider)} sessions in this range.
-        </p>
-      ) : null}
+        <Empty
+          compact
+          title={`No ${providerLabel(provider)} sessions in this range`}
+        />
+      ) : usage.error ? null : (
+        <TableSkeleton rows={3} />
+      )}
       {observed ? (
         <p className="meta">
           {observed.windows
@@ -780,7 +789,7 @@ function UsageSection({
             : "This harness does not report token counts."}
         </p>
       ) : null}
-    </section>
+    </Section>
   );
 }
 
@@ -1193,8 +1202,7 @@ function LoginTerminal({
     };
   }, [key, terminal, terminals]);
   return (
-    <section className="settings__group">
-      <h3>Provider sign-in</h3>
+    <Section title="Provider sign-in">
       <p className="meta">
         Complete the provider&apos;s own sign-in here. This terminal accepts
         input and is separate from agent sessions.
@@ -1210,6 +1218,6 @@ function LoginTerminal({
           Close
         </Button>
       </div>
-    </section>
+    </Section>
   );
 }

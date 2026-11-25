@@ -8,6 +8,11 @@ import {
   Field,
   Menu,
   Segmented,
+  Empty,
+  Page,
+  PageHeader,
+  Section,
+  TableSkeleton,
 } from "../components/primitives";
 import { asFailure } from "../lib/bridge";
 import { useAppState, useBridge } from "../lib/context";
@@ -266,17 +271,16 @@ export function SkillsPage() {
   }, [list, managedPaths]);
 
   return (
-    <>
-      <div className="settings__title-row">
-        <h2>Skills</h2>
-        <Button variant="primary" size="sm" onClick={() => setAdding(true)}>
-          Add skills
-        </Button>
-      </div>
-      <p className="settings__lede">
-        Skills work the same in every harness. Lazoo keeps one copy and links it
-        into the harnesses you choose.
-      </p>
+    <Page>
+      <PageHeader
+        title="Skills"
+        description="Skills work the same in every harness. Lazoo keeps one copy and links it into the harnesses you choose."
+        actions={
+          <Button variant="primary" onClick={() => setAdding(true)}>
+            Add skills
+          </Button>
+        }
+      />
       <Failure error={read.error} />
 
       {paused && list ? (
@@ -299,8 +303,7 @@ export function SkillsPage() {
       <ErrorLine error={notice} />
       {outcome ? <OutcomeNote outcome={outcome} /> : null}
 
-      <section className="settings__group" aria-label="Library">
-        <h3>Library</h3>
+      <Section label="Library" title="Library">
         {list?.library.length ? (
           <div className="ext-list" role="list" aria-label="Library skills">
             {list.library.map((skill) => (
@@ -316,11 +319,14 @@ export function SkillsPage() {
             ))}
           </div>
         ) : list ? (
-          <p className="meta">
-            No skills in the library yet. Add skills from skills.sh, GitHub, a
-            Git URL or a folder.
-          </p>
-        ) : null}
+          <Empty
+            compact
+            title="No skills in the library yet"
+            detail="Add skills from skills.sh, GitHub, a Git URL or a folder."
+          />
+        ) : read.error ? null : (
+          <TableSkeleton rows={2} />
+        )}
         {list?.problems.map((problem) => (
           <p
             className="meta"
@@ -331,14 +337,14 @@ export function SkillsPage() {
             <span className="mono">{displayPath(problem.path)}</span>
           </p>
         ))}
-      </section>
+      </Section>
 
       {unmanaged.length ? (
-        <section className="settings__group" aria-label="On this computer">
-          <h3>On this computer</h3>
-          <p className="meta ext-group-note">
-            Skills the harnesses already see that Lazoo does not manage.
-          </p>
+        <Section
+          label="On this computer"
+          title="On this computer"
+          description="Skills the harnesses already see that Lazoo does not manage."
+        >
           <div className="ext-list" role="list" aria-label="Unmanaged skills">
             {unmanaged.map(([name, entries]) => (
               <UnmanagedRow
@@ -352,7 +358,7 @@ export function SkillsPage() {
               />
             ))}
           </div>
-        </section>
+        </Section>
       ) : null}
 
       <AddSkillsDialog
@@ -379,7 +385,7 @@ export function SkillsPage() {
         onApplied={onApplied}
         onFailure={onFailure}
       />
-    </>
+    </Page>
   );
 }
 
@@ -403,7 +409,9 @@ function LibraryRow({
   return (
     <div className="ext-row" role="listitem">
       <div className="ext-row__main">
-        <span className="ext-row__name mono">{skill.name}</span>
+        <span className="ext-row__name mono" title={skill.name}>
+          {skill.name}
+        </span>
         <span className="ext-row__desc">{skill.description}</span>
         <span className="meta">
           {sourceLabel(skill.source)}
@@ -504,12 +512,13 @@ function UnmanagedRow({
   return (
     <div className="ext-row ext-row--plain" role="listitem">
       <div className="ext-row__main">
-        <span className="ext-row__name mono">{name}</span>
+        <span className="ext-row__name mono" title={name}>
+          {name}
+        </span>
         <span className="ext-row__desc">{entries[0]!.description}</span>
       </div>
       <span className="ext-row__menu">
         <Button
-          size="sm"
           variant="ghost"
           aria-label={`Add ${name} to library`}
           onClick={onAdd}
@@ -1065,7 +1074,6 @@ function AddSkillsDialog({
               <div className="ext-select-all">
                 <Button
                   variant="ghost"
-                  size="sm"
                   onClick={() => {
                     const names = preview.skills
                       .filter((skill) => installable(preview, skill))

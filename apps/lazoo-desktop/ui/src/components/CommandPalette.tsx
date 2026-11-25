@@ -15,12 +15,14 @@ import {
   SquareTerminal,
   Users,
   Volume2,
+  Workflow,
   Wrench,
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 
 import { useAppState, useStore } from "../lib/context";
 import { useVoice, useVoiceState } from "../lib/voice/context";
+import { useOptionalWorkflowsState } from "../lib/workflows/context";
 import { Kbd, ProjectGlyph } from "./primitives";
 
 interface Command {
@@ -38,6 +40,7 @@ export function CommandPalette() {
   const state = useAppState();
   const voice = useVoice();
   const voiceState = useVoiceState();
+  const workflowsState = useOptionalWorkflowsState();
   const [query, setQuery] = useState("");
   const [index, setIndex] = useState(0);
   const input = useRef<HTMLInputElement>(null);
@@ -86,6 +89,23 @@ export function CommandPalette() {
         icon: <Inbox size={14} aria-hidden="true" />,
         run: () => store.navigate({ kind: "inbox", filter: "all" }),
       },
+      {
+        id: "go-workflows",
+        group: "Go to",
+        label: "Workflows",
+        keywords: "automation schedule recurring",
+        icon: <Workflow size={14} aria-hidden="true" />,
+        run: () => store.navigate({ kind: "workflows", id: null }),
+      },
+      ...(workflowsState?.document.workflows ?? []).map((workflow) => ({
+        id: `go-workflow-${workflow.id}`,
+        group: "Go to" as const,
+        label: workflow.name,
+        hint: "workflow",
+        keywords: "automation schedule",
+        icon: <Workflow size={14} aria-hidden="true" />,
+        run: () => store.navigate({ kind: "workflows", id: workflow.id }),
+      })),
       {
         id: "go-settings",
         group: "Go to",
@@ -236,7 +256,7 @@ export function CommandPalette() {
       });
     }
     return list;
-  }, [state, store, voice, voiceState]);
+  }, [state, store, voice, voiceState, workflowsState]);
 
   const filtered = useMemo(() => {
     const needle = query.trim().toLowerCase();

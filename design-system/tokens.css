@@ -1,14 +1,17 @@
 /*
- * Lazoo Desktop Design System v0.3 (Slate, sharp)
+ * Lazoo Desktop Design System v1.0 (2026-11-25) (Slate, sharp)
  *
  * The single source of truth for colour, type, space, radius, elevation and
  * motion. Components consume the semantic roles (--lz-color-*, --lz-status-*,
  * --lz-provider-*), never the primitives. tokens.json is generated from this
  * file: `node design-system/build-tokens.mjs`.
  *
+ * v1.0 (2026-11-25): adds the page frame (--lz-page-pad, --lz-page-max,
+ *   --lz-prose-max) and the page-title step (--lz-headline-page). Colours and
+ *   radii are unchanged. Brand mark: design-system/brand.
  * v0.3 (2026-11-03): sharp and flat. Hairlines separate regions, radii are
- * 2 to 6 px, raised surfaces carry no shadow, motion is 60 to 200 ms. Ordered
- * dithering (lib/dither.ts) is the only decoration.
+ *   2 to 6 px, raised surfaces carry no shadow, motion is 60 to 200 ms. Ordered
+ *   dithering (lib/dither.ts) is the only decoration.
  */
 
 :root,
@@ -129,6 +132,7 @@
   --lz-headline-sm: 17px;
   --lz-headline-md: 22px;
   --lz-headline-lg: 28px;
+  --lz-headline-page: 20px;
   --lz-leading-xs: 14px;
   --lz-leading-sm: 16px;
   --lz-leading-md: 19px;
@@ -136,6 +140,7 @@
   --lz-leading-headline-sm: 24px;
   --lz-leading-headline-md: 28px;
   --lz-leading-headline-lg: 34px;
+  --lz-leading-headline-page: 28px;
   --lz-weight-regular: 400;
   --lz-weight-medium: 500;
   --lz-weight-semibold: 600;
@@ -196,6 +201,9 @@
   --lz-titlebar-h: 40px;
   --lz-navigation-w: 248px;
   --lz-gutter: 24px;
+  --lz-page-pad: 32px;
+  --lz-page-max: 920px;
+  --lz-prose-max: 68ch;
   --lz-inspector-w: 320px;
   --lz-command-palette-w: 640px;
   --lz-command-palette-max-h: 520px;

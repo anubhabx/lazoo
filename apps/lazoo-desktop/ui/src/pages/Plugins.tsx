@@ -9,6 +9,10 @@ import {
   Menu,
   StatusWord,
   Switch,
+  Empty,
+  Page,
+  PageHeader,
+  Section,
 } from "../components/primitives";
 import { asFailure } from "../lib/bridge";
 import { useAppState, useBridge, useStore } from "../lib/context";
@@ -273,17 +277,47 @@ export function PluginsPage() {
   const canToggle = can(capability, "enable") && can(capability, "disable");
 
   return (
-    <>
-      <div className="settings__title-row">
-        <h2>Plugins</h2>
-        <Button variant="primary" size="sm" onClick={() => setInstalling(true)}>
-          Install plugin
-        </Button>
-      </div>
-      <p className="settings__lede">
-        Each harness manages its own plugins. Lazoo runs the harness&apos;s own
-        commands and shows what it reports.
-      </p>
+    <Page>
+      <PageHeader
+        title="Plugins"
+        description="Each harness manages its own plugins. Lazoo runs the harness's own commands and shows what it reports."
+        actions={
+          <Button variant="primary" onClick={() => setInstalling(true)}>
+            Install plugin
+          </Button>
+        }
+        meta={
+          <div
+            className="harness-tabs"
+            role="tablist"
+            aria-label="Plugin harness"
+          >
+            {EXTENSION_PROVIDERS.map((entry) => (
+              <button
+                key={entry}
+                type="button"
+                role="tab"
+                className="harness-tab"
+                aria-selected={entry === provider}
+                onClick={() => {
+                  setProvider(entry);
+                  setProfile(null);
+                }}
+              >
+                <span
+                  className="harness-tab__swatch"
+                  style={{ background: `var(--lz-provider-${entry})` }}
+                  aria-hidden="true"
+                />
+                {providerLabel(entry)}
+                {countFor(entry) ? (
+                  <span className="harness-tab__count">{countFor(entry)}</span>
+                ) : null}
+              </button>
+            ))}
+          </div>
+        }
+      />
       <Failure error={read.error} />
 
       {paused && list ? (
@@ -303,32 +337,6 @@ export function PluginsPage() {
           A change is in progress. Controls return when it finishes.
         </p>
       ) : null}
-
-      <div className="harness-tabs" role="tablist" aria-label="Plugin harness">
-        {EXTENSION_PROVIDERS.map((entry) => (
-          <button
-            key={entry}
-            type="button"
-            role="tab"
-            className="harness-tab"
-            aria-selected={entry === provider}
-            onClick={() => {
-              setProvider(entry);
-              setProfile(null);
-            }}
-          >
-            <span
-              className="harness-tab__swatch"
-              style={{ background: `var(--lz-provider-${entry})` }}
-              aria-hidden="true"
-            />
-            {providerLabel(entry)}
-            {countFor(entry) ? (
-              <span className="harness-tab__count">{countFor(entry)}</span>
-            ) : null}
-          </button>
-        ))}
-      </div>
 
       {!list && !read.error ? (
         <p className="meta" role="status">
@@ -380,19 +388,18 @@ export function PluginsPage() {
       ) : null}
 
       {state?.error ? (
-        <section className="settings__group" aria-label="Harness status">
+        <Section label="Harness status">
           {state.error.code === "LZ-EXTENSION-NOT-DETECTED" ? (
             <p className="meta">
               {providerLabel(provider)} was not detected on this computer.
             </p>
           ) : null}
           <ErrorLine error={state.error} />
-        </section>
+        </Section>
       ) : null}
 
       {observed ? (
-        <section className="settings__group" aria-label="Installed">
-          <h3>Installed</h3>
+        <Section label="Installed" title="Installed">
           {observed.plugins.length ? (
             <div
               className="ext-list"
@@ -426,16 +433,16 @@ export function PluginsPage() {
               ))}
             </div>
           ) : (
-            <p className="meta">
-              No plugins installed in {providerLabel(provider)}.
-            </p>
+            <Empty
+              compact
+              title={`No plugins installed in ${providerLabel(provider)}.`}
+            />
           )}
-        </section>
+        </Section>
       ) : null}
 
       {observed && manageMarketplaces ? (
-        <section className="settings__group" aria-label="Marketplaces">
-          <h3>Marketplaces</h3>
+        <Section label="Marketplaces" title="Marketplaces">
           {marketplaces.length ? (
             <div className="ext-list" role="list" aria-label="Marketplaces">
               {marketplaces.map((market) => (
@@ -445,7 +452,9 @@ export function PluginsPage() {
                   key={market.name}
                 >
                   <div className="ext-row__main">
-                    <span className="ext-row__name mono">{market.name}</span>
+                    <span className="ext-row__name mono" title={market.name}>
+                      {market.name}
+                    </span>
                     <span className="meta mono">
                       {sourceText(market.source)}
                     </span>
@@ -507,7 +516,7 @@ export function PluginsPage() {
               }
             />
           ) : null}
-        </section>
+        </Section>
       ) : null}
 
       <ChangeDialog
@@ -526,7 +535,7 @@ export function PluginsPage() {
         onClose={() => setInstalling(false)}
         onReload={read.reload}
       />
-    </>
+    </Page>
   );
 }
 
@@ -641,7 +650,6 @@ function AddMarketplace({
       </Field>
       <Button
         type="submit"
-        size="sm"
         disabled={disabled || !name.trim() || !source.trim()}
       >
         Add marketplace

@@ -1,11 +1,11 @@
-import { AnimatePresence, motion } from "motion/react";
-import { CheckCheck } from "lucide-react";
+import { motion } from "motion/react";
 
 import {
   Avatar,
   Button,
-  EASE,
   Empty,
+  Page,
+  PageHeader,
   SPRING,
   Skeleton,
 } from "../components/primitives";
@@ -47,85 +47,88 @@ export function InboxPage() {
   }
 
   return (
-    <section className="page" aria-label="Inbox">
-      <header className="page__header">
-        <h1 className="page__title">Inbox</h1>
-        <div className="filters" role="tablist" aria-label="Inbox filters">
-          {FILTERS.map((entry) => {
-            const count = countFor(entry.value);
-            return (
-              <button
-                key={entry.value}
-                type="button"
-                role="tab"
-                aria-selected={filter === entry.value}
-                onClick={() =>
-                  store.navigate({ kind: "inbox", filter: entry.value })
-                }
-              >
-                {filter === entry.value ? (
-                  <motion.span
-                    layoutId="inbox-filter"
-                    className="filters__thumb"
-                    transition={SPRING}
-                  />
-                ) : null}
-                {entry.label}
-                {count ? <span className="filters__count">{count}</span> : null}
-              </button>
-            );
-          })}
-        </div>
-        <span className="spacer" />
-        <Button
-          size="sm"
-          variant="ghost"
-          onClick={() => void store.refresh("inbox")}
-        >
-          Refresh
-        </Button>
-      </header>
-      <div className="page__body">
-        {!inbox ? (
-          <div className="list" aria-busy="true">
-            {[0, 1, 2].map((index) => (
-              <div key={index} className="item">
-                <Skeleton width={8} height={8} radius={4} />
-                <div className="item__main">
-                  <Skeleton width="46%" height={12} />
-                  <Skeleton width="70%" height={10} />
-                </div>
+    <Page label="Inbox" wide>
+      <PageHeader
+        title="Inbox"
+        description="Approvals, proposals and incidents that wait for you."
+        actions={
+          <Button variant="ghost" onClick={() => void store.refresh("inbox")}>
+            Refresh
+          </Button>
+        }
+        meta={
+          <div className="filters" role="tablist" aria-label="Inbox filters">
+            {FILTERS.map((entry) => {
+              const count = countFor(entry.value);
+              return (
+                <button
+                  key={entry.value}
+                  type="button"
+                  role="tab"
+                  aria-selected={filter === entry.value}
+                  onClick={() =>
+                    store.navigate({ kind: "inbox", filter: entry.value })
+                  }
+                >
+                  {filter === entry.value ? (
+                    <motion.span
+                      layoutId="inbox-filter"
+                      className="filters__thumb"
+                      transition={SPRING}
+                    />
+                  ) : null}
+                  {entry.label}
+                  {count ? (
+                    <span className="filters__count">{count}</span>
+                  ) : null}
+                </button>
+              );
+            })}
+          </div>
+        }
+      />
+      {!inbox ? (
+        <div className="list" aria-busy="true">
+          {[0, 1, 2].map((index) => (
+            <div key={index} className="item">
+              <Skeleton width={8} height={8} radius={4} />
+              <div className="item__main">
+                <Skeleton width="46%" height={12} />
+                <Skeleton width="70%" height={10} />
               </div>
+            </div>
+          ))}
+        </div>
+      ) : inbox.items.length === 0 ? (
+        <Empty
+          title={
+            filter === "resolved" ? "Nothing resolved yet" : "Nothing needs you"
+          }
+          detail={
+            filter === "permissions"
+              ? "Provider-native permission prompts stay inside the harness terminal until passthrough exists."
+              : filter === "resolved"
+                ? "Items you approve, decline or dismiss are kept here."
+                : "Approvals, proposals, uncertain tasks, and escalated incidents appear here."
+          }
+        />
+      ) : (
+        <>
+          <div className="list" role="list">
+            {inbox.items.map((item, index) => (
+              <InboxRow
+                key={`${item.kind}:${item.id}`}
+                item={item}
+                leadRow={index === 0}
+              />
             ))}
           </div>
-        ) : inbox.items.length === 0 ? (
-          <Empty
-            icon={<CheckCheck size={18} aria-hidden="true" />}
-            title={
-              filter === "resolved"
-                ? "Nothing resolved yet"
-                : "Nothing needs you"
-            }
-            detail={
-              filter === "permissions"
-                ? "Provider-native permission prompts stay inside the harness terminal until passthrough exists."
-                : "Approvals, proposals, uncertain tasks, and escalated incidents appear here."
-            }
-          />
-        ) : (
-          <div className="list" role="list">
-            <AnimatePresence initial={false}>
-              {inbox.items.map((item) => (
-                <InboxRow key={`${item.kind}:${item.id}`} item={item} />
-              ))}
-            </AnimatePresence>
-            {inbox.truncated ? (
-              <span className="meta">Older items are not shown.</span>
-            ) : null}
-          </div>
-        )}
-      </div>
-    </section>
+          {inbox.truncated ? (
+            <p className="meta list-note">Older items are not shown.</p>
+          ) : null}
+        </>
+      )}
+    </Page>
   );
 }
 
@@ -138,7 +141,7 @@ function toneFor(item: InboxItem): string {
   return "attention";
 }
 
-function InboxRow({ item }: { item: InboxItem }) {
+function InboxRow({ item, leadRow }: { item: InboxItem; leadRow: boolean }) {
   const store = useStore();
   const conversationId = item.scope.conversationId;
   const open = () => {
@@ -148,15 +151,7 @@ function InboxRow({ item }: { item: InboxItem }) {
     store.openConversation(conversationId, item.scope.taskId ?? "lead");
   };
   return (
-    <motion.div
-      className="item"
-      role="listitem"
-      layout
-      initial={{ opacity: 0, y: 6 }}
-      animate={{ opacity: 1, y: 0 }}
-      exit={{ opacity: 0, y: -6 }}
-      transition={{ duration: 0.22, ease: EASE }}
-    >
+    <div className="item" role="listitem">
       {item.scope.employeeName ? (
         <Avatar
           name={item.scope.employeeName}
@@ -168,7 +163,7 @@ function InboxRow({ item }: { item: InboxItem }) {
         <span className="dot" data-tone={toneFor(item)} aria-hidden="true" />
       )}
       <div className="item__main">
-        <span className="item__title">
+        <span className="item__title" title={item.title}>
           {conversationId ? (
             <button
               type="button"
@@ -202,10 +197,12 @@ function InboxRow({ item }: { item: InboxItem }) {
           <ActionButton
             key={action.action}
             action={action}
-            primary={index === 0 && item.attention === "action-required"}
+            primary={
+              leadRow && index === 0 && item.attention === "action-required"
+            }
           />
         ))}
       </span>
-    </motion.div>
+    </div>
   );
 }

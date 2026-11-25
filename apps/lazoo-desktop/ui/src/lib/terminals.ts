@@ -187,6 +187,8 @@ export class TerminalManager {
     if (this.warm || typeof document === "undefined") return;
     const host = document.createElement("div");
     host.setAttribute("aria-hidden", "true");
+    // Inert: xterm's helper textarea would otherwise trap Tab off screen.
+    host.inert = true;
     host.style.cssText =
       "position:fixed;left:-10000px;top:0;width:240px;height:64px;pointer-events:none;";
     document.body.appendChild(host);

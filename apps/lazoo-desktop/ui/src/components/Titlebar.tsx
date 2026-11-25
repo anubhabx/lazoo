@@ -11,6 +11,7 @@ import {
 import { useState, type MouseEvent } from "react";
 
 import { useAppState, useBridge, useStore } from "../lib/context";
+import { useWorkflowsState } from "../lib/workflows/context";
 import { Button, EASE, ProjectGlyph } from "./primitives";
 
 export function Titlebar() {
@@ -117,6 +118,8 @@ function Breadcrumb() {
     route.kind === "conversation" ? state.conversation : null;
   const conversationProject = conversation?.scope.projectName ?? null;
 
+  if (route.kind === "workflows") return <WorkflowsCrumb id={route.id} />;
+
   if (route.kind === "inbox" || route.kind === "settings") {
     return (
       <nav className="crumbs" aria-label="Location">
@@ -154,6 +157,34 @@ function Breadcrumb() {
           <ConversationTitle />
         </>
       ) : null}
+    </nav>
+  );
+}
+
+function WorkflowsCrumb({ id }: { id: string | null }) {
+  const store = useStore();
+  const { document } = useWorkflowsState();
+  const workflow = id
+    ? document.workflows.find((entry) => entry.id === id)
+    : null;
+  if (!workflow) {
+    return (
+      <nav className="crumbs" aria-label="Location">
+        <span className="crumbs__current">Workflows</span>
+      </nav>
+    );
+  }
+  return (
+    <nav className="crumbs" aria-label="Location">
+      <button
+        type="button"
+        className="crumbs__space"
+        onClick={() => store.navigate({ kind: "workflows", id: null })}
+      >
+        <span className="truncate">Workflows</span>
+      </button>
+      <ChevronRight size={13} className="crumbs__sep" aria-hidden="true" />
+      <span className="crumbs__current truncate">{workflow.name}</span>
     </nav>
   );
 }

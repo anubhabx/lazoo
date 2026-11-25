@@ -1,4 +1,10 @@
-<!-- banner -->
+<p>
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="design-system/brand/lazoo-lockup-on-dark.svg">
+    <img src="design-system/brand/lazoo-lockup-on-light.svg" alt="Lazoo" height="56">
+  </picture>
+</p>
+
 # Lazoo
 
 A local Windows desktop for running a small team of coding agents, each in its own native terminal UI.
@@ -13,6 +19,7 @@ The name is a blend of **lazy** and **zoo**: wake the right agent when work arri
 - Several accounts per provider are supported, with isolated native profiles and per-provider routing policies. See [docs/ACCOUNT-ROUTING.md](docs/ACCOUNT-ROUTING.md).
 - Skills and plugins can be installed once and shared with the harnesses you pick (Settings, then Skills and Plugins).
 - Voice mode lets you dictate into the conversation, hear replies read aloud, or use a global push-to-talk hotkey. Speech to text runs on your computer by default.
+- Workflows (preview) chain a schedule, agents, conditions and notices on a node canvas for work that repeats. Schedules fire only while the Lazoo window is open, and the feature will stay a work in progress for a while.
 - Everything is local: a per-user daemon, a SQLite store and a named-pipe API. There is no Lazoo cloud service and no network listener by default.
 
 ## Status
@@ -105,7 +112,7 @@ These limits come from the project brief and still hold:
 - `crates/` holds the shared Rust libraries listed above.
 - `docs/` holds the project brief, the status record, design specs, plans and verification notes.
 - `scripts/` holds the installer build, the local gate and the acceptance scripts.
-- `design-system/` holds the design tokens used by the desktop UI.
+- `design-system/` holds the design system: tokens, the brand mark, the written spec and a living `reference.html`.
 
 ## Contributing
 
@@ -113,7 +120,7 @@ These limits come from the project brief and still hold:
 - Write conventional commit subjects, for example `fix: stop a stale session from blocking restart`.
 - Run `pwsh -File scripts/gate.ps1` before opening a PR. It runs the full local gate: format, clippy, tests, the release build and the acceptance scripts. CI is only a cheap backstop (format, UI check and clippy).
 - Run heavy builds one at a time. Parallel cargo builds can exhaust memory and disk on a small machine.
-- The design system lives in `design-system/`. UI changes should use its tokens.
+- The design system lives in `design-system/` ([spec](design-system/README.md)). UI changes use its tokens and base components, and one primary button per view.
 - Fill in the pull request template, and update the docs when behavior changes.
 
 ## License
