@@ -617,21 +617,138 @@ label.chip:hover {
   letter-spacing: 0;
 }
 
-/* ---- groups (the one surface in a page) ------------------------------------- */
+/* ---- page frame: the one layout every page uses ------------------------------ */
+
+.page-frame {
+  position: absolute;
+  inset: 0;
+  overflow: auto;
+  padding: var(--lz-page-pad) var(--lz-page-pad) var(--lz-space-48);
+}
+
+.page-frame__column {
+  max-width: var(--lz-page-max);
+}
+
+.page-frame__column[data-wide] {
+  max-width: none;
+}
+
+.page-header {
+  margin-bottom: var(--lz-space-24);
+}
+
+.page-header__row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--lz-space-16);
+  min-height: var(--lz-leading-headline-page);
+}
+
+.page-header__title {
+  margin: 0;
+  min-width: 0;
+  font-size: var(--lz-headline-page);
+  line-height: var(--lz-leading-headline-page);
+  font-weight: var(--lz-weight-semibold);
+  letter-spacing: var(--lz-tracking-headline);
+}
+
+.page-header__actions {
+  display: inline-flex;
+  align-items: center;
+  flex: none;
+  gap: var(--lz-space-08);
+}
+
+.page-header__description {
+  max-width: var(--lz-prose-max);
+  margin: var(--lz-space-04) 0 0;
+  color: var(--lz-color-text-muted);
+  font-size: var(--text-body);
+  line-height: var(--leading-body);
+}
+
+.page-header__meta {
+  margin-top: var(--lz-space-16);
+}
+
+.page-section {
+  margin: 0 0 var(--lz-space-32);
+}
+
+.page-section:last-child {
+  margin-bottom: 0;
+}
+
+.page-section__head {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: var(--lz-space-16);
+  margin-bottom: var(--lz-space-12);
+}
+
+.page-section__text {
+  display: grid;
+  gap: var(--lz-space-02);
+  min-width: 0;
+}
+
+.page-section__title {
+  margin: 0;
+  font-size: var(--text-body);
+  line-height: var(--leading-body);
+  font-weight: var(--lz-weight-semibold);
+}
+
+.page-section__description {
+  max-width: var(--lz-prose-max);
+  margin: 0;
+  color: var(--lz-color-text-muted);
+  font-size: var(--text-meta);
+  line-height: var(--leading-meta);
+}
+
+.page-section__actions {
+  display: inline-flex;
+  align-items: center;
+  flex: none;
+  gap: var(--lz-space-08);
+}
+
+/* ---- groups: one surface everywhere ---------------------------------------------
+   Cards, tables, lists and account rows share one treatment: a hairline, the
+   xl radius and the surface one step above the page. Rows inside divide with
+   the subtle hairline and share one padding. */
+
+:root {
+  --row-pad-x: var(--lz-space-16);
+  --row-pad-y: var(--lz-space-12);
+  --row-min: 52px;
+}
+
+.card,
+.table-wrap,
+.ext-list,
+.accounts,
+.list {
+  border: 1px solid var(--lz-color-border);
+  border-radius: var(--lz-radius-xl);
+  background: var(--lz-color-surface);
+}
 
 .card {
   display: grid;
-  gap: 12px;
-  padding: 16px;
-  border: 1px solid var(--lz-color-border-subtle);
-  border-radius: var(--lz-radius-lg);
-  max-width: 820px;
+  gap: var(--lz-space-12);
+  padding: var(--lz-space-16);
 }
 
 .card + .card,
 .card + .table-wrap,
 .table-wrap + .card {
-  margin-top: 16px;
+  margin-top: var(--lz-space-16);
 }
 
 .card h3 {
@@ -644,36 +761,43 @@ label.chip:hover {
 
 .empty {
   display: grid;
-  gap: 6px;
-  justify-items: center;
-  text-align: center;
-  padding: 40px 24px;
+  gap: var(--lz-space-04);
+  justify-items: start;
+  max-width: var(--lz-prose-max);
+  padding: var(--lz-space-48) 0 0;
+  text-align: left;
   color: var(--lz-color-text-muted);
 }
 
-.empty__icon {
-  display: inline-grid;
-  place-items: center;
-  width: 32px;
-  height: 32px;
-  margin-bottom: 6px;
-  border: 1px solid var(--lz-color-border);
-  border-radius: var(--lz-radius-md);
-  color: var(--lz-color-icon-muted);
+.empty--compact {
+  padding: var(--lz-space-12) 0 0;
+}
+
+.empty__field {
+  width: 56px;
+  height: 14px;
+  margin-bottom: var(--lz-space-12);
+  background-image: var(--lz-dither-50);
+  background-size: 4px 4px;
+  image-rendering: pixelated;
+  opacity: 0.55;
+  -webkit-mask-image: linear-gradient(90deg, #000, transparent);
+  mask-image: linear-gradient(90deg, #000, transparent);
 }
 
 .empty__title {
-  color: var(--lz-color-text-secondary);
-  font-weight: var(--lz-weight-medium);
+  color: var(--lz-color-text-primary);
+  font-size: var(--text-body);
+  font-weight: var(--lz-weight-semibold);
 }
 
 .empty__detail {
-  max-width: 380px;
-  font-size: var(--text-meta);
+  font-size: var(--text-body);
+  line-height: var(--leading-body);
 }
 
-.empty .btn {
-  margin-top: 8px;
+.empty__action {
+  margin-top: var(--lz-space-12);
 }
 
 /* Loading bars are dithered, not shimmering. */
@@ -704,8 +828,6 @@ label.chip:hover {
 .table-wrap {
   max-width: 100%;
   overflow-x: auto;
-  border: 1px solid var(--lz-color-border-subtle);
-  border-radius: var(--lz-radius-lg);
 }
 
 .table {
@@ -715,8 +837,8 @@ label.chip:hover {
 
 .table th,
 .table td {
-  height: 34px;
-  padding: 0 12px;
+  height: 44px;
+  padding: 0 var(--row-pad-x);
   text-align: left;
   border-bottom: 1px solid var(--lz-color-border-subtle);
   white-space: nowrap;
@@ -727,7 +849,7 @@ label.chip:hover {
 }
 
 .table th {
-  height: 30px;
+  height: 32px;
   color: var(--lz-color-text-muted);
   font-size: var(--text-micro);
   font-weight: var(--lz-weight-medium);
@@ -735,12 +857,18 @@ label.chip:hover {
   text-transform: uppercase;
 }
 
+.table th.num,
+.table td.num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
 .table td {
   color: var(--lz-color-text-secondary);
 }
 
 .table tbody tr:hover {
-  background: rgb(211 217 225 / 2.5%);
+  background: var(--wash);
 }
 
 .table td:first-child {
@@ -749,6 +877,28 @@ label.chip:hover {
 
 .table td.mono {
   font-size: var(--text-micro);
+}
+
+/* Long values end in an ellipsis; the full value is the title. */
+.cell-truncate {
+  display: block;
+  max-width: 320px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.row-skeleton {
+  display: flex;
+  align-items: center;
+  gap: var(--lz-space-24);
+  height: 44px;
+  padding: 0 var(--row-pad-x);
+  border-bottom: 1px solid var(--lz-color-border-subtle);
+}
+
+.row-skeleton:last-child {
+  border-bottom: 0;
 }
 
 .facts {

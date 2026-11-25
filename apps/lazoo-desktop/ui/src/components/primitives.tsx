@@ -297,24 +297,129 @@ export function Skeleton({
   );
 }
 
+/** A table while its rows load: the same card and row height as the real one. */
+export function TableSkeleton({ rows = 3 }: { rows?: number }) {
+  return (
+    <div className="table-wrap" aria-busy="true">
+      {Array.from({ length: rows }, (_, index) => (
+        <div key={index} className="row-skeleton">
+          <Skeleton width="22%" height={10} />
+          <Skeleton width="14%" height={10} />
+          <Skeleton width="30%" height={10} />
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/**
+ * Nothing here yet. Sits at the top-left of its column (never dead centre): a
+ * small dithered field, a title, one muted line and at most one action.
+ */
 export function Empty({
   title,
   detail,
   action,
-  icon,
+  compact = false,
 }: {
   title: string;
   detail?: string;
   action?: ReactNode;
-  icon?: ReactNode;
+  /** Inside a section that has other content: no top spacing, no field. */
+  compact?: boolean;
 }) {
   return (
-    <div className="empty">
-      {icon ? <span className="empty__icon">{icon}</span> : null}
+    <div className={compact ? "empty empty--compact" : "empty"}>
+      <span className="empty__field" aria-hidden="true" />
       <span className="empty__title">{title}</span>
       {detail ? <span className="empty__detail">{detail}</span> : null}
-      {action}
+      {action ? <span className="empty__action">{action}</span> : null}
     </div>
+  );
+}
+
+/**
+ * The one page frame. It scrolls, pads by --lz-page-pad and holds a column of
+ * at most --lz-page-max (or the full width for table-heavy pages), so every
+ * page's title sits at the same x and y.
+ */
+export function Page({
+  label,
+  wide = false,
+  children,
+}: {
+  label?: string;
+  wide?: boolean;
+  children: ReactNode;
+}) {
+  return (
+    <section className="page-frame" aria-label={label}>
+      <div className="page-frame__column" data-wide={wide || undefined}>
+        {children}
+      </div>
+    </section>
+  );
+}
+
+export function PageHeader({
+  title,
+  description,
+  actions,
+  meta,
+}: {
+  title: string;
+  description?: ReactNode;
+  actions?: ReactNode;
+  /** A row under the title block: filter tabs, a count, a status. */
+  meta?: ReactNode;
+}) {
+  return (
+    <header className="page-header">
+      <div className="page-header__row">
+        <h1 className="page-header__title">{title}</h1>
+        {actions ? <div className="page-header__actions">{actions}</div> : null}
+      </div>
+      {description ? (
+        <p className="page-header__description">{description}</p>
+      ) : null}
+      {meta ? <div className="page-header__meta">{meta}</div> : null}
+    </header>
+  );
+}
+
+export function Section({
+  title,
+  description,
+  actions,
+  label,
+  className = "",
+  children,
+}: {
+  title?: ReactNode;
+  description?: ReactNode;
+  actions?: ReactNode;
+  /** Accessible name for the region when the title is not plain text. */
+  label?: string;
+  className?: string;
+  children?: ReactNode;
+}) {
+  return (
+    <section className={`page-section ${className}`.trim()} aria-label={label}>
+      {title || actions ? (
+        <div className="page-section__head">
+          <div className="page-section__text">
+            {title ? <h3 className="page-section__title">{title}</h3> : null}
+            {description ? (
+              <p className="page-section__description">{description}</p>
+            ) : null}
+          </div>
+          {actions ? (
+            <div className="page-section__actions">{actions}</div>
+          ) : null}
+        </div>
+      ) : null}
+      {children}
+    </section>
   );
 }
 

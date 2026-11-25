@@ -6,9 +6,14 @@ import {
   Button,
   Dialog,
   Field,
+  Empty,
   Kbd,
+  Page,
+  PageHeader,
   ProjectGlyph,
+  Section,
   Switch,
+  TableSkeleton,
 } from "../components/primitives";
 import { useAppState, useBridge, useStore } from "../lib/context";
 import type {
@@ -33,18 +38,41 @@ import {
   words,
 } from "../lib/util";
 
-const SECTIONS: { id: SettingsSection; label: string }[] = [
-  { id: "general", label: "General" },
-  { id: "accounts", label: "Accounts" },
-  { id: "voice", label: "Voice" },
-  { id: "skills", label: "Skills" },
-  { id: "plugins", label: "Plugins" },
-  { id: "employees", label: "Employees" },
-  { id: "harnesses", label: "Harnesses" },
-  { id: "projects", label: "Projects" },
-  { id: "memory", label: "Memory" },
-  { id: "resources", label: "Resources" },
-  { id: "daemon", label: "Daemon" },
+const GROUPS: {
+  label: string;
+  items: { id: SettingsSection; label: string }[];
+}[] = [
+  {
+    label: "Workspace",
+    items: [
+      { id: "general", label: "General" },
+      { id: "voice", label: "Voice" },
+    ],
+  },
+  {
+    label: "Team",
+    items: [
+      { id: "employees", label: "Employees" },
+      { id: "accounts", label: "Accounts" },
+      { id: "harnesses", label: "Harnesses" },
+    ],
+  },
+  {
+    label: "Extensions",
+    items: [
+      { id: "skills", label: "Skills" },
+      { id: "plugins", label: "Plugins" },
+    ],
+  },
+  {
+    label: "System",
+    items: [
+      { id: "projects", label: "Projects" },
+      { id: "memory", label: "Memory" },
+      { id: "resources", label: "Resources" },
+      { id: "daemon", label: "Daemon" },
+    ],
+  },
 ];
 
 export function SettingsPage() {
@@ -55,18 +83,33 @@ export function SettingsPage() {
   return (
     <section className="settings" aria-label="Settings">
       <nav className="settings__nav" aria-label="Settings sections">
-        {SECTIONS.map((entry) => (
-          <button
-            key={entry.id}
-            type="button"
-            className="row"
-            aria-current={section === entry.id ? "page" : undefined}
-            onClick={() =>
-              store.navigate({ kind: "settings", section: entry.id })
-            }
+        {GROUPS.map((group) => (
+          <div
+            key={group.label}
+            className="settings__nav-group"
+            role="group"
+            aria-labelledby={`settings-group-${group.label}`}
           >
-            <span className="row__label">{entry.label}</span>
-          </button>
+            <span
+              id={`settings-group-${group.label}`}
+              className="settings__group-label"
+            >
+              {group.label}
+            </span>
+            {group.items.map((entry) => (
+              <button
+                key={entry.id}
+                type="button"
+                className="row"
+                aria-current={section === entry.id ? "page" : undefined}
+                onClick={() =>
+                  store.navigate({ kind: "settings", section: entry.id })
+                }
+              >
+                <span className="row__label">{entry.label}</span>
+              </button>
+            ))}
+          </div>
         ))}
       </nav>
       <div className="settings__content">
@@ -167,33 +210,32 @@ const SHORTCUTS: [string, string[]][] = [
 
 function General() {
   return (
-    <>
-      <h2>General</h2>
-      <p className="settings__lede">
-        Conversations open on each agent&apos;s own TUI. Lazoo&apos;s record of
-        requests, replies and delegations is in Activity.
-      </p>
-      <section className="settings__group">
-        <h3>Keyboard</h3>
-        <dl className="facts facts--keys">
-          {SHORTCUTS.map(([label, keys]) => (
-            <Fragment key={label}>
-              <dt>{label}</dt>
-              <dd>
-                <Kbd keys={keys} />
-              </dd>
-            </Fragment>
-          ))}
-        </dl>
-      </section>
-      <section className="settings__group">
-        <h3>Motion</h3>
-        <p className="meta">
-          Follows the Windows &quot;Show animations&quot; setting. When it is
-          off, avatars hold still and nonessential motion is removed.
-        </p>
-      </section>
-    </>
+    <Page>
+      <PageHeader
+        title="General"
+        description="Conversations open on each agent's own TUI. Lazoo's record of requests, replies and delegations is in Activity."
+      />
+      <Section title="Keyboard">
+        <div className="card">
+          <dl className="facts facts--keys">
+            {SHORTCUTS.map(([label, keys]) => (
+              <Fragment key={label}>
+                <dt>{label}</dt>
+                <dd>
+                  <Kbd keys={keys} />
+                </dd>
+              </Fragment>
+            ))}
+          </dl>
+        </div>
+      </Section>
+      <Section
+        title="Motion"
+        description={
+          'Follows the Windows "Show animations" setting. When it is off, avatars hold still and nonessential motion is removed.'
+        }
+      />
+    </Page>
   );
 }
 
@@ -265,23 +307,21 @@ function Employees() {
   const detected = (providers.data ?? []).filter((entry) => entry.detected);
 
   return (
-    <>
-      <div className="settings__title-row">
-        <h2>Employees</h2>
-        <span className="settings__title-actions">
-          <Button variant="ghost" size="sm" onClick={() => store.openSetup()}>
-            Set up agents
-          </Button>
-          <Button variant="primary" size="sm" onClick={() => setAdding(true)}>
-            New employee
-          </Button>
-        </span>
-      </div>
-      <p className="settings__lede">
-        Named identities on a harness. Creating one runs a bounded readiness
-        probe, never a model. Set up agents offers the recommended team for the
-        harnesses on this machine.
-      </p>
+    <Page>
+      <PageHeader
+        title="Employees"
+        description="Named identities on a harness. Creating one runs a bounded readiness probe, never a model. Set up agents offers the recommended team for the harnesses on this machine."
+        actions={
+          <>
+            <Button variant="ghost" onClick={() => store.openSetup()}>
+              Set up agents
+            </Button>
+            <Button variant="primary" onClick={() => setAdding(true)}>
+              New employee
+            </Button>
+          </>
+        }
+      />
       <Failure error={employees.error} />
       {list.length ? (
         <div className="table-wrap">
@@ -315,7 +355,14 @@ function Employees() {
                   <td>
                     {employee.role ? <Badge>{employee.role}</Badge> : "—"}
                   </td>
-                  <td className="mono">{employee.model ?? "—"}</td>
+                  <td className="mono">
+                    <span
+                      className="cell-truncate"
+                      title={employee.model ?? undefined}
+                    >
+                      {employee.model ?? "—"}
+                    </span>
+                  </td>
                   <td>{authorityLabel(employee.authorityMode)}</td>
                   <td>{words(employee.activationPolicy)}</td>
                   <td>
@@ -328,7 +375,6 @@ function Employees() {
                   <td>
                     {employee.enabled ? (
                       <Button
-                        size="sm"
                         variant="ghost"
                         onClick={() => void disable(employee)}
                       >
@@ -342,8 +388,13 @@ function Employees() {
           </table>
         </div>
       ) : employees.data ? (
-        <p className="meta">No employees yet.</p>
-      ) : null}
+        <Empty
+          title="No employees yet."
+          detail="Add one with New employee, or let Set up agents create the recommended team."
+        />
+      ) : employees.error ? null : (
+        <TableSkeleton rows={3} />
+      )}
       <Dialog
         open={adding}
         onClose={() => setAdding(false)}
@@ -483,7 +534,7 @@ function Employees() {
           </div>
         </form>
       </Dialog>
-    </>
+    </Page>
   );
 }
 
@@ -491,60 +542,69 @@ function Harnesses() {
   const providers = useRead<ProviderListEntry[]>("provider.list");
   const roster = useRead<unknown>("roster.get");
   return (
-    <>
-      <h2>Harnesses</h2>
-      <p className="settings__lede">
-        What Lazoo detected on this machine, and the native trust policy per
-        harness.
-      </p>
+    <Page>
+      <PageHeader
+        title="Harnesses"
+        description="What Lazoo detected on this machine, and the native trust policy per harness."
+      />
       <Failure error={providers.error} />
-      {providers.data ? (
-        <div className="table-wrap">
-          <table className="table">
-            <thead>
-              <tr>
-                <th>Harness</th>
-                <th>Detected</th>
-                <th>Executable</th>
-                <th>Source</th>
-                <th>Auto-accept managed trust</th>
-              </tr>
-            </thead>
-            <tbody>
-              {providers.data.map((entry) => (
-                <tr key={entry.provider}>
-                  <td>{providerLabel(entry.provider)}</td>
-                  <td>
-                    {entry.detected ? (
-                      <Badge tone="success">detected</Badge>
-                    ) : (
-                      <Badge>not found</Badge>
-                    )}
-                  </td>
-                  <td className="mono" title={entry.executable ?? undefined}>
-                    {entry.executable ?? "—"}
-                  </td>
-                  <td>{entry.discoverySource ?? "—"}</td>
-                  <td>
-                    {entry.provider === "claude-code" ||
-                    entry.provider === "antigravity" ? (
-                      <TrustPolicy provider={entry.provider} />
-                    ) : (
-                      <span className="meta">not applicable</span>
-                    )}
-                  </td>
+      <Section>
+        {providers.data ? (
+          <div className="table-wrap">
+            <table className="table">
+              <thead>
+                <tr>
+                  <th>Harness</th>
+                  <th>Detected</th>
+                  <th>Executable</th>
+                  <th>Source</th>
+                  <th>Auto-accept managed trust</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {providers.data.map((entry) => (
+                  <tr key={entry.provider}>
+                    <td>{providerLabel(entry.provider)}</td>
+                    <td>
+                      {entry.detected ? (
+                        <Badge tone="success">detected</Badge>
+                      ) : (
+                        <Badge>not found</Badge>
+                      )}
+                    </td>
+                    <td className="mono">
+                      <span
+                        className="cell-truncate"
+                        title={entry.executable ?? undefined}
+                      >
+                        {entry.executable ?? "—"}
+                      </span>
+                    </td>
+                    <td>{entry.discoverySource ?? "—"}</td>
+                    <td>
+                      {entry.provider === "claude-code" ||
+                      entry.provider === "antigravity" ? (
+                        <TrustPolicy provider={entry.provider} />
+                      ) : (
+                        <span className="meta">not applicable</span>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        ) : providers.error ? null : (
+          <TableSkeleton rows={5} />
+        )}
+      </Section>
+      <Section title="Roster">
+        <div className="card">
+          <Failure error={roster.error} />
+          <JsonFacts value={roster.data} />
         </div>
-      ) : null}
-      <div className="card">
-        <h3>Roster</h3>
-        <Failure error={roster.error} />
-        <JsonFacts value={roster.data} />
-      </div>
-    </>
+      </Section>
+    </Page>
   );
 }
 
@@ -595,17 +655,16 @@ function Projects() {
   const [adding, setAdding] = useState(false);
 
   return (
-    <>
-      <div className="settings__title-row">
-        <h2>Projects</h2>
-        <Button variant="primary" size="sm" onClick={() => setAdding(true)}>
-          Register a project
-        </Button>
-      </div>
-      <p className="settings__lede">
-        Registered local repositories. Each is a space with its own
-        conversations.
-      </p>
+    <Page>
+      <PageHeader
+        title="Projects"
+        description="Registered local repositories. Each is a space with its own conversations."
+        actions={
+          <Button variant="primary" onClick={() => setAdding(true)}>
+            Register a project
+          </Button>
+        }
+      />
       {projects.length ? (
         <div className="table-wrap">
           <table className="table">
@@ -626,7 +685,14 @@ function Projects() {
                       {project.displayName}
                     </span>
                   </td>
-                  <td className="mono">{project.canonicalPath}</td>
+                  <td className="mono">
+                    <span
+                      className="cell-truncate"
+                      title={project.canonicalPath}
+                    >
+                      {project.canonicalPath}
+                    </span>
+                  </td>
                   <td>{words(project.checkoutMode)}</td>
                   <td>{new Date(project.createdAt).toLocaleDateString()}</td>
                 </tr>
@@ -635,12 +701,13 @@ function Projects() {
           </table>
         </div>
       ) : (
-        <p className="meta">
-          No projects registered. Home holds projectless conversations.
-        </p>
+        <Empty
+          title="No projects registered"
+          detail="Home holds projectless conversations. Register a repository to give it its own space."
+        />
       )}
       <AddProjectDialog open={adding} onClose={() => setAdding(false)} />
-    </>
+    </Page>
   );
 }
 
@@ -649,27 +716,30 @@ function Memory() {
   const queue = useRead<unknown>("memory.queue.status");
   const worker = useRead<unknown>("memory.worker.show");
   return (
-    <>
-      <h2>Memory</h2>
-      <p className="settings__lede">
-        Retention policy, the archive queue, and the opt-in summary worker.
-      </p>
-      <div className="card">
-        <h3>Policy</h3>
-        <Failure error={policy.error} />
-        <JsonFacts value={policy.data} />
-      </div>
-      <div className="card">
-        <h3>Queue</h3>
-        <Failure error={queue.error} />
-        <JsonFacts value={queue.data} />
-      </div>
-      <div className="card">
-        <h3>Summary worker</h3>
-        <Failure error={worker.error} />
-        <JsonFacts value={worker.data} />
-      </div>
-    </>
+    <Page>
+      <PageHeader
+        title="Memory"
+        description="Retention policy, the archive queue, and the opt-in summary worker."
+      />
+      <Section title="Policy">
+        <div className="card">
+          <Failure error={policy.error} />
+          <JsonFacts value={policy.data} />
+        </div>
+      </Section>
+      <Section title="Queue">
+        <div className="card">
+          <Failure error={queue.error} />
+          <JsonFacts value={queue.data} />
+        </div>
+      </Section>
+      <Section title="Summary worker">
+        <div className="card">
+          <Failure error={worker.error} />
+          <JsonFacts value={worker.data} />
+        </div>
+      </Section>
+    </Page>
   );
 }
 
@@ -687,62 +757,65 @@ function Resources() {
       }
     | undefined;
   return (
-    <>
-      <h2>Resources</h2>
-      <p className="settings__lede">
-        Point samples of what Lazoo itself uses. Provider trees are reported
-        beside it, never counted against it.
-      </p>
-      <div className="card">
-        <h3>Daemon</h3>
-        <Failure error={resources.error} />
-        {daemon ? (
-          <dl className="facts">
-            <FactPair
-              label="Working set"
-              value={formatBytes(daemon.workingSetBytes)}
-            />
-            <FactPair
-              label="Peak"
-              value={formatBytes(daemon.peakWorkingSetBytes)}
-            />
-            <FactPair
-              label="CPU time"
-              value={formatDuration(daemon.cpuMillis)}
-            />
-            <FactPair
-              label="Uptime"
-              value={formatDuration(daemon.uptimeMillis)}
-            />
-            <FactPair label="Handles" value={daemon.handleCount} />
-            <FactPair label="Live sessions" value={daemon.liveSessions} />
-          </dl>
-        ) : (
-          <JsonFacts value={resources.data} />
-        )}
-        <div className="form-actions">
-          <Button size="sm" variant="ghost" onClick={resources.reload}>
+    <Page>
+      <PageHeader
+        title="Resources"
+        description="Point samples of what Lazoo itself uses. Provider trees are reported beside it, never counted against it."
+      />
+      <Section
+        title="Daemon"
+        actions={
+          <Button variant="ghost" onClick={resources.reload}>
             Sample again
           </Button>
+        }
+      >
+        <div className="card">
+          <Failure error={resources.error} />
+          {daemon ? (
+            <dl className="facts">
+              <FactPair
+                label="Working set"
+                value={formatBytes(daemon.workingSetBytes)}
+              />
+              <FactPair
+                label="Peak"
+                value={formatBytes(daemon.peakWorkingSetBytes)}
+              />
+              <FactPair
+                label="CPU time"
+                value={formatDuration(daemon.cpuMillis)}
+              />
+              <FactPair
+                label="Uptime"
+                value={formatDuration(daemon.uptimeMillis)}
+              />
+              <FactPair label="Handles" value={daemon.handleCount} />
+              <FactPair label="Live sessions" value={daemon.liveSessions} />
+            </dl>
+          ) : (
+            <JsonFacts value={resources.data} />
+          )}
         </div>
-      </div>
-      <div className="card">
-        <h3>Budget</h3>
-        <Failure error={budget.error} />
-        <JsonFacts value={budget.data} />
-      </div>
-    </>
+      </Section>
+      <Section title="Budget">
+        <div className="card">
+          <Failure error={budget.error} />
+          <JsonFacts value={budget.data} />
+        </div>
+      </Section>
+    </Page>
   );
 }
 
 function Daemon() {
   const { status, connectionError } = useAppState();
   return (
-    <>
-      <h2>Daemon</h2>
-      <p className="settings__lede">
-        The local control plane this window is connected to.
-      </p>
+    <Page>
+      <PageHeader
+        title="Daemon"
+        description="The local control plane this window is connected to."
+      />
       <div className="card">
         <Failure error={connectionError} />
         {status ? (
@@ -775,6 +848,6 @@ function Daemon() {
           <span className="meta">Not connected.</span>
         )}
       </div>
-    </>
+    </Page>
   );
 }

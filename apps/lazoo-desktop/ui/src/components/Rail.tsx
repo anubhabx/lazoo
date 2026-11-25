@@ -21,6 +21,7 @@ import {
   Kbd,
   ProjectGlyph,
 } from "./primitives";
+import { LogoMark } from "./Logo";
 
 /** How many conversations an open project shows before "Show all". */
 const PROJECT_PREVIEW = 5;
@@ -70,13 +71,19 @@ export function Rail() {
   const home = state.spaceConversations.home ?? [];
   const homeLoaded = "home" in state.spaceConversations;
   const onLauncher = route.kind === "launcher";
+  // The mark's cursor blinks while any conversation the sidebar knows is active.
+  const working = Object.values(state.spaceConversations).some((rows) =>
+    rows.some((row) => row.marker === "active"),
+  );
 
   return (
     <aside className="rail" aria-label="Spaces and conversations">
       <div className="rail__inner">
         <div className="rail__head">
           <span className="wordmark">
-            <span className="wordmark__mark" aria-hidden="true" />
+            <span className="wordmark__glyph">
+              <LogoMark size={16} live={working} />
+            </span>
             lazoo
           </span>
           <Button
