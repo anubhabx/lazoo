@@ -366,8 +366,11 @@ export function PageHeader({
   description,
   actions,
   meta,
+  titleAccessory,
 }: {
   title: string;
+  /** Sits inline right after the title (a status badge, say). */
+  titleAccessory?: ReactNode;
   description?: ReactNode;
   actions?: ReactNode;
   /** A row under the title block: filter tabs, a count, a status. */
@@ -376,7 +379,14 @@ export function PageHeader({
   return (
     <header className="page-header">
       <div className="page-header__row">
-        <h1 className="page-header__title">{title}</h1>
+        {titleAccessory ? (
+          <div className="page-header__heading">
+            <h1 className="page-header__title">{title}</h1>
+            {titleAccessory}
+          </div>
+        ) : (
+          <h1 className="page-header__title">{title}</h1>
+        )}
         {actions ? <div className="page-header__actions">{actions}</div> : null}
       </div>
       {description ? (

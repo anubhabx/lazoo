@@ -655,6 +655,13 @@ label.chip:hover {
   letter-spacing: var(--lz-tracking-headline);
 }
 
+.page-header__heading {
+  display: flex;
+  align-items: baseline;
+  gap: var(--lz-space-08);
+  min-width: 0;
+}
+
 .page-header__actions {
   display: inline-flex;
   align-items: center;
@@ -773,16 +780,17 @@ label.chip:hover {
   padding: var(--lz-space-12) 0 0;
 }
 
+/* A 32 px dithered tile; the grid gap adds 4 px, so 12 px above the title. */
 .empty__field {
-  width: 56px;
-  height: 14px;
-  margin-bottom: var(--lz-space-12);
-  background-image: var(--lz-dither-50);
+  width: 32px;
+  height: 32px;
+  margin-bottom: calc(var(--lz-space-12) - var(--lz-space-04));
+  border: 1px solid var(--lz-color-border);
+  border-radius: var(--lz-radius-md);
+  background-color: var(--lz-color-surface);
+  background-image: var(--lz-dither-25);
   background-size: 4px 4px;
   image-rendering: pixelated;
-  opacity: 0.55;
-  -webkit-mask-image: linear-gradient(90deg, #000, transparent);
-  mask-image: linear-gradient(90deg, #000, transparent);
 }
 
 .empty__title {

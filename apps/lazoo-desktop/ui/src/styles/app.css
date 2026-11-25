@@ -751,9 +751,10 @@ kbd,
   padding-left: 4px;
 }
 
+/* Starts at the composer's text: 1px border + 14px padding. */
 .launcher__truth {
   min-height: 18px;
-  margin: 10px 2px 0;
+  margin: 10px 15px 0;
   color: var(--lz-color-text-muted);
   font-size: var(--text-meta);
 }
@@ -1419,16 +1420,18 @@ kbd,
 
 .accounts {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   container-type: inline-size;
 }
 
 .account {
   display: grid;
   grid-template-columns:
-    64px minmax(120px, 1.1fr) 124px minmax(190px, 2fr)
+    64px minmax(0, 1.1fr) 124px minmax(0, 2fr)
     104px auto;
   align-items: center;
   gap: 12px;
+  min-width: 0;
   min-height: var(--row-min);
   padding: var(--row-pad-y) var(--lz-space-12) var(--row-pad-y) var(--row-pad-x);
   border-bottom: 1px solid var(--lz-color-border-subtle);
@@ -1448,6 +1451,11 @@ kbd,
   margin-top: var(--lz-space-08);
   border: 1px dashed var(--lz-color-border);
   border-radius: var(--lz-radius-xl);
+}
+
+/* The last-row rule above must not remove the card's own bottom edge. */
+.account.account--personal:last-child {
+  border-bottom: 1px dashed var(--lz-color-border);
 }
 
 .account--personal .account__reserve,
@@ -1952,7 +1960,7 @@ kbd,
 .settings__nav {
   display: grid;
   align-content: start;
-  gap: 1px;
+  gap: 0;
   padding: var(--lz-space-16) var(--lz-space-08) var(--lz-space-24);
   border-right: 1px solid var(--lz-color-border-subtle);
   overflow-y: auto;
@@ -1963,22 +1971,23 @@ kbd,
   gap: 1px;
 }
 
+/* 16px above every group label after the first. */
+.settings__nav-group + .settings__nav-group {
+  margin-top: var(--lz-space-16);
+}
+
 /* Same voice as the sidebar's PROJECTS and RECENTS. */
 .settings__group-label {
   display: flex;
   align-items: center;
   height: var(--lz-space-24);
   padding: 0 var(--lz-space-08);
-  margin-top: var(--lz-space-16);
+  margin: 0 0 calc(var(--lz-space-04) - 1px); /* + the 1px group gap = 4px */
   color: var(--lz-color-text-muted);
   font-size: var(--text-micro);
   font-weight: var(--lz-weight-medium);
   letter-spacing: var(--lz-tracking-label);
   text-transform: uppercase;
-}
-
-.settings__group-label:first-child {
-  margin-top: 0;
 }
 
 .settings__nav .row {
