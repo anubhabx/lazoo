@@ -436,20 +436,30 @@ fn supported_compatibility(
     if probe.provider == ProviderKind::ClaudeCode {
         return None;
     }
-    if probe.provider == ProviderKind::Codex && reviewed_codex_mcp_version(version) {
-        // Each value is pinned to independently reviewed configuration evidence.
+    if probe.provider == ProviderKind::Codex && compatible_codex_mcp_version(version) {
         Some(ConfigurationCompatibility::Native)
     } else {
         None
     }
 }
 
-fn reviewed_codex_mcp_version(version: &str) -> bool {
+/// The oldest Codex release whose MCP configuration format was reviewed.
+const CODEX_MCP_FLOOR: (u64, u64, u64) = (0, 155, 1);
+
+/// Codex ships minor and patch releases constantly, so any release on the reviewed major
+/// line at or above the floor is admitted; the probe's app-server handshake and MCP
+/// capability are the live evidence. A new major line stays refused until it is reviewed.
+fn compatible_codex_mcp_version(version: &str) -> bool {
     version.split_whitespace().any(|token| {
-        matches!(
-            token,
-            "0.155.1" | "0.162.0-alpha.17.2" | "0.165.0-alpha.1.2" | "0.166.0-alpha.5.1"
-        )
+        // "0.166.0-alpha.5.1" -> (0, 166, 0); a pre-release tag does not change the line.
+        let mut parts = token.split('-').next().unwrap_or_default().split('.');
+        let mut next = || parts.next().and_then(|part| part.parse::<u64>().ok());
+        match (next(), next(), next()) {
+            (Some(major), Some(minor), Some(patch)) => {
+                major == CODEX_MCP_FLOOR.0 && (major, minor, patch) >= CODEX_MCP_FLOOR
+            }
+            _ => false,
+        }
     })
 }
 
@@ -519,7 +529,7 @@ mod tests {
     }
 
     #[test]
-    fn only_exact_reviewed_detected_versions_are_eligible() {
+    fn codex_minor_and_patch_releases_are_eligible_without_a_new_pin() {
         assert_eq!(
             supported_compatibility(
                 &probe(ProviderKind::Codex, "codex-cli 0.165.0-alpha.1.2", true),
@@ -532,7 +542,7 @@ mod tests {
                 &probe(ProviderKind::Codex, "codex-cli 0.165.0-alpha.1.3", true),
                 "codex-cli 0.165.0-alpha.1.3"
             ),
-            None
+            Some(ConfigurationCompatibility::Native)
         );
         assert_eq!(
             supported_compatibility(
@@ -546,7 +556,7 @@ mod tests {
                 &probe(ProviderKind::Codex, "codex-cli 0.166.0-alpha.5.2", true),
                 "codex-cli 0.166.0-alpha.5.2"
             ),
-            None
+            Some(ConfigurationCompatibility::Native)
         );
         assert_eq!(
             supported_compatibility(
@@ -564,14 +574,35 @@ mod tests {
         );
         assert_eq!(
             supported_compatibility(&probe(ProviderKind::Codex, "0.155.2", true), "0.155.2"),
-            None
+            Some(ConfigurationCompatibility::Native)
         );
+        // A release Lazoo has never seen on the same line works without a code change.
+        assert_eq!(
+            supported_compatibility(
+                &probe(ProviderKind::Codex, "codex-cli 0.167.0-alpha.4.1", true),
+                "codex-cli 0.167.0-alpha.4.1"
+            ),
+            Some(ConfigurationCompatibility::Native)
+        );
+        // Older than the first reviewed format, a new major line, and junk stay refused.
+        for refused in [
+            "codex-cli 0.155.0",
+            "codex-cli 0.99.9",
+            "codex-cli 1.0.0",
+            "codex-cli nightly",
+        ] {
+            assert_eq!(
+                supported_compatibility(&probe(ProviderKind::Codex, refused, true), refused),
+                None,
+                "{refused}"
+            );
+        }
         assert_eq!(
             supported_compatibility(
                 &probe(ProviderKind::Codex, "codex-cli 0.162.0-alpha.17.3", true),
                 "codex-cli 0.162.0-alpha.17.3"
             ),
-            None
+            Some(ConfigurationCompatibility::Native)
         );
         assert_eq!(
             supported_compatibility(&probe(ProviderKind::OpenCode, "1.9.9", true), "1.9.9"),
