@@ -20,3 +20,16 @@ export function useWorkflowsState(): WorkflowsSnapshot {
     workflows.getSnapshot,
   );
 }
+
+const NO_SUBSCRIPTION = () => () => {};
+const NO_SNAPSHOT = () => null;
+
+/** The state when a controller is mounted, else null; for surfaces that may render without one. */
+export function useOptionalWorkflowsState(): WorkflowsSnapshot | null {
+  const workflows = useContext(WorkflowsContext);
+  return useSyncExternalStore(
+    workflows ? workflows.subscribe : NO_SUBSCRIPTION,
+    workflows ? workflows.getSnapshot : NO_SNAPSHOT,
+    workflows ? workflows.getSnapshot : NO_SNAPSHOT,
+  );
+}

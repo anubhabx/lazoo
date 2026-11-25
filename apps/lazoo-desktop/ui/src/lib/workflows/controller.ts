@@ -80,11 +80,11 @@ export const TEMPLATES: WorkflowTemplate[] = [
       node("schedule", "trigger.schedule", "Weekdays at 09:00", 0, 0, {
         schedule: { mode: "daily", time: "09:00", days: [1, 2, 3, 4, 5] },
       }),
-      node("agent", "agent.prompt", "Summarise yesterday", 260, 0, {
+      node("agent", "agent.prompt", "Summarise yesterday", 320, 0, {
         prompt:
           "Summarise yesterday's changes in this project: what was merged or finished, what is still in progress, and anything that needs my attention. Keep it short.",
       }),
-      node("notify", "notify", "Show the summary", 520, 0, {
+      node("notify", "notify", "Show the summary", 640, 0, {
         title: "Daily summary",
         body: "{{input}}",
       }),
@@ -107,16 +107,16 @@ export const TEMPLATES: WorkflowTemplate[] = [
           days: [0, 1, 2, 3, 4, 5, 6],
         },
       }),
-      node("agent", "agent.prompt", "Run the tests", 260, 0, {
+      node("agent", "agent.prompt", "Run the tests", 320, 0, {
         prompt:
           "Run the project's test suite and report the result. Say 'all passing' when everything passes; otherwise list each failing test with the reason.",
         timeoutMinutes: 60,
       }),
-      node("condition", "logic.condition", "Did it fail?", 520, 0, {
+      node("condition", "logic.condition", "Did it fail?", 640, 0, {
         op: "contains",
         value: "fail",
       }),
-      node("notify", "notify", "Checks failed", 780, -60, {
+      node("notify", "notify", "Checks failed", 960, -70, {
         title: "Checks failed",
         body: "{{input}}",
       }),
@@ -164,6 +164,8 @@ export class WorkflowsController {
   private dirty = false;
   private started = false;
   private disposed = false;
+  /** Bumped by every start and dispose, so a start that was disposed mid-load stands down. */
+  private generation = 0;
 
   constructor(
     private readonly bridge: Bridge,
@@ -203,14 +205,20 @@ export class WorkflowsController {
   async start() {
     if (this.started) return;
     this.started = true;
+    // React StrictMode runs effects twice (start, dispose, start): a disposed
+    // controller must be startable again.
+    this.disposed = false;
+    const generation = ++this.generation;
     await this.load();
-    if (this.disposed) return;
+    if (this.disposed || generation !== this.generation) return;
     this.tickTimer = setInterval(() => this.tick(), TICK_MS);
     this.tick();
   }
 
   dispose() {
     this.disposed = true;
+    this.started = false;
+    this.generation += 1;
     if (this.tickTimer) clearInterval(this.tickTimer);
     this.tickTimer = null;
     for (const abort of this.aborts.values()) abort.abort();

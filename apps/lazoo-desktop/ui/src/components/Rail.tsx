@@ -6,6 +6,7 @@ import {
   Plus,
   Search,
   Settings,
+  Workflow,
 } from "lucide-react";
 import { useState, type FormEvent, type ReactNode } from "react";
 
@@ -129,6 +130,12 @@ export function Rail() {
                 </span>
               ) : null
             }
+          />
+          <RailButton
+            icon={<Workflow size={15} aria-hidden="true" />}
+            label="Workflows"
+            current={route.kind === "workflows"}
+            onClick={() => store.navigate({ kind: "workflows", id: null })}
           />
         </nav>
 
