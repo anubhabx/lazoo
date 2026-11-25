@@ -1,8 +1,8 @@
 name: CI
 
-# A cheap backstop, not the gate. The repository is private on GitHub Free, so Actions
-# minutes are capped and Windows minutes bill at a multiple. The full gate
-# (scripts/gate.ps1) must pass locally before a PR is raised; see README "Verification".
+# A cheap backstop, not the gate. The repository is public, so Actions minutes are no
+# longer the constraint, but this stays small on purpose. The full local gate
+# (scripts/gate.ps1) must still pass before a PR is raised; see docs/STATUS.md "Verification".
 # ponytail: no cargo test or acceptance scripts here; add cargo test if minutes allow.
 
 on:
