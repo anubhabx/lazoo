@@ -2,6 +2,7 @@ mod client;
 mod events;
 mod terminal;
 mod voice;
+mod workflows;
 
 use std::{
     collections::HashMap,
@@ -191,6 +192,7 @@ pub fn run() {
     tauri::Builder::default()
         .manage(DesktopState::default())
         .manage(voice::VoiceRuntime::default())
+        .manage(workflows::WorkflowsRuntime::default())
         .plugin(
             tauri_plugin_global_shortcut::Builder::new()
                 .with_handler(voice::hotkey::on_event)
@@ -216,6 +218,8 @@ pub fn run() {
             voice::voice_copy_text,
             voice::voice_overlay,
             voice::voice_open_microphone_settings,
+            workflows::workflows_load,
+            workflows::workflows_save,
         ])
         .setup(|app| {
             start_keeper();

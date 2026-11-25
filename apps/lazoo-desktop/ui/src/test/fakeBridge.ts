@@ -3,7 +3,12 @@
 
 import { vi, type Mock } from "vitest";
 
-import type { Bridge, TerminalStreamHandle, VoiceBridge } from "../lib/bridge";
+import type {
+  Bridge,
+  TerminalStreamHandle,
+  VoiceBridge,
+  WorkflowsBridge,
+} from "../lib/bridge";
 import type {
   EventFrame,
   EventSummary,
@@ -18,8 +23,16 @@ export type FakeVoice = {
   [K in keyof VoiceBridge]: Mock<VoiceBridge[K]>;
 };
 
+export type FakeWorkflows = {
+  [K in keyof WorkflowsBridge]: Mock<WorkflowsBridge[K]>;
+} & {
+  /** The stored document and revision, as the desktop would hold them. */
+  stored: { revision: number; document: unknown };
+};
+
 export interface FakeBridge extends Bridge {
   voice: FakeVoice;
+  workflows: FakeWorkflows;
   /** Drives the global push-to-talk hotkey. */
   firePtt(state: PttState): void;
   /** Drives the overlay window's event. */
@@ -44,6 +57,7 @@ export function createFakeBridge(): FakeBridge {
   const pttHandlers = new Set<(state: PttState) => void>();
   const overlayHandlers = new Set<(update: OverlayUpdate) => void>();
   let windowLabel = "main";
+  const stored: FakeWorkflows["stored"] = { revision: 0, document: null };
   const unscripted = (name: string) =>
     ({
       code: "LZ-TEST-UNSCRIPTED",
@@ -150,6 +164,24 @@ export function createFakeBridge(): FakeBridge {
         return () => {
           overlayHandlers.delete(handler);
         };
+      }),
+    },
+    workflows: {
+      stored,
+      load: vi.fn<WorkflowsBridge["load"]>(async () => ({
+        revision: stored.revision,
+        document: structuredClone(stored.document),
+      })),
+      save: vi.fn<WorkflowsBridge["save"]>(async (document, revision) => {
+        if (revision !== stored.revision) {
+          throw {
+            code: "LZ-WORKFLOWS-CONFLICT",
+            message: "The workflows changed elsewhere.",
+          } as RpcFailure;
+        }
+        stored.document = structuredClone(document);
+        stored.revision += 1;
+        return { revision: stored.revision };
       }),
     },
     firePtt(state) {

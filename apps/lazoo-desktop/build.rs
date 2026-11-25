@@ -33,14 +33,18 @@ fn main() {
                 "voice_copy_text",
                 "voice_overlay",
                 "voice_open_microphone_settings",
+                "workflows_load",
+                "workflows_save",
             ])),
     )
     .expect("Tauri build configuration must be valid");
 }
 
-/// The app icon: the sidebar wordmark's mark (a 14-unit iris checkerboard with a solid 6-unit
-/// core, `.wordmark__mark` in `ui/src/styles/app.css`) on a slate rounded square, as a
-/// multi-size ICO. Each size scales the mark by whole pixels per unit so the dither stays crisp.
+/// The app icon: the Lazoo brand mark (`design-system/brand/lazoo-mark.svg`) as a multi-size ICO.
+/// On a 16-unit grid a `#171c24` tile with 3-unit rounded corners, an `#e8ecf1` "L" (rects
+/// 3,3,3,10 and 3,10,6,3) and an `#8d9af4` cursor block (rect 10,5,3,8). Each size scales the
+/// grid by nearest pixel (rect edges rounded to whole pixels); only the tile corners are
+/// antialiased.
 // Pixel coordinates and colour channels are tiny (<= 256), so the float casts are exact.
 #[allow(
     clippy::cast_precision_loss,
@@ -48,30 +52,24 @@ fn main() {
     clippy::cast_sign_loss
 )]
 fn lazoo_icon() -> Vec<u8> {
-    // (size in px, pixels per mark unit)
-    const SIZES: [(u32, u32); 7] = [
-        (16, 1),
-        (24, 1),
-        (32, 2),
-        (48, 2),
-        (64, 3),
-        (128, 6),
-        (256, 11),
+    const SIZES: [u32; 7] = [16, 24, 32, 48, 64, 128, 256];
+    const TILE: [u8; 3] = [0x17, 0x1c, 0x24];
+    const LETTER: [u8; 3] = [0xe8, 0xec, 0xf1];
+    const CURSOR: [u8; 3] = [0x8d, 0x9a, 0xf4];
+    // (x, y, width, height) in grid units, with the colour they paint.
+    const RECTS: [([u32; 4], [u8; 3]); 3] = [
+        ([3, 3, 3, 10], LETTER),
+        ([3, 10, 6, 3], LETTER),
+        ([10, 5, 3, 8], CURSOR),
     ];
-    const SLATE: [f32; 3] = [23.0, 28.0, 36.0]; // --lz-slate-100
-    const IRIS: [f32; 3] = [141.0, 154.0, 244.0]; // --lz-iris-500
-    const CORE: [f32; 3] = [168.0, 179.0, 249.0]; // --lz-iris-400
 
-    let mix = |a: [f32; 3], b: [f32; 3], t: f32| -> [f32; 3] {
-        [0, 1, 2].map(|i| a[i] + (b[i] - a[i]) * t)
-    };
     let images: Vec<Vec<u8>> = SIZES
         .iter()
-        .map(|&(size, unit)| {
+        .map(|&size| {
             let side = size as f32;
-            let radius = (side * 0.22).max(2.0);
-            let mark = 14 * unit;
-            let origin = (size - mark) / 2;
+            let radius = side * 3.0 / 16.0;
+            // Grid unit to the nearest pixel edge.
+            let edge = |unit: u32| (unit * size + 8) / 16;
             let mut pixels = Vec::with_capacity((size * size * 4) as usize);
             // BMP rows run bottom-up.
             for y in (0..size).rev() {
@@ -89,20 +87,15 @@ fn lazoo_icon() -> Vec<u8> {
                             }
                         }
                     }
-                    let inside = |v: u32| v >= origin && v < origin + mark;
-                    let colour = if inside(x) && inside(y) {
-                        let (ux, uy) = ((x - origin) / unit, (y - origin) / unit);
-                        if (4..10).contains(&ux) && (4..10).contains(&uy) {
-                            CORE
-                        } else if (ux + uy) % 2 == 0 {
-                            mix(SLATE, IRIS, 0.55)
-                        } else {
-                            mix(SLATE, IRIS, 0.18)
+                    let mut colour = TILE;
+                    for ([rx, ry, rw, rh], paint) in RECTS {
+                        if (edge(rx)..edge(rx + rw)).contains(&x)
+                            && (edge(ry)..edge(ry + rh)).contains(&y)
+                        {
+                            colour = paint;
                         }
-                    } else {
-                        SLATE
-                    };
-                    let [r, g, b] = colour.map(|c| c.round() as u8);
+                    }
+                    let [r, g, b] = colour;
                     let alpha = (covered * 255 / 16) as u8;
                     pixels.extend_from_slice(&[b, g, r, alpha]);
                 }
@@ -132,7 +125,7 @@ fn lazoo_icon() -> Vec<u8> {
     icon.extend_from_slice(&1_u16.to_le_bytes());
     icon.extend_from_slice(&u16::try_from(images.len()).unwrap().to_le_bytes());
     let mut offset = 6 + 16 * images.len();
-    for (&(size, _), image) in SIZES.iter().zip(&images) {
+    for (&size, image) in SIZES.iter().zip(&images) {
         let byte = u8::try_from(size).unwrap_or(0); // 256 is written as 0
         icon.extend_from_slice(&[byte, byte, 0, 0]);
         icon.extend_from_slice(&1_u16.to_le_bytes());
