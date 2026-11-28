@@ -118,7 +118,11 @@ try {
             Stop-Process -Id $app.Id -Force -ErrorAction SilentlyContinue
             # The uninstall hook stops the installed service before removing files.
             $checks.uninstallExit = Invoke-Exit (Join-Path $installDir 'uninstall.exe') @('/S')
-            Start-Sleep -Seconds 3
+            # uninstall.exe hands off to a copy of itself in %TEMP% and returns at once, so the
+            # removal finishes some seconds after the exit code arrives.
+            $removeDeadline = (Get-Date).AddSeconds(30)
+            do { Start-Sleep -Milliseconds 500 }
+            until (-not (Test-Path (Join-Path $installDir 'lazoo-desktop.exe')) -or (Get-Date) -gt $removeDeadline)
             $checks.serviceStoppedByUninstall = (Get-InstalledService $installDir).Count -eq 0
             $checks.removed = -not (Test-Path (Join-Path $installDir 'lazoo-desktop.exe'))
         } finally {
