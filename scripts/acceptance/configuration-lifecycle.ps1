@@ -106,8 +106,8 @@ enabled = false
     $daemon = Start-Process -FilePath $script:daemonExe -WorkingDirectory $repoRoot -WindowStyle Hidden -PassThru -RedirectStandardOutput $stdoutLog -RedirectStandardError $stderrLog
     $null = Wait-Daemon
 
-    # Test the executable Lazoo actually discovers. The backend's exact reviewed-version
-    # allowlist still refuses unreviewed versions; this script never bypasses that boundary.
+    # Test the executable Lazoo actually discovers. The backend admits any release on the
+    # reviewed Codex major line at or above its floor; this script never bypasses that boundary.
     $probe = Invoke-CtlJson @('provider', 'probe', 'codex')
     $desktopCodex = [pscustomobject]@{ Path = [string]$probe.executable; Version = [string]$probe.version }
     if ([string]::IsNullOrWhiteSpace($desktopCodex.Path) -or -not (Test-Path -LiteralPath $desktopCodex.Path -PathType Leaf)) {
