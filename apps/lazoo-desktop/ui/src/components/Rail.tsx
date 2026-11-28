@@ -6,6 +6,7 @@ import {
   Plus,
   Search,
   Settings,
+  Workflow,
 } from "lucide-react";
 import { useState, type FormEvent, type ReactNode } from "react";
 
@@ -21,6 +22,7 @@ import {
   Kbd,
   ProjectGlyph,
 } from "./primitives";
+import { LogoMark } from "./Logo";
 
 /** How many conversations an open project shows before "Show all". */
 const PROJECT_PREVIEW = 5;
@@ -70,13 +72,19 @@ export function Rail() {
   const home = state.spaceConversations.home ?? [];
   const homeLoaded = "home" in state.spaceConversations;
   const onLauncher = route.kind === "launcher";
+  // The mark's cursor blinks while any conversation the sidebar knows is active.
+  const working = Object.values(state.spaceConversations).some((rows) =>
+    rows.some((row) => row.marker === "active"),
+  );
 
   return (
     <aside className="rail" aria-label="Spaces and conversations">
       <div className="rail__inner">
         <div className="rail__head">
           <span className="wordmark">
-            <span className="wordmark__mark" aria-hidden="true" />
+            <span className="wordmark__glyph">
+              <LogoMark size={16} live={working} />
+            </span>
             lazoo
           </span>
           <Button
@@ -122,6 +130,12 @@ export function Rail() {
                 </span>
               ) : null
             }
+          />
+          <RailButton
+            icon={<Workflow size={15} aria-hidden="true" />}
+            label="Workflows"
+            current={route.kind === "workflows"}
+            onClick={() => store.navigate({ kind: "workflows", id: null })}
           />
         </nav>
 

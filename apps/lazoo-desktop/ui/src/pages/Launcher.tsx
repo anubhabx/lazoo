@@ -14,6 +14,7 @@ import {
   Dot,
   Skeleton,
   StatusWord,
+  Empty,
 } from "../components/primitives";
 import { useAppState, useStore } from "../lib/context";
 import type { AuthorityMode, LeadCandidate } from "../lib/protocol";
@@ -280,7 +281,9 @@ export function LauncherPage() {
                     size={20}
                     status={availabilityTone(lead)}
                   />
-                  <span className="member__name">{lead.name}</span>
+                  <span className="member__name" title={lead.name}>
+                    {lead.name}
+                  </span>
                   <span className="member__role">{lead.role ?? ""}</span>
                   <span className="member__meta">
                     {providerLabel(lead.provider)}
@@ -336,7 +339,9 @@ export function LauncherPage() {
                     <span className="recent__marker">
                       {marker ? <Dot tone={marker.tone} /> : null}
                     </span>
-                    <span className="recent__title truncate">{row.title}</span>
+                    <span className="recent__title truncate" title={row.title}>
+                      {row.title}
+                    </span>
                     <span className="recent__meta">
                       {row.leadName ?? ""}
                       {row.workers.total
@@ -350,6 +355,20 @@ export function LauncherPage() {
                 );
               })}
             </div>
+          </section>
+        ) : space && state.conversations ? (
+          <section
+            className="launcher__section"
+            aria-label="Recent conversations"
+          >
+            <header className="launcher__section-head">
+              <h2>Recent in {space.displayName}</h2>
+            </header>
+            <Empty
+              compact
+              title="No conversations yet"
+              detail="Describe the work above; the conversation is listed here."
+            />
           </section>
         ) : null}
       </div>

@@ -11,6 +11,10 @@ import {
   Segmented,
   StatusWord,
   Switch,
+  Page,
+  PageHeader,
+  Section,
+  Skeleton,
 } from "../components/primitives";
 import { useBridge, useStore } from "../lib/context";
 import type { RpcFailure } from "../lib/protocol";
@@ -58,20 +62,34 @@ const CLEANING_HELP: Record<Cleaning, string> = {
 
 const PREVIEW_TEXT = "This is how Lazoo will read replies aloud.";
 
+function VoiceSkeleton() {
+  return (
+    <div className="list" aria-busy="true">
+      {[0, 1, 2].map((index) => (
+        <div key={index} className="item">
+          <Skeleton width={8} height={8} radius={4} />
+          <div className="item__main">
+            <Skeleton width="30%" height={12} />
+            <Skeleton width="60%" height={10} />
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 export function VoicePage() {
   const { state, stateError } = useVoiceState();
   return (
-    <>
-      <h2>Voice</h2>
-      <p className="settings__lede">
-        Dictate into a conversation, hear replies read aloud, or dictate into
-        any app with a global hotkey. Voice only produces text; it never answers
-        an approval.
-      </p>
+    <Page>
+      <PageHeader
+        title="Voice"
+        description="Dictate into a conversation, hear replies read aloud, or dictate into any app with a global hotkey. Voice only produces text; it never answers an approval."
+      />
       <Failure error={stateError} />
       {state?.microphoneBlocked ? <MicrophoneBlocked /> : null}
-      {state ? <VoiceForm state={state} /> : null}
-    </>
+      {state ? <VoiceForm state={state} /> : <VoiceSkeleton />}
+    </Page>
   );
 }
 
@@ -98,7 +116,7 @@ function MicrophoneBlocked() {
   const bridge = useBridge();
   return (
     <section
-      className="settings__group voice-blocked"
+      className="page-section voice-blocked"
       role="note"
       aria-label="Microphone blocked"
     >
@@ -112,10 +130,7 @@ function MicrophoneBlocked() {
             microphone in Privacy &amp; security, then come back.
           </span>
         </span>
-        <Button
-          size="sm"
-          onClick={() => void bridge.voice.openMicrophoneSettings()}
-        >
+        <Button onClick={() => void bridge.voice.openMicrophoneSettings()}>
           Open Windows settings
         </Button>
       </div>
@@ -207,11 +222,11 @@ function VoiceForm({ state }: { state: VoiceState }) {
 
   return (
     <>
-      <section className="settings__group" aria-label="Speech to text">
-        <div className="settings__title-row">
-          <h3>Speech to text</h3>
-          {sttExternal ? <External host={host} /> : null}
-        </div>
+      <Section
+        label="Speech to text"
+        title="Speech to text"
+        actions={sttExternal ? <External host={host} /> : null}
+      >
         <div className="form-grid">
           <Field label="Engine" htmlFor="voice-stt-engine">
             <select
@@ -273,13 +288,13 @@ function VoiceForm({ state }: { state: VoiceState }) {
             }
           />
         ) : null}
-      </section>
+      </Section>
 
-      <section className="settings__group" aria-label="Cleaning">
-        <div className="settings__title-row">
-          <h3>Cleaning</h3>
-          {cleaningExternal ? <External host={host} /> : null}
-        </div>
+      <Section
+        label="Cleaning"
+        title="Cleaning"
+        actions={cleaningExternal ? <External host={host} /> : null}
+      >
         <Segmented<Cleaning>
           name="voice-cleaning"
           label="Transcript cleaning"
@@ -292,13 +307,13 @@ function VoiceForm({ state }: { state: VoiceState }) {
           onChange={(cleaning) => edit((value) => ({ ...value, cleaning }))}
         />
         <p className="meta voice-help">{CLEANING_HELP[draft.cleaning]}</p>
-      </section>
+      </Section>
 
-      <section className="settings__group" aria-label="Text to speech">
-        <div className="settings__title-row">
-          <h3>Text to speech</h3>
-          {ttsExternal ? <External host={host} /> : null}
-        </div>
+      <Section
+        label="Text to speech"
+        title="Text to speech"
+        actions={ttsExternal ? <External host={host} /> : null}
+      >
         <div className="form-grid">
           <Field label="Engine" htmlFor="voice-tts-engine">
             <select
@@ -372,7 +387,6 @@ function VoiceForm({ state }: { state: VoiceState }) {
               {draft.tts.rate.toFixed(1)}×
             </span>
             <Button
-              size="sm"
               onClick={() => {
                 voice.stopSpeaking();
                 voice.speak(PREVIEW_TEXT, draft.tts);
@@ -387,13 +401,13 @@ function VoiceForm({ state }: { state: VoiceState }) {
             Preview with an endpoint voice uses the saved endpoint settings.
           </p>
         ) : null}
-      </section>
+      </Section>
 
-      <section className="settings__group" aria-label="Endpoint">
-        <div className="settings__title-row">
-          <h3>Endpoint</h3>
-          {endpointUsed && external ? <External host={host} /> : null}
-        </div>
+      <Section
+        label="Endpoint"
+        title="Endpoint"
+        actions={endpointUsed && external ? <External host={host} /> : null}
+      >
         {endpointUsed || showEndpoint ? (
           <EndpointFields
             draft={draft}
@@ -408,15 +422,14 @@ function VoiceForm({ state }: { state: VoiceState }) {
               computer. Used when speech to text, text to speech or cleaning is
               set to an endpoint.
             </p>
-            <Button size="sm" onClick={() => setShowEndpoint(true)}>
+            <Button onClick={() => setShowEndpoint(true)}>
               Configure endpoint
             </Button>
           </>
         )}
-      </section>
+      </Section>
 
-      <section className="settings__group" aria-label="Privacy">
-        <h3>Privacy</h3>
+      <Section label="Privacy" title="Privacy">
         <div className="voice-row">
           <span className="voice-row__text">
             <span className="voice-row__label">Allow external processing</span>
@@ -439,10 +452,9 @@ function VoiceForm({ state }: { state: VoiceState }) {
             will be refused until this is on.
           </p>
         ) : null}
-      </section>
+      </Section>
 
-      <section className="settings__group" aria-label="Push-to-talk">
-        <h3>Push-to-talk</h3>
+      <Section label="Push-to-talk" title="Push-to-talk">
         <div className="form-grid">
           <Field
             label="Hotkey"
@@ -508,7 +520,7 @@ function VoiceForm({ state }: { state: VoiceState }) {
             }
           />
         </div>
-      </section>
+      </Section>
 
       {notice ? (
         <p className="voice-warning" role="status">
@@ -656,7 +668,6 @@ function WhisperModels({
               <span className="voice-model__action">
                 {isInstalled ? (
                   <Button
-                    size="sm"
                     variant="ghost"
                     aria-label={`Remove ${entry.model}`}
                     disabled={installing !== null}
@@ -666,7 +677,6 @@ function WhisperModels({
                   </Button>
                 ) : (
                   <Button
-                    size="sm"
                     aria-label={`Install ${entry.model}`}
                     loading={busy}
                     disabled={installing !== null}
@@ -697,7 +707,6 @@ function WhisperModels({
             Models and the speech engine are stored on this computer.
           </span>
           <Button
-            size="sm"
             variant={confirmAll ? "danger" : "ghost"}
             disabled={installing !== null}
             onClick={() =>

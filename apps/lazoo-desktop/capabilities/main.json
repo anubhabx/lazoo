@@ -30,6 +30,8 @@
     "allow-voice-insert-text",
     "allow-voice-copy-text",
     "allow-voice-overlay",
-    "allow-voice-open-microphone-settings"
+    "allow-voice-open-microphone-settings",
+    "allow-workflows-load",
+    "allow-workflows-save"
   ]
 }

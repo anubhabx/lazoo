@@ -1,8 +1,15 @@
 // Development only: a scripted daemon so the UI can be looked at in a browser
 // (`vite dev` + `?mock=1`). Never bundled into production (guarded by DEV).
 
-import type { Bridge, TerminalStreamHandle, VoiceBridge } from "./bridge";
+import type {
+  Bridge,
+  TerminalStreamHandle,
+  VoiceBridge,
+  WorkflowsBridge,
+} from "./bridge";
 import { createExtensionHandlers } from "./devExtensions";
+import { TEMPLATES } from "./workflows/controller";
+import type { WorkflowDocument } from "./workflows/types";
 import type {
   AccountUsageBucket,
   AccountUsageResult,
@@ -255,7 +262,28 @@ export function createDevBridge(): Bridge {
         nextBefore: null,
       }),
       "native.trust.list": () => trust,
-      "turn.show": () => turnRecord(),
+      "turn.show": (params) =>
+        String(params.id).startsWith("wfturn-")
+          ? // A workflow step's turn: finished at once so "Run now" completes in the mock.
+            turnRecord({
+              id: String(params.id),
+              state: "completed",
+              completedAt: new Date().toISOString(),
+              events: [
+                {
+                  sequence: 1,
+                  kind: "text-delta",
+                  provider: "codex",
+                  nativeSessionId: null,
+                  nativeTurnId: null,
+                  payload: {
+                    text: "Yesterday: the retry budget landed and two tests were fixed. The store refactor is still in progress. Nothing needs your attention.",
+                  },
+                  createdAt: new Date().toISOString(),
+                },
+              ],
+            })
+          : turnRecord(),
       "session.terminal.status": (params) =>
         params.id === SESSION_ID
           ? terminalStatus({ viewTerminal: liveTerminal })
@@ -281,6 +309,12 @@ export function createDevBridge(): Bridge {
         return { ok: true };
       },
       "turn.submit": (params) => {
+        if (String(params.idempotencyKey).startsWith("wf-")) {
+          // Workflow runs do not touch the scripted conversation.
+          return {
+            turn: { id: `wfturn-${(sequence += 1)}`, text: params.text },
+          };
+        }
         turns = [
           ...turns,
           turnSummary({
@@ -472,6 +506,7 @@ export function createDevBridge(): Bridge {
       return undefined;
     },
     voice: mockVoice(),
+    workflows: mockWorkflows(leads[0]?.employeeId ?? null),
     window: {
       // `?mock=1&overlay=1` shows the dictation pill cycling through its states.
       label: window.location.search.includes("overlay")
@@ -495,6 +530,104 @@ const WHISPER_BYTES: Record<WhisperModel, number> = {
 };
 
 /** Voice commands against in-memory state: revisions, installs, a canned transcript. */
+/** In memory, with revision semantics like the desktop, seeded so the UI has something to show. */
+function mockWorkflows(employeeId: string | null): WorkflowsBridge {
+  const minutesAgo = (minutes: number) =>
+    new Date(Date.now() - minutes * 60_000).toISOString();
+  const template = TEMPLATES[0]!;
+  const nodes = structuredClone(template.nodes);
+  for (const node of nodes) {
+    if (node.kind === "agent.prompt") {
+      (node.config as { employeeId: string | null }).employeeId = employeeId;
+    }
+  }
+  const run = (
+    id: string,
+    startedMinutesAgo: number,
+    failed: boolean,
+  ): WorkflowDocument["runs"][number] => ({
+    id,
+    workflowId: "wf-mock-daily",
+    trigger: "schedule",
+    triggerNodeId: "schedule",
+    status: failed ? "failed" : "succeeded",
+    startedAt: minutesAgo(startedMinutesAgo),
+    finishedAt: minutesAgo(startedMinutesAgo - 2),
+    steps: [
+      {
+        nodeId: "schedule",
+        status: "succeeded",
+        startedAt: minutesAgo(startedMinutesAgo),
+        finishedAt: minutesAgo(startedMinutesAgo),
+        output: null,
+        error: null,
+        conversationId: null,
+      },
+      {
+        nodeId: "agent",
+        status: failed ? "failed" : "succeeded",
+        startedAt: minutesAgo(startedMinutesAgo),
+        finishedAt: minutesAgo(startedMinutesAgo - 2),
+        output: failed
+          ? null
+          : "Two fixes landed; the store refactor is in progress.",
+        error: failed ? "No reply within 30 minutes." : null,
+        conversationId: failed ? null : CONVERSATION_ID,
+      },
+      ...(failed
+        ? []
+        : [
+            {
+              nodeId: "notify",
+              status: "succeeded" as const,
+              startedAt: minutesAgo(startedMinutesAgo - 2),
+              finishedAt: minutesAgo(startedMinutesAgo - 2),
+              output: "Two fixes landed; the store refactor is in progress.",
+              error: null,
+              conversationId: null,
+            },
+          ]),
+    ],
+  });
+  let revision = 1;
+  let document: unknown = {
+    version: 1,
+    workflows: [
+      {
+        id: "wf-mock-daily",
+        name: template.name,
+        enabled: true,
+        nodes,
+        edges: structuredClone(template.edges),
+        createdAt: minutesAgo(60 * 24 * 3),
+        updatedAt: minutesAgo(60 * 24 * 3),
+      },
+    ],
+    runs: [
+      run("run-mock-2", 60 * 24 + 5, true),
+      run("run-mock-1", 60 * 48 + 5, false),
+    ],
+    lastFired: { "wf-mock-daily:schedule": minutesAgo(60) },
+  } satisfies WorkflowDocument;
+  return {
+    async load() {
+      return { revision, document: structuredClone(document) };
+    },
+    async save(next, expected) {
+      if (expected !== revision) {
+        throw {
+          code: "LZ-WORKFLOWS-CONFLICT",
+          message:
+            "The workflows changed elsewhere. Reload and apply your change again.",
+        };
+      }
+      document = structuredClone(next);
+      revision += 1;
+      return { revision };
+    },
+  };
+}
+
 function mockVoice(): VoiceBridge {
   const installed = new Set<WhisperModel>(["base.en"]);
   let binary = true;

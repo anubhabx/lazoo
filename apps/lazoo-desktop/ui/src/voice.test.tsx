@@ -589,14 +589,14 @@ describe("Voice settings", () => {
     return { user, ...mounted };
   }
 
-  test("is a section after Accounts", async () => {
+  test("is a section in the Workspace group, after General", async () => {
     const bridge = scripted();
     await openSettings(bridge);
     const nav = screen.getByRole("navigation", { name: "Settings sections" });
     const labels = within(nav)
       .getAllByRole("button")
       .map((button) => button.textContent);
-    expect(labels.indexOf("Voice")).toBe(labels.indexOf("Accounts") + 1);
+    expect(labels.indexOf("Voice")).toBe(labels.indexOf("General") + 1);
     expect(screen.getByRole("button", { name: "Voice" })).toHaveAttribute(
       "aria-current",
       "page",

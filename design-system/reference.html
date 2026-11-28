@@ -1,0 +1,216 @@
+<!doctype html>
+<html lang="en" data-theme="lazoo-dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lazoo design system reference</title>
+<link rel="stylesheet" href="./tokens.css">
+<link rel="stylesheet" href="../apps/lazoo-desktop/ui/src/styles/components.css">
+<!-- Fonts: no font files are copied here. --lz-font-ui and --lz-font-technical list system
+     fallbacks (Segoe UI, Cascadia Mono), so the page renders with those unless Inter and
+     IBM Plex Mono are installed. Spacing and colour are exact; glyph widths may differ. -->
+<style>
+  /* Page-only layout; every specimen uses the real classes from components.css. */
+  :root {
+    --lz-dither-25: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='4' height='4' shape-rendering='crispEdges'%3E%3Crect width='2' height='2' fill='%23afb8c5' fill-opacity='.5'/%3E%3C/svg%3E");
+    --lz-dither-50: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='4' height='4' shape-rendering='crispEdges'%3E%3Crect width='2' height='2' fill='%23afb8c5' fill-opacity='.5'/%3E%3Crect x='2' y='2' width='2' height='2' fill='%23afb8c5' fill-opacity='.5'/%3E%3C/svg%3E");
+    --text-body: var(--lz-text-md); --leading-body: var(--lz-leading-md);
+    --text-meta: var(--lz-text-sm); --leading-meta: var(--lz-leading-sm);
+    --text-micro: var(--lz-text-xs); --leading-micro: var(--lz-leading-xs);
+    --wash: var(--lz-color-surface-hover); --wash-strong: var(--lz-color-surface-active);
+    --ease: var(--lz-ease-out); --t-fast: var(--lz-duration-fast);
+    --row-pad-x: var(--lz-space-16); --row-pad-y: var(--lz-space-12); --row-min: 52px;
+    --control: var(--lz-control-h-md);
+  }
+  *, *::before, *::after { box-sizing: border-box; }
+  body { margin: 0; background: var(--lz-color-window); color: var(--lz-color-text-primary);
+    font: var(--lz-text-md)/var(--lz-leading-md) var(--lz-font-ui); font-feature-settings: var(--lz-font-features);
+    letter-spacing: var(--lz-tracking-tight); -webkit-font-smoothing: antialiased; }
+  button, input, select, textarea { font: inherit; color: inherit; letter-spacing: inherit; }
+  button { background: none; border: 0; padding: 0; margin: 0; cursor: default; text-align: left; }
+  code, kbd { font-family: var(--lz-font-technical); font-size: var(--lz-text-sm); letter-spacing: 0; }
+  :focus { outline: none; }
+  :focus-visible { outline: 2px solid var(--lz-color-border-focus); outline-offset: 1px; }
+  .layout { display: grid; grid-template-columns: 220px minmax(0, 920px); align-items: start; }
+  .nav { position: sticky; top: 0; display: grid; gap: 1px; align-content: start; height: 100vh;
+    padding: var(--lz-space-24) var(--lz-space-08); border-right: 1px solid var(--lz-color-border-subtle); }
+  .nav b { display: flex; align-items: center; gap: 8px; padding: 0 8px 16px; font-size: var(--lz-text-md); }
+  .nav a { display: flex; align-items: center; height: 28px; padding: 0 8px; border-radius: var(--lz-radius-sm);
+    color: var(--lz-color-text-secondary); text-decoration: none; }
+  .nav a:hover { background: var(--wash); color: var(--lz-color-text-primary); }
+  main { padding: var(--lz-space-32); }
+  main > section { margin-bottom: var(--lz-space-48); scroll-margin-top: var(--lz-space-32); }
+  h1 { margin: 0 0 4px; font-size: var(--lz-headline-page); line-height: var(--lz-leading-headline-page);
+    letter-spacing: var(--lz-tracking-headline); }
+  h2 { margin: 0 0 4px; font-size: var(--lz-text-md); font-weight: var(--lz-weight-semibold); }
+  h3 { margin: var(--lz-space-24) 0 var(--lz-space-08); color: var(--lz-color-text-muted); font-size: var(--lz-text-xs);
+    font-weight: var(--lz-weight-medium); letter-spacing: var(--lz-tracking-label); text-transform: uppercase; }
+  .lede { margin: 0 0 var(--lz-space-16); max-width: var(--lz-prose-max); color: var(--lz-color-text-muted); }
+  .demo { display: flex; flex-wrap: wrap; align-items: center; gap: var(--lz-space-12); }
+  .demo.col { display: grid; justify-items: start; }
+  .swatches { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: var(--lz-space-08); }
+  .sw { display: flex; align-items: center; gap: 10px; min-width: 0; padding: 6px; border: 1px solid var(--lz-color-border-subtle);
+    border-radius: var(--lz-radius-md); font-size: var(--lz-text-xs); line-height: 14px; }
+  .sw i { flex: none; width: 28px; height: 28px; border: 1px solid var(--lz-color-border); border-radius: var(--lz-radius-sm); }
+  .sw span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .sw em { display: block; color: var(--lz-color-text-muted); font-style: normal; font-family: var(--lz-font-technical); }
+  .brand { display: grid; grid-template-columns: 1fr 1fr; gap: var(--lz-space-12); }
+  .brand > div { display: flex; align-items: center; gap: var(--lz-space-24); padding: var(--lz-space-24); border: 1px solid var(--lz-color-border); border-radius: var(--lz-radius-xl); }
+  .brand .on-light { background: #f4f6fa; border-color: #d5dae3; }
+  .brand img { display: block; height: 40px; }
+  .brand img.lock { height: 28px; }
+  .type-row, .scale-row { display: grid; grid-template-columns: 180px minmax(0, 1fr); align-items: baseline; gap: 16px;
+    padding: 8px 0; border-bottom: 1px solid var(--lz-color-border-subtle); }
+  .scale-row { align-items: center; } .scale-row div { height: 12px; background: var(--lz-color-accent); }
+  .type-row code, .scale-row code { color: var(--lz-color-text-muted); }
+  .radius { width: 56px; height: 56px; border: 1px solid var(--lz-color-border-strong); background: var(--lz-color-surface); }
+  .frame { padding: var(--lz-space-24); border: 1px dashed var(--lz-color-border); border-radius: var(--lz-radius-xl); }
+  .demo-row { display: flex; align-items: center; justify-content: space-between; gap: 16px; min-height: var(--row-min);
+    margin: 0 calc(-1 * var(--lz-space-16)); padding: var(--row-pad-y) var(--row-pad-x); border-top: 1px solid var(--lz-color-border-subtle); }
+  .demo-row span { color: var(--lz-color-text-muted); font-size: var(--lz-text-sm); }
+  @media (max-width: 760px) { .layout { grid-template-columns: 1fr; } .nav { display: none; } .brand { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+<div class="layout">
+<nav class="nav" aria-label="Sections">
+  <b><img src="./brand/lazoo-glyph-on-dark.svg" alt="" width="16" height="16"> Design system 1.0</b>
+  <a href="#brand">Brand</a><a href="#colour">Colour</a><a href="#type">Typography</a><a href="#space">Space and shape</a>
+  <a href="#buttons">Buttons</a><a href="#forms">Fields and controls</a><a href="#status">Status and tags</a>
+  <a href="#groups">Cards, rows, tables</a><a href="#empty">Empty state</a><a href="#page">Page and section</a>
+</nav>
+<main>
+<h1>Lazoo design system reference</h1>
+<p class="lede">Every specimen uses the real classes from components.css and the live values from tokens.css. Edit either file and reload.</p>
+
+<section id="brand"><h2>Brand</h2>
+  <p class="lede">An L and a cursor block on a 16-unit grid. Clear space is 2 grid units; minimum size is 16 px.</p>
+  <div class="brand">
+    <div style="background: var(--lz-color-window)"><img src="./brand/lazoo-mark.svg" alt="Lazoo mark"><img src="./brand/lazoo-glyph-on-dark.svg" alt="Glyph on dark"><img class="lock" src="./brand/lazoo-lockup-on-dark.svg" alt="Lockup on dark"></div>
+    <div class="on-light"><img src="./brand/lazoo-mark.svg" alt="Lazoo mark"><img src="./brand/lazoo-glyph-on-light.svg" alt="Glyph on light"><img class="lock" src="./brand/lazoo-lockup-on-light.svg" alt="Lockup on light"></div>
+  </div>
+</section>
+
+<section id="colour"><h2>Colour</h2>
+  <p class="lede">Components use the semantic roles, never the primitives. Values are read from the CSS custom properties.</p>
+  <div id="sw-surface"></div><div id="sw-text"></div><div id="sw-border"></div><div id="sw-accent"></div>
+  <div id="sw-status"></div><div id="sw-provider"></div><div id="sw-slate"></div><div id="sw-iris"></div>
+</section>
+
+<section id="type"><h2>Typography</h2>
+  <p class="lede">Inter for the interface, IBM Plex Mono only for technical strings.</p>
+  <div class="type-row"><code>--lz-headline-page 20/28</code><span style="font-size:var(--lz-headline-page);line-height:var(--lz-leading-headline-page);font-weight:600;letter-spacing:var(--lz-tracking-headline)">Page title</span></div>
+  <div class="type-row"><code>--lz-text-lg 15/22</code><span style="font-size:var(--lz-text-lg);line-height:var(--lz-leading-lg);font-weight:600">Dialog title</span></div>
+  <div class="type-row"><code>--lz-text-md 13/19</code><span>Body text and default controls, the size most of the interface uses.</span></div>
+  <div class="type-row"><code>--lz-text-sm 12/16</code><span style="font-size:var(--lz-text-sm);line-height:var(--lz-leading-sm);color:var(--lz-color-text-muted)">Descriptions, hints and field labels.</span></div>
+  <div class="type-row"><code>--lz-text-xs 11/14</code><span style="font-size:var(--lz-text-xs);line-height:var(--lz-leading-xs);letter-spacing:var(--lz-tracking-label);text-transform:uppercase;color:var(--lz-color-text-muted)">Table heads and group labels</span></div>
+  <div class="type-row"><code>--lz-font-technical</code><span style="font-family:var(--lz-font-technical);font-size:var(--lz-text-sm)">C:\workspace\lazoo\.codex\session-01.json</span></div>
+</section>
+
+<section id="space"><h2>Space and shape</h2>
+  <h3>Spacing tokens</h3><div id="space-scale"></div>
+  <h3>Radius tokens</h3><div class="demo" id="radius-scale"></div>
+</section>
+
+<section id="buttons"><h2>Buttons</h2>
+  <p class="lede">One primary button per view. Disabled controls drop to 40% opacity.</p>
+  <h3>Variants (md)</h3>
+  <div class="demo"><button class="btn">Default</button><button class="btn btn--primary">Primary</button><button class="btn btn--accent">Accent</button><button class="btn btn--ghost">Ghost</button><button class="btn btn--danger">Danger</button></div>
+  <h3>Sizes</h3>
+  <div class="demo"><button class="btn btn--sm">Small 24</button><button class="btn">Medium 28</button><button class="btn btn--lg">Large 32</button>
+    <button class="btn btn--icon btn--ghost" aria-label="More"><svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><rect x="2" y="7" width="2" height="2"/><rect x="7" y="7" width="2" height="2"/><rect x="12" y="7" width="2" height="2"/></svg></button></div>
+  <h3>Disabled and loading</h3>
+  <div class="demo"><button class="btn" disabled>Default</button><button class="btn btn--primary" disabled>Primary</button><button class="btn btn--accent" disabled>Accent</button><button class="btn btn--ghost" disabled>Ghost</button><button class="btn btn--danger" disabled>Danger</button>
+    <button class="btn is-loading" disabled aria-busy="true"><span class="spinner" style="width:12px;height:12px"></span>Saving</button></div>
+  <h3>Keys</h3>
+  <div class="demo"><span class="kbd-group"><kbd class="kbd">Ctrl</kbd><kbd class="kbd">K</kbd></span><span class="kbd-group"><kbd class="kbd">Alt</kbd><kbd class="kbd">&larr;</kbd></span></div>
+</section>
+
+<section id="forms"><h2>Fields and controls</h2>
+  <div class="demo" style="align-items:start">
+    <div class="field" style="width:240px"><label class="field__label" for="f1">Name</label><input class="input" id="f1" value="Desktop acceptance"><span class="field__hint">Shown in the sidebar.</span></div>
+    <div class="field" style="width:240px"><label class="field__label" for="f2">Harness</label><select class="select" id="f2"><option>Claude Code</option><option>Codex</option></select></div>
+    <div class="field" style="width:240px"><label class="field__label" for="f3">Notes</label><textarea class="textarea" id="f3" rows="3" placeholder="Placeholder text"></textarea></div>
+    <div class="field" style="width:240px"><label class="field__label" for="f4">Disabled</label><input class="input" id="f4" value="Read only" disabled></div>
+  </div>
+  <h3>Segmented, switch, checkbox</h3>
+  <div class="demo">
+    <div class="segmented" role="group" aria-label="Range"><button aria-pressed="true"><span class="segmented__thumb"></span><span class="segmented__label">7 days</span></button><button aria-pressed="false"><span class="segmented__label">24 hours</span></button></div>
+    <button class="switch" role="switch" aria-checked="true" aria-label="On"><span class="switch__thumb"></span></button>
+    <button class="switch" role="switch" aria-checked="false" aria-label="Off"><span class="switch__thumb"></span></button>
+    <button class="switch" role="switch" aria-checked="false" aria-label="Disabled" disabled><span class="switch__thumb"></span></button>
+    <input type="checkbox" checked aria-label="Checked"><input type="checkbox" aria-label="Unchecked">
+  </div>
+</section>
+
+<section id="status"><h2>Status and tags</h2>
+  <p class="lede">A status dot always travels with its word.</p>
+  <div class="demo">
+    <span class="status-word"><span class="dot" data-tone="running"></span><span>Running</span></span>
+    <span class="status-word"><span class="dot" data-tone="attention"></span><span>Needs you</span></span>
+    <span class="status-word"><span class="dot" data-tone="blocked"></span><span>Blocked</span></span>
+    <span class="status-word"><span class="dot" data-tone="failed"></span><span>Failed</span></span>
+    <span class="status-word"><span class="dot" data-tone="completed"></span><span>Completed</span></span>
+    <span class="status-word"><span class="dot" data-tone="suspended"></span><span>Suspended</span></span>
+    <span class="status-word"><span class="dot" data-tone="dormant"></span><span>Dormant</span></span>
+  </div>
+  <h3>Badges and chips</h3>
+  <div class="demo"><span class="badge">neutral</span><span class="badge" data-tone="accent">accent</span><span class="badge" data-tone="success">success</span><span class="badge" data-tone="warning">warning</span><span class="badge" data-tone="danger">danger</span>
+    <span class="chip">Chip</span><span class="chip chip--accent">Accent chip</span></div>
+  <h3>Meter</h3>
+  <div class="demo col" style="width:240px"><span class="meter" style="width:100%"><span class="meter__fill" style="width:40%"></span></span><span class="meter" style="width:100%"><span class="meter__fill" data-level="high" style="width:82%"></span></span><span class="meter" style="width:100%"><span class="meter__fill" data-level="full" style="width:100%"></span></span></div>
+</section>
+
+<section id="groups"><h2>Cards, rows and tables</h2>
+  <p class="lede">One treatment: a hairline, the xl radius and the surface colour. Rows divide with the subtle hairline.</p>
+  <div class="card"><h3 style="margin:0;color:inherit;font-size:var(--lz-text-md);text-transform:none;letter-spacing:0">Card title</h3>
+    <dl class="facts"><dt>Harness</dt><dd>Codex</dd><dt>Path</dt><dd class="mono">C:\workspace\lazoo</dd></dl>
+    <div style="margin-bottom:calc(-1 * var(--lz-space-16))"><div class="demo-row"><div>Work<br><span>native profile</span></div><span class="status-word"><span class="dot" data-tone="completed"></span><span>Ready</span></span></div>
+    <div class="demo-row"><div>Personal<br><span>native profile</span></div><span class="status-word"><span class="dot" data-tone="failed"></span><span>Exhausted</span></span></div></div>
+  </div>
+  <h3>Table</h3>
+  <div class="table-wrap"><table class="table"><thead><tr><th>Account</th><th class="num">Sessions</th><th class="num">Tokens</th><th>Path</th></tr></thead>
+    <tbody><tr><td>Work</td><td class="num">17</td><td class="num">2.5M</td><td class="mono">~/.codex/work</td></tr><tr><td>Personal</td><td class="num">10</td><td class="num">1.2M</td><td class="mono">~/.codex/personal</td></tr></tbody></table></div>
+</section>
+
+<section id="empty"><h2>Empty state</h2>
+  <p class="lede">Top-left, never centred: a 32 px dithered tile, a title, one muted line, at most one action.</p>
+  <div class="frame"><div class="empty" style="padding-top:0"><span class="empty__field"></span><span class="empty__title">Nothing resolved yet</span><span class="empty__detail">Resolved requests appear here.</span><span class="empty__action"><button class="btn btn--sm">Show open</button></span></div></div>
+</section>
+
+<section id="page"><h2>Page header and section</h2>
+  <p class="lede">The frame pads by 32 px and holds a column of at most 920 px. This demo uses the same markup without the scrolling frame.</p>
+  <div class="frame">
+    <header class="page-header"><div class="page-header__row"><h1 class="page-header__title">Accounts</h1><div class="page-header__actions"><button class="btn btn--primary">New account</button></div></div>
+      <p class="page-header__description">Which account pays for each agent, and how close it is to its limit.</p></header>
+    <section class="page-section"><div class="page-section__head"><div class="page-section__text"><h3 class="page-section__title" style="text-transform:none;letter-spacing:0;color:inherit;margin:0;font-size:var(--text-body)">Codex accounts</h3><p class="page-section__description">In routing order</p></div><div class="page-section__actions"><button class="btn btn--sm">Verify routing</button></div></div>
+      <div class="card">Section content sits 12 px under its head; sections sit 32 px apart.</div></section>
+  </div>
+</section>
+</main>
+</div>
+<script>
+  // Swatches and scales read the live custom properties, so they cannot drift from tokens.css.
+  const root = getComputedStyle(document.documentElement);
+  const val = (n) => root.getPropertyValue(n).trim();
+  const swatches = (id, title, names) => {
+    const box = document.getElementById(id);
+    box.innerHTML = '<h3>' + title + '</h3><div class="swatches">' + names.map((n) =>
+      '<div class="sw"><i style="background:var(' + n + ')"></i><span>' + n.slice(5) + '<em>' + val(n) + '</em></span></div>').join('') + '</div>';
+  };
+  const c = (list) => list.map((n) => '--lz-color-' + n);
+  swatches('sw-surface', 'Surface ladder', c(['canvas', 'window', 'background', 'surface', 'surface-raised', 'surface-hover', 'surface-selected']));
+  swatches('sw-text', 'Text roles', c(['text-primary', 'text-secondary', 'text-muted', 'text-disabled', 'text-accent']));
+  swatches('sw-border', 'Borders', c(['border-subtle', 'border', 'border-strong', 'border-focus']));
+  swatches('sw-accent', 'Accent and primary', c(['accent', 'accent-strong', 'accent-wash', 'accent-border', 'primary', 'on-primary']));
+  swatches('sw-status', 'Status', ['running', 'healthy', 'attention', 'waiting', 'blocked', 'failed', 'paused', 'dormant', 'degraded', 'configured'].map((n) => '--lz-status-' + n));
+  swatches('sw-provider', 'Harness hues', ['claude-code', 'codex', 'opencode', 'antigravity', 'github-copilot', 'grok-build'].map((n) => '--lz-provider-' + n));
+  swatches('sw-slate', 'Slate primitives', ['000', '050', '100', '150', '200', '250', '300', '350', '400', '500', '600', '700', '800', '900', '950'].map((n) => '--lz-slate-' + n));
+  swatches('sw-iris', 'Iris primitives', ['300', '400', '500', '600', '700'].map((n) => '--lz-iris-' + n));
+  document.getElementById('space-scale').innerHTML = ['04', '06', '08', '10', '12', '16', '20', '24', '32', '40', '48'].map((n) =>
+    '<div class="scale-row"><code>--lz-space-' + n + ' ' + val('--lz-space-' + n) + '</code><div style="width:var(--lz-space-' + n + ')"></div></div>').join('');
+  document.getElementById('radius-scale').innerHTML = ['xs', 'sm', 'md', 'xl', '3xl'].map((n) =>
+    '<div><div class="radius" style="border-radius:var(--lz-radius-' + n + ')"></div><code style="font-size:11px">' + n + ' ' + val('--lz-radius-' + n) + '</code></div>').join('');
+</script>
+</body>
+</html>

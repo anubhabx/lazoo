@@ -85,7 +85,9 @@ fn main_capability_allows_only_core_window_and_desktop_bridge_commands() {
             "allow-voice-insert-text",
             "allow-voice-copy-text",
             "allow-voice-overlay",
-            "allow-voice-open-microphone-settings"
+            "allow-voice-open-microphone-settings",
+            "allow-workflows-load",
+            "allow-workflows-save"
         ])
     );
 }

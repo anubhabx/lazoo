@@ -22,10 +22,13 @@ import { installDitherFields } from "./lib/dither";
 import { TerminalManager } from "./lib/terminals";
 import { VoiceController } from "./lib/voice/controller";
 import { VoiceProvider } from "./lib/voice/context";
+import { WorkflowsProvider } from "./lib/workflows/context";
+import { WorkflowsController } from "./lib/workflows/controller";
 import { ConversationPage } from "./pages/Conversation";
 import { InboxPage } from "./pages/Inbox";
 import { LauncherPage } from "./pages/Launcher";
 import { SettingsPage } from "./pages/Settings";
+import { WorkflowsPage } from "./pages/Workflows";
 
 /** The dictation overlay is its own window; it renders the pill and nothing else. */
 export function App({ store, bridge }: { store: Store; bridge: Bridge }) {
@@ -45,6 +48,15 @@ function MainApp({ store, bridge }: { store: Store; bridge: Bridge }) {
     void voice.start();
     return () => voice.dispose();
   }, [voice]);
+
+  const workflows = useMemo(
+    () => new WorkflowsController(bridge, store),
+    [bridge, store],
+  );
+  useEffect(() => {
+    void workflows.start();
+    return () => workflows.dispose();
+  }, [workflows]);
 
   useEffect(() => {
     installDitherFields();
@@ -66,12 +78,14 @@ function MainApp({ store, bridge }: { store: Store; bridge: Bridge }) {
       <BridgeProvider value={bridge}>
         <TerminalsProvider value={terminals}>
           <VoiceProvider value={voice}>
-            <MotionConfig
-              reducedMotion="user"
-              transition={{ duration: 0.22, ease: EASE }}
-            >
-              <Shell />
-            </MotionConfig>
+            <WorkflowsProvider value={workflows}>
+              <MotionConfig
+                reducedMotion="user"
+                transition={{ duration: 0.22, ease: EASE }}
+              >
+                <Shell />
+              </MotionConfig>
+            </WorkflowsProvider>
           </VoiceProvider>
         </TerminalsProvider>
       </BridgeProvider>
@@ -137,11 +151,13 @@ function Shell() {
   const pageKey =
     route.kind === "conversation"
       ? `conversation:${route.id}`
-      : route.kind === "settings"
-        ? "settings"
-        : route.kind === "launcher"
-          ? `launcher:${state.spaceId ?? "home"}`
-          : route.kind;
+      : route.kind === "workflows"
+        ? `workflows:${route.id ?? "index"}`
+        : route.kind === "settings"
+          ? "settings"
+          : route.kind === "launcher"
+            ? `launcher:${state.spaceId ?? "home"}`
+            : route.kind;
 
   return (
     <div
@@ -156,6 +172,7 @@ function Shell() {
             {route.kind === "launcher" ? <LauncherPage /> : null}
             {route.kind === "conversation" ? <ConversationPage /> : null}
             {route.kind === "inbox" ? <InboxPage /> : null}
+            {route.kind === "workflows" ? <WorkflowsPage /> : null}
             {route.kind === "settings" ? <SettingsPage /> : null}
           </div>
         </main>
