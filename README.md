@@ -30,13 +30,15 @@ The slice-by-slice record of what is built and verified is in [docs/STATUS.md](d
 
 ## Install
 
-There is no published release binary yet, so build the installer yourself:
+Download `Lazoo_<version>_x64-setup.exe` from the [releases page](https://github.com/anubhabx/lazoo/releases) and run it. The installer is not code-signed yet, so Windows SmartScreen warns on first run: choose **More info**, then **Run anyway**. Each release lists the installer's SHA-256 so you can check the download with `Get-FileHash`.
+
+To build the same installer yourself:
 
 ```powershell
 pwsh -File scripts\build-installer.ps1
 ```
 
-It builds a per-user Windows installer that needs no administrator rights. The installer places `lazoo-desktop.exe` (Start menu: Lazoo) and its service binaries in `%LOCALAPPDATA%\Programs\Lazoo`. Data stays in `%LOCALAPPDATA%\Lazoo`. Opening the app starts its local service.
+It is a per-user Windows installer that needs no administrator rights. The installer places `lazoo-desktop.exe` (Start menu: Lazoo) and its service binaries in `%LOCALAPPDATA%\Programs\Lazoo`. Data stays in `%LOCALAPPDATA%\Lazoo`. Opening the app starts its local service.
 
 ## Build from source
 
