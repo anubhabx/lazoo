@@ -62,6 +62,12 @@ export interface VoiceBridge {
   onOverlay(handler: (update: OverlayUpdate) => void): Promise<() => void>;
 }
 
+/** The desktop's one workflows document (revision-checked JSON; Rust never reads its shape). */
+export interface WorkflowsBridge {
+  load(): Promise<{ revision: number; document: unknown }>;
+  save(document: unknown, revision: number): Promise<{ revision: number }>;
+}
+
 export interface Bridge {
   call<T>(method: string, params?: unknown): Promise<T>;
   subscribeEvents(
@@ -79,6 +85,7 @@ export interface Bridge {
   ): Promise<void>;
   window: WindowControls;
   voice: VoiceBridge;
+  workflows: WorkflowsBridge;
 }
 
 export function isRpcFailure(value: unknown): value is RpcFailure {
@@ -158,6 +165,14 @@ function createTauriVoice(): VoiceBridge {
   };
 }
 
+function createTauriWorkflows(): WorkflowsBridge {
+  return {
+    load: () => voiceInvoke("workflows_load"),
+    save: (document, revision) =>
+      voiceInvoke("workflows_save", { document, revision }),
+  };
+}
+
 export function createTauriBridge(): Bridge {
   const win = () => getCurrentWindow();
   return {
@@ -205,6 +220,7 @@ export function createTauriBridge(): Bridge {
       }
     },
     voice: createTauriVoice(),
+    workflows: createTauriWorkflows(),
     window: {
       get label() {
         return win().label;
@@ -245,6 +261,10 @@ export function createOfflineBridge(): Bridge {
       overlay: noop,
       onPtt: async () => () => undefined,
       onOverlay: async () => () => undefined,
+    },
+    workflows: {
+      load: () => Promise.reject(offline),
+      save: () => Promise.reject(offline),
     },
     window: {
       label: "main",

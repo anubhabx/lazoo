@@ -44,6 +44,7 @@ export type Route =
   | { kind: "launcher" }
   | { kind: "conversation"; id: Uuid; tab: Uuid | "lead" }
   | { kind: "inbox"; filter: InboxFilter }
+  | { kind: "workflows"; id: string | null }
   | { kind: "settings"; section: SettingsSection };
 
 export type Connection = "connecting" | "connected" | "uncertain" | "offline";
